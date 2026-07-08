@@ -174,7 +174,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             firstReservedPosition = 0;
         }
 
-        // The actual write logic for the cloud events
         TransactionCallback<StreamVersionDiff> writeLogic = transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
 
@@ -344,7 +343,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return requireNonNull(transactionTemplate.execute(__ -> logic.apply(updateFunction)));
     }
 
-    // Queries
     @Override
     public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
         requireStreamCapability();
@@ -373,9 +371,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     private DcbAppendResult appendDcb(List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
         List<CloudEvent> eventsToAppend = DcbMarkerModel.validateDcbEvents(events);
-        // Place by the condition's boundary tags when it constrains on tags, so the same boundary always lands in
-        // the same partition regardless of per-event tags. Otherwise (no condition, or a type-only/match-all
-        // condition) fall back to the events' tags so tagless boundaries do not all collapse onto one hot partition.
+        // Place by the condition's boundary tags when it constrains tags, so the same boundary always lands
+        // in the same partition regardless of per-event tags. Otherwise fall back to the events' tags, so
+        // tagless boundaries do not all collapse onto one hot partition.
         Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
         Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
@@ -392,11 +390,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             if (condition != null) {
                 enforceAppendCondition(condition, eventsToAppend, lastPosition);
             } else {
-                // An unconditional append still increments its events' markers so a concurrent conditional append on an
-                // overlapping tag/type shares a marker and serializes against it, and so the conditional append's
-                // consistency-token check observes it. Without this, an unconditional append touches no marker, nothing
-                // forces a write-write conflict, and a concurrent conditional append's snapshot can miss this append
-                // under MongoDB snapshot isolation (write skew). See ADR 0021.
+                // An unconditional append still increments its events' markers, so a concurrent conditional append
+                // on an overlapping tag or type shares a marker, serializes against it, and its consistency-token
+                // check observes it. Without this, nothing forces a write-write conflict and a concurrent
+                // conditional append's snapshot could miss this append (write skew). See ADR 0021.
                 incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
             }
 
@@ -413,12 +410,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * retried here: it propagates to the application service, which re-reads and retries the whole command.
      */
     private static <T> T executeWithTransientRetry(Supplier<T> action) {
-        // Exponential backoff with generous attempts: several appends placed in the same partition stream serialize on
-        // stream_version, so the last writer can need to retry past all the others before it commits.
+        // Exponential backoff with generous attempts, since several appends placed in the same partition stream
+        // serialize on stream_version, so the last writer can need to retry past all the others before it commits.
         // Retry a transient transaction conflict, and also a DuplicateKeyException. That duplicate is either two
-        // transactions first-creating the same conflict marker at once, or two disjoint DCB boundaries hashing to the
-        // same partition stream and losing on the unique streamid+streamversion index. Both are safe to rerun. A genuine
-        // duplicate CloudEvent is translated to a domain exception in insertAllDcb and never reaches here.
+        // transactions first-creating the same conflict marker at once, or two disjoint DCB boundaries hashing to
+        // the same partition stream and losing on the unique streamid+streamversion index. Both are safe to rerun.
+        // A genuine duplicate CloudEvent is translated to a domain exception in insertAllDcb and never reaches here.
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
                 .maxAttempts(15)
                 .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
@@ -466,41 +463,39 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final boolean conflict;
         if (expectedToken.isPresent()) {
-            // Token-carrying check: the condition carries the consistency token the command observed when it read the
-            // query (DcbEventStream.consistencyToken()). If the query's markers have advanced since, an append matching
-            // the query committed after the read, so the condition is not fulfilled. Unlike a position-based existence
-            // check this is immune to read-watermark overshoot, because marker versions are bumped inside the append
-            // transaction (at commit), not when positions are reserved (ADR 0021).
+            // The condition carries the consistency token the command observed when it read the query
+            // (DcbEventStream.consistencyToken()). If the query's markers have advanced since, a matching append
+            // committed after the read, so the condition fails. This is immune to read-watermark overshoot,
+            // unlike a position-based check, because marker versions bump inside the append transaction at
+            // commit, not when positions are reserved (ADR 0021).
             conflict = consistencyToken(condition.query()) != expectedToken.get().value();
         } else {
-            // No token: an absolute "fail if any matching event exists" guard. Check the live events rather than the
-            // marker versions, so this means "currently exists" (matching the in-memory store, and surviving deletes and
-            // marker pruning) rather than "ever appended". The marker increments below still serialize concurrent
-            // unconditional guards on the same boundary so two of them cannot both pass.
+            // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than
+            // marker versions, so it means "currently exists" (surviving deletes and marker pruning) rather than
+            // "ever appended". The marker increments below still serialize concurrent unconditional guards on the
+            // same boundary, so two of them cannot both pass.
             conflict = mongoTemplate.exists(toDcbMongoQuery(condition.query(), 0, Long.MAX_VALUE), eventStoreCollectionName);
         }
         if (conflict) {
             throw new DcbAppendConditionNotFulfilledException(condition, currentPosition(), "Append condition was not fulfilled.");
         }
-        // Increment a marker per key for the union of the query's keys and the appended events' keys. The increments
-        // force a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs this
-        // check against the winner's committed increment. Always increment the query's markers so a concurrent matching
-        // append is serialized even when this append's own events do not match the query.
+        // Increment a marker per key for the union of the query's keys and the appended events' keys. The increment
+        // forces a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs
+        // this check against the winner's committed increment. The query's markers are always incremented, so a
+        // concurrent matching append is serialized even when this append's own events do not match the query.
         TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.query()));
         markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
         incrementConflictMarkers(markerKeys, lastPosition);
     }
 
-    // Increment a conflict marker per key. Two appends that can match a common event share at least one marker (per
-    // ADR 0021), so the in-transaction increment forces a MongoDB write-write conflict and they serialize. The
-    // monotonically increasing version is also the optimistic-concurrency token: a reader snapshots the versions of a
-    // query's markers (see consistencyToken), and an append fails if any of them changed since. The stored lastPosition
-    // is informational.
-    // The marker collection holds one document per distinct tag and per distinct type that has taken part in an append,
-    // and nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection without
-    // bound. An operator can prune markers during quiescence (a later append recreates any it still needs). Automatic
-    // reclamation is deferred: safe reclamation needs proof that no in-flight append references a marker, which is its
-    // own concurrency problem and out of proportion to the need today.
+    // Increment a conflict marker per key. Two appends that can match a common event share at least one marker
+    // (ADR 0021), so the in-transaction increment forces a MongoDB write-write conflict and they serialize. The
+    // monotonically increasing version is also the optimistic-concurrency token (see consistencyToken): a reader
+    // snapshots a query's marker versions, and an append fails if any changed since. The stored lastPosition is
+    // informational.
+    // The marker collection holds one document per distinct tag and type that has taken part in an append, and
+    // nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection
+    // without bound. An operator can prune markers during quiescence, a later append recreates any it still needs.
     private void incrementConflictMarkers(Set<String> markerKeys, long lastPosition) {
         if (markerKeys.isEmpty()) {
             return;
@@ -517,18 +512,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. The sum is
-    // monotonically increasing (every append increments at least one marker by one), so it changes if and only if some
-    // append touched at least one of the query's markers since the reader observed it. Because the versions are bumped
-    // inside the append transaction (not when positions are reserved), this token reflects only committed appends and is
-    // therefore immune to the read-watermark overshoot that a position-based check suffers (ADR 0021).
+    // monotonically increasing (every append increments at least one marker), so it changes if and only if some
+    // append touched one of the query's markers since the reader observed it. Because versions bump inside the
+    // append transaction, not when positions are reserved, this token reflects only committed appends and is
+    // immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
     private long consistencyToken(DcbCriteria query) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(query);
         if (markerKeys.isEmpty()) {
             return 0;
         }
-        // Read the query's markers in one query so their versions come from a single consistent snapshot. Reading them
-        // one by one could tear across a concurrent append and capture a sum that matches a later state, masking a real
-        // conflict (ADR 31).
+        // Read the query's markers in one query so their versions come from a single consistent snapshot. Reading
+        // them one by one could tear across a concurrent append and capture a sum that masks a real conflict
+        // (ADR 0031).
         List<String> markerIds = markerKeys.stream().map(DcbMarkerModel::markerId).toList();
         long sum = 0;
         for (Document marker : mongoTemplate.find(new Query(where(ID).in(markerIds)), Document.class, dcbCheckpointCollectionName)) {
@@ -543,7 +538,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     /**
      * Reserves a contiguous block of {@code eventCount} DCB positions by incrementing one global counter document. Every
      * DCB append passes through this single document, so it is a serialization point and an inherent throughput ceiling
-     * for the store as a whole under very high append rates. It is kept outside the append transaction (ADR 21) so it
+     * for the store as a whole under very high append rates. It is kept outside the append transaction (ADR 0021) so it
      * does not turn into transaction conflicts, but the global monotonic sequence cannot be sharded away.
      */
     private long reservePositions(int eventCount) {
@@ -607,7 +602,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     @NullUnmarked
-    // Data structures etc
     private static class EventStreamImpl<T> implements EventStream<T> {
         private String _id;
         private long version;
@@ -702,7 +696,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return LongConditionEvaluator.evaluate(condition, currentStreamVersion);
     }
 
-    // Read
     private static Query streamIdEqualTo(String streamId) {
         return Query.query(streamIdEqualToCriteria(streamId));
     }
@@ -743,8 +736,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        // We use "lte" currentStreamVersion so that we don't have the start transactions on read. This means that even
-        // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
+        // Uses "lte" currentStreamVersion instead of a transaction on read, so an event another thread inserts
+        // after currentStreamVersion is read does not matter.
         Query query = Query.query(streamIdEqualToCriteria(streamId).and(STREAM_VERSION).lte(currentStreamVersion));
 
         if (streamReadFilter != null) {
@@ -780,7 +773,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return autoClose(mongoTemplate.stream(query.with(sort), Document.class, eventStoreCollectionName));
     }
 
-    // Initialization
     private static void initializeEventStore(String eventStoreCollectionName, String dcbPositionCollectionName, String dcbCheckpointCollectionName, Set<EventStoreCapability> eventStoreCapabilities, boolean streamPositionEnabled, MongoTemplate mongoTemplate) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             mongoTemplate.createCollection(eventStoreCollectionName);
@@ -798,35 +790,33 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
 
         MongoCollection<Document> eventStoreCollection = mongoTemplate.getCollection(eventStoreCollectionName);
-        // Cloud spec defines id + source must be unique!
+        // The CloudEvent spec requires id + source to be unique.
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.ID), Indexes.ascending(CloudEventV1.SOURCE)), new IndexOptions().unique(true));
-        // streamId + streamVersion uniqueness is a stream-mode invariant, but the DCB append path also looks up the
-        // current stream version per partition (currentStreamVersion), so it needs the same compound index to avoid a
-        // collection scan. The index is unique for both capabilities: DCB-only writes assign sequential per-partition
-        // stream versions, so uniqueness holds there too. The only way two events collide on the same
-        // streamId+streamVersion is two disjoint DCB boundaries hashing to the same partition stream, which the DCB
-        // append path already treats as a retryable transient (re-reads and re-assigns a fresh version) rather than a
-        // duplicate error. Creating the identical unique index for STREAM and DCB also means no capability combination
-        // or DCB-only to STREAM+DCB upgrade ever hits an IndexOptionsConflict.
+        // streamId + streamVersion uniqueness is a stream-mode invariant, but the DCB append path also looks up
+        // the current stream version per partition, so it needs the same compound index to avoid a collection
+        // scan. The index stays unique for DCB too, since DCB-only writes assign sequential per-partition stream
+        // versions. The only collision is two disjoint DCB boundaries hashing to the same partition stream, which
+        // the DCB append path treats as a retryable transient rather than a duplicate error. One identical unique
+        // index for STREAM and DCB also means no capability combination or upgrade ever hits an IndexOptionsConflict.
         if (eventStoreCapabilities.contains(STREAM) || dcbEnabled) {
-            // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
-            // Note also that this index supports sorting both ascending and descending since MongoDB can traverse an index in both directions.
+            // This compound index also covers queries on stream id alone, and MongoDB can traverse it in either
+            // direction, so it serves both ascending and descending sorts.
             createStreamVersionIndex(eventStoreCollection, new IndexOptions().unique(true));
         }
         if (dcbEnabled) {
             eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
             // A type-only DcbCriteria has no tags to hit the dcbTags index with, so it falls back to the position
-            // index with type checked as a residual FETCH filter, examining every DCB event in the position range to
-            // find the (possibly rare) matches. A (type, position) compound index lets the planner satisfy both the
-            // type equality and the position sort directly from the index, so keysExamined tracks nReturned instead
-            // of the full position range. Evidence: explain("executionStats") on a 50k/50 skewed dataset showed
-            // docsExamined=50050 for nReturned=50 without this index.
+            // index with type checked as a residual FETCH filter, examining every DCB event in the position range.
+            // A (type, position) compound index lets the planner satisfy the type equality and position sort
+            // directly from the index, so keysExamined tracks nReturned instead of the full position range.
+            // Evidence: explain("executionStats") on a 50k/50 skewed dataset showed docsExamined=50050 for
+            // nReturned=50 without this index.
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.TYPE), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true));
             // The multikey dcbTags index alone cannot provide the position sort order, so a tag boundary read falls
             // back to an in-memory (or, on MongoDB 6.0+, disk-spilling) SORT after fetching every matching document.
-            // Evidence: explain("executionStats") on a 5,000-of-305,000 skewed dataset (a plausible "popular tag"
-            // boundary, not a pathological one) showed a winning SORT stage over the dcbTags index. A (dcbTags,
-            // position) compound index lets the planner read matches in position order directly, avoiding the sort.
+            // A (dcbTags, position) compound index lets the planner read matches in position order directly instead.
+            // Evidence: explain("executionStats") on a 5,000-of-305,000 skewed dataset (a plausible popular-tag
+            // boundary) showed a winning SORT stage over the dcbTags index without this compound index.
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true));
         }
         // The position index is created whenever the store writes a position, so position-ordered reads and catch-up
@@ -835,18 +825,14 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             eventStoreCollection.createIndex(Indexes.ascending(OccurrentCloudEventExtension.POSITION), new IndexOptions().unique(true).sparse(true));
         }
 
-        // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
-        // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
+        // SessionSynchronization must be ALWAYS for TransactionTemplate to work with MongoTemplate. See
+        // https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
         mongoTemplate.setSessionSynchronization(ALWAYS);
     }
 
-    // IndexOptionsConflict (error code 85) and IndexKeySpecsConflict (error code 86) both mean an index with this name
-    // already exists with a specification incompatible with the one Occurrent requests. Older MongoDB (4.x) reports the
-    // non-unique-vs-unique clash as 85, while MongoDB 7.0+ reports the same clash as 86. Occurrent always requests the
-    // unique streamId+streamVersion index for both STREAM and DCB, so normal capability combinations and upgrades never
-    // conflict. A conflict here therefore means an operator manually created an incompatible (e.g. non-unique) index.
-    // Occurrent never drops or replaces an existing index, and running on a non-unique index would silently lose the
-    // uniqueness guarantee stream and DCB writes rely on, so this fails startup instead of swallowing the conflict.
+    // The streamid+streamversion index already exists with options that clash with the unique one Occurrent needs
+    // (older MongoDB reports this as error 85, 7.0+ as 86). Occurrent never replaces an index, so fail rather than
+    // run without the uniqueness that stream and DCB writes depend on.
     private static void createStreamVersionIndex(MongoCollection<Document> eventStoreCollection, IndexOptions indexOptions) {
         try {
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), indexOptions);

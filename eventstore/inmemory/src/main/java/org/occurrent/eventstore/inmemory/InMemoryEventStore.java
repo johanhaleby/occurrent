@@ -74,12 +74,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
     private final AtomicLong nextPosition = new AtomicLong(1);
 
-    // Global, monotonically increasing insertion order assigned to each event at write time, keyed by the
-    // event's "id + source" (the same uniqueness key used by validateNoDuplicateEventExists). This is what
-    // SortBy.natural relies on so that "natural order" means *global* insertion order (matching MongoDB's
-    // $natural), rather than the per-stream grouping that results from iterating "state". Sequences are
-    // assigned inside the "state.compute" critical section in write(...), so they reflect the actual
-    // serialized insertion order across all streams.
+    // Global insertion order assigned to each event at write time, keyed by "id + source" (same key as
+    // validateNoDuplicateEventExists). Backs SortBy.natural, so natural order means global insertion order
+    // (matching MongoDB's $natural), not the per-stream grouping from iterating "state".
     private final AtomicLong insertionSequence = new AtomicLong();
     private final Map<String, Long> insertionOrderByEventKey = new ConcurrentHashMap<>();
 
@@ -223,8 +220,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         });
     }
 
-    // Call from inside the "state.compute" critical section so positions are drawn from the same nextPosition counter,
-    // under the same lock, that DCB uses, keeping stream and DCB writes on one shared sequence.
+    // Call from inside the "state.compute" critical section so positions come from the same nextPosition
+    // counter, under the same lock, that DCB uses, keeping stream and DCB writes on one shared sequence.
     private List<CloudEvent> applyStreamWriteExtensions(Stream<CloudEvent> events, String streamId, long streamVersion) {
         List<CloudEvent> withStreamMetadata = zip(LongStream.iterate(streamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
                 .map(pair -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, pair.t1))).apply(pair.t2))
@@ -239,8 +236,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         return withPosition;
     }
 
-    // Must be called from inside the "state.compute" critical section so that sequence numbers reflect the
-    // serialized insertion order across all streams.
+    // Must run inside the "state.compute" critical section so sequence numbers reflect the serialized
+    // insertion order across all streams.
     private void assignInsertionOrder(List<CloudEvent> events) {
         for (CloudEvent event : events) {
             insertionOrderByEventKey.put(insertionKey(event), insertionSequence.getAndIncrement());
@@ -324,9 +321,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     private DcbAppendResult appendDcb(List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
         List<CloudEvent> eventsToAppend = validateDcbEvents(events);
-        // Place by the condition's boundary tags when it constrains on tags, so the same boundary always lands in
-        // the same partition regardless of per-event tags. Otherwise (no condition, or a type-only/match-all
-        // condition) fall back to the events' tags so tagless boundaries do not all collapse onto one hot partition.
+        // Place by the condition's boundary tags when it constrains tags, so the same boundary always lands
+        // in the same partition regardless of per-event tags. Otherwise fall back to the events' tags, so
+        // tagless boundaries do not all collapse onto one hot partition.
         Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
         Set<Tag> placementTags = conditionTags.isEmpty() ? tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
@@ -335,8 +332,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         DcbAppendResult result;
         synchronized (state) {
             if (condition != null) {
-                // The in-memory store assigns positions and commits atomically under the lock, so its read head is a
-                // sound concurrency boundary: the token value is simply the position observed by the read.
+                // Positions are assigned and committed atomically under the lock, so the read head is a sound
+                // concurrency boundary. The token value is simply the position observed at read time.
                 long afterPosition = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
                 boolean fulfilled = allEvents()
                         .filter(event -> position(event) > afterPosition)
@@ -510,10 +507,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         Objects.requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(sortBy, SortBy.class.getSimpleName() + " cannot be null");
 
-        // Snapshot the per-stream event lists under the lock, then filter and sort outside it. The stream returned
-        // to the caller is consumed lazily, so iterating state.values() outside the lock could race with a concurrent
-        // write() that structurally modifies the backing map and throw ConcurrentModificationException. Each value is
-        // a CopyOnWriteArrayList that write() replaces atomically, so iterating a snapshotted reference stays safe.
+        // Snapshot the per-stream lists under the lock, then filter and sort outside it. The returned stream is
+        // consumed lazily, so iterating state.values() outside the lock could race with a concurrent write()
+        // and throw ConcurrentModificationException. Each value is a CopyOnWriteArrayList that write() replaces
+        // atomically, so iterating the snapshotted reference stays safe.
         final List<CopyOnWriteArrayList<CloudEvent>> snapshot;
         synchronized (state) {
             snapshot = new ArrayList<>(state.values());
@@ -626,9 +623,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     /**
-     * Rejects any DCB-tagged event on the stream write path, regardless of which capabilities are enabled. A
-     * dcbtags-carrying event written through write(...) would bypass the DCB append path, so it would be silently
-     * invisible to DCB reads. Enforcing this keeps the dcbtags extension the reliable DCB discriminator.
+     * Rejects DCB-tagged events on the stream write path. A dcbtags-carrying event written through write(...)
+     * would bypass the DCB append path and stay invisible to DCB reads, so this keeps dcbtags a reliable
+     * DCB discriminator.
      */
     private static void rejectDcbTaggedEvents(List<CloudEvent> events) {
         if (events.stream().anyMatch(DcbCloudEvents::isDcbEvent)) {
@@ -671,10 +668,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     private Comparator<CloudEvent> toComparator(SortBy sortBy) {
         final Comparator<CloudEvent> comparator;
         if (sortBy instanceof NaturalImpl) {
-            // "Natural" order is global insertion order (see insertionOrderByEventKey), so it matches MongoDB's
-            // $natural and is monotonic with insertion regardless of the events' "time", both standalone and as
-            // a tie-breaker step. This is what the CatchupSubscriptionModel relies on to reconcile events written
-            // during the catch-up phase.
+            // "Natural" order is global insertion order (see insertionOrderByEventKey), matching MongoDB's
+            // $natural. Monotonic with insertion regardless of the events' "time", both standalone and as a
+            // tie-breaker step.
             Comparator<CloudEvent> byInsertionOrder = comparing((CloudEvent cloudEvent) -> insertionOrderByEventKey.getOrDefault(insertionKey(cloudEvent), Long.MAX_VALUE));
             comparator = ((NaturalImpl) sortBy).direction == DESCENDING ? byInsertionOrder.reversed() : byInsertionOrder;
         } else if (sortBy instanceof SingleFieldImpl) {

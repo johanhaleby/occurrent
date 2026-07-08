@@ -94,7 +94,7 @@ public class EventStoreConfig {
         if (streamPositionOptedOut && eventStoreCapabilities.contains(EventStoreCapability.DCB)) {
             throw new IllegalArgumentException("Cannot disable stream position when the DCB capability is enabled; a combined store must position everything.");
         }
-        // Note that we deliberately allow the WriteConcern to be null in order to be able to use the default MongoTemplate settings
+        // WriteConcern may be null, so the default MongoTemplate settings apply.
         this.eventStoreCollectionName = eventStoreCollectionName;
         this.transactionTemplate = transactionTemplate;
         this.timeRepresentation = timeRepresentation;

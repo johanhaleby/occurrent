@@ -97,9 +97,8 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
             String text = convertToString(cloudEventData);
             document.put("data", text);
         } else {
-            // Note that we cannot convert the data to DocumentCloudEventData even if content-type is json.
-            // This is because json data can be an array (or just a string) and this thus
-            // not necessarily representable as a "map" (and thus not as a org.bson.Document)
+            // Data cannot become a DocumentCloudEventData even when content-type is json, since json data
+            // can be an array or a bare string, not necessarily representable as a map (org.bson.Document).
             document.put("data", cloudEventData.toBytes());
         }
         return document;
