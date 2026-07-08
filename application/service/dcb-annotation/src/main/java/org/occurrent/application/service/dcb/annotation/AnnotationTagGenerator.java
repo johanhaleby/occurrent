@@ -69,9 +69,9 @@ import static java.util.Objects.requireNonNull;
  * concurrently.
  * <p>
  * When a custom annotation type is supplied without an explicit key resolver, a no-arg
- * {@code String key()} annotation element is used when present and non-blank. If no such element
- * exists, or if it returns a blank value, the member name is used as the tag key. Custom annotations
- * must be annotated with {@code @Retention(RUNTIME)}.
+ * {@code String value()} or {@code String key()} annotation element is used when present and
+ * non-blank. If no such element exists, or if it returns a blank value, the member name is used as
+ * the tag key. Custom annotations must be annotated with {@code @Retention(RUNTIME)}.
  */
 @NullMarked
 public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
@@ -84,14 +84,26 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
      * Create a generator that scans for Occurrent's {@link DcbTag} annotation.
      */
     public AnnotationTagGenerator() {
-        this(DcbTag.class, DcbTag::key);
+        this(DcbTag.class, AnnotationTagGenerator::dcbTagKey);
+    }
+
+    // @DcbTag's key is its value(), with key() as an alias. Prefer value, fall back to key, and reject a
+    // conflicting pair.
+    private static @Nullable String dcbTagKey(DcbTag tag) {
+        String value = tag.value();
+        String key = tag.key();
+        if (!value.isBlank() && !key.isBlank() && !value.equals(key)) {
+            throw new AnnotationTagGeneratorException("@" + DcbTag.class.getSimpleName() + " has conflicting value \"" + value
+                    + "\" and key \"" + key + "\", set only one", null);
+        }
+        return value.isBlank() ? key : value;
     }
 
     /**
      * Create a generator that scans for {@code annotationType}.
      * <p>
-     * If the annotation has a no-arg {@code String key()} element, its non-blank value is used as
-     * the tag key. Otherwise the annotated member's name is used.
+     * If the annotation has a no-arg {@code String value()} or {@code String key()} element, its
+     * non-blank value is used as the tag key. Otherwise the annotated member's name is used.
      *
      * @param annotationType The annotation type to scan for
      */
@@ -281,9 +293,14 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
     }
 
     private static @Nullable Method findKeyMethod(Class<? extends Annotation> annotationType) {
+        Method valueMethod = stringElement(annotationType, "value");
+        return valueMethod != null ? valueMethod : stringElement(annotationType, "key");
+    }
+
+    private static @Nullable Method stringElement(Class<? extends Annotation> annotationType, String name) {
         try {
-            Method keyMethod = annotationType.getMethod("key");
-            return keyMethod.getReturnType() == String.class && keyMethod.getParameterCount() == 0 ? keyMethod : null;
+            Method method = annotationType.getMethod(name);
+            return method.getReturnType() == String.class && method.getParameterCount() == 0 ? method : null;
         } catch (NoSuchMethodException e) {
             return null;
         }
