@@ -31,6 +31,7 @@
         <module>mastermind</module>
         <module>course-enrollment</module>
         <module>hotel-booking</module>
+        <module>appointment-scheduling</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 
