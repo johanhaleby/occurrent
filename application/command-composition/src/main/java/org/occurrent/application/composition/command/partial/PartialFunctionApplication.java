@@ -4,7 +4,7 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
- * Utility for creating partial function applications for "commands", e.g. ({@code Function<List<T>, List<T>>} , {@code Function<Stream<T>, Stream<T>> etc}.
+ * Utility for creating partial function applications for "commands", e.g. a {@code Function<List<T>, List<T>>}.
  * For example let's say you have a domain function defined like this in {@code MyClass}:
  *
  * <pre>
