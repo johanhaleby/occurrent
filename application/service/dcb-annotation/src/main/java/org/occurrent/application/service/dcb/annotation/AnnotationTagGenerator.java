@@ -288,14 +288,14 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
     }
 
     private static Function<Annotation, @Nullable String> defaultKeyResolver(Class<? extends Annotation> annotationType) {
-        Method valueMethod = stringElement(annotationType, "value");
-        Method keyMethod = stringElement(annotationType, "key");
+        @Nullable Method valueMethod = stringElement(annotationType, "value");
+        @Nullable Method keyMethod = stringElement(annotationType, "key");
         if (valueMethod == null && keyMethod == null) {
             return __ -> null;
         }
         // Resolve at read time: value() when it is non-blank, otherwise key().
         return annotation -> {
-            String value = valueMethod == null ? null : invokeKeyMethod(annotationType, valueMethod, annotation);
+            @Nullable String value = valueMethod == null ? null : invokeKeyMethod(annotationType, valueMethod, annotation);
             if (value != null && !value.isBlank()) {
                 return value;
             }
