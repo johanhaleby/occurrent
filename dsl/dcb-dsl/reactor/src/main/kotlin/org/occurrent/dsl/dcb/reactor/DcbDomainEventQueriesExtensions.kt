@@ -19,6 +19,7 @@ package org.occurrent.dsl.dcb.reactor
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbReadOptions
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
 /**
@@ -46,3 +47,9 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Mono<Triple<List<T>, Long, DcbConsistencyToken>> =
     this.queryWithPosition(query, options).map { Triple(it.events(), it.lastSequencePosition(), it.consistencyToken()) }
+
+/**
+ * Queries DCB events of the reified type [T] as a [Flux].
+ */
+inline fun <reified T : Any> DcbDomainEventQueries<in T>.query(): Flux<T> =
+    query(T::class.java)
