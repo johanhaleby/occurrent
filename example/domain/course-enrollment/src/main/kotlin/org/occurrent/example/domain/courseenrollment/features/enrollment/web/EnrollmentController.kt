@@ -20,12 +20,12 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursedashboard.readmodel.CourseDashboard
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.courseCriteria
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentEnrolledInCourse
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentUnenrolledFromCourse
 import org.occurrent.example.domain.courseenrollment.features.enrollment.readmodel.CourseDetail
 import org.occurrent.example.domain.courseenrollment.features.enrollment.usecases.enrollStudent
 import org.occurrent.example.domain.courseenrollment.features.enrollment.usecases.unenrollStudent
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import org.springframework.stereotype.Controller
 import org.springframework.ui.Model
 import org.springframework.web.bind.annotation.GetMapping
@@ -82,7 +82,7 @@ class EnrollmentController(
     fun activity(@PathVariable id: UUID): SseEmitter {
         val emitter = SseEmitter(EMITTER_TIMEOUT_MILLIS)
         val subscriptionId = "activity-$id-${UUID.randomUUID()}"
-        val subscription = dcbSubscriptions.subscribe(subscriptionId, CourseEnrollmentQueries.courseBoundary(id)) { event ->
+        val subscription = dcbSubscriptions.subscribe(subscriptionId, courseCriteria(id)) { event ->
             // The student name is user input, so it is HTML-escaped before going into this raw SSE fragment.
             val line = when (event) {
                 is StudentEnrolledInCourse -> "<li>${nameOf(event.studentId)} enrolled</li>"

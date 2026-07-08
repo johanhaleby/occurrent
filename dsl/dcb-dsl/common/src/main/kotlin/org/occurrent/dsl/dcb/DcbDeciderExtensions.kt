@@ -20,6 +20,7 @@ package org.occurrent.dsl.dcb
 import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.dsl.decider.CompositeState
 import org.occurrent.dsl.decider.Decider
+import org.occurrent.dsl.decider.decider
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.dsl.decider.compose as decidersCompose
@@ -29,6 +30,19 @@ import org.occurrent.dsl.decider.compose as decidersCompose
  */
 fun <C : Any, S, E : Any> dcbDecider(decider: Decider<C, S, E>, criteria: (C) -> DcbCriteria, tags: (E) -> Set<Tag>): DcbDecider<C, S, E> =
     DcbDecider.from(decider, { c -> criteria(c) }, TagGenerator { e -> tags(e) })
+
+/**
+ * Builds a [DcbDecider] directly from decision parts plus its DCB [criteria] and [tags], without naming an
+ * intermediate [Decider].
+ */
+fun <C : Any, S, E : Any> dcbDecider(
+    initialState: S,
+    decide: (C, S) -> List<E>,
+    evolve: (S, E) -> S,
+    criteria: (C) -> DcbCriteria,
+    tags: (E) -> Set<Tag>,
+    isTerminal: (S) -> Boolean = { false },
+): DcbDecider<C, S, E> = dcbDecider(decider(initialState, decide, evolve, isTerminal), criteria, tags)
 
 /**
  * Wraps this [Decider] with the DCB [criteria] (the read boundary for a command) and [tags] (the tags for events it

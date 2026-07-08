@@ -26,7 +26,7 @@ import org.occurrent.example.domain.hotelbooking.features.booking.readmodel.Room
 import org.occurrent.example.domain.hotelbooking.features.booking.usecases.bookRoom
 import org.occurrent.example.domain.hotelbooking.features.booking.usecases.cancelBooking
 import org.occurrent.example.domain.hotelbooking.features.hoteldashboard.readmodel.HotelDashboard
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria
+import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.roomCriteria
 import org.springframework.format.annotation.DateTimeFormat
 import org.springframework.http.MediaType
 import org.springframework.http.codec.ServerSentEvent
@@ -111,7 +111,7 @@ class BookingController(
      */
     @GetMapping("/rooms/{id}/activity", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun activity(@PathVariable id: UUID): Flux<ServerSentEvent<String>> =
-        dcbSubscriptions.subscribe(HotelBookingCriteria.roomCriteria(id))
+        dcbSubscriptions.subscribe(roomCriteria(id))
             .mapNotNull { event ->
                 // The guest name is user input, so it is HTML-escaped before going into this raw SSE fragment.
                 val line = when (event) {

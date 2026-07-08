@@ -17,9 +17,9 @@
 package org.occurrent.example.domain.hotelbooking.features.booking.model
 
 import org.occurrent.dsl.dcb.DcbDecider
-import org.occurrent.dsl.dcb.toDcb
-import org.occurrent.dsl.decider.Decider
-import org.occurrent.dsl.decider.decider
+import org.occurrent.dsl.dcb.dcbDecider
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.hotelbooking.common.*
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.GuestDeregistered
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.GuestRegistered
@@ -27,39 +27,37 @@ import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomClosed
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomDefined
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomTags
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.bookingCriteria
 import java.time.Instant
 import java.util.*
 
 /**
- * The cross-boundary decider, and the point of the example. Its boundary spans a room AND a guest at once (see
- * [org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.bookingCriteria]), so one
+ * The cross-boundary decider, and the point of the example, wired to its DCB criteria and event tags, ready for
+ * [org.occurrent.dsl.dcb.reactor.execute]. Its boundary spans a room AND a guest at once (see [criteria]), so one
  * conditional append holds both the no-double-booking invariant (on the room) and the per-guest booking-limit invariant
  * (on the guest).
  *
- * Note how this differs from [org.occurrent.example.domain.hotelbooking.features.roommanagement.model.roomDecider] and
- * [org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.guestDecider]: it does not emit
+ * Note how this differs from [org.occurrent.example.domain.hotelbooking.features.roommanagement.model.roomDcbDecider] and
+ * [org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.guestDcbDecider]: it does not emit
  * [RoomDefined] or [GuestRegistered], it only reads them (to learn the entities exist and are still open). Most deciders
  * are single-boundary like those two, this is the one that genuinely needs DCB.
  */
-val bookingDecider: Decider<BookingCommand, BookingState, DomainEvent> =
-    decider(
-        initialState = BookingState(),
-        decide = ::decide,
-        evolve = ::evolve
-    )
-
-/** The [bookingDecider] wired to its cross-boundary DCB criteria and event tags, ready for [org.occurrent.dsl.dcb.reactor.execute]. */
-val bookingDcbDecider: DcbDecider<BookingCommand, BookingState, DomainEvent> = bookingDecider.toDcb(
-    criteria = { command -> bookingCriteria(command.roomId, command.guestId) },
-    tags = { event ->
-        when (event) {
-            is RoomBooked -> setOf(RoomTags.room(event.roomId), GuestTags.guest(event.guestId))
-            is BookingCancelled -> setOf(RoomTags.room(event.roomId), GuestTags.guest(event.guestId))
-            else -> error("No DCB tags defined for event ${event::class.simpleName}. Every event must be tagged so the right decision boundary can find it.")
-        }
-    }
+val bookingDcbDecider: DcbDecider<BookingCommand, BookingState, DomainEvent> = dcbDecider(
+    initialState = BookingState(),
+    decide = ::decide,
+    evolve = ::evolve,
+    criteria = ::criteria,
+    tags = ::tags
 )
+
+/** The boundary spans the room's events AND the guest's events, see [DcbDecider] for why. */
+private fun criteria(command: BookingCommand): DcbCriteria =
+    DcbCriteria.tagsAnyOf(RoomTags.room(command.roomId), GuestTags.guest(command.guestId))
+
+private fun tags(event: DomainEvent): Set<Tag> = when (event) {
+    is RoomBooked -> setOf(RoomTags.room(event.roomId), GuestTags.guest(event.guestId))
+    is BookingCancelled -> setOf(RoomTags.room(event.roomId), GuestTags.guest(event.guestId))
+    else -> error("No DCB tags defined for event ${event::class.simpleName}. Every event must be tagged so the right decision boundary can find it.")
+}
 
 /** Domain policy constants. */
 object BookingPolicy {

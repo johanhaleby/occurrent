@@ -17,41 +17,41 @@
 package org.occurrent.example.domain.courseenrollment.features.studentmanagement.model
 
 import org.occurrent.dsl.dcb.DcbDecider
-import org.occurrent.dsl.dcb.toDcb
-import org.occurrent.dsl.decider.Decider
-import org.occurrent.dsl.decider.decider
+import org.occurrent.dsl.dcb.dcbDecider
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.courseenrollment.common.DomainCommand
 import org.occurrent.example.domain.courseenrollment.common.StudentId
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import java.time.Instant
 import java.util.*
 
-/**
- * Decider for the student's own lifecycle. The boundary is the student itself (see
- * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries.studentCriteria]).
- */
-val studentDecider: Decider<StudentCommand, StudentRegistry, StudentEvent> =
-    decider(
-        initialState = StudentRegistry(),
-        decide = ::decide,
-        evolve = ::evolve
-    )
+/** The boundary for registering or deregistering a student (the student's own events). Also used by the student read side. */
+internal fun studentCriteria(studentId: StudentId): DcbCriteria = DcbCriteria.tags(StudentTags.student(studentId))
 
-val studentDcbDecider: DcbDecider<StudentCommand, StudentRegistry, StudentEvent> = studentDecider.toDcb(
-    criteria = { command ->
-        val studentId = when (command) {
-            is StudentCommand.RegisterStudent -> command.studentId
-            is StudentCommand.DeregisterStudent -> command.studentId
-        }
-        CourseEnrollmentQueries.studentCriteria(studentId)
-    },
-    tags = { event ->
-        when (event) {
-            is StudentRegistered -> setOf(StudentTags.student(event.studentId))
-            is StudentDeregistered -> setOf(StudentTags.student(event.studentId))
-        }
-    }
+/**
+ * Decider for the student's own lifecycle, wired to its DCB boundary and event tags. The boundary is the student
+ * itself (see [studentCriteria]).
+ */
+val studentDcbDecider: DcbDecider<StudentCommand, StudentRegistry, StudentEvent> = dcbDecider(
+    initialState = StudentRegistry(),
+    decide = ::decide,
+    evolve = ::evolve,
+    criteria = ::criteria,
+    tags = ::tags
 )
+
+private fun criteria(command: StudentCommand): DcbCriteria {
+    val studentId = when (command) {
+        is StudentCommand.RegisterStudent -> command.studentId
+        is StudentCommand.DeregisterStudent -> command.studentId
+    }
+    return studentCriteria(studentId)
+}
+
+private fun tags(event: StudentEvent): Set<Tag> = when (event) {
+    is StudentRegistered -> setOf(StudentTags.student(event.studentId))
+    is StudentDeregistered -> setOf(StudentTags.student(event.studentId))
+}
 
 sealed interface StudentCommand : DomainCommand {
     data class RegisterStudent(val eventId: UUID, val occurredAt: Instant, val studentId: StudentId, val name: String) : StudentCommand

@@ -17,41 +17,38 @@
 package org.occurrent.example.domain.hotelbooking.features.guestmanagement.model
 
 import org.occurrent.dsl.dcb.DcbDecider
-import org.occurrent.dsl.dcb.toDcb
-import org.occurrent.dsl.decider.Decider
-import org.occurrent.dsl.decider.decider
+import org.occurrent.dsl.dcb.dcbDecider
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.hotelbooking.common.DomainCommand
 import org.occurrent.example.domain.hotelbooking.common.GuestId
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.guestCriteria
 import java.time.Instant
 import java.util.*
 
-/**
- * Decider for the guest's own lifecycle. Single boundary: the guest (see
- * [org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.guestCriteria]).
- */
-val guestDecider: Decider<GuestCommand, GuestRegistry, GuestEvent> =
-    decider(
-        initialState = GuestRegistry(),
-        decide = ::decide,
-        evolve = ::evolve
-    )
+/** The boundary for registering or deregistering a guest (the guest's own events). Also used by the guest read side. */
+internal fun guestCriteria(guestId: GuestId): DcbCriteria = DcbCriteria.tags(GuestTags.guest(guestId))
 
-/** The [guestDecider] wired to its DCB boundary and event tags, ready for [org.occurrent.dsl.dcb.reactor.execute]. */
-val guestDcbDecider: DcbDecider<GuestCommand, GuestRegistry, GuestEvent> = guestDecider.toDcb(
-    criteria = { command ->
-        when (command) {
-            is GuestCommand.RegisterGuest -> guestCriteria(command.guestId)
-            is GuestCommand.DeregisterGuest -> guestCriteria(command.guestId)
-        }
-    },
-    tags = { event ->
-        when (event) {
-            is GuestRegistered -> setOf(GuestTags.guest(event.guestId))
-            is GuestDeregistered -> setOf(GuestTags.guest(event.guestId))
-        }
-    }
+/**
+ * Decider for the guest's own lifecycle, wired to its DCB boundary and event tags, ready for
+ * [org.occurrent.dsl.dcb.reactor.execute]. Single boundary: the guest (see [guestCriteria]).
+ */
+val guestDcbDecider: DcbDecider<GuestCommand, GuestRegistry, GuestEvent> = dcbDecider(
+    initialState = GuestRegistry(),
+    decide = ::decide,
+    evolve = ::evolve,
+    criteria = ::criteria,
+    tags = ::tags
 )
+
+private fun criteria(command: GuestCommand): DcbCriteria = when (command) {
+    is GuestCommand.RegisterGuest -> guestCriteria(command.guestId)
+    is GuestCommand.DeregisterGuest -> guestCriteria(command.guestId)
+}
+
+private fun tags(event: GuestEvent): Set<Tag> = when (event) {
+    is GuestRegistered -> setOf(GuestTags.guest(event.guestId))
+    is GuestDeregistered -> setOf(GuestTags.guest(event.guestId))
+}
 
 sealed interface GuestCommand : DomainCommand {
     data class RegisterGuest(val eventId: UUID, val occurredAt: Instant, val guestId: GuestId, val name: String) : GuestCommand
