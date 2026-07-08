@@ -28,12 +28,12 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria
 /**
  * Execute a domain function for the events selected by [query].
  */
-fun <E : Any> DcbApplicationService<E>.executeList(query: DcbCriteria, functionThatCallsDomainModel: (List<E>) -> List<E>): DcbAppendResult? =
+fun <E : Any> DcbApplicationService<E>.executeOrNull(query: DcbCriteria, functionThatCallsDomainModel: (List<E>) -> List<E>): DcbAppendResult? =
     execute(query) { events -> functionThatCallsDomainModel(events) }.orElse(null)
 
 /**
  * Execute a domain function for the events selected by [query], with the supplied [DcbExecuteOptions].
  */
 @Suppress("UNCHECKED_CAST")
-fun <E : Any> DcbApplicationService<E>.executeList(query: DcbCriteria, options: DcbExecuteOptions<*>, functionThatCallsDomainModel: (List<E>) -> List<E>): DcbAppendResult? =
+fun <E : Any> DcbApplicationService<E>.executeOrNull(query: DcbCriteria, options: DcbExecuteOptions<*>, functionThatCallsDomainModel: (List<E>) -> List<E>): DcbAppendResult? =
     execute(query, options as DcbExecuteOptions<E>) { events -> functionThatCallsDomainModel(events) }.orElse(null)

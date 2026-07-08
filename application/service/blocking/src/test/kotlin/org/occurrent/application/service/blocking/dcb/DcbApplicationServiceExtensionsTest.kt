@@ -47,26 +47,26 @@ class DcbApplicationServiceExtensionsTest {
     }
 
     @Test
-    fun executeList_returns_the_append_result_when_events_are_produced() {
-        val result = applicationService.executeList(tags(Tag.of("name", "1"))) { listOf(nameDefined("Johan")) }
+    fun executeOrNull_returns_the_append_result_when_events_are_produced() {
+        val result = applicationService.executeOrNull(tags(Tag.of("name", "1"))) { listOf(nameDefined("Johan")) }
 
         assertThat(result).isNotNull()
         assertThat(result!!.eventCount()).isEqualTo(1)
     }
 
     @Test
-    fun executeList_returns_null_when_no_events_are_produced() {
-        val result = applicationService.executeList(tags(Tag.of("name", "1"))) { emptyList() }
+    fun executeOrNull_returns_null_when_no_events_are_produced() {
+        val result = applicationService.executeOrNull(tags(Tag.of("name", "1"))) { emptyList() }
 
         assertThat(result).isNull()
     }
 
     @Test
-    fun executeList_with_options_runs_the_side_effect_with_the_written_events() {
+    fun executeOrNull_with_options_runs_the_side_effect_with_the_written_events() {
         val observed = mutableListOf<String>()
         val options = dcbSideEffect<DomainEvent, NameDefined> { observed += it.name() }
 
-        val result = applicationService.executeList(tags(Tag.of("name", "1")), options) { listOf(nameDefined("Grace")) }
+        val result = applicationService.executeOrNull(tags(Tag.of("name", "1")), options) { listOf(nameDefined("Grace")) }
 
         assertThat(result).isNotNull()
         assertThat(observed).containsExactly("Grace")

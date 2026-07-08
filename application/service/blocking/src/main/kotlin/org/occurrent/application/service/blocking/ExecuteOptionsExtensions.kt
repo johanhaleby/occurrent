@@ -10,7 +10,7 @@ import java.util.function.Consumer
  *
  * This helper exists so Kotlin code can start an options chain with `options()`
  * and let the event type be inferred later from chained `sideEffect(...)` or
- * the surrounding `executeList(...)` call.
+ * the surrounding `execute(...)` call.
  * Standalone assignments may still require explicit type context.
  */
 fun options(): ExecuteOptions<Any> = ExecuteOptions.options()
@@ -22,7 +22,7 @@ fun options(): ExecuteOptions<Any> = ExecuteOptions.options()
  * instead of `options().filter(...)` when that reads better.
  *
  * Type inference is expected to come from the surrounding expression, typically
- * an `executeList(...)` call.
+ * an `execute(...)` call.
  */
 fun filter(filter: StreamReadFilter): ExecuteOptions<Any> = options().filter(filter)
 
@@ -33,7 +33,7 @@ fun filter(filter: StreamReadFilter): ExecuteOptions<Any> = options().filter(fil
  * when the filter is expressed in terms of domain event classes.
  *
  * Type inference is expected to come from the surrounding expression, typically
- * an `executeList(...)` call.
+ * an `execute(...)` call.
  */
 fun <E : Any> filter(filter: ExecuteFilter<out E>): ExecuteOptions<E> = ExecuteOptions.withExecuteFilter(filter)
 
@@ -58,8 +58,7 @@ fun <T : Any> ExecuteOptions<in T>.filter(filter: ExecuteFilter<out T>): Execute
  * Create [ExecuteOptions] with a typed [sideEffect] that is invoked for events
  * matching [E].
  *
- * Type inference typically comes from the surrounding `executeList(...)`
- * or `executeList(...)` call.
+ * Type inference typically comes from the surrounding `execute(...)` call.
  */
 inline fun <T : Any, reified E : T> sideEffect(noinline sideEffect: (E) -> Unit): ExecuteOptions<T> =
     typedOptions<T>().addTypedSideEffect(E::class.java, sideEffect)
