@@ -34,7 +34,7 @@ class MakeGuess(private val applicationService: DcbApplicationService<GameEvent>
 
     @Retryable(include = [DcbAppendConditionNotFulfilledException::class, DataIntegrityViolationException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(gameId: GameId, timeOfGuess: Timestamp, playerId: PlayerId, word: Word) {
-        applicationService.execute(GameDcbQueries.gameplay(gameId)) { events: List<GameEvent> ->
+        applicationService.execute(GameDcbQueries.gameplay(gameId)) { events ->
             guessWord(events, timeOfGuess, playerId, word)
         }
     }

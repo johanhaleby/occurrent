@@ -39,7 +39,7 @@ class StartGame(
         applicationService.execute(
             gameId,
             sideEffect(revealInitialCharactersInWordHintAfterGameIsStarted::invoke)
-        ) { events: List<GameEvent> ->
+        ) { events ->
             startGame(events, gameId, startTime, startedBy, wordList, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal)
         }
     }

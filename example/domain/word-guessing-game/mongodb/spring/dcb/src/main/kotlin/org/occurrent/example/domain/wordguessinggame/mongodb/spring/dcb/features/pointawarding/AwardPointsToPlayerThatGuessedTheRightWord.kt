@@ -48,7 +48,7 @@ class AwardPointsToPlayerThatGuessedTheRightWord(
         val gameId = playerGuessedTheRightWord.gameId
         val playerId = playerGuessedTheRightWord.playerId
 
-        applicationService.execute(GameDcbQueries.pointsBoundary(gameId)) { events: List<GameEvent> ->
+        applicationService.execute(GameDcbQueries.pointsCriteria(gameId)) { events ->
             val gameWasStarted = events.filterIsInstance<GameWasStarted>().firstOrNull()
             val pointsAlreadyAwarded = events
                 .filter { it is PlayerWasAwardedPointsForGuessingTheRightWord || it is PlayerWasNotAwardedAnyPointsForGuessingTheRightWord }

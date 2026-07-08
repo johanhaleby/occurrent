@@ -38,7 +38,7 @@ class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
     operator fun invoke(playerGuessedTheWrongWord: PlayerGuessedTheWrongWord) {
         val gameId = playerGuessedTheWrongWord.gameId
         val gameWasStarted = gameEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))!!
-        applicationService.execute("wordhint:$gameId") { events: List<GameEvent> ->
+        applicationService.execute("wordhint:$gameId") { events ->
             val characterPositionsInWord = events.map { it as CharacterInWordHintWasRevealed }.map { it.characterPositionInWord }.toSet()
             val wordHintData = WordHintData(gameId, wordToGuess = gameWasStarted.wordToGuess, currentlyRevealedPositions = characterPositionsInWord)
             WordHintCharacterRevelation.revealCharacterInWordHintWhenPlayerGuessedTheWrongWord(wordHintData).toList()

@@ -41,7 +41,7 @@ class MakeGuess(
         applicationService.execute(
             gameId,
             sideEffect(revealCharacterInWordHintAfterPlayerGuessedTheWrongWord::invoke, awardPointsToPlayerThatGuessedTheRightWord::invoke)
-        ) { events: List<GameEvent> ->
+        ) { events ->
             guessWord(events, timeOfGuess, playerId, word)
         }
     }

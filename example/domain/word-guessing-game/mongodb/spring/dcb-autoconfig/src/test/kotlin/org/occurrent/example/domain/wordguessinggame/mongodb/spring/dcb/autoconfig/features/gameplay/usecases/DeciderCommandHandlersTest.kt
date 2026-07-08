@@ -72,7 +72,7 @@ class DeciderCommandHandlersTest {
         val startedBy = UUID.randomUUID()
 
         startGame(gameId, Date(1), startedBy, wordList())
-        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintBoundary(gameId), 1)
+        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), 1)
 
         val cloudEvents = readGameplayCloudEvents(gameId)
         val events = cloudEvents.toDomainEvents()
@@ -94,10 +94,10 @@ class DeciderCommandHandlersTest {
         val gameId = UUID.randomUUID()
         val playerId = UUID.randomUUID()
         startGame(gameId, Date(1), UUID.randomUUID(), wordList())
-        val initialHints = eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintBoundary(gameId), 1)
+        val initialHints = eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), 1)
 
         makeGuess(gameId, Date(2), playerId, Word("wrong"))
-        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintBoundary(gameId), initialHints.size + 1)
+        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), initialHints.size + 1)
         makeGuess(gameId, Date(3), playerId, Word("wrong"))
 
         val events = readGameplayCloudEvents(gameId).toDomainEvents()
@@ -115,11 +115,11 @@ class DeciderCommandHandlersTest {
         val gameId = UUID.randomUUID()
         val playerId = UUID.randomUUID()
         startGame(gameId, Date(1), UUID.randomUUID(), wordList())
-        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintBoundary(gameId), 1)
+        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), 1)
         val wordToGuess = readGameplayCloudEvents(gameId).toDomainEvents().filterIsInstance<GameWasStarted>().single().wordToGuess
 
         makeGuess(gameId, Date(2), playerId, Word(wordToGuess))
-        eventuallySingle<PlayerWasAwardedPointsForGuessingTheRightWord>(GameDcbQueries.pointsBoundary(gameId))
+        eventuallySingle<PlayerWasAwardedPointsForGuessingTheRightWord>(GameDcbQueries.pointsCriteria(gameId))
 
         val cloudEvents = readGameplayCloudEvents(gameId)
         val events = cloudEvents.toDomainEvents()

@@ -42,7 +42,7 @@ class RevealInitialCharactersInWordHintAfterGameIsStarted(
 
     @Retryable(backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(gameWasStarted: GameWasStarted) {
-        applicationService.execute(GameDcbQueries.wordHintBoundary(gameWasStarted.gameId)) { events: List<GameEvent> ->
+        applicationService.execute(GameDcbQueries.wordHintCriteria(gameWasStarted.gameId)) { events ->
             if (events.filterIsInstance<CharacterInWordHintWasRevealed>().isEmpty()) {
                 WordHintCharacterRevelation
                     .revealInitialCharactersInWordHintWhenGameWasStarted(WordHintData(gameWasStarted.gameId, gameWasStarted.wordToGuess))

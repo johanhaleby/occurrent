@@ -38,7 +38,7 @@ class AwardPointsToPlayerThatGuessedTheRightWord(
         val gameId = playerGuessedTheRightWord.gameId
         val playerId = playerGuessedTheRightWord.playerId
         val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))!!
-        applicationService.execute("points:$gameId") { events: List<GameEvent> ->
+        applicationService.execute("points:$gameId") { events ->
             val totalNumberGuessesForPlayerInGame = events.count { event -> event is PlayerGuessedTheWrongWord && event.playerId == playerGuessedTheRightWord.playerId } + 1
             val basis = BasisForPointAwarding(gameId, gameWasStarted.startedBy, playerId, totalNumberGuessesForPlayerInGame)
             PointAwarding.awardPointsToPlayerThatGuessedTheRightWord(basis).toList()

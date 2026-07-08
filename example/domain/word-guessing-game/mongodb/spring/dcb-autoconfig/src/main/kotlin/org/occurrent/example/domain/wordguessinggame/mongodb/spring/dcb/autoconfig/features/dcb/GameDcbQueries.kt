@@ -32,12 +32,12 @@ internal object GameDcbQueries {
 
     fun gameplay(gameId: UUID): DcbCriteria = DcbCriteria.tags(GameDcbTags.gameplay(gameId))
 
-    fun wordHintBoundary(gameId: UUID): DcbCriteria = DcbCriteria.anyOf(
+    fun wordHintCriteria(gameId: UUID): DcbCriteria = DcbCriteria.anyOf(
             DcbCriteria.type(GameWasStarted::class.eventType()).tags(GameDcbTags.game(gameId)),
             DcbCriteria.type(CharacterInWordHintWasRevealed::class.eventType()).tags(GameDcbTags.wordHint(gameId))
     )
 
-    fun pointsBoundary(gameId: UUID): DcbCriteria = DcbCriteria.anyOf(
+    fun pointsCriteria(gameId: UUID): DcbCriteria = DcbCriteria.anyOf(
             DcbCriteria.type(GameWasStarted::class.eventType()).tags(GameDcbTags.game(gameId)),
             DcbCriteria.type(PlayerGuessedTheWrongWord::class.eventType()).tags(GameDcbTags.gameplay(gameId)),
             DcbCriteria.type(PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType()).tags(GameDcbTags.points(gameId)),
