@@ -40,7 +40,6 @@ import java.util.List;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -156,7 +155,7 @@ class DcbSubscriptionsTest {
 
     private void append(List<String> tags, DomainEvent... events) {
         List<Tag> parsedTags = tags.stream().map(Tag::parse).toList();
-        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(events)).stream()
                 .map(event -> DcbCloudEvents.withTags(event, parsedTags))
                 .toList();
         eventStore.append(cloudEvents);

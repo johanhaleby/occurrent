@@ -22,21 +22,19 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 /**
  * The heart of the game. This is the domain model that contains the game logic.
  */
 public class NumberGuessingGame {
 
-    public static Stream<GameEvent> startNewGame(UUID gameId, LocalDateTime startDate, UUID whoIsStartingTheGame,
+    public static List<GameEvent> startNewGame(UUID gameId, LocalDateTime startDate, UUID whoIsStartingTheGame,
                                                  SecretNumberToGuess secretNumberToGuess, MaxNumberOfGuesses maxNumberOfGuesses) {
-        return Stream.of(new NumberGuessingGameWasStarted(UUID.randomUUID(), gameId, startDate, whoIsStartingTheGame, secretNumberToGuess.value, maxNumberOfGuesses.value));
+        return List.of(new NumberGuessingGameWasStarted(UUID.randomUUID(), gameId, startDate, whoIsStartingTheGame, secretNumberToGuess.value, maxNumberOfGuesses.value));
     }
 
-    public static Stream<GameEvent> guessNumber(Stream<GameEvent> events, UUID gameId, LocalDateTime guessingDate, UUID playerId, Guess guess) {
+    public static List<GameEvent> guessNumber(List<GameEvent> events, UUID gameId, LocalDateTime guessingDate, UUID playerId, Guess guess) {
         GameState game = rehydrate(events);
 
         if (!game.started) {
@@ -65,11 +63,12 @@ public class NumberGuessingGame {
             exhaustGameAttemptsIfLastGuess.accept(newEvents);
         }
 
-        return newEvents.stream();
+        return newEvents;
     }
 
-    private static GameState rehydrate(Stream<GameEvent> events) {
-        return events.collect(GameState::new, (state, gameEvent) -> {
+    private static GameState rehydrate(List<GameEvent> events) {
+        GameState state = new GameState();
+        for (GameEvent gameEvent : events) {
             switch (gameEvent) {
                 case NumberGuessingGameWasStarted numberGuessingGameWasStarted -> {
                     state.started = true;
@@ -82,7 +81,8 @@ public class NumberGuessingGame {
                 case GuessingAttemptsExhausted ignored -> state.ended = true;
                 case NumberGuessingGameEnded ignored -> state.ended = true;
             }
-        }, EMPTY);
+        }
+        return state;
     }
 
     private static class GameState {
@@ -96,8 +96,4 @@ public class NumberGuessingGame {
             return numberOfGuesses + 1 == maxNumberOfGuesses;
         }
     }
-
-
-    private static final BiConsumer<GameState, GameState> EMPTY = (gameState, gameState2) -> {
-    };
 }

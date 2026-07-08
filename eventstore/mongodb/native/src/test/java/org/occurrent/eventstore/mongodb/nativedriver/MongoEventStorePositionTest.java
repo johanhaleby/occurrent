@@ -48,7 +48,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -99,7 +98,7 @@ class MongoEventStorePositionTest {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM, DCB).withStreamPosition().build());
 
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1"), event("StreamEvent2")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1"), event("StreamEvent2")));
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         List<CloudEvent> nameEvents = eventStore.read(org.occurrent.eventstore.api.dcb.DcbCriteria.tags(Tag.parse("name:1"))).events();
@@ -125,7 +124,7 @@ class MongoEventStorePositionTest {
     void writing_a_single_stream_event_with_stream_position_enabled_still_carries_a_position() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
 
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1")));
 
         CloudEvent written = eventStore.read("stream:1").events().findFirst().orElseThrow();
         long writtenPosition = OccurrentCloudEventExtension.getPosition(written);
@@ -137,7 +136,7 @@ class MongoEventStorePositionTest {
     void stream_only_store_writes_no_position_when_opted_out() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
 
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1")));
 
         CloudEvent written = eventStore.read("stream:1").events().findFirst().orElseThrow();
         assertThat(written.getExtensionNames()).doesNotContain(OccurrentCloudEventExtension.POSITION);
@@ -162,10 +161,10 @@ class MongoEventStorePositionTest {
     void position_ordered_reader_returns_events_within_the_requested_range_in_position_order() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM, DCB).withStreamPosition().build());
 
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("A")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("B")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("C")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("D")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("A")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("B")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("C")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("D")));
 
         // Read the actual positions rather than assuming a contiguous 1,2,3,4 sequence: a transaction retry under
         // contention reserves (and abandons) a position block, same as the DCB write path (ADR 0021), so gaps are
@@ -185,8 +184,8 @@ class MongoEventStorePositionTest {
     void position_ordered_reader_applies_the_supplied_filter() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
 
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("Included")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("Excluded")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("Included")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("Excluded")));
 
         List<CloudEvent> events = eventStore.readInPositionOrder(Filter.type("Included"), PositionRange.fromBeginning()).toList();
 
@@ -197,8 +196,8 @@ class MongoEventStorePositionTest {
     void position_ordered_reader_clamps_to_the_current_high_watermark() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
 
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("A")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("B")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("A")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("B")));
 
         List<CloudEvent> events = eventStore.readInPositionOrder(Filter.all(), PositionRange.upToPosition(1_000_000)).toList();
 
@@ -209,7 +208,7 @@ class MongoEventStorePositionTest {
     void opt_out_store_writes_no_stream_position() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
 
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1")));
 
         CloudEvent written = eventStore.read("stream:1").events().findFirst().orElseThrow();
         assertThat(written.getExtensionNames()).doesNotContain(OccurrentCloudEventExtension.POSITION);
@@ -246,13 +245,13 @@ class MongoEventStorePositionTest {
         // Seed a collection with a stream event written by a position-less store, mirroring an existing deployment
         // that has not yet run the position backfill migration.
         newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build())
-                .write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PreExistingEvent")));
+                .write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("PreExistingEvent")));
 
         // Flipping stream position on against the pre-existing, unpositioned history must not throw by default (WARN).
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
 
         // New writes still get a position; the guard only warns, it never blocks startup or new writes.
-        eventStore.write("stream:2", WriteCondition.anyStreamVersion(), Stream.of(event("NewEvent")));
+        eventStore.write("stream:2", WriteCondition.anyStreamVersion(), List.of(event("NewEvent")));
         CloudEvent newEvent = eventStore.read("stream:2").events().findFirst().orElseThrow();
         assertThat(newEvent.getExtensionNames()).contains(OccurrentCloudEventExtension.POSITION);
     }
@@ -260,7 +259,7 @@ class MongoEventStorePositionTest {
     @Test
     void startup_guard_fails_fast_when_configured_to_require_backfilled_position() {
         newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build())
-                .write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PreExistingEvent")));
+                .write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("PreExistingEvent")));
 
         assertThatThrownBy(() -> newEventStore(eventStoreConfig(STREAM).withStreamPosition().requireBackfilledPosition(true).build()))
                 .isExactlyInstanceOf(IllegalStateException.class)
@@ -270,7 +269,7 @@ class MongoEventStorePositionTest {
     @Test
     void startup_guard_does_not_fire_when_all_existing_events_are_already_positioned() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PositionedEvent")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("PositionedEvent")));
 
         // Re-opening the store against the same, fully positioned collection must not fail even with a hard-fail guard.
         MongoEventStore reopened = newEventStore(eventStoreConfig(STREAM).withStreamPosition().requireBackfilledPosition(true).build());
@@ -280,7 +279,7 @@ class MongoEventStorePositionTest {
     @Test
     void position_is_turned_off_on_an_existing_unpositioned_store_when_it_was_not_enabled_explicitly() {
         newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build())
-                .write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PreExistingEvent")));
+                .write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("PreExistingEvent")));
 
         // Default (not explicit) position over a collection that already has unpositioned events turns itself off,
         // rather than building the position index over the whole collection at startup.
@@ -298,7 +297,7 @@ class MongoEventStorePositionTest {
     @Test
     void position_stays_on_by_default_once_the_store_has_positioned_events() {
         newEventStore(eventStoreConfig(STREAM).build())
-                .write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PositionedEvent")));
+                .write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("PositionedEvent")));
 
         // Re-opening a store whose events already have positions keeps position on.
         MongoEventStore reopened = newEventStore(eventStoreConfig(STREAM).build());

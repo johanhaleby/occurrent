@@ -51,7 +51,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -91,7 +90,8 @@ class ReactiveDcbSubscriptionWaitUntilStartedAnnotationMongoTest {
 
     @Test
     void a_live_event_appended_immediately_after_context_startup_is_received_with_no_race() {
-        List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(new TestEvent("live-1")))
+        List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(new TestEvent("live-1")))
+                .stream()
                 .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                 .toList();
         dcbEventStore.append(cloudEvents).block();

@@ -30,7 +30,6 @@ import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
@@ -54,10 +53,9 @@ public class DomainEventStore {
         return eventStore.read(id.toString()).map(this::deserialize);
     }
 
-    private Stream<CloudEvent> serialize(UUID id, List<DomainEvent> events) {
+    private List<CloudEvent> serialize(UUID id, List<DomainEvent> events) {
         CloudEventConverter<DomainEvent> cloudEventConverter = converter(__ -> id.toString());
-        return events.stream()
-                .map(cloudEventConverter::toCloudEvent);
+        return cloudEventConverter.toCloudEvents(events);
     }
 
     private DomainEvent deserialize(CloudEvent cloudEvent) {

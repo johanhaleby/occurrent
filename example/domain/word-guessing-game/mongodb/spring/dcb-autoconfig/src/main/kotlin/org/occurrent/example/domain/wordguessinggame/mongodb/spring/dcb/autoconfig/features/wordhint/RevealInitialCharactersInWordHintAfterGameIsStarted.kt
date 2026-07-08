@@ -30,8 +30,6 @@ import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Component
 import java.util.UUID
-import java.util.stream.Stream
-import kotlin.streams.asStream
 
 @Component
 class RevealInitialCharactersInWordHintAfterGameIsStarted(
@@ -49,13 +47,13 @@ class RevealInitialCharactersInWordHintAfterGameIsStarted(
 
     @Retryable(backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(gameWasStarted: GameWasStarted) {
-        applicationService.execute(GameDcbQueries.wordHintBoundary(gameWasStarted.gameId)) { events: Stream<GameEvent> ->
-            if (events.toList().filterIsInstance<CharacterInWordHintWasRevealed>().isEmpty()) {
+        applicationService.execute(GameDcbQueries.wordHintBoundary(gameWasStarted.gameId)) { events: List<GameEvent> ->
+            if (events.filterIsInstance<CharacterInWordHintWasRevealed>().isEmpty()) {
                 WordHintCharacterRevelation
                     .revealInitialCharactersInWordHintWhenGameWasStarted(WordHintData(gameWasStarted.gameId, gameWasStarted.wordToGuess))
-                    .asStream()
+                    .toList()
             } else {
-                Stream.empty()
+                emptyList()
             }
         }
     }

@@ -39,7 +39,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,9 +58,8 @@ class GenericDcbApplicationServiceTest {
                 GenericDcbApplicationService.defaultRetryStrategy());
 
         Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")), events -> {
-            List<DomainEvent> currentEvents = events.toList();
-            assertThat(currentEvents).extracting(DomainEvent::type).containsExactly("NameDefined");
-            return Stream.of(new DomainEvent("NameChanged", "name:1"));
+            assertThat(events).extracting(DomainEvent::type).containsExactly("NameDefined");
+            return List.of(new DomainEvent("NameChanged", "name:1"));
         });
 
         assertThat(result).hasValue(new DcbAppendResult(2, 2, 1));
@@ -80,7 +78,7 @@ class GenericDcbApplicationServiceTest {
                 converter(),
                 event -> Set.of(Tag.parse(event.name())));
 
-        Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")), events -> Stream.empty());
+        Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")), events -> List.of());
 
         assertThat(result).isEmpty();
         assertThat(eventStore.read(tags(Tag.parse("name:1"))).events()).isEmpty();
@@ -100,13 +98,12 @@ class GenericDcbApplicationServiceTest {
 
         Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")), events -> {
             attempts.incrementAndGet();
-            List<DomainEvent> currentEvents = events.toList();
             if (attempts.get() == 1) {
-                assertThat(currentEvents).extracting(DomainEvent::type).containsExactly("NameDefined");
+                assertThat(events).extracting(DomainEvent::type).containsExactly("NameDefined");
             } else {
-                assertThat(currentEvents).extracting(DomainEvent::type).containsExactly("NameDefined", "NameChangedByOther");
+                assertThat(events).extracting(DomainEvent::type).containsExactly("NameDefined", "NameChangedByOther");
             }
-            return Stream.of(new DomainEvent("NameChangedByService", "name:1"));
+            return List.of(new DomainEvent("NameChangedByService", "name:1"));
         });
 
         assertThat(result).hasValue(new DcbAppendResult(3, 3, 1));
@@ -130,7 +127,7 @@ class GenericDcbApplicationServiceTest {
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> applicationService.execute(tags(Tag.parse("name:1")), events -> {
                     attempts.incrementAndGet();
-                    return Stream.of(new DomainEvent("NameChangedByService", "name:1"));
+                    return List.of(new DomainEvent("NameChangedByService", "name:1"));
                 }))
                 .isInstanceOf(org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException.class);
 

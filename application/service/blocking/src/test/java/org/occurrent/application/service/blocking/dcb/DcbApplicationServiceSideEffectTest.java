@@ -41,8 +41,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Stream;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import org.occurrent.eventstore.api.dcb.Tag;
 import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
@@ -72,7 +70,7 @@ class DcbApplicationServiceSideEffectTest {
                     invocations.incrementAndGet();
                     events.forEach(observed::add);
                 }),
-                events -> Stream.of(nameDefined));
+                events -> List.of(nameDefined));
 
         assertThat(result).isPresent();
         assertThat(invocations).hasValue(1);
@@ -85,7 +83,7 @@ class DcbApplicationServiceSideEffectTest {
 
         Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")),
                 DcbExecuteOptions.<DomainEvent>options().sideEffect(events -> invoked.set(true)),
-                events -> Stream.empty());
+                events -> List.of());
 
         assertThat(result).isEmpty();
         assertThat(invoked).isFalse();
@@ -100,7 +98,7 @@ class DcbApplicationServiceSideEffectTest {
 
         applicationService.execute(tags(Tag.parse("name:1")),
                 DcbExecuteOptions.<DomainEvent>options().sideEffect(policy),
-                events -> Stream.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
+                events -> List.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
 
         assertThat(definedName.get()).isEqualTo("Johan");
         assertThat(changedName.get()).isEqualTo("not-called");
@@ -109,7 +107,7 @@ class DcbApplicationServiceSideEffectTest {
     @Test
     void simple_execute_overload_appends_without_a_side_effect() {
         Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")),
-                events -> Stream.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
+                events -> List.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
 
         assertThat(result).isPresent();
         assertThat(eventStore.read(tags(Tag.parse("name:1"))).events()).extracting(CloudEvent::getType).hasSize(1);

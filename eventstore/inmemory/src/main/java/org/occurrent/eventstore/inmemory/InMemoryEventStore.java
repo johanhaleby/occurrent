@@ -80,7 +80,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     private final AtomicLong insertionSequence = new AtomicLong();
     private final Map<String, Long> insertionOrderByEventKey = new ConcurrentHashMap<>();
 
-    private final Consumer<Stream<CloudEvent>> listener;
+    private final Consumer<List<CloudEvent>> listener;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
     // Whether stream-written events get a global position from the same counter DCB uses, so stream and DCB events
     // share one sequence. Turn it off with withoutStreamPosition() for a STREAM-only store that wants no position.
@@ -104,7 +104,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      *
      * @param listener A listener that will be invoked after events have been written to the datastore (synchronously!)
      */
-    public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener) {
+    public InMemoryEventStore(Consumer<List<CloudEvent>> listener) {
         this(listener, new PartitionedDcbStreamIdGenerator());
     }
 
@@ -115,11 +115,11 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * @param listener            A listener that will be invoked after events have been written to the datastore (synchronously!)
      * @param dcbStreamIdGenerator Derives the storage stream id for DCB appends from the events' DCB tags
      */
-    public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
+    public InMemoryEventStore(Consumer<List<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
         this(listener, dcbStreamIdGenerator, true);
     }
 
-    private InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled) {
+    private InMemoryEventStore(Consumer<List<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled) {
         this.listener = requireNonNull(listener, "listener cannot be null");
         this.dcbStreamIdGenerator = requireNonNull(dcbStreamIdGenerator, DcbStreamIdGenerator.class.getSimpleName() + " cannot be null");
         this.streamPositionEnabled = streamPositionEnabled;
@@ -162,11 +162,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+    public WriteResult write(String streamId, WriteCondition writeCondition, List<CloudEvent> events) {
         requireTrue(writeCondition != null, WriteCondition.class.getSimpleName() + " cannot be null");
-        List<CloudEvent> cachedEvents = events.toList();
-        rejectDcbTaggedEvents(cachedEvents);
-        Stream<CloudEvent> cloudEventStream = cachedEvents.stream().peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1));
+        rejectDcbTaggedEvents(events);
+        Stream<CloudEvent> cloudEventStream = events.stream().peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1));
 
         final AtomicReference<@Nullable List<CloudEvent>> newCloudEvents = new AtomicReference<>();
         final AtomicLong currentStreamVersionContainer = new AtomicLong();
@@ -199,7 +198,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         List<CloudEvent> addedEvents = newCloudEvents.get();
         final long oldStreamVersion = currentStreamVersionContainer.get();
         if (addedEvents != null && !addedEvents.isEmpty()) {
-            listener.accept(addedEvents.stream());
+            listener.accept(addedEvents);
             CloudEvent cloudEvent = addedEvents.getLast();
             long newStreamVersion = OccurrentExtensionGetter.getStreamVersion(cloudEvent);
             writeResult = new WriteResult(streamId, oldStreamVersion, newStreamVersion);
@@ -262,7 +261,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public WriteResult write(String streamId, Stream<CloudEvent> events) {
+    public WriteResult write(String streamId, List<CloudEvent> events) {
         return write(streamId, WriteCondition.anyStreamVersion(), events);
     }
 
@@ -361,7 +360,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             result = new DcbAppendResult(firstPosition, lastPosition, addedEvents.size());
         }
 
-        listener.accept(addedEvents.stream());
+        listener.accept(addedEvents);
         return result;
     }
 

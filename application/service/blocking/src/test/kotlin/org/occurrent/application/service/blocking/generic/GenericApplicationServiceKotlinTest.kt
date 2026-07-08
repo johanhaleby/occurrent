@@ -29,7 +29,6 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
 import org.occurrent.application.service.blocking.ExecuteFilters
 import org.occurrent.application.service.blocking.executeList
-import org.occurrent.application.service.blocking.executeSequence
 import org.occurrent.application.service.blocking.filter
 import org.occurrent.application.service.blocking.options
 import org.occurrent.application.service.blocking.sideEffect
@@ -44,7 +43,6 @@ import java.net.URI
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.util.UUID
-import kotlin.streams.asStream
 
 @DisplayName("generic application service - kotlin")
 class GenericApplicationServiceKotlinTest {
@@ -70,8 +68,8 @@ class GenericApplicationServiceKotlinTest {
         val time = LocalDateTime.now()
 
         // When
-        val writeResult = applicationService.executeSequence(streamId) {
-            sequenceOf(
+        val writeResult = applicationService.executeList(streamId) {
+            listOf(
                 NameDefined("eventId1", time, "name", "Some Doe"),
                 NameWasChanged("eventId2", time, "name", "Jane Doe")
             )
@@ -90,16 +88,16 @@ class GenericApplicationServiceKotlinTest {
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
 
-        applicationService.executeSequence(streamId) {
-            sequenceOf(
+        applicationService.executeList(streamId) {
+            listOf(
                 NameDefined("eventId1", time, "name", "Some Doe"),
                 NameWasChanged("eventId2", time, "name", "Jane Doe")
             )
         }
 
         // When
-        val writeResult = applicationService.executeSequence(streamId) {
-            sequenceOf(
+        val writeResult = applicationService.executeList(streamId) {
+            listOf(
                 NameWasChanged("eventId3", time, "name", "Hello"),
                 NameWasChanged("eventId4", time, "name", "World")
             )
@@ -113,21 +111,21 @@ class GenericApplicationServiceKotlinTest {
     }
 
     @Test
-    fun execute_sequence_infers_sequence_without_explicit_lambda_type() {
+    fun execute_list_infers_list_without_explicit_lambda_type_and_side_effect() {
         // Given
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
         val sideEffects = mutableListOf<String>()
 
         // When
-        val writeResult = applicationService.executeSequence(
+        val writeResult = applicationService.executeList(
             streamId,
             sideEffect(
                 { event: NameDefined -> sideEffects += "defined:${event.name()}" },
                 { event: NameWasChanged -> sideEffects += "changed:${event.name()}" }
             )
         ) {
-            sequenceOf(
+            listOf(
                 NameDefined("eventId1", time, "name", "Some Doe"),
                 NameWasChanged("eventId2", time, "name", "Jane Doe")
             )
@@ -141,21 +139,21 @@ class GenericApplicationServiceKotlinTest {
     }
 
     @Test
-    fun execute_sequence_accepts_options_helper_without_explicit_event_type() {
+    fun execute_list_accepts_options_helper_without_explicit_event_type() {
         // Given
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
         val sideEffects = mutableListOf<String>()
 
         // When
-        applicationService.executeSequence(
+        applicationService.executeList(
             streamId,
             options().sideEffect(
                 { event: NameDefined -> sideEffects += "defined:${event.name()}" },
                 { event: NameWasChanged -> sideEffects += "changed:${event.name()}" }
             )
         ) {
-            sequenceOf(
+            listOf(
                 NameDefined("eventId1", time, "name", "Some Doe"),
                 NameWasChanged("eventId2", time, "name", "Jane Doe")
             )
@@ -184,21 +182,21 @@ class GenericApplicationServiceKotlinTest {
     }
 
     @Test
-    fun execute_sequence_accepts_filter_helper_with_direct_imported_side_effect() {
+    fun execute_list_accepts_filter_helper_with_direct_imported_side_effect() {
         // Given
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
         val sideEffects = mutableListOf<String>()
 
         // When
-        val writeResult = applicationService.executeSequence(
+        val writeResult = applicationService.executeList(
             streamId,
             filter(type(NameDefined::class.java.name)).sideEffect(
                 { event: NameDefined -> sideEffects += "defined:${event.name()}" },
                 { event: NameWasChanged -> sideEffects += "changed:${event.name()}" }
             )
         ) {
-            sequenceOf(
+            listOf(
                 NameDefined("eventId1", time, "name", "Some Doe"),
                 NameWasChanged("eventId2", time, "name", "Jane Doe")
             )
@@ -212,23 +210,23 @@ class GenericApplicationServiceKotlinTest {
     }
 
     @Test
-    fun execute_sequence_accepts_typed_execute_filter_without_explicit_event_type() {
+    fun execute_list_accepts_typed_execute_filter_without_explicit_event_type() {
         // Given
         cloudEventConverter = customCloudEventConverter()
         applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
-        eventStore.write(streamId, cloudEventConverter.toCloudEvents(sequenceOf(
+        eventStore.write(streamId, cloudEventConverter.toCloudEvents(listOf(
             NameDefined("eventId1", time, "name", "Some Doe"),
             NameWasChanged("eventId2", time, "name", "Jane Doe")
-        ).asStream()))
+        )))
 
         // When
-        val writeResult = applicationService.executeSequence(
+        val writeResult = applicationService.executeList(
             streamId,
             options().filter(ExecuteFilters.type<NameDefined>())
         ) {
-            sequenceOf(NameWasChanged("eventId3", time, "name", "New Name"))
+            listOf(NameWasChanged("eventId3", time, "name", "New Name"))
         }
 
         // Then
@@ -236,23 +234,23 @@ class GenericApplicationServiceKotlinTest {
     }
 
     @Test
-    fun execute_sequence_accepts_direct_type_helper_with_uuid_stream_id() {
+    fun execute_list_accepts_direct_type_helper_with_uuid_stream_id() {
         // Given
         cloudEventConverter = customCloudEventConverter()
         applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         val streamId = UUID.randomUUID()
         val time = LocalDateTime.now()
-        eventStore.write(streamId.toString(), cloudEventConverter.toCloudEvents(sequenceOf(
+        eventStore.write(streamId.toString(), cloudEventConverter.toCloudEvents(listOf(
             NameDefined("eventId1", time, "name", "Some Doe"),
             NameWasChanged("eventId2", time, "name", "Jane Doe")
-        ).asStream()))
+        )))
 
         // When
-        val writeResult = applicationService.executeSequence(
+        val writeResult = applicationService.executeList(
             streamId,
             ExecuteFilters.type<NameDefined>()
         ) {
-            sequenceOf(NameDefined("eventId3", time, "name", "Filtered Input Still Writes"))
+            listOf(NameDefined("eventId3", time, "name", "Filtered Input Still Writes"))
         }
 
         // Then
@@ -260,23 +258,23 @@ class GenericApplicationServiceKotlinTest {
     }
 
     @Test
-    fun execute_sequence_accepts_direct_include_types_helper() {
+    fun execute_list_accepts_direct_include_types_helper() {
         // Given
         cloudEventConverter = customCloudEventConverter()
         applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
-        eventStore.write(streamId, cloudEventConverter.toCloudEvents(sequenceOf(
+        eventStore.write(streamId, cloudEventConverter.toCloudEvents(listOf(
             NameDefined("eventId1", time, "name", "Some Doe"),
             NameWasChanged("eventId2", time, "name", "Jane Doe")
-        ).asStream()))
+        )))
 
         // When
-        val writeResult = applicationService.executeSequence(
+        val writeResult = applicationService.executeList(
             streamId,
             ExecuteFilters.includeTypes(NameDefined::class, NameWasChanged::class)
         ) {
-            sequenceOf(NameWasChanged("eventId3", time, "name", "Still Writes"))
+            listOf(NameWasChanged("eventId3", time, "name", "Still Writes"))
         }
 
         // Then
@@ -284,23 +282,23 @@ class GenericApplicationServiceKotlinTest {
     }
 
     @Test
-    fun execute_sequence_accepts_direct_exclude_types_helper() {
+    fun execute_list_accepts_direct_exclude_types_helper_with_string_stream_id() {
         // Given
         cloudEventConverter = customCloudEventConverter()
         applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
-        eventStore.write(streamId, cloudEventConverter.toCloudEvents(sequenceOf(
+        eventStore.write(streamId, cloudEventConverter.toCloudEvents(listOf(
             NameDefined("eventId1", time, "name", "Some Doe"),
             NameWasChanged("eventId2", time, "name", "Jane Doe")
-        ).asStream()))
+        )))
 
         // When
-        val writeResult = applicationService.executeSequence(
+        val writeResult = applicationService.executeList(
             streamId,
             ExecuteFilters.excludeTypes(NameWasChanged::class, NameDefined::class)
         ) {
-            sequenceOf(NameDefined("eventId3", time, "name", "Filtered Input Still Writes"))
+            listOf(NameDefined("eventId3", time, "name", "Filtered Input Still Writes"))
         }
 
         // Then
@@ -314,10 +312,10 @@ class GenericApplicationServiceKotlinTest {
         applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
-        eventStore.write(streamId, cloudEventConverter.toCloudEvents(sequenceOf(
+        eventStore.write(streamId, cloudEventConverter.toCloudEvents(listOf(
             NameDefined("eventId1", time, "name", "Some Doe"),
             NameWasChanged("eventId2", time, "name", "Jane Doe")
-        ).asStream()))
+        )))
 
         // When
         val writeResult = applicationService.executeList(
@@ -338,10 +336,10 @@ class GenericApplicationServiceKotlinTest {
         applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         val streamId = UUID.randomUUID()
         val time = LocalDateTime.now()
-        eventStore.write(streamId.toString(), cloudEventConverter.toCloudEvents(sequenceOf(
+        eventStore.write(streamId.toString(), cloudEventConverter.toCloudEvents(listOf(
             NameDefined("eventId1", time, "name", "Some Doe"),
             NameWasChanged("eventId2", time, "name", "Jane Doe")
-        ).asStream()))
+        )))
 
         // When
         val writeResult = applicationService.executeList(

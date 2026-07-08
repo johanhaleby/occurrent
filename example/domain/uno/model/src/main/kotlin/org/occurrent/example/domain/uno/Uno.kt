@@ -30,7 +30,7 @@ typealias Timestamp = LocalDateTime
 
 object Uno {
 
-    fun start(events: Sequence<Event>, gameId: GameId, timestamp: Timestamp, playerCount: PlayerCount, firstCard: Card): Sequence<Event> {
+    fun start(events: List<Event>, gameId: GameId, timestamp: Timestamp, playerCount: PlayerCount, firstCard: Card): List<Event> {
         require(playerCount > 2) {
             "There should be at least 3 players"
         }
@@ -40,31 +40,31 @@ object Uno {
                 val firstPlayerId = if (firstCard is Skip) 1 else 0
                 val gameStarted = GameStarted(EventId.randomUUID(), gameId, timestamp, firstPlayerId, playerCount, firstCard)
                 val directionChanged = if (firstCard is KickBack) DirectionChanged(EventId.randomUUID(), gameId, timestamp, direction = CounterClockwise) else null
-                sequenceOf(gameStarted, directionChanged).filterNotNull()
+                listOf(gameStarted, directionChanged).filterNotNull()
             }
             is Started -> throw IllegalStateException("The game cannot be started more than once")
         }
     }
 
-    fun play(events: Sequence<Event>, timestamp: Timestamp, playerId: PlayerId, card: Card): Sequence<Event> = when (val state = events.evolve()) {
+    fun play(events: List<Event>, timestamp: Timestamp, playerId: PlayerId, card: Card): List<Event> = when (val state = events.evolve()) {
         NotStarted -> throw IllegalStateException("Game has not been started")
         is Started -> {
             val (gameId, turn, topCard) = state
             val expectedPlayerId = turn.playerId
             when {
-                expectedPlayerId != playerId -> sequenceOf(PlayerPlayedAtWrongTurn(EventId.randomUUID(), gameId, timestamp, playerId, card))
+                expectedPlayerId != playerId -> listOf(PlayerPlayedAtWrongTurn(EventId.randomUUID(), gameId, timestamp, playerId, card))
                 card.hasSameColorAs(topCard) || card.hasSameValueAs(topCard) -> {
                     fun cardPlayed(nextPlayerId: PlayerId) = CardPlayed(EventId.randomUUID(), gameId, timestamp, playerId, card, nextPlayerId)
                     when (card) {
-                        is DigitCard -> sequenceOf(cardPlayed(turn.next().playerId))
+                        is DigitCard -> listOf(cardPlayed(turn.next().playerId))
                         is KickBack -> {
                             val nextTurn = turn.reverse().next()
-                            sequenceOf(cardPlayed(nextTurn.playerId), DirectionChanged(EventId.randomUUID(), gameId, timestamp, nextTurn.direction))
+                            listOf(cardPlayed(nextTurn.playerId), DirectionChanged(EventId.randomUUID(), gameId, timestamp, nextTurn.direction))
                         }
-                        is Skip -> sequenceOf(cardPlayed(turn.skip().playerId))
+                        is Skip -> listOf(cardPlayed(turn.skip().playerId))
                     }
                 }
-                else -> sequenceOf(PlayerPlayedWrongCard(EventId.randomUUID(), gameId, timestamp, playerId, card))
+                else -> listOf(PlayerPlayedWrongCard(EventId.randomUUID(), gameId, timestamp, playerId, card))
             }
         }
     }
@@ -112,7 +112,7 @@ private data class Started(val gameId: GameId, val turn: Turn, val topCard: Card
 private inline fun <reified ExpectedState : State> State.coerce(doWithState: ExpectedState.() -> State): State =
     if (this is ExpectedState) doWithState(this) else throw IllegalStateException("Invalid state: Expecting ${ExpectedState::class.simpleName}, was ${this::class.simpleName}")
 
-private fun Sequence<Event>.evolve(): State = fold<Event, State>(NotStarted) { currentState, event ->
+private fun List<Event>.evolve(): State = fold<Event, State>(NotStarted) { currentState, event ->
     when (event) {
         is GameStarted -> Started(event.gameId, Turn(event.firstPlayerId, event.playerCount, Clockwise), event.firstCard)
         is CardPlayed -> currentState.coerce<Started> { copy(turn = turn.setPlayer(event.nextPlayerId), topCard = event.card) }

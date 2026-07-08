@@ -38,7 +38,7 @@ class GameLogicKtTest {
             @Test
             fun `then startGame returns GameWasStarted event`() {
                 // Given
-                val currentEvents = emptySequence<GameEvent>()
+                val currentEvents = emptyList<GameEvent>()
 
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp()
@@ -49,7 +49,7 @@ class GameLogicKtTest {
                 val newEvents = startGame(currentEvents, gameId, timestamp, playerId, wordsToChooseFrom, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal)
 
                 // Then
-                val events = newEvents.toList()
+                val events = newEvents
                 assertThat(events).hasSize(1)
                 assertThat(events[0]).isExactlyInstanceOf(GameWasStarted::class.java)
                 val event = events[0] as GameWasStarted
@@ -73,7 +73,7 @@ class GameLogicKtTest {
             fun `then startGame returns throws illegal state exception`() {
                 // Given
                 val gameId = GameId.randomUUID()
-                val currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Word", 2, 4))
+                val currentEvents = listOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Word", 2, 4))
 
                 val wordsToChooseFrom = WordList(WordCategory("Category"), wordsOf("wordA", "wordB", "wordC", "wordD", "wordE"))
 
@@ -105,11 +105,11 @@ class GameLogicKtTest {
         @DisplayName("and player guess the right word")
         inner class AndPlayerGuessTheRightWord {
 
-            private lateinit var currentEvents: Sequence<GameEvent>
+            private lateinit var currentEvents: List<GameEvent>
 
             @BeforeEach
             fun `game is started`() {
-                currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Secret", 2, 4))
+                currentEvents = listOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Secret", 2, 4))
             }
 
             @Test
@@ -119,7 +119,7 @@ class GameLogicKtTest {
                 val timestamp = Timestamp()
 
                 // When
-                val events = guessWord(currentEvents, timestamp, playerId, Word("Secret")).toList()
+                val events = guessWord(currentEvents, timestamp, playerId, Word("Secret"))
 
                 // Then
                 val playerGuessedTheRightWord = events.find<PlayerGuessedTheRightWord>()
@@ -145,11 +145,11 @@ class GameLogicKtTest {
         @DisplayName("and player guess the right word with different case")
         inner class AndPlayerGuessTheRightWordWithDifferentCase {
 
-            private lateinit var currentEvents: Sequence<GameEvent>
+            private lateinit var currentEvents: List<GameEvent>
 
             @BeforeEach
             fun `game is started`() {
-                currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Secret", 2, 4))
+                currentEvents = listOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Secret", 2, 4))
             }
 
             @Test
@@ -159,7 +159,7 @@ class GameLogicKtTest {
                 val timestamp = Timestamp()
 
                 // When
-                val events = guessWord(currentEvents, timestamp, playerId, Word("secret")).toList()
+                val events = guessWord(currentEvents, timestamp, playerId, Word("secret"))
 
                 // Then
                 val playerGuessedTheRightWord = events.find<PlayerGuessedTheRightWord>()
@@ -190,11 +190,11 @@ class GameLogicKtTest {
             @DisplayName("when player has more guesses left")
             inner class WhenPlayerHasMoreGuessesLeft {
 
-                private lateinit var currentEvents: Sequence<GameEvent>
+                private lateinit var currentEvents: List<GameEvent>
 
                 @BeforeEach
                 fun `game is started`() {
-                    currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Secret", 2, 4))
+                    currentEvents = listOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Secret", 2, 4))
                 }
 
                 @Test
@@ -204,7 +204,7 @@ class GameLogicKtTest {
                     val timestamp = Timestamp()
 
                     // When
-                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong-Word")).toList()
+                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong-Word"))
 
                     // Then
                     assertThat(events).hasSize(1)
@@ -225,14 +225,14 @@ class GameLogicKtTest {
             @DisplayName("when last guess for player but more guesses remaining in game")
             inner class WhenLastGuessForPlayer {
 
-                private lateinit var currentEvents: Sequence<GameEvent>
+                private lateinit var currentEvents: List<GameEvent>
                 private lateinit var playerId: PlayerId
 
                 @BeforeEach
                 fun `game is started`() {
                     playerId = PlayerId.randomUUID()
 
-                    currentEvents = sequenceOf(
+                    currentEvents = listOf(
                             GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 4),
                             PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Wrong"))
                 }
@@ -243,7 +243,7 @@ class GameLogicKtTest {
                     val timestamp = Timestamp()
 
                     // When
-                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong-Word")).toList()
+                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong-Word"))
 
                     // Then
                     assertThat(events).hasSize(2)
@@ -270,14 +270,14 @@ class GameLogicKtTest {
             @DisplayName("when player tries to guess but attempts are already exhausted")
             inner class WhenPlayerTriesToGuessButAttemptsAreAlreadyExhausted {
 
-                private lateinit var currentEvents: Sequence<GameEvent>
+                private lateinit var currentEvents: List<GameEvent>
                 private lateinit var playerId: PlayerId
 
                 @BeforeEach
                 fun `game is started`() {
                     playerId = PlayerId.randomUUID()
 
-                    currentEvents = sequenceOf(
+                    currentEvents = listOf(
                             GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 4),
                             PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Wrong1"),
                             PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Wrong2"))
@@ -300,7 +300,7 @@ class GameLogicKtTest {
             @DisplayName("when last guess for game")
             inner class WhenLastGuessForGame {
 
-                private lateinit var currentEvents: Sequence<GameEvent>
+                private lateinit var currentEvents: List<GameEvent>
                 private lateinit var playerId1: PlayerId
                 private lateinit var playerId2: PlayerId
 
@@ -309,7 +309,7 @@ class GameLogicKtTest {
                     playerId1 = PlayerId.randomUUID()
                     playerId2 = PlayerId.randomUUID()
 
-                    currentEvents = sequenceOf(
+                    currentEvents = listOf(
                             GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId1, "Category", "Secret", 2, 3),
                             PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId1, "Wrong1"),
                             PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId1, "Wrong2"))
@@ -321,7 +321,7 @@ class GameLogicKtTest {
                     val timestamp = Timestamp()
 
                     // When
-                    val events = guessWord(currentEvents, timestamp, playerId2, Word("Wrong-Word")).toList()
+                    val events = guessWord(currentEvents, timestamp, playerId2, Word("Wrong-Word"))
 
                     // Then
                     assertThat(events).hasSize(2)
@@ -356,7 +356,7 @@ class GameLogicKtTest {
             val playerId = PlayerId.randomUUID()
             val timestamp = Timestamp()
 
-            val currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 1),
+            val currentEvents = listOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 1),
                     PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Wrong"),
                     GameWasLost(UUID.randomUUID(), Timestamp(), gameId))
 
@@ -379,7 +379,7 @@ class GameLogicKtTest {
             val playerId = PlayerId.randomUUID()
             val timestamp = Timestamp()
 
-            val currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 4),
+            val currentEvents = listOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 4),
                     PlayerGuessedTheRightWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Secret"),
                     GameWasWon(UUID.randomUUID(), Timestamp(), gameId, winnerId = playerId))
 

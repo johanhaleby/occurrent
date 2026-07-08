@@ -18,7 +18,7 @@ package se.occurrent.dsl.module.blocking.em
 
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeSequence
+import org.occurrent.application.service.blocking.executeList
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.api.blocking.EventStore
@@ -94,19 +94,12 @@ sealed class EventModelSlice<C, E> {
 
     data class CommandDefinition<C : Any, E : Any>(val applicationService: ApplicationService<E>, val wireframeName: String) : EventModelSlice<C, E>() {
 
-        @JvmName("listCommand")
         inline fun <reified CMD : C> command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (List<E>, CMD) -> List<E>): EventDefinition<C, E> {
-            return command(streamIdGetter) { eventSeq: Sequence<E>, cmd ->
-                commandHandler(eventSeq.toList(), cmd).asSequence()
-            }
-        }
-
-        inline fun <reified CMD : C> command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (Sequence<E>, CMD) -> Sequence<E>): EventDefinition<C, E> {
             val dispatcherFn: (C) -> Unit = { command ->
                 command as CMD
                 val streamId = streamIdGetter(command)
-                applicationService.executeSequence(streamId) { e ->
-                    commandHandler(e, command)
+                applicationService.executeList(streamId) { events ->
+                    commandHandler(events, command)
                 }
             }
             return EventDefinition(wireframeName, EventModelCommandDispatcher(CMD::class, dispatcherFn))

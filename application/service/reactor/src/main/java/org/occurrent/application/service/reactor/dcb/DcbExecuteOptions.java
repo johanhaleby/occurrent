@@ -23,6 +23,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.List;
 import java.util.stream.Stream;
 
 /**
@@ -40,10 +41,10 @@ import java.util.stream.Stream;
  */
 @NullMarked
 public final class DcbExecuteOptions<E> {
-    private final @Nullable Function<Stream<E>, Mono<Void>> sideEffect;
+    private final @Nullable Function<List<E>, Mono<Void>> sideEffect;
     private final @Nullable TagGenerator<E> tagGenerator;
 
-    private DcbExecuteOptions(@Nullable Function<Stream<E>, Mono<Void>> sideEffect, @Nullable TagGenerator<E> tagGenerator) {
+    private DcbExecuteOptions(@Nullable Function<List<E>, Mono<Void>> sideEffect, @Nullable TagGenerator<E> tagGenerator) {
         this.sideEffect = sideEffect;
         this.tagGenerator = tagGenerator;
     }
@@ -84,7 +85,7 @@ public final class DcbExecuteOptions<E> {
      * point the tag generator is invoked, not here.
      */
     @SuppressWarnings("unchecked")
-    public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> sideEffect(Function<Stream<E_SPECIFIC>, Mono<Void>> sideEffect) {
+    public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> sideEffect(Function<List<E_SPECIFIC>, Mono<Void>> sideEffect) {
         return new DcbExecuteOptions<>(Objects.requireNonNull(sideEffect, "sideEffect cannot be null"), (TagGenerator<E_SPECIFIC>) this.tagGenerator);
     }
 
@@ -102,13 +103,13 @@ public final class DcbExecuteOptions<E> {
      */
     @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> tagGenerator(TagGenerator<E_SPECIFIC> tagGenerator) {
-        return new DcbExecuteOptions<>((Function<Stream<E_SPECIFIC>, Mono<Void>>) (Function<?, ?>) this.sideEffect, Objects.requireNonNull(tagGenerator, "tagGenerator cannot be null"));
+        return new DcbExecuteOptions<>((Function<List<E_SPECIFIC>, Mono<Void>>) (Function<?, ?>) this.sideEffect, Objects.requireNonNull(tagGenerator, "tagGenerator cannot be null"));
     }
 
     /**
      * Return the configured post-append side-effect, or {@code null} if none has been configured.
      */
-    public @Nullable Function<Stream<E>, Mono<Void>> sideEffect() {
+    public @Nullable Function<List<E>, Mono<Void>> sideEffect() {
         return sideEffect;
     }
 

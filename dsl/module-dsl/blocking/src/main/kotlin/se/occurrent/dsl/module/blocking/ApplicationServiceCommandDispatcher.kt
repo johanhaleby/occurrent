@@ -17,7 +17,7 @@
 package se.occurrent.dsl.module.blocking
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeSequence
+import org.occurrent.application.service.blocking.executeList
 import kotlin.reflect.KClass
 
 
@@ -48,21 +48,14 @@ class ApplicationServiceCommandBuilder<C : Any, E : Any>(val applicationService:
         dispatchers[CMD::class] = { cmd -> commandHandler(cmd as CMD) }
     }
 
-    inline fun <reified CMD : C> command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (Sequence<E>, CMD) -> Sequence<E>) {
+    inline fun <reified CMD : C> command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (List<E>, CMD) -> List<E>) {
         val dispatcherFn: (CMD) -> Unit = { command ->
             val streamId = streamIdGetter(command)
-            applicationService.executeSequence(streamId) { e ->
-                commandHandler(e, command)
+            applicationService.executeList(streamId) { events ->
+                commandHandler(events, command)
             }
         }
 
         dispatchers[CMD::class] = { cmd -> dispatcherFn(cmd as CMD) }
-    }
-}
-
-@JvmName("listCommand")
-inline fun <C : Any, E : Any, reified CMD : C> ApplicationServiceCommandBuilder<C, E>.command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (List<E>, CMD) -> List<E>) {
-    command(streamIdGetter) { eventSeq, cmd ->
-        commandHandler(eventSeq.toList(), cmd).asSequence()
     }
 }

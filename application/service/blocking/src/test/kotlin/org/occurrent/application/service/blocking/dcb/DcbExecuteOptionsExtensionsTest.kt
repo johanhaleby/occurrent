@@ -10,7 +10,6 @@ import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import java.time.LocalDateTime
 import java.util.UUID
-import java.util.stream.Stream
 
 @DisplayName("DcbExecuteOptions extensions")
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
@@ -23,7 +22,7 @@ class DcbExecuteOptionsExtensionsTest {
         val options = dcbSideEffect<DomainEvent, NameDefined> { observed += "defined:${it.name()}" }
 
         // When
-        options.sideEffect()!!.accept(Stream.of(nameDefined("Ada"), nameWasChanged("Lovelace")))
+        options.sideEffect()!!.accept(listOf(nameDefined("Ada"), nameWasChanged("Lovelace")))
 
         // Then
         assertThat(observed).containsExactly("defined:Ada")
@@ -39,7 +38,7 @@ class DcbExecuteOptionsExtensionsTest {
         )
 
         // When
-        options.sideEffect()!!.accept(Stream.of(nameDefined("Ada"), nameWasChanged("Lovelace")))
+        options.sideEffect()!!.accept(listOf(nameDefined("Ada"), nameWasChanged("Lovelace")))
 
         // Then
         assertThat(observed).containsExactly("defined:Ada", "changed:Lovelace")

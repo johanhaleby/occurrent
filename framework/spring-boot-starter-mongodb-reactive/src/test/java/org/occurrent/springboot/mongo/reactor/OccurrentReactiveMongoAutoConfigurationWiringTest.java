@@ -55,7 +55,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -286,7 +285,7 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
 
                     ApplicationService<TestEvent> applicationService = context.getBean(ApplicationService.class);
                     TestEvent historic = new TestEvent(UUID.randomUUID().toString());
-                    applicationService.execute(UUID.randomUUID().toString(), events -> Stream.of(historic)).block();
+                    applicationService.execute(UUID.randomUUID().toString(), events -> List.of(historic)).block();
 
                     ReplayingListener replayingListener = context.getBean(ReplayingListener.class);
                     await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->

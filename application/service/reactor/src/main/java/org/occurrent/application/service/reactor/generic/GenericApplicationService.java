@@ -37,7 +37,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 /**
  * The reactive counterpart of the blocking {@code GenericApplicationService}. It reads a stream, applies the events to a
@@ -75,7 +74,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
     }
 
     @Override
-    public Mono<WriteResult> execute(String streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    public Mono<WriteResult> execute(String streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(executeOptions, "ExecuteOptions cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
@@ -84,25 +83,29 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         if (filter != null && !(eventStore instanceof ReadEventStreamWithFilter)) {
             throw new UnsupportedOperationException("The provided EventStore implementation does not support reading with a StreamReadFilter. EventStore must implement ReadEventStreamWithFilter in order to use filters when reading.");
         }
-        @Nullable Function<Stream<E>, Mono<Void>> sideEffect = executeOptions.sideEffect();
+        @Nullable Function<List<E>, Mono<Void>> sideEffect = executeOptions.sideEffect();
 
         // The read, decide, and write run as one unit and retry from a fresh read on an optimistic-concurrency
         // conflict, so the decision always runs against the current events. The side-effect is composed after the
         // retry so it runs once on success, not per attempt.
         Mono<Result<E>> readDecideWrite = Mono.defer(() -> read(streamId, filter).flatMap(eventStream ->
                 eventStream.events().collectList().flatMap(currentCloudEvents -> {
-                    Stream<E> domainEvents = cloudEventConverter.toDomainEvents(currentCloudEvents.stream());
-                    List<E> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(domainEvents)).toList();
-                    List<CloudEvent> newCloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents.stream()).toList();
+                    List<E> domainEvents = cloudEventConverter.toDomainEvents(currentCloudEvents.stream()).toList();
+                    List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
+                    if (newDomainEvents == null) {
+                        newDomainEvents = List.of();
+                    }
+                    List<CloudEvent> newCloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
+                    List<E> writtenDomainEvents = newDomainEvents;
                     return eventStore.write(streamId, eventStream.version(), Flux.fromIterable(newCloudEvents))
-                            .map(writeResult -> new Result<>(writeResult, newDomainEvents));
+                            .map(writeResult -> new Result<>(writeResult, writtenDomainEvents));
                 }))).retryWhen(retry);
 
         return readDecideWrite.flatMap(result -> {
             if (sideEffect == null) {
                 return Mono.just(result.writeResult());
             }
-            return sideEffect.apply(result.newDomainEvents().stream()).thenReturn(result.writeResult());
+            return sideEffect.apply(result.newDomainEvents()).thenReturn(result.writeResult());
         });
     }
 
@@ -119,10 +122,6 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
             return executeFilter.resolve(cloudEventConverter::getCloudEventType);
         }
         return executeOptions.filter();
-    }
-
-    private static <T> Stream<T> emptyStreamIfNull(@Nullable Stream<T> stream) {
-        return stream == null ? Stream.empty() : stream;
     }
 
     /**

@@ -1935,11 +1935,11 @@ public class SpringMongoEventStoreTest {
     }
 
     private WriteResult persist(String eventStreamId, CloudEvent event) {
-        return eventStore.write(eventStreamId, Stream.of(event));
+        return eventStore.write(eventStreamId, List.of(event));
     }
 
     private WriteResult persist(String eventStreamId, DomainEvent event) {
-        return eventStore.write(eventStreamId, Stream.of(convertDomainEventCloudEvent(event)));
+        return eventStore.write(eventStreamId, List.of(convertDomainEventCloudEvent(event)));
     }
 
     private WriteResult persist(String eventStreamId, List<DomainEvent> events) {
@@ -1947,7 +1947,7 @@ public class SpringMongoEventStoreTest {
     }
 
     private WriteResult persist(String eventStreamId, Stream<DomainEvent> events) {
-        return eventStore.write(eventStreamId, events.map(this::convertDomainEventCloudEvent));
+        return eventStore.write(eventStreamId, events.map(this::convertDomainEventCloudEvent).collect(Collectors.toList()));
     }
 
     private WriteResult persist(String eventStreamId, WriteCondition writeCondition, DomainEvent event) {
@@ -1961,7 +1961,7 @@ public class SpringMongoEventStoreTest {
     }
 
     private WriteResult persist(String eventStreamId, WriteCondition writeCondition, Stream<DomainEvent> events) {
-        return eventStore.write(eventStreamId, writeCondition, events.map(this::convertDomainEventCloudEvent));
+        return eventStore.write(eventStreamId, writeCondition, events.map(this::convertDomainEventCloudEvent).collect(Collectors.toList()));
     }
 
     private CloudEvent convertDomainEventCloudEvent(DomainEvent domainEvent) {

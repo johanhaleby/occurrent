@@ -35,11 +35,11 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
@@ -88,7 +88,7 @@ public class InMemorySubscriptionModelTest {
         inMemorySubscriptionModel.subscribe("subscription2", receivedEvents2::add);
 
         // When
-        inMemoryEventStore.write("streamId1", Stream.of(cloudEvent));
+        inMemoryEventStore.write("streamId1", List.of(cloudEvent));
 
         // Then
         await().until(receivedEvents1::size, is(1));
@@ -123,7 +123,7 @@ public class InMemorySubscriptionModelTest {
         });
 
         // When
-        inMemoryEventStore.write("streamId1", Stream.of(cloudEvent));
+        inMemoryEventStore.write("streamId1", List.of(cloudEvent));
 
         // Then
         await().untilAsserted(() -> {
@@ -311,8 +311,8 @@ public class InMemorySubscriptionModelTest {
         }
     }
 
-    private Stream<CloudEvent> serialize(DomainEvent e) {
-        return Stream.of(io.cloudevents.core.builder.CloudEventBuilder.v1()
+    private List<CloudEvent> serialize(DomainEvent e) {
+        return List.of(io.cloudevents.core.builder.CloudEventBuilder.v1()
                 .withId(e.eventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())

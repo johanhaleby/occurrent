@@ -42,7 +42,6 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
 import static org.occurrent.application.composition.command.ListCommandComposition.composeCommands;
 import static org.occurrent.application.composition.command.partial.PartialFunctionApplication.partial;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
@@ -67,12 +66,12 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream", toStreamCommand(
+        applicationService.execute("stream",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
-        ));
+        );
 
         // When
         List<DomainEvent> events = domainEventQueries.all().collect(Collectors.toList());
@@ -90,12 +89,12 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream", toStreamCommand(
+        applicationService.execute("stream",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
-        ));
+        );
 
         // When
         List<DomainEvent> events = domainEventQueries.query(Filter.all()).collect(Collectors.toList());
@@ -113,12 +112,12 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream", toStreamCommand(
+        applicationService.execute("stream",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
-        ));
+        );
 
         // When
         List<NameDefined> events = domainEventQueries.<NameDefined>query(type(NameDefined.class.getName())).collect(Collectors.toList());
@@ -136,12 +135,12 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream", toStreamCommand(
+        applicationService.execute("stream",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
-        ));
+        );
 
         // When
         NameDefined event = domainEventQueries.queryOne(type(NameDefined.class.getName()));
@@ -155,19 +154,19 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream1", toStreamCommand(
+        applicationService.execute("stream1",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
-        ));
+        );
 
-        applicationService.execute("stream2", toStreamCommand(
+        applicationService.execute("stream2",
                 composeCommands(
                         partial(Name::defineName, "eventId3", time, "name", "Another Doe"),
                         partial(Name::changeName, "eventId4", time, "name", "Jane2 Doe")
                 )
-        ));
+        );
 
         // When
         NameDefined event = domainEventQueries.queryOne(type(NameDefined.class.getName()));
@@ -181,12 +180,12 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream", toStreamCommand(
+        applicationService.execute("stream",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
-        ));
+        );
 
         // When
         List<NameDefined> events = domainEventQueries.query(NameDefined.class).collect(Collectors.toList());
@@ -203,13 +202,13 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream", toStreamCommand(
+        applicationService.execute("stream",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe"),
                         partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")
                 )
-        ));
+        );
 
         // When
         NameWasChanged event = domainEventQueries.queryOne(NameWasChanged.class);
@@ -223,17 +222,17 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream", toStreamCommand(
+        applicationService.execute("stream",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe"),
                         partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")
                 )
-        ));
+        );
 
         // When
         List<DomainEvent> events = domainEventQueries.query(NameWasChanged.class, NameDefined.class).collect(Collectors.toList());
-        
+
 
         // Then
         assertAll(
@@ -247,13 +246,13 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream", toStreamCommand(
+        applicationService.execute("stream",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe"),
                         partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")
                 )
-        ));
+        );
 
         // When
         List<DomainEvent> events = domainEventQueries.query(Arrays.asList(NameWasChanged.class, NameDefined.class)).collect(Collectors.toList());
@@ -270,13 +269,13 @@ public class DomainEventQueriesTest {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("stream", toStreamCommand(
+        applicationService.execute("stream",
                 composeCommands(
                         partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
                         partial(Name::changeName, "eventId2", time, "name", "Jane Doe"),
                         partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")
                 )
-        ));
+        );
 
         // When
         NameWasChanged event = domainEventQueries.queryOne(NameWasChanged.class, SortBy.natural(DESCENDING));
@@ -294,9 +293,9 @@ public class DomainEventQueriesTest {
         ApplicationService<DomainEvent> applicationServiceWithPosition = new GenericApplicationService<>(eventStore, cloudEventConverter);
         DomainEventQueries<DomainEvent> queriesWithPosition = new DomainEventQueries<>(eventStore, cloudEventConverter);
 
-        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::defineName, "eventId1", time, "name", "Some Doe")));
-        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId2", time, "name", "Jane Doe")));
-        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")));
+        applicationServiceWithPosition.execute("stream1", partial(Name::defineName, "eventId1", time, "name", "Some Doe"));
+        applicationServiceWithPosition.execute("stream1", partial(Name::changeName, "eventId2", time, "name", "Jane Doe"));
+        applicationServiceWithPosition.execute("stream1", partial(Name::changeName, "eventId3", time, "name", "Jane Doe2"));
 
         // When
         List<DomainEvent> events = queriesWithPosition.afterPosition(1).collect(Collectors.toList());
@@ -317,9 +316,9 @@ public class DomainEventQueriesTest {
         ApplicationService<DomainEvent> applicationServiceWithPosition = new GenericApplicationService<>(eventStore, cloudEventConverter);
         DomainEventQueries<DomainEvent> queriesWithPosition = new DomainEventQueries<>(eventStore, cloudEventConverter);
 
-        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::defineName, "eventId1", time, "name", "Some Doe")));
-        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId2", time, "name", "Jane Doe")));
-        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")));
+        applicationServiceWithPosition.execute("stream1", partial(Name::defineName, "eventId1", time, "name", "Some Doe"));
+        applicationServiceWithPosition.execute("stream1", partial(Name::changeName, "eventId2", time, "name", "Jane Doe"));
+        applicationServiceWithPosition.execute("stream1", partial(Name::changeName, "eventId3", time, "name", "Jane Doe2"));
 
         // When
         List<DomainEvent> events = queriesWithPosition.readInPositionOrder(Filter.all(), org.occurrent.eventstore.api.PositionRange.between(1, 2))

@@ -17,7 +17,7 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.wordhint
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeSequence
+import org.occurrent.application.service.blocking.executeList
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintCharacterRevelation
@@ -32,11 +32,11 @@ class RevealInitialCharactersInWordHintAfterGameIsStarted(private val applicatio
 
     @Retryable(backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(gameWasStarted: GameWasStarted) {
-        applicationService.executeSequence("wordhint:${gameWasStarted.gameId}") { events ->
-            if (events.toList().isEmpty()) {
-                WordHintCharacterRevelation.revealInitialCharactersInWordHintWhenGameWasStarted(WordHintData(gameWasStarted.gameId, gameWasStarted.wordToGuess))
+        applicationService.executeList("wordhint:${gameWasStarted.gameId}") { events: List<GameEvent> ->
+            if (events.isEmpty()) {
+                WordHintCharacterRevelation.revealInitialCharactersInWordHintWhenGameWasStarted(WordHintData(gameWasStarted.gameId, gameWasStarted.wordToGuess)).toList()
             } else {
-                emptySequence()
+                emptyList()
             }
         }
     }

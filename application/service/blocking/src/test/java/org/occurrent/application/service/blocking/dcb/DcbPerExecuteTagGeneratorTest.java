@@ -32,7 +32,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,7 +60,7 @@ class DcbPerExecuteTagGeneratorTest {
                 .tagGenerator(event -> Set.of(Tag.parse("per-execute:tag")));
 
         Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("per-execute:tag")), options, events ->
-                Stream.of(new DomainEvent("NameDefined", "name:1")));
+                List.of(new DomainEvent("NameDefined", "name:1")));
 
         assertThat(result).isPresent();
 
@@ -84,7 +83,7 @@ class DcbPerExecuteTagGeneratorTest {
                 .tagGenerator(event -> Set.of(Tag.parse("name:1")));
 
         Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")), options, events ->
-                Stream.of(new DomainEvent("NameDefined", "name:1")));
+                List.of(new DomainEvent("NameDefined", "name:1")));
 
         assertThat(result).isPresent();
         assertThat(eventStore.read(tags(Tag.parse("name:1"))).events())
@@ -101,7 +100,7 @@ class DcbPerExecuteTagGeneratorTest {
                 GenericDcbApplicationService.defaultRetryStrategy());
 
         assertThatThrownBy(() -> applicationService.execute(tags(Tag.parse("name:1")), events ->
-                Stream.of(new DomainEvent("NameDefined", "name:1"))))
+                List.of(new DomainEvent("NameDefined", "name:1"))))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("No TagGenerator available");
     }

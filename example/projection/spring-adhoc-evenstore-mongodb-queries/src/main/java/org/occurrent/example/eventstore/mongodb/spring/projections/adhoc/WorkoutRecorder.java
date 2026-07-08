@@ -51,6 +51,6 @@ public class WorkoutRecorder {
                         .withData(CheckedFunction.unchecked(objectMapper::writeValueAsBytes).apply(e))
                         .build())
                 .collect(groupingBy(CloudEventAttributes::getSubject))
-                .forEach((streamId, cloudEvents) -> eventStore.write(streamId, 0, cloudEvents.stream()));
+                .forEach((streamId, cloudEvents) -> eventStore.write(streamId, 0, cloudEvents));
     }
 }

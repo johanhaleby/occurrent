@@ -35,7 +35,6 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -71,7 +70,7 @@ class DcbSubscriptionModelTest {
 
         CloudEvent matching = dcbEvent("TypeA", 1L, List.of("x:1"));
         CloudEvent nonMatching = dcbEvent("TypeA", 2L, List.of("y:2"));
-        delegate.accept(Stream.of(matching, nonMatching));
+        delegate.accept(List.of(matching, nonMatching));
 
         await().untilAsserted(() ->
                 assertThat(received).extracting(CloudEvent::getId).containsExactly(matching.getId()));
@@ -84,7 +83,7 @@ class DcbSubscriptionModelTest {
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("OrderPlaced", 1L, List.of("order:1"));
-        delegate.accept(Stream.of(matching));
+        delegate.accept(List.of(matching));
 
         await().untilAsserted(() ->
                 assertThat(received).extracting(CloudEvent::getId).containsExactly(matching.getId()));
@@ -97,12 +96,12 @@ class DcbSubscriptionModelTest {
                 .waitUntilStarted();
 
         CloudEvent first = dcbEvent("TypeA", 1L, List.of("x:1"));
-        delegate.accept(Stream.of(first));
+        delegate.accept(List.of(first));
         await().untilAsserted(() -> assertThat(received).extracting(CloudEvent::getId).containsExactly(first.getId()));
 
         dcbSubscriptionModel.cancelSubscription("sub");
 
-        delegate.accept(Stream.of(dcbEvent("TypeA", 2L, List.of("x:1"))));
+        delegate.accept(List.of(dcbEvent("TypeA", 2L, List.of("x:1"))));
         await().during(Duration.ofMillis(200)).atMost(Duration.ofSeconds(2))
                 .untilAsserted(() -> assertThat(received).extracting(CloudEvent::getId).containsExactly(first.getId()));
     }

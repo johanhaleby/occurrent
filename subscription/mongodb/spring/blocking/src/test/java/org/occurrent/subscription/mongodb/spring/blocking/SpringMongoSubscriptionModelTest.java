@@ -67,7 +67,6 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -157,7 +156,7 @@ public class SpringMongoSubscriptionModelTest {
         NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
 
         // When
-        mongoEventStore.append(serialize(nameDefined)
+        mongoEventStore.append(serialize(nameDefined).stream()
                 .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse("name:1"))))
                 .toList());
 
@@ -879,8 +878,8 @@ public class SpringMongoSubscriptionModelTest {
         }
     }
 
-    private Stream<CloudEvent> serialize(DomainEvent e) {
-        return Stream.of(CloudEventBuilder.v1()
+    private List<CloudEvent> serialize(DomainEvent e) {
+        return List.of(CloudEventBuilder.v1()
                 .withId(e.eventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())

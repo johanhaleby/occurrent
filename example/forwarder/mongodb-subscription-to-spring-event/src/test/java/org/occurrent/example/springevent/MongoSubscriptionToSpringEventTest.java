@@ -98,7 +98,7 @@ public class MongoSubscriptionToSpringEventTest {
         });
     }
 
-    private Stream<CloudEvent> serialize(DomainEvent... events) {
+    private List<CloudEvent> serialize(DomainEvent... events) {
         return Stream.of(events)
                 .map(e -> CloudEventBuilder.v1()
                         .withId(UUID.randomUUID().toString())
@@ -108,6 +108,7 @@ public class MongoSubscriptionToSpringEventTest {
                         .withSubject(e.name())
                         .withDataContentType("application/json")
                         .withData(CheckedFunction.unchecked(objectMapper::writeValueAsBytes).apply(e))
-                        .build());
+                        .build())
+                .toList();
     }
 }

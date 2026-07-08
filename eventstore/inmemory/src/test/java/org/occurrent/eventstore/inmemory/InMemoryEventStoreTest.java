@@ -385,7 +385,7 @@ public class InMemoryEventStoreTest {
             // Given
             CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
-            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).toList()));
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(list -> events.addAll(list.stream().map(deserialize(objectMapper)).toList()));
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name", Stream.empty());
@@ -399,7 +399,7 @@ public class InMemoryEventStoreTest {
             // Given
             CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
-            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).toList()));
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(list -> events.addAll(list.stream().map(deserialize(objectMapper)).toList()));
             LocalDateTime now = LocalDateTime.now();
 
             DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
@@ -417,7 +417,7 @@ public class InMemoryEventStoreTest {
             // Given
             CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
-            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).toList()));
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(list -> events.addAll(list.stream().map(deserialize(objectMapper)).toList()));
             LocalDateTime now = LocalDateTime.now();
 
             DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
@@ -1110,7 +1110,7 @@ public class InMemoryEventStoreTest {
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
             unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
-            inMemoryEventStore.write("something", Stream.of(CloudEventBuilder.v1()
+            inMemoryEventStore.write("something", List.of(CloudEventBuilder.v1()
                     .withId(UUID.randomUUID().toString())
                     .withSource(URI.create("http://something"))
                     .withType("something")
@@ -1137,7 +1137,7 @@ public class InMemoryEventStoreTest {
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
             unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
-            inMemoryEventStore.write("something", Stream.of(CloudEventBuilder.v1()
+            inMemoryEventStore.write("something", List.of(CloudEventBuilder.v1()
                     .withId(UUID.randomUUID().toString())
                     .withSource(URI.create("http://something"))
                     .withType("something")
@@ -1281,7 +1281,7 @@ public class InMemoryEventStoreTest {
                     .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
                     .withExtension(occurrent("something", 1L))
                     .build();
-            inMemoryEventStore.write("something", Stream.of(cloudEvent));
+            inMemoryEventStore.write("something", List.of(cloudEvent));
 
             // Then
             // Stream position is on by default, so the store stamps a global position (the fourth event written here).
@@ -1312,7 +1312,7 @@ public class InMemoryEventStoreTest {
                     .withData("text".getBytes(UTF_8))
                     .withExtension(occurrent("something", 1L))
                     .build();
-            inMemoryEventStore.write("something", Stream.of(cloudEvent));
+            inMemoryEventStore.write("something", List.of(cloudEvent));
 
             // Then
             // Stream position is on by default, so the store stamps a global position (the fourth event written here).
@@ -1683,11 +1683,11 @@ public class InMemoryEventStoreTest {
     }
 
     private WriteResult unconditionallyPersist(EventStore inMemoryEventStore, String eventStreamId, Stream<DomainEvent> events) {
-        return inMemoryEventStore.write(eventStreamId, events.map(convertDomainEventToCloudEvent(objectMapper)));
+        return inMemoryEventStore.write(eventStreamId, events.map(convertDomainEventToCloudEvent(objectMapper)).collect(Collectors.toList()));
     }
 
     private WriteResult conditionallyPersist(EventStore inMemoryEventStore, String eventStreamId, WriteCondition writeCondition, Stream<DomainEvent> events) {
-        return inMemoryEventStore.write(eventStreamId, writeCondition, events.map(convertDomainEventToCloudEvent(objectMapper)));
+        return inMemoryEventStore.write(eventStreamId, writeCondition, events.map(convertDomainEventToCloudEvent(objectMapper)).collect(Collectors.toList()));
     }
 
     private static Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent(ObjectMapper objectMapper) {

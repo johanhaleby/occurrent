@@ -23,7 +23,6 @@ import PlayHand
 import kotlinx.collections.immutable.persistentListOf
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.catchThrowable
-import org.assertj.core.api.ObjectAssert
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -39,7 +38,7 @@ class GamePlayTest {
         @Test
         fun `then creating game will return GameCreatedEvent`() {
             // Given
-            val currentEvents = emptySequence<GameEvent>()
+            val currentEvents = emptyList<GameEvent>()
             val timestamp = Timestamp.now()
             val creator = GameCreatorId.random()
             val bestOfRounds = BestOfRounds.ONE
@@ -54,7 +53,7 @@ class GamePlayTest {
         @Test
         fun `then play hand will throw GameDoesNotExist exception`() {
             // Given
-            val currentEvents = emptySequence<GameEvent>()
+            val currentEvents = emptyList<GameEvent>()
 
             // When
             val throwable = catchThrowable { handle(currentEvents, PlayHand(Timestamp.now(), PlayerId.random(), Shape.PAPER)) }
@@ -71,7 +70,7 @@ class GamePlayTest {
         @Test
         fun `then game cannot be created again`() {
             // Given
-            val currentEvents = sequenceOf(GameCreated(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
+            val currentEvents = listOf(GameCreated(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
 
             // When
             val throwable = catchThrowable { handle(currentEvents, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE)) }
@@ -83,7 +82,7 @@ class GamePlayTest {
         @Nested
         @DisplayName("and no player has joined")
         inner class AndNoPlayerHasJoined {
-            private val currentEvents = sequenceOf(GameCreated(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
+            private val currentEvents = listOf(GameCreated(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
 
             @Test
             fun `then game is started`() {
@@ -593,27 +592,6 @@ class GamePlayTest {
     }
 }
 
-private fun compose(vararg command: GameCommand): Sequence<GameEvent> = command.fold(persistentListOf<GameEvent>()) { events, cmd ->
-    events.addAll(handle(events.asSequence(), cmd).toList())
-}.asSequence()
-
-// Extension functions to better support sequences in assertj
-private fun <T> ObjectAssert<Sequence<T>>.containsOnly(vararg elements: T?) = satisfies({ seq ->
-    assertThat(seq.toList()).containsOnly(*elements)
-})
-
-private fun <T> ObjectAssert<Sequence<T>>.containsExactly(vararg elements: T?) = satisfies({ seq ->
-    assertThat(seq.toList()).containsExactly(*elements)
-})
-
-private fun <T> ObjectAssert<Sequence<T>>.contains(vararg elements: T?) = satisfies({ seq ->
-    assertThat(seq.toList()).contains(*elements)
-})
-
-private fun <T> ObjectAssert<Sequence<T>>.doesNotContain(vararg elements: T?) = satisfies({ seq ->
-    assertThat(seq.toList()).doesNotContain(*elements)
-})
-
-private fun <T> ObjectAssert<Sequence<T>>.hasSize(size: Int) = satisfies({ seq ->
-    assertThat(seq.toList()).hasSize(size)
-})
+private fun compose(vararg command: GameCommand): List<GameEvent> = command.fold(persistentListOf<GameEvent>()) { events, cmd ->
+    events.addAll(handle(events, cmd))
+}

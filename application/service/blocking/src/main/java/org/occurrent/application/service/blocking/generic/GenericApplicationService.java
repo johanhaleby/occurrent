@@ -33,13 +33,10 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
 
 import java.time.Duration;
-import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * A generic application service that works in many scenarios. If you need more complex logic, such as transaction support, you may consider either wrapping it
@@ -85,13 +82,13 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
     }
 
     @Override
-    public WriteResult execute(String streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    public WriteResult execute(String streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(executeOptions, "ExecuteOptions cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
         StreamReadFilter filter = resolveFilter(executeOptions);
-        Consumer<Stream<E>> sideEffect = executeOptions.sideEffect();
+        Consumer<List<E>> sideEffect = executeOptions.sideEffect();
 
         boolean isStreamReadFilterCompatibleEventStore = eventStore instanceof ReadEventStreamWithFilter;
         if (!isStreamReadFilterCompatibleEventStore && filter != null) {
@@ -103,33 +100,23 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
               // @formatter:on
 
         Tuple<WriteResult, List<E>> result = retryStrategy.execute(() -> {
-            // Read all events from the event store for a particular stream
             EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter);
-            // Convert the cloud events into domain events
-            Stream<E> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events());
+            List<E> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events()).toList();
 
-            // Call a pure function from the domain model which returns a Stream of events
-            Stream<E> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(eventsInStream));
+            List<E> newDomainEvents = functionThatCallsDomainModel.apply(eventsInStream);
+            if (newDomainEvents == null) {
+                newDomainEvents = List.of();
+            }
 
-            // We need to convert the new domain event stream into a list in order to be able to call side effects with new events
-            // if side effect is defined
-            final List<E> newEventsAsList = sideEffect == null ? Collections.emptyList() : newDomainEvents.collect(Collectors.toList());
-
-            // Convert to cloud events and write the new events to the event store
-            Stream<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(sideEffect == null ? newDomainEvents : newEventsAsList.stream());
+            List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
             WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
-            return new Tuple<>(writeResult, newEventsAsList);
+            return new Tuple<>(writeResult, newDomainEvents);
         });
 
-        // Invoke side-effect
         if (sideEffect != null) {
-            sideEffect.accept(result.v2.stream());
+            sideEffect.accept(result.v2);
         }
         return result.v1;
-    }
-
-    private static <T> Stream<T> emptyStreamIfNull(@Nullable Stream<T> stream) {
-        return stream == null ? Stream.empty() : stream;
     }
 
     private @Nullable StreamReadFilter resolveFilter(ExecuteOptions<E> executeOptions) {

@@ -25,6 +25,7 @@ import reactor.core.publisher.Mono;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.List;
 import java.util.stream.Stream;
 
 /**
@@ -46,12 +47,12 @@ public interface ApplicationService<E> {
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model.
      * @return A {@link Mono} of the write result.
      */
-    Mono<WriteResult> execute(String streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
+    Mono<WriteResult> execute(String streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel);
 
     /**
      * Execute a function using an {@link ExecuteFilter} that resolves domain event classes to CloudEvent types when reading.
      */
-    default Mono<WriteResult> execute(String streamId, ExecuteFilter<? extends E> executeFilter, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default Mono<WriteResult> execute(String streamId, ExecuteFilter<? extends E> executeFilter, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(executeFilter, "ExecuteFilter cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "functionThatCallsDomainModel cannot be null");
@@ -61,14 +62,14 @@ public interface ApplicationService<E> {
     /**
      * Execute a function with no read filter and no side-effect.
      */
-    default Mono<WriteResult> execute(String streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default Mono<WriteResult> execute(String streamId, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         return execute(streamId, ExecuteOptions.empty(), functionThatCallsDomainModel);
     }
 
     /**
      * Convenience overload that accepts a {@link UUID} stream id.
      */
-    default Mono<WriteResult> execute(UUID streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default Mono<WriteResult> execute(UUID streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), executeOptions, functionThatCallsDomainModel);
     }
@@ -76,7 +77,7 @@ public interface ApplicationService<E> {
     /**
      * Convenience overload that accepts a {@link UUID} stream id and an {@link ExecuteFilter}.
      */
-    default Mono<WriteResult> execute(UUID streamId, ExecuteFilter<? extends E> executeFilter, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default Mono<WriteResult> execute(UUID streamId, ExecuteFilter<? extends E> executeFilter, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), executeFilter, functionThatCallsDomainModel);
     }
@@ -84,7 +85,7 @@ public interface ApplicationService<E> {
     /**
      * Convenience overload that accepts a {@link UUID} stream id.
      */
-    default Mono<WriteResult> execute(UUID streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default Mono<WriteResult> execute(UUID streamId, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), functionThatCallsDomainModel);
     }

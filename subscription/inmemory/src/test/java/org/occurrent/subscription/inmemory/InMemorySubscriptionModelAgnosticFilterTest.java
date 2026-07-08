@@ -34,7 +34,6 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -67,7 +66,7 @@ class InMemorySubscriptionModelAgnosticFilterTest {
 
         CloudEvent streamEvent = streamEvent("TypeA", 1L);
         CloudEvent dcbEvent = dcbEvent("TypeB", 2L, List.of("x:1"));
-        subscriptionModel.accept(Stream.of(streamEvent, dcbEvent));
+        subscriptionModel.accept(List.of(streamEvent, dcbEvent));
 
         await().untilAsserted(() ->
                 assertThat(received).extracting(CloudEvent::getId).containsExactlyInAnyOrder(streamEvent.getId(), dcbEvent.getId()));
@@ -83,7 +82,7 @@ class InMemorySubscriptionModelAgnosticFilterTest {
         CloudEvent matchingDcb = dcbEvent("OrderPlaced", 2L, List.of("order:1"));
         CloudEvent nonMatchingStream = streamEvent("OrderCancelled", 3L);
         CloudEvent nonMatchingDcb = dcbEvent("OrderCancelled", 4L, List.of("order:1"));
-        subscriptionModel.accept(Stream.of(matchingStream, matchingDcb, nonMatchingStream, nonMatchingDcb));
+        subscriptionModel.accept(List.of(matchingStream, matchingDcb, nonMatchingStream, nonMatchingDcb));
 
         await().untilAsserted(() ->
                 assertThat(received).extracting(CloudEvent::getId)

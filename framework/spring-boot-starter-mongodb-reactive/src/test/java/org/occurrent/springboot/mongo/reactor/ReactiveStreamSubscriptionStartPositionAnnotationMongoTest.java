@@ -51,7 +51,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -102,8 +101,8 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
             assertThat(nowPositionSubscriber.received()).isEmpty();
         });
 
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("live-default"))).block();
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("live-now"))).block();
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("live-default"))).block();
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("live-now"))).block();
 
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(defaultPositionSubscriber.received()).extracting(TestEvent::name).containsExactly("live-default"));
@@ -168,7 +167,7 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
 
         @PostConstruct
         void appendHistory() {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("historic"))).block();
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("historic"))).block();
         }
     }
 

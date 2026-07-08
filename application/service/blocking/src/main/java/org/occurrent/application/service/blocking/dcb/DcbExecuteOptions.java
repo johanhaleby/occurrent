@@ -20,9 +20,9 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.service.dcb.TagGenerator;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 /**
  * Options used when executing a command through a {@link DcbApplicationService}.
@@ -43,10 +43,10 @@ import java.util.stream.Stream;
  */
 @NullMarked
 public final class DcbExecuteOptions<E> {
-    private final @Nullable Consumer<Stream<E>> sideEffect;
+    private final @Nullable Consumer<List<E>> sideEffect;
     private final @Nullable TagGenerator<E> tagGenerator;
 
-    private DcbExecuteOptions(@Nullable Consumer<Stream<E>> sideEffect, @Nullable TagGenerator<E> tagGenerator) {
+    private DcbExecuteOptions(@Nullable Consumer<List<E>> sideEffect, @Nullable TagGenerator<E> tagGenerator) {
         this.sideEffect = sideEffect;
         this.tagGenerator = tagGenerator;
     }
@@ -86,7 +86,7 @@ public final class DcbExecuteOptions<E> {
      * point the tag generator is invoked, not here.
      */
     @SuppressWarnings("unchecked")
-    public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> sideEffect(Consumer<Stream<E_SPECIFIC>> sideEffect) {
+    public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> sideEffect(Consumer<List<E_SPECIFIC>> sideEffect) {
         return new DcbExecuteOptions<>(Objects.requireNonNull(sideEffect, "sideEffect cannot be null"), (TagGenerator<E_SPECIFIC>) this.tagGenerator);
     }
 
@@ -104,13 +104,13 @@ public final class DcbExecuteOptions<E> {
      */
     @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> tagGenerator(TagGenerator<E_SPECIFIC> tagGenerator) {
-        return new DcbExecuteOptions<>((Consumer<Stream<E_SPECIFIC>>) (Consumer<?>) this.sideEffect, Objects.requireNonNull(tagGenerator, "tagGenerator cannot be null"));
+        return new DcbExecuteOptions<>((Consumer<List<E_SPECIFIC>>) (Consumer<?>) this.sideEffect, Objects.requireNonNull(tagGenerator, "tagGenerator cannot be null"));
     }
 
     /**
      * Return the configured post-append side-effect, or {@code null} if none has been configured.
      */
-    public @Nullable Consumer<Stream<E>> sideEffect() {
+    public @Nullable Consumer<List<E>> sideEffect() {
         return sideEffect;
     }
 

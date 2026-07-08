@@ -61,7 +61,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -104,7 +103,7 @@ class GenericApplicationServiceTest {
         String streamId = UUID.randomUUID().toString();
 
         WriteResult result = applicationService.execute(streamId, options(),
-                events -> Stream.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"))).block();
+                events -> List.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"))).block();
 
         assertThat(requireNonNull(result).streamId()).isEqualTo(streamId);
         assertThat(result.newStreamVersion()).isEqualTo(1L);
@@ -122,10 +121,10 @@ class GenericApplicationServiceTest {
 
         WriteResult result = applicationService.execute(streamId,
                 ExecuteOptions.<DomainEvent>options().filter(ExecuteFilter.type(NameDefined.class))
-                        .sideEffect(events -> Mono.fromRunnable(() -> sideEffectPayload.set(events.findFirst().map(DomainEvent::name).orElse("empty")))),
+                        .sideEffect(events -> Mono.fromRunnable(() -> sideEffectPayload.set(events.stream().findFirst().map(DomainEvent::name).orElse("empty")))),
                 events -> {
-                    typesSeenByDomain.set(events.count());
-                    return Stream.of(new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"));
+                    typesSeenByDomain.set((long) events.size());
+                    return List.of(new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"));
                 }).block();
 
         // The read was filtered to NameDefined, so the domain function only saw that one event. The write still appends
@@ -143,7 +142,7 @@ class GenericApplicationServiceTest {
                 new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Mattias"));
 
         WriteResult result = applicationService.execute(streamId, ExecuteFilter.type(NameDefined.class),
-                events -> Stream.of(new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"))).block();
+                events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"))).block();
 
         assertThat(requireNonNull(result).newStreamVersion()).isEqualTo(3L);
     }
@@ -151,13 +150,13 @@ class GenericApplicationServiceTest {
     @Test
     void runs_the_side_effect_after_execute_even_when_no_events_are_produced() {
         // Parity with the blocking GenericApplicationService: the side-effect runs once after a successful execute,
-        // with the new events (an empty stream here), regardless of whether the domain function produced any.
+        // with the new events (an empty list here), regardless of whether the domain function produced any.
         String streamId = UUID.randomUUID().toString();
         AtomicInteger sideEffectInvocations = new AtomicInteger();
 
         applicationService.execute(streamId,
                 options().sideEffect(events -> Mono.fromRunnable(sideEffectInvocations::incrementAndGet)),
-                events -> Stream.empty()).block();
+                events -> List.<DomainEvent>of()).block();
 
         assertThat(sideEffectInvocations).hasValue(1);
         assertThat(readNames(streamId)).isEmpty();
@@ -174,7 +173,7 @@ class GenericApplicationServiceTest {
         WriteResult result = service.execute(streamId, options(),
                 events -> {
                     attempts.incrementAndGet();
-                    return Stream.of(new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"));
+                    return List.of(new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"));
                 }).block();
 
         // The first write conflicts because the interloper bumped the stream version, the retry reads the fresh stream
@@ -185,7 +184,7 @@ class GenericApplicationServiceTest {
     }
 
     private void write(String streamId, DomainEvent... events) {
-        eventStore.write(streamId, Flux.fromIterable(converter.toCloudEvents(Stream.of(events)).toList())).block();
+        eventStore.write(streamId, Flux.fromIterable(converter.toCloudEvents(List.of(events)))).block();
     }
 
     private List<String> readNames(String streamId) {

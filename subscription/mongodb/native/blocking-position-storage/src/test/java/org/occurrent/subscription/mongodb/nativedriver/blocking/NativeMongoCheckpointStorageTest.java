@@ -52,12 +52,12 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -428,8 +428,8 @@ public class NativeMongoCheckpointStorageTest {
         assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
     }
 
-    private Stream<CloudEvent> serialize(DomainEvent e) {
-        return Stream.of(CloudEventBuilder.v1()
+    private List<CloudEvent> serialize(DomainEvent e) {
+        return List.of(CloudEventBuilder.v1()
                 .withId(e.eventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())

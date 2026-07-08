@@ -35,7 +35,7 @@ import org.occurrent.application.composition.command.composeCommands
 import org.occurrent.application.composition.command.partial
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeSequence
+import org.occurrent.application.service.blocking.executeList
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.eventstore.api.WriteResult
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
@@ -55,7 +55,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.executeSequence(gameId.value) { events ->
+        applicationService.executeList(gameId.value) { events ->
             handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
         }
 
@@ -74,13 +74,13 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.executeSequence(
+        applicationService.executeList(
             gameId.value,
             composeCommands(
-                { events: Sequence<GameEvent> ->
+                { events: List<GameEvent> ->
                     handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
                 },
-                { events: Sequence<GameEvent> ->
+                { events: List<GameEvent> ->
                     handle(events, PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK))
                 })
         )
@@ -103,7 +103,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.executeSequence(
+        applicationService.executeList(
             gameId.value,
             composeCommands(
                 ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE)),
@@ -129,7 +129,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.executeSequence(
+        applicationService.executeList(
             gameId.value,
             ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE)) andThen
                     ::handle.partial(PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK))
@@ -193,11 +193,11 @@ class ApplicationServiceDemo {
 }
 
 private fun ApplicationService<GameEvent>.execute(gameId: GameId, firstCommand: GameCommand, vararg additionalCommands: GameCommand): WriteResult {
-    val functionsToInvoke = sequenceOf(firstCommand, *additionalCommands).map { cmd ->
+    val functionsToInvoke = listOf(firstCommand, *additionalCommands).map { cmd ->
         ::handle.partial(cmd)
     }
 
-    return executeSequence(gameId.value, composeCommands(functionsToInvoke))
+    return executeList(gameId.value, composeCommands(functionsToInvoke))
 }
 
 class SimpleCloudEventConverter : CloudEventConverter<GameEvent> {

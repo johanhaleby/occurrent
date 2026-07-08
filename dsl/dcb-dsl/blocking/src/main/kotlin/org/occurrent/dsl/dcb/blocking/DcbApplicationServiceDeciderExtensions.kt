@@ -25,7 +25,6 @@ import org.occurrent.dsl.decider.adaptEvents
 import org.occurrent.eventstore.api.dcb.DcbAppendResult
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import java.util.concurrent.atomic.AtomicReference
-import java.util.stream.Stream
 
 // A DcbDecider carries both the read boundary (derived from the command) and the tags for the events it emits, so the
 // caller no longer passes a separate DcbCriteria. The decider's event type may be a subtype of the service event type
@@ -84,8 +83,8 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
     val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
     val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
     val options = DcbExecuteOptions.options<E>().tagGenerator(tags)
-    return execute(criteria, options) { events: Stream<E> ->
-        widened.decideOnEventsAndReturnEvents(events.toList(), commands).stream()
+    return execute(criteria, options) { events: List<E> ->
+        widened.decideOnEventsAndReturnEvents(events, commands)
     }.orElse(null)
 }
 
@@ -111,10 +110,10 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
     val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
     val options = DcbExecuteOptions.options<E>().tagGenerator(tags)
     val decision = AtomicReference<Decider.Decision<S, E>>()
-    execute(criteria, options) { events: Stream<E> ->
-        val result = widened.decideOnEvents(events.toList(), commands)
+    execute(criteria, options) { events: List<E> ->
+        val result = widened.decideOnEvents(events, commands)
         decision.set(result)
-        result.events.stream()
+        result.events
     }
     return decision.get()
 }

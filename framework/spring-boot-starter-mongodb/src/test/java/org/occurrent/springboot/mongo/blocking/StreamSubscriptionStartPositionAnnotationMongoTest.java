@@ -50,7 +50,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -149,7 +148,7 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
     }
 
     private void append(TestEvent event) {
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(event));
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(event));
     }
 
     // --- inner application and configuration classes ---
@@ -233,7 +232,7 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
         }
 
         private void append(TestEvent event) {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(event));
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(event));
         }
     }
 

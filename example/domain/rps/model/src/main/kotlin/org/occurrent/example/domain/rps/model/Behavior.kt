@@ -33,14 +33,14 @@ import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedState
 import org.occurrent.example.domain.rps.model.StateEvolution.evolve
 import org.occurrent.example.domain.rps.model.StateTranslation.translateToDomain
 
-fun handle(events: Sequence<GameEvent>, cmd: GameCommand): Sequence<GameEvent> {
+fun handle(events: List<GameEvent>, cmd: GameCommand): List<GameEvent> {
     val state = events.evolve()
     return when (cmd) {
         is CreateGame -> when (state) {
             is EvolvedState -> throw GameCannotBeCreatedMoreThanOnce()
             else -> {
                 val (gameId, timestamp, creator, numberOfRounds) = cmd
-                sequenceOf(GameCreated(gameId, timestamp, creator, numberOfRounds))
+                listOf(GameCreated(gameId, timestamp, creator, numberOfRounds))
             }
         }
         is PlayHand -> when (state) {
@@ -203,14 +203,13 @@ private object GameLogic {
 
 private data class Hand(val playerId: PlayerId, val shape: Shape)
 
-private class AccumulatedChanges private constructor(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent>) : Sequence<GameEvent> {
+private class AccumulatedChanges private constructor(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent>) : List<GameEvent> by events {
     val currentState: DomainState by lazy {
         evolvedState.translateToDomain()
     }
 
-    override fun iterator(): Iterator<GameEvent> = events.iterator()
     fun evolve(e: GameEvent, vararg es: GameEvent) = AccumulatedChanges(
-        sequenceOf(e, *es).evolve(evolvedState)!!, events.addAll(listOf(e, *es)),
+        listOf(e, *es).evolve(evolvedState)!!, events.addAll(listOf(e, *es)),
     )
 
     operator fun plus(e: GameEvent) = evolve(e)
@@ -290,7 +289,7 @@ private object StateEvolution {
     }
 
 
-    fun Sequence<GameEvent>.evolve(currentState: EvolvedState? = null): EvolvedState? = fold(currentState, ::evolve)
+    fun List<GameEvent>.evolve(currentState: EvolvedState? = null): EvolvedState? = fold(currentState, ::evolve)
 
     fun evolve(currentState: EvolvedState?, e: GameEvent) = when (e) {
         is GameCreated -> EvolvedState(gameId = e.game, state = EvolvedGameState.Created, bestOfRounds = e.bestOfRounds)

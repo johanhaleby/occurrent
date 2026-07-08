@@ -42,26 +42,26 @@ public class AppointmentSchedulingService {
 
     public void registerClinician(RegisterClinician command) {
         applicationService.execute(Clinician.criteria(command),
-                events -> Clinician.DECIDER.decideOnEventsAndReturnEvents(events.toList(), command).stream());
+                events -> Clinician.DECIDER.decideOnEventsAndReturnEvents(events, command));
     }
 
     public void registerPatient(RegisterPatient command) {
         applicationService.execute(Patient.criteria(command),
-                events -> Patient.DECIDER.decideOnEventsAndReturnEvents(events.toList(), command).stream());
+                events -> Patient.DECIDER.decideOnEventsAndReturnEvents(events, command));
     }
 
     public void defineSlot(DefineSlot command) {
         applicationService.execute(Slot.criteria(command),
-                events -> Slot.DECIDER.decideOnEventsAndReturnEvents(events.toList(), command).stream());
+                events -> Slot.DECIDER.decideOnEventsAndReturnEvents(events, command));
     }
 
     public void bookAppointment(BookAppointment command) {
         applicationService.execute(Appointment.criteria(command),
-                events -> Appointment.DECIDER.decideOnEventsAndReturnEvents(events.toList(), command).stream());
+                events -> Appointment.DECIDER.decideOnEventsAndReturnEvents(events, command));
     }
 
     public void cancelAppointment(CancelAppointment command) {
         applicationService.execute(Appointment.criteria(command),
-                events -> Appointment.DECIDER.decideOnEventsAndReturnEvents(events.toList(), command).stream());
+                events -> Appointment.DECIDER.decideOnEventsAndReturnEvents(events, command));
     }
 }

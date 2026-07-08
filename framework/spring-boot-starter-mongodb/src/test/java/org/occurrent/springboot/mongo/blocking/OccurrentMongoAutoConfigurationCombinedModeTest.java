@@ -45,6 +45,7 @@ import java.net.URI;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -92,7 +93,7 @@ class OccurrentMongoAutoConfigurationCombinedModeTest {
         String streamId = UUID.randomUUID().toString();
         TestEvent event = new TestEvent(UUID.randomUUID().toString(), new Date(), "stream-name", "stream-subject");
 
-        applicationService.execute(streamId, __ -> Stream.of(event));
+        applicationService.execute(streamId, __ -> List.of(event));
 
         try (Stream<TestEvent> read = domainEventQueries.query(TestEvent.class)) {
             assertThat(read).contains(event);
@@ -104,7 +105,7 @@ class OccurrentMongoAutoConfigurationCombinedModeTest {
         String tag = "tenant:" + UUID.randomUUID();
         TestEvent event = new TestEvent(UUID.randomUUID().toString(), new Date(), "dcb-name", tag);
 
-        dcbApplicationService.execute(DcbCriteria.tags(Tag.parse(tag)), __ -> Stream.of(event));
+        dcbApplicationService.execute(DcbCriteria.tags(Tag.parse(tag)), __ -> List.of(event));
 
         try (Stream<TestEvent> read = dcbDomainEventQueries.query(DcbCriteria.tags(Tag.parse(tag)))) {
             assertThat(read).containsExactly(event);

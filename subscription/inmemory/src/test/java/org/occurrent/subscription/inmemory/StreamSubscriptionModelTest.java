@@ -30,9 +30,9 @@ import org.occurrent.subscription.api.blocking.StreamSubscriptionModel;
 import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -67,7 +67,7 @@ class StreamSubscriptionModelTest {
 
         CloudEvent matching = event("OrderPlaced");
         CloudEvent nonMatching = event("OrderCancelled");
-        delegate.accept(Stream.of(matching, nonMatching));
+        delegate.accept(List.of(matching, nonMatching));
 
         await().untilAsserted(() ->
                 assertThat(received).extracting(CloudEvent::getId).containsExactly(matching.getId()));
@@ -81,7 +81,7 @@ class StreamSubscriptionModelTest {
 
         CloudEvent first = event("OrderPlaced");
         CloudEvent second = event("OrderCancelled");
-        delegate.accept(Stream.of(first, second));
+        delegate.accept(List.of(first, second));
 
         await().untilAsserted(() ->
                 assertThat(received).extracting(CloudEvent::getId).containsExactly(first.getId(), second.getId()));
@@ -94,12 +94,12 @@ class StreamSubscriptionModelTest {
                 .waitUntilStarted();
 
         CloudEvent first = event("OrderPlaced");
-        delegate.accept(Stream.of(first));
+        delegate.accept(List.of(first));
         await().untilAsserted(() -> assertThat(received).extracting(CloudEvent::getId).containsExactly(first.getId()));
 
         streamSubscriptionModel.cancelSubscription("sub");
 
-        delegate.accept(Stream.of(event("OrderPlaced")));
+        delegate.accept(List.of(event("OrderPlaced")));
         await().during(Duration.ofMillis(200)).atMost(Duration.ofSeconds(2))
                 .untilAsserted(() -> assertThat(received).extracting(CloudEvent::getId).containsExactly(first.getId()));
     }

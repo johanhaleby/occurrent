@@ -35,7 +35,6 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -60,7 +59,7 @@ class DcbCriteriaBuilderReadMatchesWriteTest {
         DcbDomainEventQueries<DomainEvent> queries = new DcbDomainEventQueries<>(new DomainEventQueries<>(eventStore, converter));
 
         NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.now(), "name", "Some Doe");
-        List<CloudEvent> cloudEvents = converter.toCloudEvents(Stream.of(nameDefined))
+        List<CloudEvent> cloudEvents = converter.toCloudEvents(List.of(nameDefined)).stream()
                 .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.of("name", "1"))))
                 .toList();
         eventStore.append(cloudEvents);

@@ -18,11 +18,10 @@ package org.occurrent.application.service.reactor
 
 import reactor.core.publisher.Mono
 import java.util.function.Function
-import java.util.stream.Stream
 
 /**
  * Build a reactive side-effect that runs [policy] for every produced event of the reified type [E]. The result can be
  * passed to [ExecuteOptions.sideEffect].
  */
-inline fun <T : Any, reified E : T> executePolicy(noinline policy: (E) -> Mono<Void>): Function<Stream<T>, Mono<Void>> =
+inline fun <T : Any, reified E : T> executePolicy(noinline policy: (E) -> Mono<Void>): Function<List<T>, Mono<Void>> =
     PolicySideEffect.executePolicy(E::class.java, Function { event: E -> policy(event) })

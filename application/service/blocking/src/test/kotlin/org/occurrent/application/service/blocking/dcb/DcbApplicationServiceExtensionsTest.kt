@@ -62,14 +62,6 @@ class DcbApplicationServiceExtensionsTest {
     }
 
     @Test
-    fun executeSequence_returns_the_append_result_when_events_are_produced() {
-        val result = applicationService.executeSequence(tags(Tag.of("name", "1"))) { sequenceOf(nameDefined("Ada")) }
-
-        assertThat(result).isNotNull()
-        assertThat(result!!.eventCount()).isEqualTo(1)
-    }
-
-    @Test
     fun executeList_with_options_runs_the_side_effect_with_the_written_events() {
         val observed = mutableListOf<String>()
         val options = dcbSideEffect<DomainEvent, NameDefined> { observed += it.name() }

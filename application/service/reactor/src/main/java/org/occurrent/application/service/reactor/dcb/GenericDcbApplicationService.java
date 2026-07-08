@@ -103,12 +103,12 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     @Override
-    public Mono<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    public Mono<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(query, "Query cannot be null");
         Objects.requireNonNull(options, DcbExecuteOptions.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
-        @Nullable Function<Stream<E>, Mono<Void>> sideEffect = options.sideEffect();
+        @Nullable Function<List<E>, Mono<Void>> sideEffect = options.sideEffect();
 
         // The read, decide, and append run as one unit and retry from a fresh read on a DCB conflict, so the decision
         // always runs against the current events. The side-effect is composed after the retry so it runs once on
@@ -116,12 +116,12 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
         Mono<Result<E>> readDecideAppend = Mono.defer(() -> eventStore.read(query).flatMap(eventStream -> {
-            Stream<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream());
-            List<E> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(domainEvents)).toList();
-            if (newDomainEvents.isEmpty()) {
+            List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
+            List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
+            if (newDomainEvents == null || newDomainEvents.isEmpty()) {
                 return Mono.empty();
             }
-            List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents.stream()).toList();
+            List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
             List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
             DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(query, eventStream.consistencyToken());
             return eventStore.append(dcbEvents, appendCondition).map(result -> new Result<>(result, newDomainEvents));
@@ -131,7 +131,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             if (sideEffect == null) {
                 return Mono.just(result.appendResult());
             }
-            return sideEffect.apply(result.newDomainEvents().stream()).thenReturn(result.appendResult());
+            return sideEffect.apply(result.newDomainEvents()).thenReturn(result.appendResult());
         });
     }
 
@@ -148,10 +148,6 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             dcbEvents.add(DcbCloudEvents.withTags(cloudEvents.get(i), effective.tags(domainEvents.get(i))));
         }
         return dcbEvents;
-    }
-
-    private static <T> Stream<T> emptyStreamIfNull(@Nullable Stream<T> stream) {
-        return stream == null ? Stream.empty() : stream;
     }
 
     /**

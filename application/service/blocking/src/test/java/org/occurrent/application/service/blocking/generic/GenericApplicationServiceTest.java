@@ -42,15 +42,14 @@ import org.occurrent.eventstore.api.WriteCondition;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
 import static org.occurrent.application.service.blocking.ExecuteOptions.options;
 import static org.occurrent.application.service.blocking.PolicySideEffect.executePolicy;
 
@@ -78,7 +77,7 @@ public class GenericApplicationServiceTest {
 
         // When
         WriteResult writeResult = applicationService.execute(streamId,
-                toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
+                events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
 
         // Then
         assertAll(
@@ -93,7 +92,7 @@ public class GenericApplicationServiceTest {
         String streamId = UUID.randomUUID().toString();
         cloudEventConverter = customCloudEventConverter();
         applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
-        var initialEvents = cloudEventConverter.toCloudEvents(Stream.of(
+        var initialEvents = cloudEventConverter.toCloudEvents(List.of(
                 new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
                 new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Mattias"))
         );
@@ -101,8 +100,8 @@ public class GenericApplicationServiceTest {
         AtomicReference<String> sideEffectPayload = new AtomicReference<>("not-called");
         // When
         WriteResult writeResult = applicationService.execute(streamId,
-                options().filter(ExecuteFilter.type(NameDefined.class)).sideEffect(events -> sideEffectPayload.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
-                toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
+                options().filter(ExecuteFilter.type(NameDefined.class)).sideEffect(events -> sideEffectPayload.set(events.stream().findFirst().map(DomainEvent::name).orElse("empty"))),
+                events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"));
 
         // Then
         assertAll(
@@ -118,14 +117,14 @@ public class GenericApplicationServiceTest {
         String streamId = UUID.randomUUID().toString();
         cloudEventConverter = customCloudEventConverter();
         applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
-        eventStore.write(streamId, cloudEventConverter.toCloudEvents(Stream.of(
+        eventStore.write(streamId, cloudEventConverter.toCloudEvents(List.of(
                 new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
                 new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Mattias"))
         ));
 
         // When
         WriteResult writeResult = applicationService.execute(streamId, ExecuteFilter.type(NameDefined.class),
-                toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
+                events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"));
 
         // Then
         assertThat(writeResult.newStreamVersion()).isEqualTo(3L);
@@ -137,7 +136,7 @@ public class GenericApplicationServiceTest {
         String streamId = UUID.randomUUID().toString();
         cloudEventConverter = customCloudEventConverter();
         applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
-        eventStore.write(streamId, cloudEventConverter.toCloudEvents(Stream.of(
+        eventStore.write(streamId, cloudEventConverter.toCloudEvents(List.of(
                 new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
                 new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Mattias"))
         ));
@@ -145,8 +144,8 @@ public class GenericApplicationServiceTest {
 
         // When
         applicationService.execute(streamId,
-                options().filter(ExecuteFilter.excludeTypes(NameWasChanged.class)).sideEffect(events -> observedName.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
-                toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
+                options().filter(ExecuteFilter.excludeTypes(NameWasChanged.class)).sideEffect(events -> observedName.set(events.stream().findFirst().map(DomainEvent::name).orElse("empty"))),
+                events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"));
 
         // Then
         assertThat(observedName.get()).isEqualTo("New Name");
@@ -161,7 +160,7 @@ public class GenericApplicationServiceTest {
         // When
         Throwable throwable = catchThrowable(() -> applicationService.execute(UUID.randomUUID().toString(),
                 ExecuteFilter.type(NameDefined.class),
-                toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"))));
+                events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
 
         // Then
         assertThat(throwable)
@@ -181,19 +180,19 @@ public class GenericApplicationServiceTest {
             // When
             PolicySideEffect<DomainEvent> sideEffect = executePolicy(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName);
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")),
+                    events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
                     sideEffect);
 
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "tina", "Tina")),
+                    events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "tina", "Tina"),
                     sideEffect);
 
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "abbe", "Abbe")),
+                    events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "abbe", "Abbe"),
                     sideEffect);
 
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "agnes", "Agnes")),
+                    events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "agnes", "Agnes"),
                     sideEffect);
 
             // Then
@@ -211,11 +210,11 @@ public class GenericApplicationServiceTest {
 
             // When
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")),
+                    events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
                     policy);
 
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "agnes", "Agnes")),
+                    events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "agnes", "Agnes"),
                     policy);
 
             // Then
@@ -232,10 +231,10 @@ public class GenericApplicationServiceTest {
             UUID streamId = UUID.randomUUID();
 
             // When
-            applicationService.execute(streamId, toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
+            applicationService.execute(streamId, events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
 
             applicationService.execute(streamId,
-                    toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "tina", "Tina")),
+                    events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "tina", "Tina"),
                     executePolicy(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName));
 
             // Then
@@ -254,11 +253,11 @@ public class GenericApplicationServiceTest {
             AtomicInteger atomicInteger = new AtomicInteger();
 
             // When
-            applicationService.execute(streamId, stream -> {
+            applicationService.execute(streamId, events -> {
                 if (atomicInteger.getAndIncrement() == 0) {
                     throw new WriteConditionNotFulfilledException(streamId.toString(), 2L, null, null);
                 } else {
-                    return Stream.empty();
+                    return List.of();
                 }
             });
 
@@ -272,7 +271,7 @@ public class GenericApplicationServiceTest {
             UUID streamId = UUID.randomUUID();
 
             // When
-            Throwable throwable = catchThrowable(() -> applicationService.execute(streamId, stream -> {
+            Throwable throwable = catchThrowable(() -> applicationService.execute(streamId, events -> {
                 throw new IllegalArgumentException("expected");
             }));
 
@@ -289,11 +288,11 @@ public class GenericApplicationServiceTest {
                     GenericApplicationService.defaultRetryStrategy().mapRetryPredicate(p -> p.or(IllegalArgumentException.class::isInstance)));
 
             // When
-            applicationService.execute(streamId, stream -> {
+            applicationService.execute(streamId, events -> {
                 if (atomicInteger.getAndIncrement() == 0) {
                     throw new IllegalArgumentException("expected");
                 } else {
-                    return Stream.empty();
+                    return List.of();
                 }
             });
 
@@ -307,7 +306,7 @@ public class GenericApplicationServiceTest {
             UUID streamId = UUID.randomUUID();
 
             // When
-            Throwable throwable = catchThrowable(() -> applicationService.execute(streamId, stream -> {
+            Throwable throwable = catchThrowable(() -> applicationService.execute(streamId, events -> {
                 throw new WriteConditionNotFulfilledException(streamId.toString(), 2L, null, null);
             }));
 
@@ -371,12 +370,12 @@ public class GenericApplicationServiceTest {
         }
 
         @Override
-        public WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+        public WriteResult write(String streamId, WriteCondition writeCondition, List<CloudEvent> events) {
             return ((ConditionallyWriteToEventStream) delegate).write(streamId, writeCondition, events);
         }
 
         @Override
-        public WriteResult write(String streamId, Stream<CloudEvent> events) {
+        public WriteResult write(String streamId, List<CloudEvent> events) {
             return ((UnconditionallyWriteToEventStream) delegate).write(streamId, events);
         }
 

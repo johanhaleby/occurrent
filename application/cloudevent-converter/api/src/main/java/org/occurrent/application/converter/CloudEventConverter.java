@@ -19,6 +19,7 @@ package org.occurrent.application.converter;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
 
@@ -67,16 +68,16 @@ public interface CloudEventConverter<T> {
     }
 
     /**
-     * Convert a stream of domain events into a stream of cloud events.
+     * Convert domain events into cloud events.
      * The reason for implementing this method is to allow adding things such as correlation id
-     * that should be the same for all events in a stream.
+     * that should be the same for all events written together.
      *
      * @param events The domain events to convert to cloud events, or {@code null} to convert no events
-     * @return A stream of cloud events.
+     * @return A list of cloud events.
      */
-    default Stream<CloudEvent> toCloudEvents(@Nullable Stream<T> events) {
-        Stream<T> stream = events == null ? Stream.empty() : events;
-        return stream.map(this::toCloudEvent);
+    default List<CloudEvent> toCloudEvents(@Nullable List<T> events) {
+        List<T> list = events == null ? List.of() : events;
+        return list.stream().map(this::toCloudEvent).toList();
     }
 
     /**

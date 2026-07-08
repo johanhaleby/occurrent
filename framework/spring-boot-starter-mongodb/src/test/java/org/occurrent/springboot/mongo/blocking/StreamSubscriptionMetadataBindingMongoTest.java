@@ -47,7 +47,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -115,7 +114,7 @@ class StreamSubscriptionMetadataBindingMongoTest {
     }
 
     private void append(MyEvent event) {
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(event));
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(event));
     }
 
     // --- container configuration ---

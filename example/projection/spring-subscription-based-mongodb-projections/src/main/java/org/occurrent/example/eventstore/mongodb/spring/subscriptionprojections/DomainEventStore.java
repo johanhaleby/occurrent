@@ -27,7 +27,6 @@ import org.springframework.stereotype.Component;
 import java.net.URI;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -54,7 +53,7 @@ public class DomainEventStore {
         return eventStore.read(id.toString()).map(deserializeCloudEventToDomainEvent::deserialize);
     }
 
-    private Stream<CloudEvent> serialize(List<DomainEvent> events) {
+    private List<CloudEvent> serialize(List<DomainEvent> events) {
         return events.stream()
                 .map(e -> CloudEventBuilder.v1()
                         .withId(e.eventId())
@@ -64,6 +63,7 @@ public class DomainEventStore {
                         .withSubject(e.name())
                         .withDataContentType("application/json")
                         .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
-                        .build());
+                        .build())
+                .toList();
     }
 }

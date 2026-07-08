@@ -48,7 +48,7 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
  * An in-memory subscription model
  */
 @NullMarked
-public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Stream<CloudEvent>> {
+public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<List<CloudEvent>> {
 
     private final ConcurrentMap<String, InMemorySubscription> subscriptions;
     private final ConcurrentMap<String, Boolean> pausedSubscriptions;
@@ -145,11 +145,10 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
     }
 
     @Override
-    public void accept(Stream<CloudEvent> cloudEventStream) {
+    public void accept(List<CloudEvent> cloudEvents) {
         if (!running) {
             return;
         }
-        List<CloudEvent> cloudEvents = cloudEventStream.toList();
         subscriptions.values().forEach(subscription -> {
             if (isRunning(subscription.id())) {
                 cloudEvents.stream()

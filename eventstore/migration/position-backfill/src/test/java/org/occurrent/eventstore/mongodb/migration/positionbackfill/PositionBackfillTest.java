@@ -253,7 +253,7 @@ class PositionBackfillTest {
                         .build())
                 .limit(count)
                 .toList();
-        eventStoreWithoutPosition.write(streamId, events.stream());
+        eventStoreWithoutPosition.write(streamId, events);
     }
 
     private List<Document> eventsSortedById() {

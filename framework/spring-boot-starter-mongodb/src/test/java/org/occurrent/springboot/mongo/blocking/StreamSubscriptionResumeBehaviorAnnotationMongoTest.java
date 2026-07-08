@@ -48,7 +48,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -105,7 +104,7 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
             // The plain-defaults subscriber never replays history, but is live and receives a fresh event appended
             // while it is running.
             ApplicationService<TestEvent> applicationService = ctx1.getBean(ApplicationService.class);
-            applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("plain-live-1")));
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("plain-live-1")));
             await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                     assertThat(plainDefaultsSubscriber1.received()).extracting(TestEvent::name).containsExactly("plain-live-1"));
         } finally {
@@ -253,7 +252,7 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
         }
 
         private void append(TestEvent event) {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(event));
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(event));
         }
     }
 
@@ -266,8 +265,8 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
         @PostConstruct
         void appendWhileDown() {
-            applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("while-down-1")));
-            applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("plain-while-down-1")));
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("while-down-1")));
+            applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("plain-while-down-1")));
         }
     }
 

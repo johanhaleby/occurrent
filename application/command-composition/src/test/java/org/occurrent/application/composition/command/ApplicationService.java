@@ -21,7 +21,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 import static io.vavr.API.*;
 import static io.vavr.Predicates.is;
@@ -39,15 +38,11 @@ class ApplicationService {
         this.objectMapper = objectMapper;
     }
 
-    public void executeStreamCommand(String streamId, Function<Stream<DomainEvent>, Stream<DomainEvent>> functionThatCallsDomainModel) {
-        EventStream<CloudEvent> eventStream = eventStore.read(streamId);
-        Stream<DomainEvent> events = eventStream.events().map(this::convertCloudEventToDomainEvent);
-        Stream<DomainEvent> newEvents = functionThatCallsDomainModel.apply(events);
-        eventStore.write(streamId, eventStream.version(), newEvents.map(this::convertDomainEventCloudEvent));
-    }
-
     public void executeListCommand(String streamId, Function<List<DomainEvent>, List<DomainEvent>> functionThatCallsDomainModel) {
-        executeStreamCommand(streamId, CommandConversion.toStreamCommand(functionThatCallsDomainModel));
+        EventStream<CloudEvent> eventStream = eventStore.read(streamId);
+        List<DomainEvent> events = eventStream.events().map(this::convertCloudEventToDomainEvent).toList();
+        List<DomainEvent> newEvents = functionThatCallsDomainModel.apply(events);
+        eventStore.write(streamId, eventStream.version(), newEvents.stream().map(this::convertDomainEventCloudEvent).toList());
     }
 
     @SuppressWarnings("ConstantConditions")

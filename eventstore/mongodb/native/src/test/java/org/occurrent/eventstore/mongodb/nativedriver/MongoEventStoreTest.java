@@ -156,7 +156,7 @@ class MongoEventStoreTest {
     @Test
     void does_not_change_event_store_content_when_writing_an_empty_stream_of_events() {
         // When
-        persist("name", Stream.empty());
+        persist("name", List.of());
 
         // Then
         EventStream<CloudEvent> eventStream = eventStore.read("name");
@@ -303,7 +303,7 @@ class MongoEventStoreTest {
         NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name4");
 
         // When
-        Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)));
+        Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(0), List.of(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)));
 
         // Then
         EventStream<CloudEvent> eventStream = eventStore.read("name");
@@ -324,10 +324,10 @@ class MongoEventStoreTest {
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
         NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name4");
 
-        persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1));
+        persist("name", streamVersionEq(0), List.of(nameDefined, nameWasChanged1));
 
         // When
-        Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(2), Stream.of(nameWasChanged2, nameWasChanged1)));
+        Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(2), List.of(nameWasChanged2, nameWasChanged1)));
 
         // Then
         EventStream<CloudEvent> eventStream = eventStore.read("name");
@@ -358,7 +358,7 @@ class MongoEventStoreTest {
             NameWasChanged nameWasChanged2 = new NameWasChanged(eventId2, now.plusHours(2), "name", "name4");
 
             // When
-            Throwable throwable = catchThrowable(() -> persist("name", Stream.of(nameWasChanged1, nameWasChanged2)));
+            Throwable throwable = catchThrowable(() -> persist("name", List.of(nameWasChanged1, nameWasChanged2)));
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class);
@@ -386,7 +386,7 @@ class MongoEventStoreTest {
             // When
             DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
             DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-            WriteResult writeResult = persist("name", Stream.of(event1, event2));
+            WriteResult writeResult = persist("name", List.of(event1, event2));
 
             // Then
             assertAll(
@@ -405,8 +405,8 @@ class MongoEventStoreTest {
             DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
             DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
             DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe2");
-            persist("name", Stream.of(event1));
-            WriteResult writeResult = persist("name", Stream.of(event2, event3));
+            persist("name", List.of(event1));
+            WriteResult writeResult = persist("name", List.of(event2, event3));
 
             // Then
             assertAll(
@@ -419,7 +419,7 @@ class MongoEventStoreTest {
         @Test
         void mongo_event_store_returns_0_as_version_when_no_events_are_written_to_an_empty_stream() {
             // When
-            WriteResult writeResult = persist("name", Stream.empty());
+            WriteResult writeResult = persist("name", List.of());
 
             // Then
             assertAll(
@@ -437,8 +437,8 @@ class MongoEventStoreTest {
             // When
             DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
             DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-            persist("name", Stream.of(event1, event2));
-            WriteResult writeResult = persist("name", Stream.empty());
+            persist("name", List.of(event1, event2));
+            WriteResult writeResult = persist("name", List.of());
 
             // Then
             assertAll(
@@ -516,7 +516,7 @@ class MongoEventStoreTest {
 
             EventStream<CloudEvent> eventStream = eventStore.read("name", StreamReadFilter.type(in(NameWasChanged.class.getSimpleName())));
 
-            WriteResult writeResult = eventStore.write("name", streamVersionEq(eventStream.version()), Stream.of(event4).map(convertDomainEventToCloudEvent()));
+            WriteResult writeResult = eventStore.write("name", streamVersionEq(eventStream.version()), Stream.of(event4).map(convertDomainEventToCloudEvent()).collect(Collectors.toList()));
 
             // Then
             assertAll(
@@ -557,7 +557,7 @@ class MongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            persist("name", List.of(nameDefined, nameWasChanged1));
 
             // When
             eventStore.deleteEventStream("name");
@@ -579,7 +579,7 @@ class MongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            persist("name", List.of(nameDefined, nameWasChanged1));
 
             // When
             eventStore.deleteEvent(nameWasChanged1.eventId(), NAME_SOURCE);
@@ -601,7 +601,7 @@ class MongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            persist("name", List.of(nameDefined, nameWasChanged1));
 
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name2");
             persist("name2", nameDefined2);
@@ -629,7 +629,7 @@ class MongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            persist("name", List.of(nameDefined, nameWasChanged1));
 
             // When
             boolean exists = eventStore.exists("name");
@@ -767,7 +767,7 @@ class MongoEventStoreTest {
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             String eventId2 = UUID.randomUUID().toString();
             NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name", "name2");
-            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            persist("name", List.of(nameDefined, nameWasChanged1));
 
             // When
             eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
@@ -789,7 +789,7 @@ class MongoEventStoreTest {
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             String eventId2 = UUID.randomUUID().toString();
             NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name", "name2");
-            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            persist("name", List.of(nameDefined, nameWasChanged1));
 
             // When
             Optional<NameWasChanged> updatedCloudEvent = eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
@@ -807,7 +807,7 @@ class MongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            persist("name", List.of(nameDefined, nameWasChanged1));
 
             // When
             Optional<CloudEvent> updatedCloudEvent = eventStore.updateEvent(UUID.randomUUID().toString(), NAME_SOURCE, cloudEvent -> {
@@ -918,7 +918,7 @@ class MongoEventStoreTest {
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersionEq(eventStream1.version()), Stream.of(event2));
+                persist(eventStream1.id(), streamVersionEq(eventStream1.version()), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -929,11 +929,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_stream_version_does_not_match_expected_version() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(10), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(10), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -953,7 +953,7 @@ class MongoEventStoreTest {
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), WriteCondition.streamVersion(in(eventStream1.version(), eventStream1.version() + 1)), Stream.of(event2));
+                persist(eventStream1.id(), WriteCondition.streamVersion(in(eventStream1.version(), eventStream1.version() + 1)), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -968,7 +968,7 @@ class MongoEventStoreTest {
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(in(10L, 12L)), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(in(10L, 12L)), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -984,11 +984,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_does_not_match_expected_version() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(ne(20L)), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(ne(20L)), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -999,11 +999,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_stream_version_match_expected_version() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(ne(1L)), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(ne(1L)), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1019,11 +1019,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_is_less_than_expected_version() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(lt(10L)), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(lt(10L)), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -1034,11 +1034,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(lt(0L)), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(lt(0L)), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1049,11 +1049,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(lt(1L)), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(lt(1L)), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1069,11 +1069,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_is_greater_than_expected_version() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(gt(0L)), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(gt(0L)), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -1084,11 +1084,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(gt(100L)), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(gt(100L)), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1099,11 +1099,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(gt(1L)), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(gt(1L)), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1119,11 +1119,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_is_less_than_expected_version() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(lte(10L)), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(lte(10L)), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -1135,11 +1135,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_is_equal_to_expected_version() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(lte(1L)), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(lte(1L)), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -1150,11 +1150,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(lte(0L)), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(lte(0L)), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1170,11 +1170,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_is_greater_than_expected_version() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(gte(0L)), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(gte(0L)), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -1185,11 +1185,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_is_equal_to_expected_version() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(gte(0L)), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(gte(0L)), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -1200,11 +1200,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(gte(100L)), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(gte(100L)), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1220,11 +1220,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_is_when_all_conditions_match_and_expression() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(and(gte(0L), lt(100L), ne(40L))), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(and(gte(0L), lt(100L), ne(40L))), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -1235,11 +1235,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_any_of_the_operations_in_the_and_expression_is_not_fulfilled() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(and(gte(0L), lt(100L), ne(1L))), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(and(gte(0L), lt(100L), ne(1L))), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1255,11 +1255,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_is_when_any_condition_in_or_expression_matches() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(or(gte(100L), lt(0L), ne(40L))), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(or(gte(100L), lt(0L), ne(40L))), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -1270,11 +1270,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_none_of_the_operations_in_the_and_expression_is_fulfilled() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(or(gte(100L), lt(1L))), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(or(gte(100L), lt(1L))), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1290,11 +1290,11 @@ class MongoEventStoreTest {
             void writes_events_when_stream_version_is_not_matching_condition() {
                 // When
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-                persist(eventStream1.id(), streamVersion(not(eq(100L))), Stream.of(event2));
+                persist(eventStream1.id(), streamVersion(not(eq(100L))), List.of(event2));
 
                 // Then
                 EventStream<CloudEvent> eventStream2 = eventStore.read("name");
@@ -1305,11 +1305,11 @@ class MongoEventStoreTest {
             void throws_write_condition_not_fulfilled_when_condition_is_fulfilled_but_should_not_be_so() {
                 // Given
                 DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                persist("name", Stream.of(event1));
+                persist("name", List.of(event1));
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(not(eq(1L))), Stream.of(event2)));
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(not(eq(1L))), List.of(event2)));
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1354,8 +1354,8 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
-                persist("name2", Stream.of(nameWasChanged2));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
+                persist("name2", List.of(nameWasChanged2));
 
                 // Then
                 Stream<CloudEvent> events = eventStore.all(1, 2);
@@ -1371,7 +1371,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
                 persist("something", CloudEventBuilder.v1()
                         .withId(UUID.randomUUID().toString())
@@ -1398,7 +1398,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
                 persist("something", CloudEventBuilder.v1()
                         .withId(UUID.randomUUID().toString())
@@ -1426,7 +1426,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
 
                 // Then
@@ -1443,7 +1443,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
 
                 // Then
@@ -1460,7 +1460,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
 
                 // Then
@@ -1477,7 +1477,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
 
                 // Then
@@ -1495,7 +1495,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
 
                 // Then
@@ -1512,7 +1512,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
 
                 // Then
@@ -1529,7 +1529,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
                 CloudEvent cloudEvent = CloudEventBuilder.v1()
                         .withId(UUID.randomUUID().toString())
@@ -1560,7 +1560,7 @@ class MongoEventStoreTest {
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                persist("name1", List.of(nameDefined, nameWasChanged1));
                 persist("name2", nameWasChanged2);
                 CloudEvent cloudEvent = CloudEventBuilder.v1()
                         .withId(UUID.randomUUID().toString())
@@ -1744,7 +1744,7 @@ class MongoEventStoreTest {
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                     // When
-                    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                    persist("name1", List.of(nameDefined, nameWasChanged1));
                     persist("name2", nameWasChanged2);
 
                     // Then
@@ -1761,7 +1761,7 @@ class MongoEventStoreTest {
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                     // When
-                    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                    persist("name1", List.of(nameDefined, nameWasChanged1));
                     persist("name2", nameWasChanged2);
 
                     // Then
@@ -1779,7 +1779,7 @@ class MongoEventStoreTest {
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                     // When
-                    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                    persist("name1", List.of(nameDefined, nameWasChanged1));
                     persist("name2", nameWasChanged2);
 
                     // Then
@@ -1797,7 +1797,7 @@ class MongoEventStoreTest {
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                     // When
-                    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                    persist("name1", List.of(nameDefined, nameWasChanged1));
                     persist("name2", nameWasChanged2);
 
                     // Then
@@ -1814,7 +1814,7 @@ class MongoEventStoreTest {
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                     // When
-                    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                    persist("name1", List.of(nameDefined, nameWasChanged1));
                     persist("name2", nameWasChanged2);
 
                     // Then
@@ -1841,7 +1841,7 @@ class MongoEventStoreTest {
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                     // When
-                    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                    persist("name1", List.of(nameDefined, nameWasChanged1));
                     persist("name2", nameWasChanged2);
 
                     // Then
@@ -1858,7 +1858,7 @@ class MongoEventStoreTest {
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                     // When
-                    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                    persist("name1", List.of(nameDefined, nameWasChanged1));
                     persist("name2", nameWasChanged2);
 
                     // Then
@@ -1875,7 +1875,7 @@ class MongoEventStoreTest {
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                     // When
-                    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                    persist("name1", List.of(nameDefined, nameWasChanged1));
                     persist("name2", nameWasChanged2);
 
                     // Then
@@ -1892,7 +1892,7 @@ class MongoEventStoreTest {
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                     // When
-                    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+                    persist("name1", List.of(nameDefined, nameWasChanged1));
                     persist("name2", nameWasChanged2);
 
                     // Then
@@ -1930,7 +1930,7 @@ class MongoEventStoreTest {
     }
 
     private void persist(String eventStreamId, CloudEvent event) {
-        eventStore.write(eventStreamId, Stream.of(event));
+        eventStore.write(eventStreamId, List.of(event));
     }
 
     private void persist(String eventStreamId, WriteCondition writeCondition, DomainEvent event) {
@@ -1940,11 +1940,7 @@ class MongoEventStoreTest {
     }
 
     private void persist(String eventStreamId, WriteCondition writeCondition, List<DomainEvent> events) {
-        persist(eventStreamId, writeCondition, events.stream());
-    }
-
-    private void persist(String eventStreamId, WriteCondition writeCondition, Stream<DomainEvent> events) {
-        eventStore.write(eventStreamId, writeCondition, events.map(convertDomainEventToCloudEvent()));
+        eventStore.write(eventStreamId, writeCondition, events.stream().map(convertDomainEventToCloudEvent()).collect(Collectors.toList()));
     }
 
     private void persist(String eventStreamId, DomainEvent event) {
@@ -1953,12 +1949,8 @@ class MongoEventStoreTest {
         persist(eventStreamId, events);
     }
 
-    private void persist(String eventStreamId, List<DomainEvent> events) {
-        persist(eventStreamId, events.stream());
-    }
-
-    private WriteResult persist(String eventStreamId, Stream<DomainEvent> events) {
-        return eventStore.write(eventStreamId, events.map(convertDomainEventToCloudEvent()));
+    private WriteResult persist(String eventStreamId, List<DomainEvent> events) {
+        return eventStore.write(eventStreamId, events.stream().map(convertDomainEventToCloudEvent()).collect(Collectors.toList()));
     }
 
     private Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent() {

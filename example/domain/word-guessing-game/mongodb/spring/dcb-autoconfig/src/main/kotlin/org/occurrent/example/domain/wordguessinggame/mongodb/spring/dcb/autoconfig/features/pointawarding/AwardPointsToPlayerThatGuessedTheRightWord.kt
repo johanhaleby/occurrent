@@ -33,8 +33,6 @@ import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Component
 import java.util.UUID
-import java.util.stream.Stream
-import kotlin.streams.asStream
 
 @Component
 class AwardPointsToPlayerThatGuessedTheRightWord(
@@ -55,19 +53,18 @@ class AwardPointsToPlayerThatGuessedTheRightWord(
         val gameId = playerGuessedTheRightWord.gameId
         val playerId = playerGuessedTheRightWord.playerId
 
-        applicationService.execute(GameDcbQueries.pointsBoundary(gameId)) { events: Stream<GameEvent> ->
-            val eventList = events.toList()
-            val gameWasStarted = eventList.filterIsInstance<GameWasStarted>().firstOrNull()
-            val pointsAlreadyAwarded = eventList
+        applicationService.execute(GameDcbQueries.pointsBoundary(gameId)) { events: List<GameEvent> ->
+            val gameWasStarted = events.filterIsInstance<GameWasStarted>().firstOrNull()
+            val pointsAlreadyAwarded = events
                 .filter { it is PlayerWasAwardedPointsForGuessingTheRightWord || it is PlayerWasNotAwardedAnyPointsForGuessingTheRightWord }
                 .any { it.gameId == gameId && playerId(it) == playerId }
 
             if (gameWasStarted == null || pointsAlreadyAwarded) {
-                Stream.empty()
+                emptyList()
             } else {
-                val totalNumberGuessesForPlayerInGame = eventList.filterIsInstance<PlayerGuessedTheWrongWord>().count { it.playerId == playerId } + 1
+                val totalNumberGuessesForPlayerInGame = events.filterIsInstance<PlayerGuessedTheWrongWord>().count { it.playerId == playerId } + 1
                 val basis = BasisForPointAwarding(gameId, gameWasStarted.startedBy, playerId, totalNumberGuessesForPlayerInGame)
-                PointAwarding.awardPointsToPlayerThatGuessedTheRightWord(basis).asStream()
+                PointAwarding.awardPointsToPlayerThatGuessedTheRightWord(basis).toList()
             }
         }
     }

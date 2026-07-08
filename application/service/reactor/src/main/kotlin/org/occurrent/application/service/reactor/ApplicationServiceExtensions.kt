@@ -20,35 +20,6 @@ import org.occurrent.application.service.ExecuteFilter
 import org.occurrent.eventstore.api.WriteResult
 import reactor.core.publisher.Mono
 import java.util.UUID
-import java.util.function.Function
-import java.util.stream.Stream
-import kotlin.streams.asSequence
-import kotlin.streams.asStream
-
-/** Execute a domain function over a Kotlin [Sequence], returning a [Mono] of the write result. */
-fun <E : Any> ApplicationService<E>.executeSequence(streamId: String, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): Mono<WriteResult> =
-    executeSequence(streamId, ExecuteOptions.empty<E>(), functionThatCallsDomainModel)
-
-/** [executeSequence] variant accepting a [UUID] stream id. */
-fun <E : Any> ApplicationService<E>.executeSequence(streamId: UUID, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): Mono<WriteResult> =
-    executeSequence(streamId.toString(), functionThatCallsDomainModel)
-
-/** Execute a domain function over a Kotlin [Sequence] with [ExecuteOptions]. */
-@Suppress("UNCHECKED_CAST")
-fun <E : Any> ApplicationService<E>.executeSequence(streamId: String, options: ExecuteOptions<*>, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): Mono<WriteResult> =
-    execute(streamId, options as ExecuteOptions<E>) { streamOfEvents -> functionThatCallsDomainModel(streamOfEvents.asSequence()).asStream() }
-
-/** Execute a domain function over a Kotlin [Sequence] with an [ExecuteFilter]. */
-fun <E : Any> ApplicationService<E>.executeSequence(streamId: String, executeFilter: ExecuteFilter<out E>, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): Mono<WriteResult> =
-    execute(streamId, executeFilter) { streamOfEvents -> functionThatCallsDomainModel(streamOfEvents.asSequence()).asStream() }
-
-/** [executeSequence] variant accepting a [UUID] stream id and [ExecuteOptions]. */
-fun <E : Any> ApplicationService<E>.executeSequence(streamId: UUID, options: ExecuteOptions<*>, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): Mono<WriteResult> =
-    executeSequence(streamId.toString(), options, functionThatCallsDomainModel)
-
-/** [executeSequence] variant accepting a [UUID] stream id and an [ExecuteFilter]. */
-fun <E : Any> ApplicationService<E>.executeSequence(streamId: UUID, executeFilter: ExecuteFilter<out E>, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): Mono<WriteResult> =
-    executeSequence(streamId.toString(), executeFilter, functionThatCallsDomainModel)
 
 /** Execute a domain function over a Kotlin [List], returning a [Mono] of the write result. */
 fun <E : Any> ApplicationService<E>.executeList(streamId: String, functionThatCallsDomainModel: (List<E>) -> List<E>): Mono<WriteResult> =
@@ -60,16 +31,12 @@ fun <E : Any> ApplicationService<E>.executeList(streamId: UUID, functionThatCall
 
 /** Execute a domain function over a Kotlin [List] with [ExecuteOptions]. */
 @Suppress("UNCHECKED_CAST")
-fun <E : Any> ApplicationService<E>.executeList(streamId: String, options: ExecuteOptions<*>, functionThatCallsDomainModel: (List<E>) -> List<E>): Mono<WriteResult> {
-    val f = Function<Stream<E>, Stream<E>> { eventStream -> functionThatCallsDomainModel(eventStream.toList()).stream() }
-    return execute(streamId, options as ExecuteOptions<E>, f)
-}
+fun <E : Any> ApplicationService<E>.executeList(streamId: String, options: ExecuteOptions<*>, functionThatCallsDomainModel: (List<E>) -> List<E>): Mono<WriteResult> =
+    execute(streamId, options as ExecuteOptions<E>) { events -> functionThatCallsDomainModel(events) }
 
 /** Execute a domain function over a Kotlin [List] with an [ExecuteFilter]. */
-fun <E : Any> ApplicationService<E>.executeList(streamId: String, executeFilter: ExecuteFilter<out E>, functionThatCallsDomainModel: (List<E>) -> List<E>): Mono<WriteResult> {
-    val f = Function<Stream<E>, Stream<E>> { eventStream -> functionThatCallsDomainModel(eventStream.toList()).stream() }
-    return execute(streamId, executeFilter, f)
-}
+fun <E : Any> ApplicationService<E>.executeList(streamId: String, executeFilter: ExecuteFilter<out E>, functionThatCallsDomainModel: (List<E>) -> List<E>): Mono<WriteResult> =
+    execute(streamId, executeFilter) { events -> functionThatCallsDomainModel(events) }
 
 /** [executeList] variant accepting a [UUID] stream id and [ExecuteOptions]. */
 fun <E : Any> ApplicationService<E>.executeList(streamId: UUID, options: ExecuteOptions<*>, functionThatCallsDomainModel: (List<E>) -> List<E>): Mono<WriteResult> =

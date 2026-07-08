@@ -30,10 +30,8 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
-import java.util.stream.Stream
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.streams.asStream
 
 @Configuration
 class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
@@ -56,20 +54,19 @@ class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
             .filterIsInstance<PlayerGuessedTheWrongWord>()
             .size
 
-        applicationService.execute(GameDcbQueries.wordHintBoundary(gameId)) { events: Stream<GameEvent> ->
-            val eventList = events.toList()
-            val gameWasStarted = eventList.filterIsInstance<GameWasStarted>().firstOrNull()
-            val revealedCharacters = eventList.filterIsInstance<CharacterInWordHintWasRevealed>()
+        applicationService.execute(GameDcbQueries.wordHintBoundary(gameId)) { events: List<GameEvent> ->
+            val gameWasStarted = events.filterIsInstance<GameWasStarted>().firstOrNull()
+            val revealedCharacters = events.filterIsInstance<CharacterInWordHintWasRevealed>()
 
             if (gameWasStarted == null || revealedCharacters.size >= maximumNumberOfRevealedCharacters(gameWasStarted.wordToGuess, wrongGuessCount)) {
-                Stream.empty()
+                emptyList()
             } else {
                 val wordHintData = WordHintData(
                     gameId,
                     wordToGuess = gameWasStarted.wordToGuess,
                     currentlyRevealedPositions = revealedCharacters.map { it.characterPositionInWord }.toSet()
                 )
-                WordHintCharacterRevelation.revealCharacterInWordHintWhenPlayerGuessedTheWrongWord(wordHintData).asStream()
+                WordHintCharacterRevelation.revealCharacterInWordHintWhenPlayerGuessedTheWrongWord(wordHintData).toList()
             }
         }
     }

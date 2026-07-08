@@ -33,11 +33,11 @@ import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
@@ -180,8 +180,8 @@ class CompetingConsumerSubscriptionModelChaosTest {
     }
 
 
-    private Stream<CloudEvent> serialize(DomainEvent e) {
-        return Stream.of(CloudEventBuilder.v1()
+    private List<CloudEvent> serialize(DomainEvent e) {
+        return List.of(CloudEventBuilder.v1()
                 .withId(e.eventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())

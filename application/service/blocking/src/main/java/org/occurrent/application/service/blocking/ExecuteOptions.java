@@ -21,9 +21,9 @@ import org.occurrent.application.service.ExecuteFilter;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.StreamReadFilter;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 /**
  * Options used when executing a command in {@link ApplicationService}.
@@ -45,9 +45,9 @@ import java.util.stream.Stream;
 public final class ExecuteOptions<E> {
     private final @Nullable StreamReadFilter filter;
     private final @Nullable ExecuteFilter<? extends E> executeFilter;
-    private final @Nullable Consumer<Stream<E>> sideEffect;
+    private final @Nullable Consumer<List<E>> sideEffect;
 
-    private ExecuteOptions(@Nullable StreamReadFilter filter, @Nullable ExecuteFilter<? extends E> executeFilter, @Nullable Consumer<Stream<E>> sideEffect) {
+    private ExecuteOptions(@Nullable StreamReadFilter filter, @Nullable ExecuteFilter<? extends E> executeFilter, @Nullable Consumer<List<E>> sideEffect) {
         this.filter = filter;
         this.executeFilter = executeFilter;
         this.sideEffect = sideEffect;
@@ -122,7 +122,7 @@ public final class ExecuteOptions<E> {
      * @return New options with side-effect applied.
      */
     @SuppressWarnings("unchecked")
-    public <E_SPECIFIC extends E> ExecuteOptions<E_SPECIFIC> sideEffect(Consumer<Stream<E_SPECIFIC>> sideEffect) {
+    public <E_SPECIFIC extends E> ExecuteOptions<E_SPECIFIC> sideEffect(Consumer<List<E_SPECIFIC>> sideEffect) {
         return new ExecuteOptions<>(filter, (ExecuteFilter<? extends E_SPECIFIC>) executeFilter, Objects.requireNonNull(sideEffect, "sideEffect cannot be null"));
     }
 
@@ -143,7 +143,7 @@ public final class ExecuteOptions<E> {
     /**
      * Return the configured post-write side-effect, or {@code null} if none has been configured.
      */
-    public @Nullable Consumer<Stream<E>> sideEffect() {
+    public @Nullable Consumer<List<E>> sideEffect() {
         return sideEffect;
     }
 

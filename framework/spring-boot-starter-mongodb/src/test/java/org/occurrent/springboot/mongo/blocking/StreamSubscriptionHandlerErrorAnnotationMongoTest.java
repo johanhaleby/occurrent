@@ -47,7 +47,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -89,8 +88,8 @@ class StreamSubscriptionHandlerErrorAnnotationMongoTest {
 
     @Test
     void a_permanently_failing_handler_blocks_delivery_of_a_later_event_on_the_same_subscription() {
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("poison")));
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("should-not-arrive")));
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("poison")));
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("should-not-arrive")));
 
         // The poison event is retried (its handler is invoked at least once), but since it always throws it is never
         // recorded as successfully processed, and the later event never arrives either: the redelivery loop for the

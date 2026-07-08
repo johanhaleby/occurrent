@@ -36,7 +36,7 @@ import java.net.URI;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Stream;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -66,7 +66,7 @@ class AnnotationTagGeneratorIntegrationTest {
 
         SubscribedToCourse event = new SubscribedToCourse(UUID.randomUUID().toString(), System.currentTimeMillis(), "alice@example.com", "course-42");
 
-        Optional<DcbAppendResult> result = applicationService.execute(DcbCriteria.all(), events -> Stream.of(event));
+        Optional<DcbAppendResult> result = applicationService.execute(DcbCriteria.all(), events -> List.of(event));
 
         assertThat(result).isPresent();
 

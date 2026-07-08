@@ -67,7 +67,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
@@ -317,7 +316,7 @@ class DcbCatchupSubscriptionModelMongoTest {
     }
 
     private void appendTagged(String tag, DomainEvent... events) {
-        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(events)).stream()
                 .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse(tag))))
                 .toList();
         eventStore.append(cloudEvents);
