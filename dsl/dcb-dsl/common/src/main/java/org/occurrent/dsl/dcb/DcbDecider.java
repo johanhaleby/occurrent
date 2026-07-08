@@ -27,7 +27,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * A self-describing, composable DCB (Dynamic Consistency Boundary) decision model.
@@ -76,6 +78,27 @@ public record DcbDecider<C, S extends @Nullable Object, E>(
      */
     public static <C, S extends @Nullable Object, E> DcbDecider<C, S, E> from(Decider<C, S, E> decider, Function<C, @Nullable DcbCriteria> criteria, TagGenerator<E> tags) {
         return new DcbDecider<>(decider, criteria, tags);
+    }
+
+    /**
+     * Builds a {@code DcbDecider} directly from decision parts plus its DCB {@code criteria} and {@code tags}, without
+     * naming an intermediate {@link Decider}. Never terminal, see {@link #create(Object, BiFunction, BiFunction, Function, TagGenerator, Predicate)}
+     * to also supply an {@code isTerminal} predicate.
+     */
+    public static <C, S extends @Nullable Object, E> DcbDecider<C, S, E> create(
+            S initialState, BiFunction<C, S, List<E>> decide, BiFunction<S, E, S> evolve,
+            Function<C, @Nullable DcbCriteria> criteria, TagGenerator<E> tags) {
+        return from(Decider.create(initialState, decide, evolve), criteria, tags);
+    }
+
+    /**
+     * Like {@link #create(Object, BiFunction, BiFunction, Function, TagGenerator)} but also supplies an
+     * {@code isTerminal} predicate for the built decider.
+     */
+    public static <C, S extends @Nullable Object, E> DcbDecider<C, S, E> create(
+            S initialState, BiFunction<C, S, List<E>> decide, BiFunction<S, E, S> evolve,
+            Function<C, @Nullable DcbCriteria> criteria, TagGenerator<E> tags, Predicate<S> isTerminal) {
+        return from(Decider.create(initialState, decide, evolve, isTerminal), criteria, tags);
     }
 
     /**

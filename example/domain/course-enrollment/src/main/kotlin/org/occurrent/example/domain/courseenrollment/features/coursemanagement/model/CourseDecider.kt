@@ -17,38 +17,41 @@
 package org.occurrent.example.domain.courseenrollment.features.coursemanagement.model
 
 import org.occurrent.dsl.dcb.DcbDecider
-import org.occurrent.dsl.dcb.toDcb
-import org.occurrent.dsl.decider.Decider
-import org.occurrent.dsl.decider.decider
+import org.occurrent.dsl.dcb.dcbDecider
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.courseenrollment.common.CourseId
 import org.occurrent.example.domain.courseenrollment.common.DomainCommand
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import java.time.Instant
 import java.util.*
 
+/** The boundary for defining or cancelling a course (the course's own events). Also used by the course read side. */
+internal fun courseCriteria(courseId: CourseId): DcbCriteria = DcbCriteria.tags(CourseTags.course(courseId))
+
 /**
- * Decider for the course's own lifecycle. Single boundary: the course (see
- * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries.courseBoundary]).
+ * Decider for the course's own lifecycle, wired to its DCB boundary and event tags. Single boundary: the course (see
+ * [courseCriteria]).
  */
-val courseDecider: Decider<CourseCommand, CourseState, CourseEvent> = decider(
-    initialState = CourseState.NotDefined, decide = ::decide, evolve = ::evolve
+val courseDcbDecider: DcbDecider<CourseCommand, CourseState, CourseEvent> = dcbDecider(
+    initialState = CourseState.NotDefined,
+    decide = ::decide,
+    evolve = ::evolve,
+    criteria = ::criteria,
+    tags = ::tags
 )
 
-val courseDcbDecider: DcbDecider<CourseCommand, CourseState, CourseEvent> = courseDecider.toDcb(
-    criteria = { command ->
-        val courseId = when (command) {
-            is CourseCommand.DefineCourse -> command.courseId
-            is CourseCommand.CancelCourse -> command.courseId
-        }
-        CourseEnrollmentQueries.courseBoundary(courseId)
-    },
-    tags = { event ->
-        when (event) {
-            is CourseDefined -> setOf(CourseTags.course(event.courseId))
-            is CourseCancelled -> setOf(CourseTags.course(event.courseId))
-        }
+private fun criteria(command: CourseCommand): DcbCriteria {
+    val courseId = when (command) {
+        is CourseCommand.DefineCourse -> command.courseId
+        is CourseCommand.CancelCourse -> command.courseId
     }
-)
+    return courseCriteria(courseId)
+}
+
+private fun tags(event: CourseEvent): Set<Tag> = when (event) {
+    is CourseDefined -> setOf(CourseTags.course(event.courseId))
+    is CourseCancelled -> setOf(CourseTags.course(event.courseId))
+}
 
 sealed interface CourseCommand : DomainCommand {
     data class DefineCourse(val eventId: UUID, val occurredAt: Instant, val courseId: CourseId, val title: String, val capacity: Int) : CourseCommand

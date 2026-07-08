@@ -17,9 +17,9 @@
 package org.occurrent.example.domain.courseenrollment.features.enrollment.model
 
 import org.occurrent.dsl.dcb.DcbDecider
-import org.occurrent.dsl.dcb.toDcb
-import org.occurrent.dsl.decider.Decider
-import org.occurrent.dsl.decider.decider
+import org.occurrent.dsl.dcb.dcbDecider
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.courseenrollment.common.CourseId
 import org.occurrent.example.domain.courseenrollment.common.DomainCommand
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
@@ -30,36 +30,35 @@ import org.occurrent.example.domain.courseenrollment.features.coursemanagement.m
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentTags
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import java.time.Instant
 import java.util.*
 
 /**
- * The cross-boundary decider, and the point of the example. Its boundary spans a course AND a student at once (see
- * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries.enrollmentCriteria]), so
- * one conditional append holds both the course-capacity invariant and the per-student-limit invariant.
+ * The cross-boundary decider, and the point of the example, wired to its DCB criteria and event tags. Its boundary
+ * spans a course AND a student at once (see [criteria]), so one conditional append holds both the course-capacity
+ * invariant and the per-student-limit invariant.
  *
- * Note how this differs from [org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.courseDecider] and [org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.studentDecider]: it does not emit [org.occurrent.example.domain.courseenrollment.common.CourseDefined] or
+ * Note how this differs from [org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.courseDcbDecider] and [org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.studentDcbDecider]: it does not emit [org.occurrent.example.domain.courseenrollment.common.CourseDefined] or
  * [org.occurrent.example.domain.courseenrollment.common.StudentRegistered], it only reads them (to learn the capacity and that the entities exist). Most deciders are
  * single-boundary like those two, this is the one that genuinely needs DCB.
  */
-val enrollmentDecider: Decider<EnrollmentCommand, EnrollmentState, DomainEvent> =
-    decider(
-        initialState = EnrollmentState(),
-        decide = ::decide,
-        evolve = ::evolve
-    )
-
-val enrollmentDcbDecider: DcbDecider<EnrollmentCommand, EnrollmentState, DomainEvent> = enrollmentDecider.toDcb(
-    criteria = { command -> CourseEnrollmentQueries.enrollmentCriteria(command.courseId, command.studentId) },
-    tags = { event ->
-        when (event) {
-            is StudentEnrolledInCourse -> setOf(CourseTags.course(event.courseId), StudentTags.student(event.studentId))
-            is StudentUnenrolledFromCourse -> setOf(CourseTags.course(event.courseId), StudentTags.student(event.studentId))
-            else -> error("No DCB tags defined for event ${event::class.simpleName}. Every event must be tagged so the right decision boundary can find it.")
-        }
-    }
+val enrollmentDcbDecider: DcbDecider<EnrollmentCommand, EnrollmentState, DomainEvent> = dcbDecider(
+    initialState = EnrollmentState(),
+    decide = ::decide,
+    evolve = ::evolve,
+    criteria = ::criteria,
+    tags = ::tags
 )
+
+/** The boundary spans the course's events AND the student's events, see [DcbDecider] for why. */
+private fun criteria(command: EnrollmentCommand): DcbCriteria =
+    DcbCriteria.tagsAnyOf(CourseTags.course(command.courseId), StudentTags.student(command.studentId))
+
+private fun tags(event: DomainEvent): Set<Tag> = when (event) {
+    is StudentEnrolledInCourse -> setOf(CourseTags.course(event.courseId), StudentTags.student(event.studentId))
+    is StudentUnenrolledFromCourse -> setOf(CourseTags.course(event.courseId), StudentTags.student(event.studentId))
+    else -> error("No DCB tags defined for event ${event::class.simpleName}. Every event must be tagged so the right decision boundary can find it.")
+}
 
 /** Domain policy constants. */
 object EnrollmentPolicy {

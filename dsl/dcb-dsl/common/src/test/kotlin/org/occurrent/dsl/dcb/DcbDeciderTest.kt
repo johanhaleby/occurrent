@@ -21,6 +21,7 @@ import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
 import org.junit.jupiter.api.Test
+import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.dsl.decider.decider
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.Tag
@@ -53,6 +54,61 @@ class DcbDeciderTest {
 
         assertThat(events).containsExactly(CourseRegistered("course-1"))
         assertThat(dcbDecider.tags().tags(events.single())).containsExactly(Tag.of("course", "course-1"))
+    }
+
+    // ---- build-from-parts factories ----
+
+    @Test
+    fun kotlin_dcbDecider_factory_builds_from_parts_without_naming_a_plain_decider() {
+        val dcbDecider = dcbDecider(
+            initialState = false,
+            decide = { command: RegisterCourse, _: Boolean -> listOf(CourseRegistered(command.courseId)) },
+            evolve = { _: Boolean, _: CourseRegistered -> true },
+            criteria = { command -> DcbCriteria.tags(Tag.of("course", command.courseId)) },
+            tags = { event -> setOf(Tag.of("course", event.courseId)) }
+        )
+
+        val criteria = dcbDecider.criteria().apply(RegisterCourse("course-1"))
+        val events = dcbDecider.decider().decide(RegisterCourse("course-1"), false)
+
+        assertThat(criteria).isEqualTo(DcbCriteria.tags(Tag.of("course", "course-1")))
+        assertThat(events).containsExactly(CourseRegistered("course-1"))
+        assertThat(dcbDecider.tags().tags(events.single())).containsExactly(Tag.of("course", "course-1"))
+        assertThat(dcbDecider.decider().evolve(false, events.single())).isTrue()
+    }
+
+    @Test
+    fun java_DcbDecider_create_factory_builds_from_parts_without_naming_a_plain_decider() {
+        val dcbDecider = DcbDecider.create(
+            false,
+            { command: RegisterCourse, _: Boolean -> listOf(CourseRegistered(command.courseId)) },
+            { _: Boolean, _: CourseRegistered -> true },
+            { command: RegisterCourse -> DcbCriteria.tags(Tag.of("course", command.courseId)) },
+            TagGenerator<CourseRegistered> { event -> setOf(Tag.of("course", event.courseId)) }
+        )
+
+        val criteria = dcbDecider.criteria().apply(RegisterCourse("course-1"))
+        val events = dcbDecider.decider().decide(RegisterCourse("course-1"), false)
+
+        assertThat(criteria).isEqualTo(DcbCriteria.tags(Tag.of("course", "course-1")))
+        assertThat(events).containsExactly(CourseRegistered("course-1"))
+        assertThat(dcbDecider.tags().tags(events.single())).containsExactly(Tag.of("course", "course-1"))
+        assertThat(dcbDecider.decider().evolve(false, events.single())).isTrue()
+    }
+
+    @Test
+    fun java_DcbDecider_create_factory_with_isTerminal_stops_folding_once_terminal() {
+        val dcbDecider = DcbDecider.create(
+            false,
+            { command: RegisterCourse, _: Boolean -> listOf(CourseRegistered(command.courseId)) },
+            { _: Boolean, _: CourseRegistered -> true },
+            { command: RegisterCourse -> DcbCriteria.tags(Tag.of("course", command.courseId)) },
+            TagGenerator<CourseRegistered> { event -> setOf(Tag.of("course", event.courseId)) },
+            { state: Boolean -> state }
+        )
+
+        assertThat(dcbDecider.decider().isTerminal(true)).isTrue()
+        assertThat(dcbDecider.decider().isTerminal(false)).isFalse()
     }
 
     // ---- adapt ----

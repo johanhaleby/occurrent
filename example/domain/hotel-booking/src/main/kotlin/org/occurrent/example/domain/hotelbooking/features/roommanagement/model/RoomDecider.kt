@@ -17,39 +17,39 @@
 package org.occurrent.example.domain.hotelbooking.features.roommanagement.model
 
 import org.occurrent.dsl.dcb.DcbDecider
-import org.occurrent.dsl.dcb.toDcb
-import org.occurrent.dsl.decider.Decider
-import org.occurrent.dsl.decider.decider
+import org.occurrent.dsl.dcb.dcbDecider
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.hotelbooking.common.DomainCommand
 import org.occurrent.example.domain.hotelbooking.common.HotelId
 import org.occurrent.example.domain.hotelbooking.common.RoomId
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.roomCriteria
 import java.time.Instant
 import java.util.*
 
+/** The boundary for defining or closing a room (the room's own events). Also used by the room read side. */
+internal fun roomCriteria(roomId: RoomId): DcbCriteria = DcbCriteria.tags(RoomTags.room(roomId))
+
 /**
- * Decider for the room's own lifecycle. Single boundary: the room (see
- * [org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.roomCriteria]).
+ * Decider for the room's own lifecycle, wired to its DCB boundary and event tags, ready for
+ * [org.occurrent.dsl.dcb.reactor.execute]. Single boundary: the room (see [roomCriteria]).
  */
-val roomDecider: Decider<RoomCommand, RoomState, RoomEvent> = decider(
-    initialState = RoomState.NotDefined, decide = ::decide, evolve = ::evolve
+val roomDcbDecider: DcbDecider<RoomCommand, RoomState, RoomEvent> = dcbDecider(
+    initialState = RoomState.NotDefined,
+    decide = ::decide,
+    evolve = ::evolve,
+    criteria = ::criteria,
+    tags = ::tags
 )
 
-/** The [roomDecider] wired to its DCB boundary and event tags, ready for [org.occurrent.dsl.dcb.reactor.execute]. */
-val roomDcbDecider: DcbDecider<RoomCommand, RoomState, RoomEvent> = roomDecider.toDcb(
-    criteria = { command ->
-        when (command) {
-            is RoomCommand.DefineRoom -> roomCriteria(command.roomId)
-            is RoomCommand.CloseRoom -> roomCriteria(command.roomId)
-        }
-    },
-    tags = { event ->
-        when (event) {
-            is RoomDefined -> setOf(RoomTags.room(event.roomId))
-            is RoomClosed -> setOf(RoomTags.room(event.roomId))
-        }
-    }
-)
+private fun criteria(command: RoomCommand): DcbCriteria = when (command) {
+    is RoomCommand.DefineRoom -> roomCriteria(command.roomId)
+    is RoomCommand.CloseRoom -> roomCriteria(command.roomId)
+}
+
+private fun tags(event: RoomEvent): Set<Tag> = when (event) {
+    is RoomDefined -> setOf(RoomTags.room(event.roomId))
+    is RoomClosed -> setOf(RoomTags.room(event.roomId))
+}
 
 sealed interface RoomCommand : DomainCommand {
     data class DefineRoom(val eventId: UUID, val occurredAt: Instant, val hotelId: HotelId, val roomId: RoomId, val roomNumber: String) : RoomCommand
