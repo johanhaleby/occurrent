@@ -23,6 +23,11 @@ import org.occurrent.annotation.DcbTag;
 import org.occurrent.application.service.dcb.annotation.AnnotationTagGenerator.AnnotationTagGeneratorException;
 import org.occurrent.eventstore.api.dcb.Tag;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -40,6 +45,17 @@ class DcbTagAliasTest {
     record Conflicting(@DcbTag(value = "a", key = "b") String id) {
     }
 
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.RECORD_COMPONENT)
+    @interface CustomTag {
+        String value() default "";
+
+        String key() default "";
+    }
+
+    record ValueBlankKeySet(@CustomTag(key = "student") String id) {
+    }
+
     @Test
     void value_shorthand_and_key_alias_produce_the_same_tag() {
         assertThat(generator.tags(new ShorthandValue("1"))).containsExactly(Tag.of("clinician", "1"));
@@ -51,5 +67,11 @@ class DcbTagAliasTest {
         assertThatThrownBy(() -> generator.tags(new Conflicting("1")))
                 .isInstanceOf(AnnotationTagGeneratorException.class)
                 .hasMessageContaining("conflicting");
+    }
+
+    @Test
+    void a_custom_annotation_with_both_elements_falls_back_to_key_when_value_is_blank() {
+        AnnotationTagGenerator<Object> custom = new AnnotationTagGenerator<>(CustomTag.class);
+        assertThat(custom.tags(new ValueBlankKeySet("s1"))).containsExactly(Tag.of("student", "s1"));
     }
 }
