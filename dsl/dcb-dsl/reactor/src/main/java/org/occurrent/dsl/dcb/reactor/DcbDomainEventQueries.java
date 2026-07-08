@@ -123,9 +123,8 @@ public class DcbDomainEventQueries<E> {
      * Queries DCB events of the given type, mapped to its CloudEvent type string through the converter.
      */
     public <SUB extends E> Flux<SUB> query(Class<SUB> type) {
-        @SuppressWarnings("unchecked")
-        Flux<SUB> events = (Flux<SUB>) query(criteria().type(type));
-        return events;
+        requireNonNull(type, "Type cannot be null");
+        return query(criteria().type(type)).cast(type);
     }
 
     /**
