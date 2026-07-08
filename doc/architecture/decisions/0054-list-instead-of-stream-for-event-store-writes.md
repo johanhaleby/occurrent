@@ -66,6 +66,6 @@ in-memory subscription model that consumes it, move from `Consumer<Stream<CloudE
 `Consumer<List<CloudEvent>>` for the same reason as the write API, since they are always handed an
 already-materialized batch.
 
-One related cleanup is deliberately left out of this change. The `Sequence` and `Stream` overloads on the
-view DSL's `evolve` helpers are a read-model fold concern rather than part of the write path, and collapsing
-them to `List` is a separate, self-contained follow-up.
+The view DSL's `evolve`, `evolveAll`, and `evolveFrom` helpers were collapsed to `List` and varargs in the
+same change, dropping their `Stream` and `Sequence` overloads. A view fold operates on a materialized set of
+events already in hand, so it follows the same reasoning as the write side rather than the lazy read side.
