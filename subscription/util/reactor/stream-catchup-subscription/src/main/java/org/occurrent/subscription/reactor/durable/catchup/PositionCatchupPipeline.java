@@ -30,20 +30,19 @@ import java.util.function.Predicate;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The bulk-then-reconcile-then-live handover shared by every position-ordered reactive catch-up model. A
- * {@link CatchupReader} supplies the window and head reads, so this pipeline is free of any specific store or query
- * type, and is reused by both the stream and the DCB catch-up models.
+ * Bulk-then-reconcile-then-live handover shared by every position-ordered reactive catch-up model. A
+ * {@link CatchupReader} supplies the window and head reads so this pipeline is store-agnostic, reused by both the
+ * stream and DCB catch-up models.
  * <p>
- * The live resume token is captured before the bulk replay, not after, so an event that commits during the replay is
- * still delivered by the live subscription. The replay pages the sequence in {@code position} windows, then a single
- * reconciliation pass drains up to a head snapshotted once at reconcile start so events written during the replay are
- * delivered in order. It does not chase a moving head: under sustained writes that would never terminate, so anything
- * committed after the snapshot head is left to the live subscription (which resumes from the pre-bulk token), deduped
- * by the id cache. That cache dedupes events that both the replay and the live subscription see.
+ * The live resume token is captured before the bulk replay so an event committing during the replay is still
+ * delivered live. The replay pages in {@code position} windows, then reconciles once, draining up to a head
+ * snapshotted at reconcile start so writes during replay are delivered in order. It does not chase a moving head,
+ * which would never terminate under sustained writes; anything after the snapshot is left to the live subscription
+ * (resuming from the pre-bulk token), deduped by the id cache.
  * <p>
- * If the replay runs longer than the change stream history (the MongoDB oplog window), the captured token ages out
- * and the live resume fails loudly rather than silently dropping an event. If the model reports no resume token at
- * all (for example an empty oplog or a restricted cluster), the subscription fails loudly for the same reason.
+ * If the replay runs longer than the change stream history (e.g. the MongoDB oplog window), the captured token ages
+ * out and the handover fails loudly rather than silently dropping events. Same if the model reports no resume token
+ * at all (e.g. an empty oplog or a restricted cluster).
  */
 @NullMarked
 final class PositionCatchupPipeline {
@@ -77,19 +76,17 @@ final class PositionCatchupPipeline {
             throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
         }
         // Capture the live resume token before the bulk replay so an event committing during the replay is still
-        // delivered by the live subscription. If the model reports no token (for example an empty oplog or a
-        // restricted cluster) a no-loss handover to live cannot be guaranteed, so fail loudly instead of silently
-        // dropping the events committed between the end of the replay and going live.
+        // delivered live. If the model reports no token (e.g. an empty oplog or a restricted cluster) a no-loss
+        // handover cannot be guaranteed, so fail loudly instead of silently dropping events.
         return subscriptionModel.globalCheckpoint()
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")))
                 .flatMapMany(liveToken ->
                         reader.currentHead().flatMapMany(bulkHead -> {
                             HandoverCache cache = new HandoverCache(handoverCacheSize);
-                            // Cache the replayed ids, including the bulk tail, because the reactive global
-                            // subscription position resumes inclusively, so the live change stream re-delivers
-                            // boundary events the replay already emitted. Dedup is by id, not by position, so an
-                            // in-flight event below the replay head that was never seen during the replay is still
-                            // delivered once by the live change stream.
+                            // Cache the replayed ids, including the bulk tail, since the reactive global position
+                            // resumes inclusively and the live change stream re-delivers boundary events already
+                            // emitted. Dedup by id, not position, so an in-flight event never seen during the
+                            // replay is still delivered once, live.
                             Flux<CloudEvent> bulk = windows(startPosition, bulkHead, cache);
                             Flux<CloudEvent> reconcile = reconcile(bulkHead, cache);
                             Flux<CloudEvent> live = subscriptionModel.subscribe(liveSubscriptionFilter, StartAt.checkpoint(liveToken))
@@ -110,12 +107,9 @@ final class PositionCatchupPipeline {
                 .concatWith(Flux.defer(() -> windows(upTo, toInclusive, cache)));
     }
 
-    // Drains events written during the bulk replay in position order up to a head snapshotted once here. It does not
-    // chase a moving head: under sustained writes re-reading the head would advance forever and the catch-up would
-    // never hand over to live (a livelock). Anything committed after this snapshot head is delivered by the live
-    // change stream, which resumes from the pre-bulk token, deduped by the id cache. Loss-safe: nothing in
-    // (snapshotHead, now] is skipped because live covers it, and nothing in (cursor, snapshotHead] is skipped because
-    // this pass drains it.
+    // Snapshot the head once and drain events up to it in position order. Re-reading a moving head would advance
+    // forever under sustained writes and never hand over to live (livelock). Anything after the snapshot is
+    // covered by the live change stream (resumes from the pre-bulk token), deduped by the id cache.
     private Flux<CloudEvent> reconcile(long cursor, HandoverCache cache) {
         return reader.currentHead().flatMapMany(snapshotHead -> windows(cursor, snapshotHead, cache));
     }

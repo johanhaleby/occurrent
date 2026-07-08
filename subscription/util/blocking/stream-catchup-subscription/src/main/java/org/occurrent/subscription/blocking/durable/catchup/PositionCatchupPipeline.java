@@ -27,15 +27,15 @@ import java.util.stream.Stream;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The bulk-then-reconcile paging shared by every position-ordered blocking catch-up replay. A {@link Reader} supplies
- * the window and head reads, so this pipeline is free of any specific store or query type, and is reused by both the
- * stream and the DCB catch-up models (the blocking counterpart of the reactor {@code PositionCatchupPipeline}).
+ * Bulk-then-reconcile paging shared by every position-ordered blocking catch-up replay. A {@link Reader} supplies
+ * the window and head reads so this pipeline is store-agnostic, reused by both the stream and DCB catch-up models
+ * (blocking counterpart of the reactor {@code PositionCatchupPipeline}).
  * <p>
- * The replay pages the sequence in {@code windowSize} windows, then a single reconciliation pass drains up to a head
- * snapshotted once at reconcile start so events written during the replay are delivered in order. It does not chase a
- * moving head, which under sustained writes would never terminate, so anything committed after the snapshot head is
- * left to the live subscription (resuming from the pre-bulk token), deduped by the caller's cache. The caller supplies
- * the delivery (dedup cache, checkpoint persistence, cancellation) so this class stays a pure paging loop.
+ * The replay pages the sequence in {@code windowSize} windows, then reconciles once, draining up to a head
+ * snapshotted at reconcile start so writes during the replay are delivered in order. It does not chase a moving
+ * head, which would never terminate under sustained writes. Anything committed after the snapshot is left to the
+ * live subscription, deduped by the caller's cache. The caller supplies delivery (dedup, checkpoint persistence,
+ * cancellation), keeping this a pure paging loop.
  */
 @NullMarked
 final class PositionCatchupPipeline {
@@ -80,13 +80,9 @@ final class PositionCatchupPipeline {
         long bulkHead = reader.currentHead();
         long cursor = windows(startPosition, bulkHead, keepRunning, deliver, null);
 
-        // Reconcile events written during the bulk replay by draining up to a head snapshotted once here. It does not
-        // chase a moving head: under sustained writes re-reading the head would advance forever and the catch-up would
-        // never hand over to live (a livelock). Anything committed after this snapshot head is delivered by the live
-        // subscription, which resumes from the pre-bulk token, deduped by the cache. Loss-safe: nothing in
-        // (snapshotHead, now] is skipped because live covers it, and nothing in (cursor, snapshotHead] is skipped
-        // because this pass drains it. Re-reads of the bulk-tail overlap are deduped by the cache (delivery is
-        // at-least-once).
+        // Snapshot the head once and reconcile up to it. Re-reading a moving head would advance forever under
+        // sustained writes and never hand over to live (livelock). Anything after the snapshot is covered by the
+        // live subscription (resumes from the pre-bulk token); the bulk-tail overlap is deduped by the cache.
         long snapshotHead = reader.currentHead();
         cursor = windows(cursor, snapshotHead, keepRunning, deliver, cache);
         return cursor;

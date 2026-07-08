@@ -60,33 +60,30 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 /**
  * The blocking stream catch-up path: replays historic stream events (by {@code position} when the store writes one,
- * otherwise by the legacy time/{@code $natural} order) then hands over to a live subscription. This is the stream
- * counterpart split out of {@code CatchupSubscriptionModel} (see ADR 25) so a stream-only application does
- * not need to depend on {@code eventstore-api-dcb}. The dispatcher {@code CatchupSubscriptionModel} in the
- * {@code catchup-subscription} module wraps this class for its stream routing.
+ * otherwise by the legacy time/{@code $natural} order) then hands over to a live subscription. Split out of
+ * {@code CatchupSubscriptionModel} (ADR 25) so a stream-only application does not need {@code eventstore-api-dcb}.
+ * The dispatcher {@code CatchupSubscriptionModel} wraps this class for its stream routing.
  * <p>
- * This class only ever replays and delivers stream-capability events. On a store that has both the {@code STREAM} and
- * {@code DCB} capabilities enabled at once, that promise is enforced, not merely descriptive: a
- * {@link Filter#capability(EventStoreCapability) STREAM-capability filter} is ANDed into both the catch-up-phase reads
- * and the filter handed to the delegated live subscription, so a DCB-tagged event never reaches a subscriber of this
- * class in either phase (see ADR 50). A caller filter is still honored; the capability guard is composed on top of it.
+ * Only ever replays and delivers stream-capability events. On a store with both {@code STREAM} and {@code DCB}
+ * capabilities enabled, this is enforced, not descriptive: a
+ * {@link Filter#capability(EventStoreCapability) STREAM-capability filter} is ANDed into both catch-up reads and
+ * the live-subscription filter, so a DCB-tagged event never reaches a subscriber of this class (ADR 50). A caller
+ * filter is still honored, with the capability guard composed on top.
  * <p>
- * Delivery is at-least-once, with the same catch-up-to-live handover and clock-skew-safe reconciliation guarantees
- * documented on the dispatcher.
+ * Delivery is at-least-once, with the same handover and clock-skew-safe reconciliation guarantees documented on
+ * the dispatcher.
  */
 @NullMarked
 public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
-    // Guards every read and every live handover this class performs so a DCB-tagged event is never delivered to a
-    // stream subscriber, even on a store that has both capabilities enabled (see ADR 50). It is store-agnostic: each
-    // Filter-conversion implementation maps this capability to its own storage artifact.
+    // Guards every read and live handover so a DCB-tagged event never reaches a stream subscriber, even when both
+    // capabilities are enabled (ADR 50). Store-agnostic: each Filter-conversion implementation maps this capability
+    // to its own storage artifact.
     private static final Filter STREAM_CAPABILITY_FILTER = Filter.capability(EventStoreCapability.STREAM);
 
     private final EventStoreQueries eventStoreQueries;
-    // The capability guard ANDed into every read and every live handover. It is {@link #STREAM_CAPABILITY_FILTER} for a
-    // stream subscription (so a DCB-tagged event never reaches a stream subscriber, see ADR 50), and {@code null} for a
-    // capability-agnostic subscription, which then filters only by the caller's plain Filter and so delivers events of
-    // every capability.
+    // The capability guard ANDed into every read and live handover: STREAM_CAPABILITY_FILTER for a stream
+    // subscription, null for a capability-agnostic one, which then delivers events of every capability.
     private final @Nullable Filter capabilityScope;
 
     public StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
@@ -151,8 +148,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         boolean positionMode = streamStoreWritesPosition();
         final StartAt firstStartAt;
         if (startAt.isDefault()) {
-            // By default, we check if there's a subscription position stored for this subscription, if so we resume from there, otherwise,
-            // delegate to the parent subscription model.
+            // Resume from a stored position if there is one, otherwise delegate to the parent subscription model.
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             if (checkpoint == null) {
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
@@ -169,7 +165,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         } else if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
-                // We're not allowed to start this subscription model, defer to parent!
+                // Not allowed to start this subscription model, defer to parent
                 return getDelegatedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAt, action);
             } else {
                 firstStartAt = startAtGeneratedByDynamic;
@@ -196,9 +192,9 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         };
     }
 
-    // The kinds of resolved start a stream subscription can have. Classifying once keeps the routing above an
-    // exhaustive switch, so a new kind forces both switches to handle it and no start can silently fall through to
-    // live delivery, which is the class of bug that once dropped specific-time replay on a position store.
+    // Resolved start kinds for a stream subscription. Classifying once keeps the routing above an exhaustive switch,
+    // so a new kind forces both switches to handle it instead of silently falling through to live delivery, which
+    // once dropped specific-time replay on a position store.
     private enum StreamStart {BEGINNING_OF_TIME, SPECIFIC_TIME, GLOBAL_POSITION, LIVE}
 
     // Resolve the start once, then branch on the resolved checkpoint. Beginning-of-time must be checked before
@@ -254,49 +250,37 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // Perform the catchup
         runCatchupForStream(eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy), subscriptionId, action, null);
 
-        // Here we check if the delegated subscription model is allowed to execute. The reason for doing this is that
-        // in certain scenarios, such as when using the @Subscription annotation with settings {@code startAt=BEGINNING_OF_TIME} and
-        // {@code resume=SAME_AS_START_AT}, we instruct the DurableSubscriptionModel (which is typically the delegated subscription model here)
-        // to NOT store the position durably. This because we start at "beginning of time" and we also want to resume at
-        // "beginning of time" and thus we never need to store ANY subscription position (because we always start from "beginning of time"
-        // when application is rebooted). This allows for catching up in-memory projections/views/policies.
-        // We force the wrapping subscription to be a CheckpointAwareSubscriptionModel so that we can capture
-        // where the live subscription should resume. This position is captured *after* the bulk replay so it
-        // stays fresh: capturing it before a long replay would risk the resume token ageing out of the
-        // database change stream (e.g. MongoDB's oplog) before the handover, making the live subscription
-        // unresumable. Events written during the replay are not covered by this position (they were written
-        // before it). They are reconciled separately by the insertion-order delta below. A null resume token from
-        // the delegate fails loudly (captureLiveResumeCheckpoint) instead of silently resuming live at "now" and
-        // dropping every event committed during the replay; see the position path for the same guarantee captured
-        // before its replay instead.
+        // The delegated subscription model may be configured to never store its position durably, e.g. @Subscription
+        // with startAt=BEGINNING_OF_TIME and resume=SAME_AS_START_AT: since every restart replays from beginning of
+        // time anyway, no position needs to be stored. This lets in-memory projections/views/policies catch up.
+        //
+        // The wrapping subscription is forced to be a CheckpointAwareSubscriptionModel to capture where live
+        // delivery should resume. Captured *after* the bulk replay, not before, so the token stays fresh: capturing
+        // it before a long replay risks it ageing out of the change stream (e.g. MongoDB's oplog) before handover.
+        // Events written during the replay are not covered by this checkpoint; they are reconciled separately by
+        // the insertion-order delta below. A null resume token fails loudly (captureLiveResumeCheckpoint) instead
+        // of silently resuming live at "now" and dropping events committed during the replay; the position path
+        // captures its checkpoint before its replay instead, for the same guarantee.
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
 
-        // We generate a cache so that events that are streamed at the same time as streaming the events missed
-        // during the catch-up phase are not streamed again.
+        // Cache to avoid re-delivering events already streamed during catch-up when they arrive again live.
         FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
 
-        // Reconcile events that arrived during the catch-up phase, i.e. those written after the bulk replay started
-        // but at or before the live subscription's resume position (globalCheckpoint). They are, by
-        // definition, the most-recently-inserted matching events, so we read the newest ones in *insertion order*
-        // (SortBy.natural, descending + limit, no skip) and reverse them back to insertion order for delivery.
+        // Reconcile events written after the bulk replay started but at or before the live resume position
+        // (globalCheckpoint): read the newest N in insertion order (SortBy.natural descending + limit, no skip)
+        // and reverse for delivery.
         //
-        // Selecting by insertion order rather than the configurable, time-based catchupPhaseSortBy is what makes this
-        // reconciliation loss-free under clock skew: a during-catch-up event whose "time" is earlier than the replay
-        // cursor's already-passed position would otherwise sort before the already-processed boundary (missed here)
-        // and sit below the live subscription's resume position (missed there too), and would be silently lost.
-        // Reading the newest N in insertion order also reads only the recent tail instead of skipping the whole
-        // backlog, which matters on large event stores.
+        // Selecting by insertion order rather than the configurable catchupPhaseSortBy is what keeps this loss-free
+        // under clock skew (ADR 0014): a during-catch-up event whose time sorts before the already-processed
+        // boundary would be missed by both a time-sorted reconcile and by live delivery. Insertion order also reads
+        // only the recent tail instead of the whole backlog.
         //
-        // The number to read is derived from a count, but more events can be written between that count and the read.
-        // Such a write inflates the store and shifts the "newest N" window forward, pushing the oldest during-catch-up
-        // event out of the read; being at or before globalCheckpoint it would not be re-delivered by the live
-        // subscription either, and would be lost. To close that window we re-read until the matching count stops
-        // growing: each pass reads every event after the pre-catch-up boundary, so a pass during which no new event is
-        // written has necessarily delivered them all. Re-reads re-deliver already-seen events, which are deduped by the
-        // cache (delivery is at-least-once). Any event written after a pass is, by definition, newer than
-        // globalCheckpoint and is therefore covered by the live subscription regardless.
+        // The count to read comes from a count query, but more events can be written before the read runs, shifting
+        // the window and pushing an old during-catch-up event out. Re-read until the matching count stops growing:
+        // a pass with no new event has delivered them all. Re-reads are deduped by the cache (at-least-once).
+        // Anything written after a pass is newer than globalCheckpoint and is covered by live delivery regardless.
         long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
         long matchingEventCount = eventStoreQueries.count(catchupFilter);
         while (matchingEventCount > reconciledThroughCount && shouldKeepReplaying(subscriptionId)) {
@@ -319,8 +303,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             matchingEventCount = eventStoreQueries.count(catchupFilter);
         }
 
-        // We check if the delegated subscription model is not allowed to subscribe. If so, we remove any temporary subscription position written during the catchup phase
-        // since we're now done with the catch-up.
+        // If the delegate is not allowed to subscribe, remove the temporary position written during catch-up
+        // now that it's done.
         if (delegatedStartAt == null) {
             returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                 cfg.storage().delete(subscriptionId);
@@ -333,38 +317,30 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             subscriptionsWasCancelledOrShutdown = false;
             runningCatchupSubscriptions.remove(subscriptionId);
         } else {
-            // When runningCatchupSubscriptions doesn't contain the key at this stage it means that it has been explicitly cancelled.
+            // Key missing from runningCatchupSubscriptions at this stage means it was explicitly cancelled.
             subscriptionsWasCancelledOrShutdown = true;
         }
 
-        // When the catch-up subscription is ready, we store the global position in the position storage so that subscriptions
-        // that have not received _any_ new events during replay will start at the global position if the application is restarted.
-        // Otherwise, nothing will be stored in the "storage" and replay of historic events will take place again on application restart
-        // which is not what we want! The reason for doing this with UseCheckpointInStorage (as opposed to just
-        // PersistCheckpointDuringCatchupPhase) is that if using a "storage" at all in the config, is to accommodate
-        // that the wrapping subscription continues from where we left off.
+        // Store the global position once catch-up is ready so a subscription that got no new events during replay
+        // still resumes from it after a restart, instead of replaying history again. Uses UseCheckpointInStorage
+        // rather than PersistCheckpointDuringCatchupPhase because using storage at all implies the wrapped
+        // subscription should continue from where this left off.
         StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                         cfg -> () -> {
-                            // It's important that we find the document inside the supplier so that we look up the latest resume token on retry
+                            // Read inside the supplier so a retry picks up the latest checkpoint
                             Checkpoint position = cfg.storage().read(subscriptionId);
-                            // If there is no position stored in storage, or if the stored position is time-based
-                            // (i.e. written by the catch-up subscription), we save the globalCheckpoint.
-                            // The reason that we need to write the time-based subscription position in this case
-                            // is that the wrapped subscription might not support time-based subscriptions.
+                            // Nothing stored, or a time-based position from catch-up: save globalCheckpoint, since
+                            // the wrapped subscription may not support time-based positions.
                             if ((position == null || isTimeBasedCheckpoint(position)) && globalCheckpoint != null) {
                                 position = cfg.storage().save(subscriptionId, globalCheckpoint);
                             } else if (position == null) {
-                                // Position can still be null here if globalCheckpoint is null, if so, we start at the "subscriptionModelDefault",
-                                // given that the delegated subscription model is allowed to subscribe (i.e. delegatedStartAt != null).
+                                // globalCheckpoint is also null: start at subscriptionModelDefault if the delegate may subscribe
                                 return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                             }
                             return StartAt.checkpoint(position);
                         })
                 .orElse(() -> {
                     if (globalCheckpoint == null) {
-                        // We check if the delegated subscription model is allowed to subscribe (delegatedStartAt != null),
-                        // if so we instruct the subscription model to start from default, otherwise just return the original
-                        // startAt supplied by the user.
                         return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                     } else {
                         return StartAt.checkpoint(globalCheckpoint);
@@ -383,7 +359,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
             doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                // Only get position if using storage and no position has been stored!
+                // Only get position if using storage and no position has been stored
                 if (!cfg.storage().exists(subscriptionId)) {
                     startAtToUse.get(generateSubscriptionModelContext());
                 }

@@ -36,13 +36,12 @@ public class CatchupSubscriptionModelConfig {
     static final long DEFAULT_DCB_CATCHUP_POSITION_WINDOW_SIZE = 1000;
 
     /**
-     * Default ceiling on the number of event ids kept to deduplicate the catch-up-to-live handover seam, used by the
-     * convenience constructors that do not take an explicit {@code cacheSize}. The dedup cache grows to cover the
-     * overlap the live subscription re-delivers (bounded by the write volume during the replay, not by total history)
-     * and evicts oldest-first only once it would exceed this ceiling. Exceeding it yields extra duplicate deliveries,
-     * never loss (delivery is at-least-once). It is well above the previous {@code 100} so a rebuild with heavy
-     * concurrent writes no longer evicts the overlap before the live subscription re-delivers it. Each id is a short
-     * string, so lower it to cap memory or raise it to cut duplicates further.
+     * Default ceiling on the number of event ids kept to dedupe the catch-up-to-live handover, used by convenience
+     * constructors without an explicit {@code cacheSize}. The cache grows to cover the replay-to-live overlap
+     * (bounded by write volume during replay, not total history) and evicts oldest-first past this ceiling.
+     * Exceeding it causes extra duplicate deliveries, never loss (at-least-once). Well above the previous
+     * {@code 100} so a rebuild under heavy concurrent writes no longer evicts the overlap before live re-delivers
+     * it. Each id is a short string, so lower it to cap memory or raise it to cut duplicates further.
      */
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 
@@ -91,13 +90,10 @@ public class CatchupSubscriptionModelConfig {
      * @param subscriptionStorageConfig Configures if and how checkpoint persistence should be handled during the catch-up phase.
      */
     public CatchupSubscriptionModelConfig(int cacheSize, CheckpointStorageConfig subscriptionStorageConfig) {
-        // We sort by time but fallback to stream version if time is the same for two events.
-        // While this will _not_ sort the entire in database in insertion order, it at least guarantees
-        // order within a stream. Note that we can't do SortBy.time(ASCENDING).thenNatural(ASCENDING)
-        // since for certain databases (MongoDB) this will prevent sorting from using a "time index" for queries
-        // (see https://docs.mongodb.com/manual/reference/method/cursor.sort/#return-natural-order).
-        // For MongoDB, doing SortBy.time(ASCENDING).then("_id", ASCENDING) would be better,
-        // but "_id" is unique to MongoDB so we cannot use it here.
+        // Sorts by time, falling back to stream version when time ties, which guarantees order within a stream but
+        // not full insertion order. Not SortBy.time(ASCENDING).thenNatural(ASCENDING): on MongoDB that prevents the
+        // sort from using a time index (see https://docs.mongodb.com/manual/reference/method/cursor.sort/#return-natural-order).
+        // SortBy.time(ASCENDING).then("_id", ASCENDING) would be better on MongoDB, but "_id" is Mongo-specific.
         this(cacheSize, subscriptionStorageConfig, SortBy.ascending(TIME, STREAM_VERSION));
     }
 

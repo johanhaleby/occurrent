@@ -23,19 +23,18 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * An insertion-ordered cache of delivered event ids that grows to cover the replay-to-live overlap up to {@code size},
- * evicting oldest-first once it would exceed it. Used both to dedupe an overlapping catch-up reconciliation re-read and
- * to skip, in the live consumer, events already delivered during catch-up at the handover seam. Shared by the stream
- * and DCB catch-up paths. The overlap it must cover is bounded by the write volume during the replay (the live change
- * stream resumes from a recent token, not from history), not by total history.
+ * Insertion-ordered cache of delivered event ids covering the replay-to-live overlap up to {@code size}, evicting
+ * oldest-first past that. Dedupes the overlapping reconcile re-read and lets the live consumer skip events already
+ * delivered during catch-up at the handover seam. Shared by the stream and DCB catch-up paths. The overlap is
+ * bounded by write volume during replay, not total history, since the live change stream resumes from a recent
+ * token.
  * <p>
- * Eviction is loss-safe by construction: dropping an id can only stop a re-delivered live event from being suppressed,
- * so an overlap larger than {@code size} yields extra duplicate deliveries, never loss (delivery is at-least-once).
- * Dedup is by id, never by position, so a low-position event that commits late (after the handover advanced past its
- * position) is never in this cache and is always delivered by the live subscription.
+ * Dedup is id-based with a fixed ceiling: exceeding {@code size} evicts entries and causes duplicate delivery,
+ * never loss, since delivery is at-least-once. Never dedupes by position, so a late-committing low-position event
+ * is always delivered live.
  * <p>
- * Written on the catch-up (replay) thread and read on the live delivery thread at the handover seam, so every access
- * is synchronized, matching the reactor {@code HandoverCache}.
+ * Written on the catch-up thread, read on the live thread at the handover seam, so access is synchronized, matching
+ * the reactor {@code HandoverCache}.
  */
 @NullMarked
 final class FixedSizeCache {

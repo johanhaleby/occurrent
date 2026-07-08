@@ -58,7 +58,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     private final AtomicBoolean stoppedByUser = new AtomicBoolean(false);
 
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, CompetingConsumer> competingConsumers = new ConcurrentHashMap<>();
-    // A set that hold which subscriptions whose StartAt position have indicated that they should not use the competing consumer model
+    // Subscriptions whose StartAt position indicated they should not use the competing consumer model
     private final Set<String> nonCompetingConsumersSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     public CompetingConsumerSubscriptionModel(SubscriptionModel subscriptionModel, CompetingConsumerStrategy strategy) {
@@ -85,9 +85,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         final Subscription subscription;
         if (startAt.get(new SubscriptionModelContext(CompetingConsumerSubscriptionModel.class)) == null) {
             nonCompetingConsumersSubscriptions.add(subscriptionId);
-            // We're not allowed to start the competing consumer subscription, just delegate to parent.
-            // One reason for this might be if we're starting a non-durable in-memory subscription on multiple nodes.
-            // Then typically you want all nodes to receive all events, and thus there's no need for a  CompetingConsumerSubscription.
+            // Not allowed to start the competing consumer subscription, delegate to parent instead. One case: a
+            // non-durable in-memory subscription started on multiple nodes, where every node should receive every
+            // event, so competing consumption is not wanted.
             subscription = getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
         } else {
             subscription = startCompetingConsumerSubscription(subscriberId, subscriptionId, filter, startAt, action);
@@ -150,14 +150,13 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         if (resumeSubscriptionsAutomatically) {
-            // Note that we deliberately don't start the delegated subscription model here!!
-            // This is because we're not sure that we have the lock. The underlying SM will be started
-            // automatically if required (since it's instructed to do so in the Waiting state supplier).
+            // Deliberately not starting the delegated subscription model here since the lock is not known to be
+            // held. The underlying SM starts automatically if required, per the Waiting state supplier.
             competingConsumers.values().stream()
                     .filter(not(CompetingConsumer::isRunning))
                     .forEach(cc -> {
                                 logDebug("Starting CompetingConsumer subscription (subscriberId={}, subscriptionId={}, state={})", cc.getSubscriberId(), cc.getSubscriptionId(), cc.state.getClass().getSimpleName());
-                                // Only change state if we have permission to consume
+                                // Only change state when permitted to consume
                                 if (cc.isWaiting()) {
                                     // Registering a competing consumer will start the subscription automatically if lock was acquired
                                     competingConsumerStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
@@ -221,15 +220,15 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                             subscription = startWaitingConsumer(competingConsumer);
                         } else {
                             competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
-                            // This works because we've checked that it's already paused earlier
+                            // Safe because it was already checked to be paused above
                             subscription = delegate.resumeSubscription(subscriptionId);
                         }
                     } else if (registerCompetingConsumer(subscriptionId, subscriberId) && !competingConsumer.isWaiting()) {
-                        // This works because we've checked that it's already paused earlier
+                        // Safe because it was already checked to be paused above
                         competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
                         subscription = delegate.resumeSubscription(subscriptionId);
                     } else {
-                        // We're not allowed to resume since we don't have the lock.
+                        // Not allowed to resume without the lock
                         subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
                     }
                     return subscription;
@@ -293,14 +292,13 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 pauseConsumer(competingConsumer, pausedByUser);
                 if (pausedByUser) {
                     logDebug("Will unregister competing consumer because subscription was paused explicitly by user (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());
-                    // If subscription is paused by user explicitly, then the user needs to resume it again explicitly to start it.
-                    // In these cases, we unregister the competing consumer. This means that it cannot be leader again until the subscription is
-                    // resumed explicitly (it'll re-register the competing consumers).
+                    // A user-paused subscription needs an explicit resume to restart, so unregister the competing
+                    // consumer: it cannot become leader again until the subscription is explicitly resumed.
                     competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
                 } else {
                     logDebug("Will release competing consumer because subscription was paused by system (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());
-                    // Subscription was not paused by the user, thus we just "release" the competing consumer so that it can re-gain leader status
-                    // later without explicitly resuming the subscription.
+                    // Not paused by the user, so just release the competing consumer so it can re-gain leader
+                    // status later without an explicit resume.
                     competingConsumerStrategy.releaseCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
                 }
             }
@@ -366,14 +364,12 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
         if (competingConsumer.isRunning()) {
             logDebug("CompetingConsumer is running, will pause subscription and consumers (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            // We pause the entire subscription. The reason for this is that we don't want this instance to subscribe to any events at all.
-            // If we don't do this, events will still be sent to the instance. Also, we make use of the "checkpoint" when resuming the
-            // subscription later. If we had not paused the subscription this could happen:
+            // Pausing (not just stopping delivery) is what lets resume later use the checkpoint. Without it:
             // 1. Subscriber 1 loses lock
             // 2. An event is published (A)
             // 3. Subscriber 2 doesn't have lock yet
-            // 4. When we detect that no one has the lock, we resume the subscriber (say Subscriber 2), but now it's too late because we've missed A.
-            // This also make sense since there can only be one subscription with the same id for the same CatchupSubscriptionModel instance.
+            // 4. No one has the lock is detected, Subscriber 2 is resumed, but A was already missed.
+            // Also only one subscription can exist per id per CatchupSubscriptionModel instance.
             pauseSubscription(subscriptionId, false);
         } else if (competingConsumer.isPaused()) {
             logDebug("CompetingConsumer is already paused, won't do anything (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
