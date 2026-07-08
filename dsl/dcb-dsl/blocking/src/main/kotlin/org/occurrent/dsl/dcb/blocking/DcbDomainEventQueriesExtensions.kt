@@ -72,13 +72,13 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForSequenceWithPosition(
  * Queries DCB events of the reified type [T] as a [List].
  */
 inline fun <reified T : Any> DcbDomainEventQueries<in T>.queryForList(): List<T> =
-    query(T::class.java).toList()
+    types(T::class.java).toList()
 
 /**
  * Queries DCB events of the reified type [T] as a [Sequence].
  */
 inline fun <reified T : Any> DcbDomainEventQueries<in T>.queryForSequence(): Sequence<T> =
-    query(T::class.java).asSequence()
+    types(T::class.java).asSequence()
 
 /**
  * Queries DCB events tagged with all the given tags, as a [List].

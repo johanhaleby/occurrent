@@ -122,7 +122,7 @@ public class DcbDomainEventQueries<E> {
     /**
      * Queries DCB events of the given type, mapped to its CloudEvent type string through the converter.
      */
-    public <SUB extends E> Flux<SUB> query(Class<SUB> type) {
+    public <SUB extends E> Flux<SUB> types(Class<SUB> type) {
         requireNonNull(type, "Type cannot be null");
         return query(criteria().type(type)).cast(type);
     }
@@ -131,7 +131,7 @@ public class DcbDomainEventQueries<E> {
      * Queries DCB events of any of the given types, each mapped to its CloudEvent type string through the converter.
      */
     @SafeVarargs
-    public final Flux<E> query(Class<? extends E> first, Class<? extends E>... rest) {
+    public final Flux<E> types(Class<? extends E> first, Class<? extends E>... rest) {
         return query(criteria().types(first, rest));
     }
 

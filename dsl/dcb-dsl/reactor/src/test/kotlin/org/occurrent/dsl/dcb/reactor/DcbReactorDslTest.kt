@@ -145,7 +145,7 @@ class DcbReactorDslTest {
         val nameDefined = NameDefined("event-0", time, "name", "Jane Doe")
         append(nameDefined)
 
-        assertThat(queries.query<NameDefined>().collectList().block()).containsExactly(nameDefined)
+        assertThat(queries.types<NameDefined>().collectList().block()).containsExactly(nameDefined)
         assertThat(queries.tags(Tag.of("name", "name")).collectList().block()).containsExactly(nameDefined)
         assertThat(queries.tags("name:name").collectList().block()).containsExactly(nameDefined)
         assertThat(queries.tagsAnyOf("name:name", "other:1").collectList().block()).containsExactly(nameDefined)

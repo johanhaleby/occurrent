@@ -48,17 +48,17 @@ public class SchedulingQueries {
     }
 
     public Overview overview() {
-        List<AppointmentBooked> active = activeFrom(queries.query(AppointmentBooked.class, AppointmentCancelled.class).toList());
+        List<AppointmentBooked> active = activeFrom(queries.types(AppointmentBooked.class, AppointmentCancelled.class).toList());
         Map<UUID, Long> activeByPatient = active.stream().collect(Collectors.groupingBy(AppointmentBooked::patientId, Collectors.counting()));
         Set<UUID> bookedSlots = active.stream().map(AppointmentBooked::slotId).collect(Collectors.toSet());
 
-        List<ClinicianView> clinicians = queries.query(ClinicianRegistered.class)
+        List<ClinicianView> clinicians = queries.types(ClinicianRegistered.class)
                 .map(e -> new ClinicianView(e.clinicianId(), e.name()))
                 .toList();
-        List<PatientView> patients = queries.query(PatientRegistered.class)
+        List<PatientView> patients = queries.types(PatientRegistered.class)
                 .map(e -> new PatientView(e.patientId(), e.name(), e.maxAppointments(), activeByPatient.getOrDefault(e.patientId(), 0L).intValue()))
                 .toList();
-        List<SlotView> slots = queries.query(SlotDefined.class)
+        List<SlotView> slots = queries.types(SlotDefined.class)
                 .map(e -> new SlotView(e.slotId(), e.startTime(), bookedSlots.contains(e.slotId())))
                 .toList();
         List<AppointmentView> appointments = active.stream().map(SchedulingQueries::toAppointment).toList();

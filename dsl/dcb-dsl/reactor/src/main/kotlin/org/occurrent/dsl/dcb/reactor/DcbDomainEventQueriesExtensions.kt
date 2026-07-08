@@ -51,5 +51,5 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
 /**
  * Queries DCB events of the reified type [T] as a [Flux].
  */
-inline fun <reified T : Any> DcbDomainEventQueries<in T>.query(): Flux<T> =
-    query(T::class.java)
+inline fun <reified T : Any> DcbDomainEventQueries<in T>.types(): Flux<T> =
+    types(T::class.java)

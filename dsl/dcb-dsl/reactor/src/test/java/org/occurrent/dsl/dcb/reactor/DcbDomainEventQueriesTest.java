@@ -181,13 +181,13 @@ class DcbDomainEventQueriesTest {
     }
 
     @Test
-    void query_by_type_returns_only_events_of_that_type() {
+    void types_returns_only_events_of_the_given_types() {
         NameDefined nameDefined = new NameDefined("eventId1", time, "name", "Some Doe");
         NameWasChanged nameWasChanged = new NameWasChanged("eventId2", time, "name", "Jane Doe");
         append("name:1", nameDefined, nameWasChanged);
 
-        List<NameWasChanged> byType = dcbQueries.query(NameWasChanged.class).collectList().block();
-        List<DomainEvent> byTypes = dcbQueries.query(NameDefined.class, NameWasChanged.class).collectList().block();
+        List<NameWasChanged> byType = dcbQueries.types(NameWasChanged.class).collectList().block();
+        List<DomainEvent> byTypes = dcbQueries.types(NameDefined.class, NameWasChanged.class).collectList().block();
 
         assertThat(byType).containsExactly(nameWasChanged);
         assertThat(byTypes).containsExactly(nameDefined, nameWasChanged);
