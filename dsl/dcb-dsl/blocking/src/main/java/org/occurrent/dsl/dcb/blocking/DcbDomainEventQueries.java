@@ -25,7 +25,9 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.eventstore.api.dcb.Tag;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -113,6 +115,59 @@ public class DcbDomainEventQueries<E> {
         DcbEventStream eventStream = dcbEventStore.read(query, options);
         List<E> events = domainEventQueries.toDomainEvents(eventStream.stream()).toList();
         return new DcbDomainEventStream<>(events, eventStream.lastSequencePosition(), eventStream.consistencyToken());
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // Convenience queries (one-liners over query(criteria), read from the beginning of the DCB sequence).
+    // For read options or mixed criteria, use criteria() together with query(criteria, options).
+    // ------------------------------------------------------------------------------------------------------
+
+    /**
+     * Queries DCB events of the given type, mapped to its CloudEvent type string through the converter.
+     */
+    public <SUB extends E> Stream<SUB> types(Class<SUB> type) {
+        requireNonNull(type, "Type cannot be null");
+        return query(criteria().type(type)).map(type::cast);
+    }
+
+    /**
+     * Queries DCB events of any of the given types, each mapped to its CloudEvent type string through the converter.
+     */
+    @SafeVarargs
+    public final Stream<E> types(Class<? extends E> first, Class<? extends E>... rest) {
+        return query(criteria().types(first, rest));
+    }
+
+    /**
+     * Queries DCB events tagged with all the given tags.
+     */
+    public Stream<E> tags(Tag first, Tag... rest) {
+        return query(DcbCriteria.tags(first, rest));
+    }
+
+    /**
+     * Queries DCB events tagged with all the given tags, each parsed from {@code "key:value"} form.
+     */
+    public Stream<E> tags(String first, String... rest) {
+        return tags(Tag.parse(first), parseTags(rest));
+    }
+
+    /**
+     * Queries DCB events tagged with any of the given tags.
+     */
+    public Stream<E> tagsAnyOf(Tag first, Tag... rest) {
+        return query(DcbCriteria.tagsAnyOf(first, rest));
+    }
+
+    /**
+     * Queries DCB events tagged with any of the given tags, each parsed from {@code "key:value"} form.
+     */
+    public Stream<E> tagsAnyOf(String first, String... rest) {
+        return tagsAnyOf(Tag.parse(first), parseTags(rest));
+    }
+
+    private static Tag[] parseTags(String[] tags) {
+        return Arrays.stream(tags).map(Tag::parse).toArray(Tag[]::new);
     }
 
     private static DcbEventStore requireDcbEventStore(DomainEventQueries<?> domainEventQueries) {

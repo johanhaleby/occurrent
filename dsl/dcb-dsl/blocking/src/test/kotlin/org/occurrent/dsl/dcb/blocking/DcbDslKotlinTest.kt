@@ -85,6 +85,20 @@ class DcbDslKotlinTest {
     }
 
     @Test
+    fun reified_type_and_tag_shortcuts_query_dcb_events() {
+        val nameDefined = NameDefined("eventId1", time, "name", "Some Doe")
+        val nameWasChanged = NameWasChanged("eventId2", time, "name", "Jane Doe")
+        append(listOf("name:1", "tenant:1"), nameDefined)
+        append("name:1", nameWasChanged)
+
+        assertThat(dcbQueries.queryForList<NameDefined>()).containsExactly(nameDefined)
+        assertThat(dcbQueries.queryForSequence<NameWasChanged>().toList()).containsExactly(nameWasChanged)
+        assertThat(dcbQueries.queryForList(Tag.of("name", "1"), Tag.of("tenant", "1"))).containsExactly(nameDefined)
+        assertThat(dcbQueries.queryForList("name:1", "tenant:1")).containsExactly(nameDefined)
+        assertThat(dcbQueries.queryForListAnyOf("name:1", "tenant:1")).containsExactly(nameDefined, nameWasChanged)
+    }
+
+    @Test
     fun queryWithPosition_for_KClass_keeps_the_DCB_sequence_position() {
         val nameDefined = NameDefined("eventId1", time, "name", "Some Doe")
         append("other:1", NameWasChanged("eventId2", time, "name", "Jane Doe"))

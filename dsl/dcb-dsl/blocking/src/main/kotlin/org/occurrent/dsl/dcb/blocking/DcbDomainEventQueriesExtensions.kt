@@ -19,6 +19,7 @@ package org.occurrent.dsl.dcb.blocking
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbReadOptions
+import org.occurrent.eventstore.api.dcb.Tag
 import kotlin.streams.asSequence
 
 /**
@@ -66,3 +67,39 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForSequenceWithPosition(
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Triple<Sequence<T>, Long, DcbConsistencyToken> =
     this.queryWithPosition(query, options).let { Triple(it.events().asSequence(), it.lastSequencePosition(), it.consistencyToken()) }
+
+/**
+ * Queries DCB events of the reified type [T] as a [List].
+ */
+inline fun <reified T : Any> DcbDomainEventQueries<in T>.queryForList(): List<T> =
+    types(T::class.java).toList()
+
+/**
+ * Queries DCB events of the reified type [T] as a [Sequence].
+ */
+inline fun <reified T : Any> DcbDomainEventQueries<in T>.queryForSequence(): Sequence<T> =
+    types(T::class.java).asSequence()
+
+/**
+ * Queries DCB events tagged with all the given tags, as a [List].
+ */
+fun <T : Any> DcbDomainEventQueries<T>.queryForList(firstTag: Tag, vararg moreTags: Tag): List<T> =
+    tags(firstTag, *moreTags).toList()
+
+/**
+ * Queries DCB events tagged with all the given tags (each parsed from `"key:value"`), as a [List].
+ */
+fun <T : Any> DcbDomainEventQueries<T>.queryForList(firstTag: String, vararg moreTags: String): List<T> =
+    tags(firstTag, *moreTags).toList()
+
+/**
+ * Queries DCB events tagged with any of the given tags, as a [List].
+ */
+fun <T : Any> DcbDomainEventQueries<T>.queryForListAnyOf(firstTag: Tag, vararg moreTags: Tag): List<T> =
+    tagsAnyOf(firstTag, *moreTags).toList()
+
+/**
+ * Queries DCB events tagged with any of the given tags (each parsed from `"key:value"`), as a [List].
+ */
+fun <T : Any> DcbDomainEventQueries<T>.queryForListAnyOf(firstTag: String, vararg moreTags: String): List<T> =
+    tagsAnyOf(firstTag, *moreTags).toList()

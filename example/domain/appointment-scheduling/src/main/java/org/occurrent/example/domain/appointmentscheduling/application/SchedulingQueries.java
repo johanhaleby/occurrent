@@ -48,21 +48,17 @@ public class SchedulingQueries {
     }
 
     public Overview overview() {
-        List<AppointmentBooked> active = activeFrom(queries.query(
-                queries.criteria().types(AppointmentBooked.class, AppointmentCancelled.class)).toList());
+        List<AppointmentBooked> active = activeFrom(queries.types(AppointmentBooked.class, AppointmentCancelled.class).toList());
         Map<UUID, Long> activeByPatient = active.stream().collect(Collectors.groupingBy(AppointmentBooked::patientId, Collectors.counting()));
         Set<UUID> bookedSlots = active.stream().map(AppointmentBooked::slotId).collect(Collectors.toSet());
 
-        List<ClinicianView> clinicians = queries.query(queries.criteria().type(ClinicianRegistered.class))
-                .map(ClinicianRegistered.class::cast)
+        List<ClinicianView> clinicians = queries.types(ClinicianRegistered.class)
                 .map(e -> new ClinicianView(e.clinicianId(), e.name()))
                 .toList();
-        List<PatientView> patients = queries.query(queries.criteria().type(PatientRegistered.class))
-                .map(PatientRegistered.class::cast)
+        List<PatientView> patients = queries.types(PatientRegistered.class)
                 .map(e -> new PatientView(e.patientId(), e.name(), e.maxAppointments(), activeByPatient.getOrDefault(e.patientId(), 0L).intValue()))
                 .toList();
-        List<SlotView> slots = queries.query(queries.criteria().type(SlotDefined.class))
-                .map(SlotDefined.class::cast)
+        List<SlotView> slots = queries.types(SlotDefined.class)
                 .map(e -> new SlotView(e.slotId(), e.startTime(), bookedSlots.contains(e.slotId())))
                 .toList();
         List<AppointmentView> appointments = active.stream().map(SchedulingQueries::toAppointment).toList();
@@ -70,21 +66,21 @@ public class SchedulingQueries {
     }
 
     public Optional<ClinicianDetail> clinician(UUID clinicianId) {
-        List<DomainEvent> events = queries.query(queries.criteria().tags(Tags.clinician(clinicianId))).toList();
+        List<DomainEvent> events = queries.tags(Tags.clinician(clinicianId)).toList();
         return events.stream().filter(ClinicianRegistered.class::isInstance).map(ClinicianRegistered.class::cast).findFirst()
                 .map(registered -> new ClinicianDetail(registered.clinicianId(), registered.name(),
                         activeFrom(events).stream().map(SchedulingQueries::toAppointment).toList()));
     }
 
     public Optional<PatientDetail> patient(UUID patientId) {
-        List<DomainEvent> events = queries.query(queries.criteria().tags(Tags.patient(patientId))).toList();
+        List<DomainEvent> events = queries.tags(Tags.patient(patientId)).toList();
         return events.stream().filter(PatientRegistered.class::isInstance).map(PatientRegistered.class::cast).findFirst()
                 .map(registered -> new PatientDetail(registered.patientId(), registered.name(), registered.maxAppointments(),
                         activeFrom(events).stream().map(SchedulingQueries::toAppointment).toList()));
     }
 
     public Optional<SlotDetail> slot(UUID slotId) {
-        List<DomainEvent> events = queries.query(queries.criteria().tags(Tags.slot(slotId))).toList();
+        List<DomainEvent> events = queries.tags(Tags.slot(slotId)).toList();
         return events.stream().filter(SlotDefined.class::isInstance).map(SlotDefined.class::cast).findFirst()
                 .map(defined -> {
                     List<AppointmentBooked> active = activeFrom(events);

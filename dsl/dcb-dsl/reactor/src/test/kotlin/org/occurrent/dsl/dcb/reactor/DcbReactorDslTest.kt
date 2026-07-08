@@ -141,6 +141,17 @@ class DcbReactorDslTest {
     }
 
     @Test
+    fun reified_type_and_tag_shortcuts_query_dcb_events() {
+        val nameDefined = NameDefined("event-0", time, "name", "Jane Doe")
+        append(nameDefined)
+
+        assertThat(queries.types<NameDefined>().collectList().block()).containsExactly(nameDefined)
+        assertThat(queries.tags(Tag.of("name", "name")).collectList().block()).containsExactly(nameDefined)
+        assertThat(queries.tags("name:name").collectList().block()).containsExactly(nameDefined)
+        assertThat(queries.tagsAnyOf("name:name", "other:1").collectList().block()).containsExactly(nameDefined)
+    }
+
+    @Test
     fun queryWithPosition_returns_events_position_and_a_usable_consistency_token() {
         append(NameDefined("event-0", time, "name", "Jane Doe"))
 

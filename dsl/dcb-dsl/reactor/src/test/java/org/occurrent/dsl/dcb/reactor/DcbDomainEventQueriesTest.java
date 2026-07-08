@@ -181,6 +181,46 @@ class DcbDomainEventQueriesTest {
     }
 
     @Test
+    void types_returns_only_events_of_the_given_types() {
+        NameDefined nameDefined = new NameDefined("eventId1", time, "name", "Some Doe");
+        NameWasChanged nameWasChanged = new NameWasChanged("eventId2", time, "name", "Jane Doe");
+        append("name:1", nameDefined, nameWasChanged);
+
+        List<NameWasChanged> byType = dcbQueries.types(NameWasChanged.class).collectList().block();
+        List<DomainEvent> byTypes = dcbQueries.types(NameDefined.class, NameWasChanged.class).collectList().block();
+
+        assertThat(byType).containsExactly(nameWasChanged);
+        assertThat(byTypes).containsExactly(nameDefined, nameWasChanged);
+    }
+
+    @Test
+    void tags_returns_events_matching_all_of_the_tags() {
+        NameDefined taggedWithBoth = new NameDefined("eventId1", time, "name", "Some Doe");
+        NameWasChanged taggedWithNameOnly = new NameWasChanged("eventId2", time, "name", "Jane Doe");
+        appendTagged(List.of(Tag.of("name", "1"), Tag.of("tenant", "1")), taggedWithBoth);
+        append("name:1", taggedWithNameOnly);
+
+        assertThat(dcbQueries.tags(Tag.of("name", "1"), Tag.of("tenant", "1")).collectList().block()).containsExactly(taggedWithBoth);
+        assertThat(dcbQueries.tags("name:1", "tenant:1").collectList().block()).containsExactly(taggedWithBoth);
+    }
+
+    @Test
+    void tags_anyOf_returns_events_matching_any_of_the_tags() {
+        NameDefined name = new NameDefined("eventId1", time, "name", "Some Doe");
+        NameWasChanged other = new NameWasChanged("eventId2", time, "name", "Jane Doe");
+        append("name:1", name);
+        append("other:1", other);
+
+        assertThat(dcbQueries.tagsAnyOf(Tag.of("name", "1"), Tag.of("other", "1")).collectList().block()).containsExactly(name, other);
+        assertThat(dcbQueries.tagsAnyOf("name:1", "other:1").collectList().block()).containsExactly(name, other);
+    }
+
+    @Test
+    void a_malformed_string_tag_is_rejected() {
+        assertThatThrownBy(() -> dcbQueries.tags("not-a-tag")).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void constructor_rejects_a_domain_event_queries_not_backed_by_a_reactive_dcb_event_store() {
         DomainEventQueries<DomainEvent> wrapped = new DomainEventQueries<>(new StreamOnlyEventStoreQueries(), cloudEventConverter);
 
@@ -207,8 +247,12 @@ class DcbDomainEventQueriesTest {
     }
 
     private void append(String tag, DomainEvent... events) {
+        appendTagged(List.of(Tag.parse(tag)), events);
+    }
+
+    private void appendTagged(List<Tag> tags, DomainEvent... events) {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
-                .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse(tag))))
+                .map(event -> DcbCloudEvents.withTags(event, tags))
                 .toList();
         eventStore.append(cloudEvents).block();
     }
