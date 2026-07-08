@@ -24,15 +24,13 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
- * An insertion-ordered set of replayed event ids that the inclusive live resume re-delivers at the handover seam, so
- * the pipeline can suppress those duplicates. It holds the ids delivered during the replay window (the overlap the
- * live change stream re-delivers, bounded by the write volume during the replay, not by total history), and grows to
- * cover that overlap up to {@code ceiling}. Once the set would exceed {@code ceiling} it evicts oldest-first.
+ * Insertion-ordered set of replayed event ids the inclusive live resume re-delivers at the handover seam, so the
+ * pipeline can suppress those duplicates. Grows to cover the replay-to-live overlap (bounded by write volume during
+ * replay, not total history) up to {@code ceiling}, then evicts oldest-first.
  * <p>
- * Eviction is loss-safe by construction: dropping an id can only stop a re-delivered live event from being suppressed,
- * so an overlap larger than {@code ceiling} yields extra duplicate deliveries, never loss. Dedup is by id, never by
- * position, so a low-position event that commits late (after the handover advanced past its position) and is therefore
- * absent from the forward-only replay is never in this set and is always delivered by the live change stream.
+ * Dedup is id-based with a fixed ceiling: exceeding it evicts entries and causes duplicate delivery, never loss.
+ * Never dedupes by position, so a late-committing low-position event, absent from the forward-only replay, is
+ * always delivered by the live change stream.
  */
 @NullMarked
 final class HandoverCache {

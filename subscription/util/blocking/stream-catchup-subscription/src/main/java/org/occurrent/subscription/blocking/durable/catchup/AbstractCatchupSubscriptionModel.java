@@ -38,11 +38,10 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
- * Shared plumbing for the mode-specific catch-up subscription models
- * ({@link StreamCatchupSubscriptionModel} and the DCB catch-up model): the wrapped live delegate, the config, the
- * running-catch-up bookkeeping, the shutdown flag, and the lifecycle delegation to the wrapped subscription model.
- * The mode-specific replay and {@code subscribe(...)} routing stays in each subclass. This base is DCB-free so it can
- * live in the stream module that both modes build against.
+ * Shared plumbing for the mode-specific catch-up subscription models ({@link StreamCatchupSubscriptionModel} and the
+ * DCB catch-up model): the live delegate, config, running-catch-up bookkeeping, shutdown flag, and lifecycle
+ * delegation. Replay and {@code subscribe(...)} routing stay in each subclass. DCB-free so it can live in the
+ * stream module both modes build against.
  */
 @NullMarked
 abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
@@ -51,13 +50,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     protected final CatchupSubscriptionModelConfig config;
     protected final Class<?> subscriptionModelContextType;
     protected final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
-    // A pause requested for a subscriptionId while its replay is still in-flight (the delegate does not know the id
-    // yet, so pauseSubscription against it would be a no-op or fail). Applied via applyPendingPauseIfAny once the
-    // live delegate subscription for that id exists.
+    // Pause requested for a subscriptionId while its replay is still in-flight, before the delegate knows the id.
+    // Applied via applyPendingPauseIfAny once the live delegate subscription exists.
     protected final ConcurrentMap<String, Boolean> pauseRequestedDuringCatchup = new ConcurrentHashMap<>();
     protected volatile boolean shuttingDown = false;
-    // Set by stop(), cleared by start(...). Checked by the replay loops so stop() interrupts an in-flight replay
-    // instead of only stopping the delegate the replay has not registered with yet.
+    // Set by stop(), cleared by start(...). Checked by the replay loops so stop() interrupts an in-flight
+    // replay, not just the delegate the replay has not registered with yet.
     protected volatile boolean stopped = false;
 
     protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
@@ -66,9 +64,8 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
         this.subscriptionModelContextType = Objects.requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
     }
 
-    // Reports subscriptionModelContextType (CatchupSubscriptionModel when wrapped by the dispatcher) so a
-    // StartAt.dynamic supplied by a caller that pattern matches on the public dispatcher type keeps working
-    // regardless of which mode-specific class ends up running the catch-up underneath it.
+    // Reports subscriptionModelContextType (the dispatcher's type when wrapped) so a caller's StartAt.dynamic
+    // pattern-matching on the public dispatcher type keeps working regardless of which subclass runs underneath.
     protected SubscriptionModelContext generateSubscriptionModelContext() {
         return new SubscriptionModelContext(subscriptionModelContextType);
     }
@@ -109,10 +106,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     @Override
     public void pauseSubscription(String subscriptionId) {
         if (runningCatchupSubscriptions.containsKey(subscriptionId)) {
-            // The delegate does not know this id yet since the replay has not handed over to it, so record the
-            // request and apply it via applyPendingPauseIfAny once the live delegate subscription for this id
-            // exists. Interrupting the replay itself and resuming it later would need the exact replay cursor to be
-            // persisted, which this class does not do; the replay keeps running until the handover.
+            // Delegate does not know this id yet, so record the request and apply it in applyPendingPauseIfAny
+            // once the live subscription exists. The replay itself keeps running until the handover since
+            // interrupting and resuming it would require persisting the exact replay cursor, which this class does not do.
             pauseRequestedDuringCatchup.put(subscriptionId, true);
         } else {
             getDelegatedSubscriptionModel().pauseSubscription(subscriptionId);
@@ -138,13 +134,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     }
 
     /**
-     * Captures the live resume token so an event committed during the replay is still delivered live. Callers
-     * choose when to capture it relative to the bulk replay: {@link StreamCatchupSubscriptionModel}'s position path
-     * captures it before the replay so no in-flight event is missed, while its time-based path captures it after
-     * the replay to keep the token fresh. Returns null when the delegated subscription model must not run
-     * ({@code delegatedStartAt} is null, i.e. the catch-up owns the position entirely). Otherwise fails loudly when
-     * the delegate reports no resume token, mirroring the reactor pipeline's fail-loud handover, instead of silently
-     * falling back to "now" and dropping every event committed during the replay.
+     * Captures the live resume checkpoint handed over to live delivery. Callers choose when: the position path in
+     * {@link StreamCatchupSubscriptionModel} captures it before the bulk replay so no in-flight event is missed;
+     * the time-based path captures it after, to keep the token fresh (avoids oplog ageing).
+     * Returns null when the delegate must not run ({@code delegatedStartAt} null, catch-up owns the position
+     * entirely). Fails loudly if the delegate has no checkpoint rather than silently resuming at "now" and
+     * dropping events committed during replay.
      */
     protected @Nullable Checkpoint captureLiveResumeCheckpoint(@Nullable StartAt delegatedStartAt) {
         if (delegatedStartAt == null) {

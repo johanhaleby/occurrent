@@ -139,10 +139,10 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
 
-        // Page through the DCB sequence from the resume position to the head seen at the start, in windows so a large
+        // Page through the DCB sequence from the resume position to the head seen at start, in windows so a large
         // rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
-        // position is monotonic and server-assigned, so this needs no count and no time sort. Anything written after
-        // the reconciliation loop stabilises is newer than the live resume position and arrives live.
+        // Position is monotonic and server-assigned, so this needs no count and no time sort. Anything written
+        // after the reconciliation loop stabilises is newer than the live resume position and arrives live.
         FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
         PositionCatchupPipeline.Reader dcbReader = new PositionCatchupPipeline.Reader() {
             @Override

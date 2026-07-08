@@ -35,22 +35,14 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
 import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 
 /**
- * Combines  a {@link SubscriptionModel} and with a {@link CheckpointStorage} to automatically persist
- * the checkpoint after each successful call to the "action" method
- * (i.e. when the consumer in this method {@link DurableSubscriptionModel#subscribe(String, Consumer)} has completed successfully),
- * thus making the subscription durable.
+ * Combines a {@link SubscriptionModel} with a {@link CheckpointStorage}, persisting the checkpoint after each
+ * successful call to the action in {@link DurableSubscriptionModel#subscribe(String, Consumer)}.
  *
  * <p>
- * Note that this implementation stores the checkpoint after _every_ action by default. This means one synchronous checkpoint
- * write per delivered event, which roughly doubles the write load of a subscription that's keeping pace with the event store.
- * This default is kept on purpose since changing it would change what happens after a crash: with the default, replay after
- * a restart resumes right after the last delivered event; if checkpoints are written less often, replay resumes from an
- * earlier checkpoint and events already handled before the crash will be re-delivered.
- * <p>
- * If checkpoint-write throughput matters more than minimizing re-delivery after a crash, pass a {@link DurableSubscriptionModelConfig}
- * with {@link org.occurrent.subscription.util.predicate.EveryN#every(int)} as the {@code persistCloudEventPositionPredicate}, for example
- * {@code EveryN.every(10)} to checkpoint every 10th event instead of every single one. The tradeoff is fewer checkpoint writes in
- * exchange for more events being re-delivered (and needing to be handled idempotently) after a crash or restart.
+ * By default the checkpoint is written after every event, doubling write load but resuming right after the
+ * last delivered event on crash. Pass a {@link DurableSubscriptionModelConfig} with
+ * {@link org.occurrent.subscription.util.predicate.EveryN#every(int)} to checkpoint less often, trading fewer
+ * writes for events being re-delivered (must be handled idempotently) after a crash.
  */
 @NullMarked
 public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, DelegatingSubscriptionModel {
@@ -94,7 +86,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
         StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
         if (startAtToUse == null) {
-            // We're not allowed to start this subscription, delegate to wrapped subscription instead
+            // Not allowed to start, delegate to the wrapped subscription instead
             return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
         }
 
@@ -114,7 +106,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         if (originalStartAt.isDefault()) {
             StartAt startAtIfNoSubscriptionFound = StartAt.subscriptionModelDefault();
             startAtToUse = StartAt.dynamic(() -> {
-                // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
+                // Read inside the supplier so a retry picks up the latest checkpoint, not a stale one
                 Checkpoint checkpoint = storage.read(subscriptionId);
                 if (checkpoint == null) {
                     Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
