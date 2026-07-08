@@ -98,7 +98,7 @@ class MongoListenerLockService {
                 final ErrorCategory errorCategory = ErrorCategory.fromErrorCode(e.getErrorCode());
 
                 if (errorCategory.equals(DUPLICATE_KEY)) {
-                    // This happens frequently, so we don't log it
+                    // Happens frequently, not logged.
                     return Optional.empty();
                 }
 

@@ -187,7 +187,6 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 boolean stillHasLock = MongoListenerLockService.commit(collection, clock, retryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId);
                 if (!stillHasLock) {
                     logDebug("Lost lock! (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
-                    // Lock was lost!
                     competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
                     competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId));
                     logDebug("Completed calling onConsumeProhibited for all listeners (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);

@@ -90,11 +90,10 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
     }
 
     private Mono<UpdateResult> persistDocumentStreamPosition(String subscriptionId, Document document) {
-        // "document" carries no $-prefixed update operators, so Spring Data applies it as a full-document
-        // replacement rather than a field-level merge. Any field absent from "document" is therefore dropped,
-        // including the legacy "subscriptionPosition" field written before the SubscriptionPosition -> Checkpoint
-        // rename: the first save after upgrade rewrites the document under the new "checkpoint" field and the legacy
-        // field does not survive. This is the same replacement behaviour the native adapter gets from replaceOne.
+        // "document" has no $-prefixed operators, so Spring Data applies it as a full-document replacement,
+        // not a field-level merge. That drops the legacy "subscriptionPosition" field (from before the
+        // SubscriptionPosition -> Checkpoint rename) on the first save after upgrade, same as the native
+        // adapter's replaceOne.
         return mongo.upsert(query(where(ID).is(subscriptionId)),
                 Update.fromDocument(document),
                 checkpointCollection);
