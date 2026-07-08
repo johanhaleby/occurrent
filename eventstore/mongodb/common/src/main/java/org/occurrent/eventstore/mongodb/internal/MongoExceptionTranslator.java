@@ -49,10 +49,8 @@ public class MongoExceptionTranslator {
                     .map(RuntimeException.class::cast)
                     .orElse(e);
         } else if (e instanceof MongoCommandException && e.getCode() == 112) {
-            // See https://github.com/johanhaleby/occurrent/issues/85
-            // We increase version by 1 since this error only happens when two or more clients write to the same stream at the same time
-            // while also have read the same previous event stream version. This means that one of these write "have won" and the
-            // version has increased by at least one.
+            // This error only happens when two or more clients write to the same stream at the same time after
+            // reading the same previous version, so one of the writes won and the version increased by at least one.
             long eventStreamVersion = ctx.eventStreamVersion + 1;
             runtimeException = new WriteConditionNotFulfilledException(ctx.eventStreamId, eventStreamVersion, ctx.writeCondition,
                     String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), ctx.writeCondition.toString(), eventStreamVersion));
@@ -91,9 +89,6 @@ public class MongoExceptionTranslator {
     private static final String STREAM_VERSION_INDEX_NAME = OccurrentCloudEventExtension.STREAM_ID + "_1_" + OccurrentCloudEventExtension.STREAM_VERSION + "_1";
 
     private static boolean referencesStreamVersion(String message) {
-        // The duplicate-key message names the offending index, e.g. "index: streamid_1_streamversion_1". Matching
-        // the index name (rather than a bare "streamversion" substring) avoids misclassifying an id+source
-        // duplicate whose source value happens to contain that text.
         return message != null && message.contains("index: " + STREAM_VERSION_INDEX_NAME);
     }
 

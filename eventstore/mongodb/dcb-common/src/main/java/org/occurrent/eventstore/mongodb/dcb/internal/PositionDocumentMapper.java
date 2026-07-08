@@ -25,8 +25,8 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * Adds and reads back the {@value org.occurrent.cloudevents.OccurrentCloudEventExtension#POSITION} field on a stored
- * MongoDB document. Extracted so that both the DCB write path (which uses it today) and, in the future, the stream
- * write path can add a position to a document without duplicating the field-name and type-coercion contract.
+ * MongoDB document. Extracted so write paths that add a position to a document share one field-name and
+ * type-coercion contract instead of duplicating it.
  */
 @NullMarked
 public final class PositionDocumentMapper {

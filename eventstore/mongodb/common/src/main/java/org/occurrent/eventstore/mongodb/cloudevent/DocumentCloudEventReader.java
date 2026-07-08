@@ -53,7 +53,6 @@ public class DocumentCloudEventReader implements CloudEventReader {
 
         V writer = cloudEventWriterFactory.create(specVersion);
 
-        // Let's deal with attributes first
         Set<String> allCloudEventAttributes = specVersion.getAllAttributes();
         for (String attributeName : allCloudEventAttributes) {
             if (Objects.equals(attributeName, SPEC_VERSION_ATTRIBUTE_NAME)) {
@@ -66,17 +65,15 @@ public class DocumentCloudEventReader implements CloudEventReader {
             }
         }
 
-        // Let's deal with extensions
         for (Map.Entry<String, Object> extension : document.entrySet()) {
             if (allCloudEventAttributes.contains(extension.getKey())) {
                 continue;
             }
             if (extension.getKey().equals("data")) {
-                // data handled later
+                // data is handled separately below
                 continue;
             }
 
-            // Switch on types document support
             if (extension.getValue() instanceof Integer integer) {
                 writer.withContextAttribute(extension.getKey(), integer);
             } else if (extension.getValue() instanceof Boolean bool) {
@@ -86,7 +83,6 @@ public class DocumentCloudEventReader implements CloudEventReader {
             }
         }
 
-        // Let's handle data
         Object data = document.get(DATA_ATTRIBUTE_NAME);
         if (data != null) {
             Object contentType = document.get(CONTENT_TYPE_ATTRIBUTE_NAME);
@@ -112,7 +108,6 @@ public class DocumentCloudEventReader implements CloudEventReader {
     private static CloudEventData convertJsonData(Object data) {
         final CloudEventData ceData;
         if (data instanceof Document document) {
-            // Best case, it's a document
             ceData = PojoCloudEventData.wrap(document, DocumentCloudEventReader::convertDocumentToBytes);
         } else if (data instanceof String json) {
             if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {

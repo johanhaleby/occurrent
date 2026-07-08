@@ -229,7 +229,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return convertToCloudEvent(timeRepresentation, eventStream);
     }
 
-    // DCB
     @Override
     public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
         if (!eventStoreCapabilities.contains(DCB)) {
@@ -237,11 +236,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
-        // events may include it while the token does not, which only makes a later conditional append over-cautious (a
-        // false conflict that retries) rather than miss the conflict (ADR 0031). The token read and the position read
-        // are independent of each other (neither is derived from the other's result), so zip them concurrently rather
-        // than sequencing them, while keeping both strictly before the event read below.
+        // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads,
+        // the events may include it while the token does not, which only makes a later conditional append
+        // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The token read
+        // and the position read are independent, so zip them concurrently rather than sequencing them, while
+        // keeping both strictly before the event read below.
         return Mono.zip(consistencyToken(query), currentPosition())
                 .flatMap(tokenAndHighWatermark -> {
                     long token = tokenAndHighWatermark.getT1();
@@ -306,9 +305,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         } catch (RuntimeException e) {
             return Mono.error(e);
         }
-        // Place by the condition's boundary tags when it constrains on tags, so the same boundary always lands in the
-        // same partition regardless of per-event tags. Otherwise (no condition, or a type-only/match-all condition)
-        // fall back to the events' tags so tagless boundaries do not all collapse onto one hot partition.
+        // Place by the condition's boundary tags when it constrains tags, so the same boundary always lands
+        // in the same partition regardless of per-event tags. Otherwise fall back to the events' tags, so
+        // tagless boundaries do not all collapse onto one hot partition.
         Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
         Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
@@ -326,11 +325,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         if (condition != null) {
                             conditionAndMarkers = enforceAppendCondition(condition, eventsToAppend, lastPosition);
                         } else {
-                            // An unconditional append still increments its events' markers so a concurrent conditional append on an
-                            // overlapping tag/type shares a marker and serializes against it, and so the conditional append's
-                            // consistency-token check observes it. Without this, an unconditional append touches no marker, nothing
-                            // forces a write-write conflict, and a concurrent conditional append's snapshot can miss this append
-                            // under MongoDB snapshot isolation (write skew). See ADR 0021.
+                            // An unconditional append still increments its events' markers, so a concurrent conditional
+                            // append on an overlapping tag or type shares a marker, serializes against it, and its
+                            // consistency-token check observes it. Without this, nothing forces a write-write conflict
+                            // and a concurrent conditional append's snapshot could miss this append (write skew). See ADR 0021.
                             conditionAndMarkers = incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
                         }
                         return conditionAndMarkers.then(Mono.defer(() -> {
@@ -351,10 +349,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
         final Mono<Boolean> conflictMono;
         if (expectedToken.isPresent()) {
-            // Token-carrying check: the condition carries the consistency token the command observed when it read the
-            // query. If the query's markers have advanced since, an append matching the query committed after the read,
-            // so the condition is not fulfilled. Immune to read-watermark overshoot because marker versions are bumped
-            // inside the append transaction (ADR 0021).
+            // The condition carries the consistency token the command observed when it read the query. If the
+            // query's markers have advanced since, a matching append committed after the read, so the condition
+            // fails. Immune to read-watermark overshoot because marker versions bump inside the append
+            // transaction (ADR 0021).
             conflictMono = consistencyToken(condition.query()).map(actual -> actual != expectedToken.get().value());
         } else {
             // No token: an absolute "fail if any matching event exists" guard. The marker increments below still
@@ -585,12 +583,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return new Criteria().andOperator(criteria);
     }
 
-    // Read
     private Mono<EventStreamImpl> readEventStream(String streamId, @Nullable StreamReadFilter streamReadFilter, int skip, int limit) {
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
-                    // We use "lte" currentStreamVersion so that we don't have the start transactions on read. This means that even
-                    // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
+                    // Uses "lte" currentStreamVersion instead of a transaction on read, so an event another thread
+                    // inserts after currentStreamVersion is read does not matter.
                     Query query = streamIdAndStreamVersionLessThanOrEqualTo(streamId, currentStreamVersion);
                     if (streamReadFilter != null) {
                         StreamReadFilterValidator.validate(streamReadFilter);
@@ -682,24 +679,21 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return oldestEvent != null && !oldestEvent.containsKey(OccurrentCloudEventExtension.POSITION);
     }
 
-    // Initialization
     private Mono<Void> initializeEventStore(String eventStoreCollectionName, String dcbPositionCollectionName, String dcbCheckpointCollectionName, Set<EventStoreCapability> eventStoreCapabilities, ReactiveMongoTemplate mongoTemplate) {
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
         boolean writesPosition = writesPosition();
 
-        // Cloud spec defines id + source must be unique!
+        // The CloudEvent spec requires id + source to be unique.
         Mono<Void> chain = createCollection(eventStoreCollectionName, mongoTemplate)
                 .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true)))
                 .then();
 
-        // streamId + streamVersion uniqueness is a stream-mode invariant, but the DCB append path also looks up the
-        // current stream version per partition (currentStreamVersion), so it needs the same compound index to avoid a
-        // collection scan. The index is unique for both capabilities: DCB-only writes assign sequential per-partition
-        // stream versions, so uniqueness holds there too. The only way two events collide on the same
-        // streamId+streamVersion is two disjoint DCB boundaries hashing to the same partition stream, which the DCB
-        // append path already treats as a retryable transient (re-reads and re-assigns a fresh version) rather than a
-        // duplicate error. Creating the identical unique index for STREAM and DCB also means no capability combination
-        // or DCB-only to STREAM+DCB upgrade ever hits an IndexOptionsConflict.
+        // streamId + streamVersion uniqueness is a stream-mode invariant, but the DCB append path also looks up
+        // the current stream version per partition, so it needs the same compound index to avoid a collection
+        // scan. The index stays unique for DCB too, since DCB-only writes assign sequential per-partition stream
+        // versions. The only collision is two disjoint DCB boundaries hashing to the same partition stream, which
+        // the DCB append path treats as a retryable transient rather than a duplicate error. One identical unique
+        // index for STREAM and DCB also means no capability combination or upgrade ever hits an IndexOptionsConflict.
         if (eventStoreCapabilities.contains(STREAM) || dcbEnabled) {
             chain = chain.then(createStreamVersionIndex(eventStoreCollectionName, mongoTemplate, new IndexOptions().unique(true))).then();
         }
@@ -719,18 +713,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true)))
                     // A type-only DcbCriteria has no tags to hit the dcbTags index with, so it falls back to the
                     // position index with type checked as a residual FETCH filter, examining every DCB event in the
-                    // position range to find the (possibly rare) matches. A (type, position) compound index lets the
-                    // planner satisfy both the type equality and the position sort directly from the index, so
-                    // keysExamined tracks nReturned instead of the full position range. Evidence:
-                    // explain("executionStats") on a 50k/50 skewed dataset showed docsExamined=50050 for nReturned=50
-                    // without this index.
+                    // position range. A (type, position) compound index lets the planner satisfy the type equality
+                    // and position sort directly from the index, so keysExamined tracks nReturned instead of the
+                    // full position range. Evidence: explain("executionStats") on a 50k/50 skewed dataset showed
+                    // docsExamined=50050 for nReturned=50 without this index.
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending("type"), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true)))
                     // The multikey dcbTags index alone cannot provide the position sort order, so a tag boundary read
                     // falls back to an in-memory (or, on MongoDB 6.0+, disk-spilling) SORT after fetching every
-                    // matching document. Evidence: explain("executionStats") on a 5,000-of-305,000 skewed dataset (a
-                    // plausible "popular tag" boundary, not a pathological one) showed a winning SORT stage over the
-                    // dcbTags index. A (dcbTags, position) compound index lets the planner read matches in position
-                    // order directly, avoiding the sort.
+                    // matching document. A (dcbTags, position) compound index lets the planner read matches in
+                    // position order directly instead. Evidence: explain("executionStats") on a 5,000-of-305,000
+                    // skewed dataset (a plausible popular-tag boundary) showed a winning SORT stage over the dcbTags
+                    // index without this compound index.
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true)))
                     .then();
         }
@@ -739,8 +732,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             chain = chain.then(warnIfUnpositionedEventsExist(eventStoreCollectionName, mongoTemplate));
         }
 
-        // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
-        // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
+        // SessionSynchronization must be ALWAYS for TransactionTemplate to work with MongoTemplate. See
+        // https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
         mongoTemplate.setSessionSynchronization(ALWAYS);
 
         return chain;
@@ -779,13 +772,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return mongoTemplate.getCollection(eventStoreCollectionName).flatMap(collection -> Mono.from(collection.createIndex(index, indexOptions)));
     }
 
-    // IndexOptionsConflict (error code 85) and IndexKeySpecsConflict (error code 86) both mean an index with this name
-    // already exists with a specification incompatible with the one Occurrent requests. Older MongoDB (4.x) reports the
-    // non-unique-vs-unique clash as 85, while MongoDB 7.0+ reports the same clash as 86. Occurrent always requests the
-    // unique streamId+streamVersion index for both STREAM and DCB, so normal capability combinations and upgrades never
-    // conflict. A conflict here therefore means an operator manually created an incompatible (e.g. non-unique) index.
-    // Occurrent never drops or replaces an existing index, and running on a non-unique index would silently lose the
-    // uniqueness guarantee stream and DCB writes rely on, so this fails startup instead of swallowing the conflict.
+    // The streamid+streamversion index already exists with options that clash with the unique one Occurrent needs
+    // (older MongoDB reports this as error 85, 7.0+ as 86). Occurrent never replaces an index, so fail rather than
+    // run without the uniqueness that stream and DCB writes depend on.
     private static Mono<String> createStreamVersionIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate, IndexOptions indexOptions) {
         Bson index = Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION));
         return createIndex(eventStoreCollectionName, mongoTemplate, index, indexOptions)

@@ -58,7 +58,7 @@ public class OccurrentCloudEventMongoDocumentMapper {
                         " or convert the " + OffsetDateTime.class.getSimpleName() + " to UTC using e.g. \"offsetDateTime.withOffsetSameInstant(ZoneOffset.UTC)\".");
             }
 
-            // Convert date string to a date in order to be able to perform date/time queries on the "time" property name
+            // Store as a Date (not a string) so date/time queries against the "time" property work.
             Date date = Date.from(time.toInstant());
             cloudEventDocument.put("time", date);
         }
@@ -71,7 +71,7 @@ public class OccurrentCloudEventMongoDocumentMapper {
         document.remove("_id");
 
         if (timeRepresentation == DATE) {
-            Object time = document.get("time"); // Be a bit nice and don't enforce Date here if TimeRepresentation has been changed
+            Object time = document.get("time"); // Guard against a non-Date value in case TimeRepresentation changed after storage
             if (time instanceof Date timeAsDate) {
                 OffsetDateTime offsetDateTime = OffsetDateTime.ofInstant(timeAsDate.toInstant(), UTC);
                 String format = RFC_3339_DATE_TIME_FORMATTER.format(offsetDateTime);
@@ -80,7 +80,7 @@ public class OccurrentCloudEventMongoDocumentMapper {
         }
 
         CloudEvent cloudEvent = DocumentCloudEventReader.toCloudEvent(document);
-        // When converting to JSON (document.toJson()) the stream version is interpreted as an int in Jackson, we convert it manually to long afterwards.
+        // document.toJson() has Jackson interpret the stream version as an int, so convert it back to long here.
         return CloudEventBuilder.v1(cloudEvent).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.getLong(OccurrentCloudEventExtension.STREAM_VERSION)).build();
     }
 }
