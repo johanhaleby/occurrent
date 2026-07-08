@@ -28,7 +28,7 @@ import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
 import org.occurrent.application.service.blocking.ExecuteFilters
-import org.occurrent.application.service.blocking.executeList
+import org.occurrent.application.service.blocking.ExecuteOptions
 import org.occurrent.application.service.blocking.filter
 import org.occurrent.application.service.blocking.options
 import org.occurrent.application.service.blocking.sideEffect
@@ -68,7 +68,7 @@ class GenericApplicationServiceKotlinTest {
         val time = LocalDateTime.now()
 
         // When
-        val writeResult = applicationService.executeList(streamId) {
+        val writeResult = applicationService.execute(streamId) {
             listOf(
                 NameDefined("eventId1", time, "name", "Some Doe"),
                 NameWasChanged("eventId2", time, "name", "Jane Doe")
@@ -88,7 +88,7 @@ class GenericApplicationServiceKotlinTest {
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
 
-        applicationService.executeList(streamId) {
+        applicationService.execute(streamId) {
             listOf(
                 NameDefined("eventId1", time, "name", "Some Doe"),
                 NameWasChanged("eventId2", time, "name", "Jane Doe")
@@ -96,7 +96,7 @@ class GenericApplicationServiceKotlinTest {
         }
 
         // When
-        val writeResult = applicationService.executeList(streamId) {
+        val writeResult = applicationService.execute(streamId) {
             listOf(
                 NameWasChanged("eventId3", time, "name", "Hello"),
                 NameWasChanged("eventId4", time, "name", "World")
@@ -118,7 +118,7 @@ class GenericApplicationServiceKotlinTest {
         val sideEffects = mutableListOf<String>()
 
         // When
-        val writeResult = applicationService.executeList(
+        val writeResult = applicationService.execute(
             streamId,
             sideEffect(
                 { event: NameDefined -> sideEffects += "defined:${event.name()}" },
@@ -146,7 +146,7 @@ class GenericApplicationServiceKotlinTest {
         val sideEffects = mutableListOf<String>()
 
         // When
-        applicationService.executeList(
+        applicationService.execute(
             streamId,
             options().sideEffect(
                 { event: NameDefined -> sideEffects += "defined:${event.name()}" },
@@ -170,7 +170,7 @@ class GenericApplicationServiceKotlinTest {
         val time = LocalDateTime.now()
 
         // When
-        val writeResult = applicationService.executeList(streamId) {
+        val writeResult = applicationService.execute(streamId) {
             listOf(
                 NameDefined("eventId1", time, "name", "Some Doe"),
                 NameWasChanged("eventId2", time, "name", "Jane Doe")
@@ -189,7 +189,7 @@ class GenericApplicationServiceKotlinTest {
         val sideEffects = mutableListOf<String>()
 
         // When
-        val writeResult = applicationService.executeList(
+        val writeResult = applicationService.execute(
             streamId,
             filter(type(NameDefined::class.java.name)).sideEffect(
                 { event: NameDefined -> sideEffects += "defined:${event.name()}" },
@@ -222,9 +222,10 @@ class GenericApplicationServiceKotlinTest {
         )))
 
         // When
-        val writeResult = applicationService.executeList(
+        val writeResult = applicationService.execute(
             streamId,
-            options().filter(ExecuteFilters.type<NameDefined>())
+            @Suppress("UNCHECKED_CAST")
+            (options().filter(ExecuteFilters.type<NameDefined>()) as ExecuteOptions<DomainEvent>)
         ) {
             listOf(NameWasChanged("eventId3", time, "name", "New Name"))
         }
@@ -246,7 +247,7 @@ class GenericApplicationServiceKotlinTest {
         )))
 
         // When
-        val writeResult = applicationService.executeList(
+        val writeResult = applicationService.execute(
             streamId,
             ExecuteFilters.type<NameDefined>()
         ) {
@@ -270,7 +271,7 @@ class GenericApplicationServiceKotlinTest {
         )))
 
         // When
-        val writeResult = applicationService.executeList(
+        val writeResult = applicationService.execute(
             streamId,
             ExecuteFilters.includeTypes(NameDefined::class, NameWasChanged::class)
         ) {
@@ -294,7 +295,7 @@ class GenericApplicationServiceKotlinTest {
         )))
 
         // When
-        val writeResult = applicationService.executeList(
+        val writeResult = applicationService.execute(
             streamId,
             ExecuteFilters.excludeTypes(NameWasChanged::class, NameDefined::class)
         ) {
@@ -318,9 +319,10 @@ class GenericApplicationServiceKotlinTest {
         )))
 
         // When
-        val writeResult = applicationService.executeList(
+        val writeResult = applicationService.execute(
             streamId,
-            options().filter(ExecuteFilters.type<NameDefined>())
+            @Suppress("UNCHECKED_CAST")
+            (options().filter(ExecuteFilters.type<NameDefined>()) as ExecuteOptions<DomainEvent>)
         ) {
             listOf(NameWasChanged("eventId3", time, "name", "New Name"))
         }
@@ -342,7 +344,7 @@ class GenericApplicationServiceKotlinTest {
         )))
 
         // When
-        val writeResult = applicationService.executeList(
+        val writeResult = applicationService.execute(
             streamId,
             ExecuteFilters.excludeTypes(NameWasChanged::class, NameDefined::class)
         ) {

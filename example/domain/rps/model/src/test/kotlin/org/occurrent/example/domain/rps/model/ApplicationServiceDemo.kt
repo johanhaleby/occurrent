@@ -35,7 +35,6 @@ import org.occurrent.application.composition.command.composeCommands
 import org.occurrent.application.composition.command.partial
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeList
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.eventstore.api.WriteResult
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
@@ -55,7 +54,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.executeList(gameId.value) { events ->
+        applicationService.execute(gameId.value) { events ->
             handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
         }
 
@@ -74,7 +73,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.executeList(
+        applicationService.execute(
             gameId.value,
             composeCommands(
                 { events: List<GameEvent> ->
@@ -103,7 +102,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.executeList(
+        applicationService.execute(
             gameId.value,
             composeCommands(
                 ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE)),
@@ -129,7 +128,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.executeList(
+        applicationService.execute(
             gameId.value,
             ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE)) andThen
                     ::handle.partial(PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK))
@@ -197,7 +196,7 @@ private fun ApplicationService<GameEvent>.execute(gameId: GameId, firstCommand: 
         ::handle.partial(cmd)
     }
 
-    return executeList(gameId.value, composeCommands(functionsToInvoke))
+    return execute(gameId.value, composeCommands(functionsToInvoke))
 }
 
 class SimpleCloudEventConverter : CloudEventConverter<GameEvent> {

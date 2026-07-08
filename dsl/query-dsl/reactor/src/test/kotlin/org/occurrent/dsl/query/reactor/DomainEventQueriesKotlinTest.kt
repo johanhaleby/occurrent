@@ -27,7 +27,6 @@ import org.occurrent.application.composition.command.partial
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter
 import org.occurrent.application.service.reactor.ApplicationService
-import org.occurrent.application.service.reactor.executeList
 import org.occurrent.application.service.reactor.generic.GenericApplicationService
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.Name
@@ -81,7 +80,7 @@ class DomainEventQueriesKotlinTest {
     fun queryForList() {
         // Given
         val time = LocalDateTime.now()
-        applicationService.executeList(
+        applicationService.execute(
             "stream", composeCommands(
                 Name::defineName.partial("eventId1", time, "name", "Some Doe"),
                 Name::changeName.partial("eventId2", time, "name", "Jane Doe")
@@ -102,7 +101,7 @@ class DomainEventQueriesKotlinTest {
     fun queryForListWithFilterAndSortBy() {
         // Given
         val time = LocalDateTime.now()
-        applicationService.executeList(
+        applicationService.execute(
             "stream", composeCommands(
                 Name::defineName.partial("eventId1", time, "name", "Some Doe"),
                 Name::changeName.partial("eventId2", time, "name", "Jane Doe")
@@ -123,7 +122,7 @@ class DomainEventQueriesKotlinTest {
     fun querySingleWithSpecificReifiedKClassType() {
         // Given
         val time = LocalDateTime.now()
-        applicationService.executeList(
+        applicationService.execute(
             "stream", composeCommands(
                 Name::defineName.partial("eventId1", time, "name", "Some Doe"),
                 Name::changeName.partial("eventId2", time, "name", "Jane Doe")
@@ -141,7 +140,7 @@ class DomainEventQueriesKotlinTest {
     fun querySingleWithSpecificKClassType() {
         // Given
         val time = LocalDateTime.now()
-        applicationService.executeList(
+        applicationService.execute(
             "stream", composeCommands(
                 Name::defineName.partial("eventId1", time, "name", "Some Doe"),
                 Name::changeName.partial("eventId2", time, "name", "Jane Doe")
@@ -159,7 +158,7 @@ class DomainEventQueriesKotlinTest {
     fun queryWithKClassType() {
         // Given
         val time = LocalDateTime.now()
-        applicationService.executeList(
+        applicationService.execute(
             "stream", composeCommands(
                 Name::defineName.partial("eventId1", time, "name", "Some Doe"),
                 Name::changeName.partial("eventId2", time, "name", "Jane Doe")
@@ -180,7 +179,7 @@ class DomainEventQueriesKotlinTest {
     fun queryWithMultipleKClassType() {
         // Given
         val time = LocalDateTime.now()
-        applicationService.executeList(
+        applicationService.execute(
             "stream", composeCommands(
                 Name::defineName.partial("eventId1", time, "name", "Some Doe"),
                 Name::changeName.partial("eventId2", time, "name", "Jane Doe")
@@ -201,7 +200,7 @@ class DomainEventQueriesKotlinTest {
     fun queryOneBasedOnReifiedClassTypeAndSortBy() {
         // Given
         val time = LocalDateTime.now()
-        applicationService.executeList(
+        applicationService.execute(
             "stream", composeCommands(
                 Name::defineName.partial("eventId1", time, "name", "Some Doe"),
                 Name::changeName.partial("eventId2", time, "name", "Jane Doe"),

@@ -18,7 +18,6 @@
 package org.occurrent.dsl.decider
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeList
 import org.occurrent.eventstore.api.WriteResult
 import java.util.*
 import java.util.concurrent.atomic.AtomicReference
@@ -35,7 +34,7 @@ inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.execute
 inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.execute(streamId: UUID, commands: List<C>, decider: Decider<C, S, SubE>): WriteResult = execute(streamId.toString(), commands, decider)
 inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.execute(streamId: String, commands: List<C>, decider: Decider<C, S, SubE>): WriteResult {
     val widened: Decider<C, S, E> = decider.adaptEvents()
-    return executeList(streamId) { events: List<E> -> widened.decideOnEventsAndReturnEvents(events, commands) }
+    return execute(streamId) { events: List<E> -> widened.decideOnEventsAndReturnEvents(events, commands) }
 }
 
 // ExecuteAndReturnDecision
@@ -45,7 +44,7 @@ inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.execute
 inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: String, commands: List<C>, decider: Decider<C, S, SubE>): Decider.Decision<S, E> {
     val widened: Decider<C, S, E> = decider.adaptEvents()
     val cheat = AtomicReference<Decider.Decision<S, E>>()
-    executeList(streamId) { events: List<E> ->
+    execute(streamId) { events: List<E> ->
         val decision: Decider.Decision<S, E> = widened.decideOnEvents(events, commands)
         cheat.set(decision)
         decision.events

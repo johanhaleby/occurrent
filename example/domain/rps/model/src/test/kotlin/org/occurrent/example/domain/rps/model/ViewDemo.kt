@@ -22,7 +22,6 @@ import org.assertj.core.api.Assertions.assertThat
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.Test
-import org.occurrent.application.service.blocking.executeList
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.dsl.subscription.blocking.subscriptions
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
@@ -51,11 +50,11 @@ class ViewDemo {
         // When
         val gameId1 = GameId.random()
         val gameId2 = GameId.random()
-        applicationService.executeList(gameId1.value) { events ->
+        applicationService.execute(gameId1.value) { events ->
             handle(events, CreateGame(gameId1, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
         }
 
-        applicationService.executeList(gameId2.value) { events ->
+        applicationService.execute(gameId2.value) { events ->
             handle(events, CreateGame(gameId2, Timestamp.now(), GameCreatorId.random(), BestOfRounds.THREE))
         }
 

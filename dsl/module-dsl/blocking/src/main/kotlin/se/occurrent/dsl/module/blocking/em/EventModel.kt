@@ -18,7 +18,6 @@ package se.occurrent.dsl.module.blocking.em
 
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeList
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.api.blocking.EventStore
@@ -98,7 +97,7 @@ sealed class EventModelSlice<C, E> {
             val dispatcherFn: (C) -> Unit = { command ->
                 command as CMD
                 val streamId = streamIdGetter(command)
-                applicationService.executeList(streamId) { events ->
+                applicationService.execute(streamId) { events ->
                     commandHandler(events, command)
                 }
             }

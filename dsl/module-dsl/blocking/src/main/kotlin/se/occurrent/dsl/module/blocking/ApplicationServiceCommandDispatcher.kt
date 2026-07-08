@@ -17,7 +17,6 @@
 package se.occurrent.dsl.module.blocking
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeList
 import kotlin.reflect.KClass
 
 
@@ -51,7 +50,7 @@ class ApplicationServiceCommandBuilder<C : Any, E : Any>(val applicationService:
     inline fun <reified CMD : C> command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (List<E>, CMD) -> List<E>) {
         val dispatcherFn: (CMD) -> Unit = { command ->
             val streamId = streamIdGetter(command)
-            applicationService.executeList(streamId) { events ->
+            applicationService.execute(streamId) { events ->
                 commandHandler(events, command)
             }
         }

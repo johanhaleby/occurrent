@@ -17,7 +17,6 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.usecases
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeList
 import org.occurrent.application.service.blocking.sideEffect
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
@@ -37,7 +36,7 @@ class StartGame(
     @Transactional
     @Retryable(include = [WriteConditionNotFulfilledException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(gameId: GameId, startTime: Timestamp, startedBy: PlayerId, wordList: WordList) {
-        applicationService.executeList(
+        applicationService.execute(
             gameId,
             sideEffect(revealInitialCharactersInWordHintAfterGameIsStarted::invoke)
         ) { events: List<GameEvent> ->
