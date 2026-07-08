@@ -44,7 +44,7 @@ public interface PolicySideEffect<E> extends Consumer<List<E>> {
      * @param policy    The policy
      * @param <E>       The type of your domain events
      * @param <E_SPECIFIC>       The specific event type that the policy is interested in
-     * @return A {@link PolicySideEffect}, which is a {@code Consumer<Stream<T>>} that allows composing policies.
+     * @return A {@link PolicySideEffect}, which is a {@code Consumer<List<T>>} that allows composing policies.
      */
     static <E, E_SPECIFIC extends E> PolicySideEffect<E> executePolicy(Class<E_SPECIFIC> eventType, Consumer<E_SPECIFIC> policy) {
         Objects.requireNonNull(eventType, "Event type cannot be null");
@@ -90,7 +90,7 @@ public interface PolicySideEffect<E> extends Consumer<List<E>> {
      * @param eventType The type of the domain event
      * @param policy    The policy
      * @param <E_SPECIFIC>       The specific event type that the policy is interested in
-     * @return A {@link PolicySideEffect}, which is a {@code Consumer<Stream<T>>} that allows composing policies.
+     * @return A {@link PolicySideEffect}, which is a {@code Consumer<List<T>>} that allows composing policies.
      */
     default <E_SPECIFIC extends E> PolicySideEffect<E> andThenExecuteAnotherPolicy(Class<E_SPECIFIC> eventType, Consumer<E_SPECIFIC> policy) {
         return events -> {
