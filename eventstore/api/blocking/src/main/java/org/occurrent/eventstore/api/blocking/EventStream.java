@@ -21,7 +21,6 @@ import org.jspecify.annotations.NullMarked;
 import java.util.Iterator;
 import java.util.List;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -64,7 +63,7 @@ public interface EventStream<T> extends Iterable<T> {
      * @return The events in this stream as a list
      */
     default List<T> eventList() {
-        return events().collect(Collectors.toList());
+        return events().toList();
     }
 
     /**
@@ -77,17 +76,10 @@ public interface EventStream<T> extends Iterable<T> {
     default <T2> EventStream<T2> map(Function<T, T2> fn) {
         return new EventStream<>() {
 
-            @Override
-            public Iterator<T2> iterator() {
-                return events().iterator();
-            }
-
-            @Override
             public String id() {
                 return EventStream.this.id();
             }
 
-            @Override
             public long version() {
                 return EventStream.this.version();
             }
