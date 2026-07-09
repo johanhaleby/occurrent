@@ -230,23 +230,23 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     @Override
-    public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
+    public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
         if (!eventStoreCapabilities.contains(DCB)) {
             return Mono.error(capabilityError(DCB));
         }
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads,
         // the events may include it while the token does not, which only makes a later conditional append
         // over-cautious (a false conflict that retries) rather than miss the conflict (ADR 0031). The token read
         // and the position read are independent, so zip them concurrently rather than sequencing them, while
         // keeping both strictly before the event read below.
-        return Mono.zip(consistencyToken(query), currentPosition())
+        return Mono.zip(consistencyToken(criteria), currentPosition())
                 .flatMap(tokenAndHighWatermark -> {
                     long token = tokenAndHighWatermark.getT1();
                     long highWatermark = tokenAndHighWatermark.getT2();
                     long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
-                    Query mongoQuery = toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound);
+                    Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
                     mongoQuery.with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
                     return mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
                             .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
@@ -256,28 +256,28 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     @Override
-    public Mono<Boolean> exists(DcbCriteria query, DcbReadOptions options) {
+    public Mono<Boolean> exists(DcbCriteria criteria, DcbReadOptions options) {
         if (!eventStoreCapabilities.contains(DCB)) {
             return Mono.error(capabilityError(DCB));
         }
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
         return currentPosition().flatMap(highWatermark -> {
             long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
-            return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
+            return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
     }
 
     @Override
-    public Mono<Long> count(DcbCriteria query, DcbReadOptions options) {
+    public Mono<Long> count(DcbCriteria criteria, DcbReadOptions options) {
         if (!eventStoreCapabilities.contains(DCB)) {
             return Mono.error(capabilityError(DCB));
         }
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
         return currentPosition().flatMap(highWatermark -> {
             long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
-            return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
+            return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
     }
 
@@ -308,7 +308,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // Place by the condition's boundary tags when it constrains tags, so the same boundary always lands
         // in the same partition regardless of per-event tags. Otherwise fall back to the events' tags, so
         // tagless boundaries do not all collapse onto one hot partition.
-        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
+        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.criteria());
         Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
         int eventCount = eventsToAppend.size();
@@ -353,11 +353,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // query's markers have advanced since, a matching append committed after the read, so the condition
             // fails. Immune to read-watermark overshoot because marker versions bump inside the append
             // transaction (ADR 0021).
-            conflictMono = consistencyToken(condition.query()).map(actual -> actual != expectedToken.get().value());
+            conflictMono = consistencyToken(condition.criteria()).map(actual -> actual != expectedToken.get().value());
         } else {
             // No token: an absolute "fail if any matching event exists" guard. The marker increments below still
             // serialize concurrent unconditional guards on the same boundary so two of them cannot both pass.
-            conflictMono = mongoTemplate.exists(toDcbMongoQuery(condition.query(), 0, Long.MAX_VALUE), eventStoreCollectionName);
+            conflictMono = mongoTemplate.exists(toDcbMongoQuery(condition.criteria(), 0, Long.MAX_VALUE), eventStoreCollectionName);
         }
         return conflictMono.flatMap(conflict -> {
             if (conflict) {
@@ -366,7 +366,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // Increment a marker per key for the union of the query's keys and the appended events' keys. Always
             // increment the query's markers so a concurrent matching append is serialized even when this append's own
             // events do not match the query.
-            TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.query()));
+            TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
             markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
             return incrementConflictMarkers(markerKeys, lastPosition);
         });
@@ -390,8 +390,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. Read the markers
     // in one query so their versions come from a single consistent snapshot.
-    private Mono<Long> consistencyToken(DcbCriteria query) {
-        Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(query);
+    private Mono<Long> consistencyToken(DcbCriteria criteria) {
+        Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         if (markerKeys.isEmpty()) {
             return Mono.just(0L);
         }
@@ -557,13 +557,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return null;
     }
 
-    private static Query toDcbMongoQuery(DcbCriteria query, long afterPosition, long upperSequencePosition) {
+    private static Query toDcbMongoQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition) {
         Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterPosition).lte(upperSequencePosition);
         Criteria dcbEventCriteria = where(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD).exists(true);
-        if (query instanceof DcbCriteria.MatchAll) {
+        if (criteria instanceof DcbCriteria.MatchAll) {
             return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria));
         }
-        List<Criteria> itemCriteria = DcbMarkerModel.dcbQueryItems(query).stream()
+        List<Criteria> itemCriteria = DcbMarkerModel.dcbQueryItems(criteria).stream()
                 .map(ReactorMongoEventStore::toCriteria)
                 .toList();
         return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria, new Criteria().orOperator(itemCriteria)));

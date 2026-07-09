@@ -83,8 +83,8 @@ public class DcbDomainEventQueries<E> {
     /**
      * Queries matching DCB events from the beginning of the DCB sequence.
      */
-    public Stream<E> query(DcbCriteria query) {
-        return query(query, DcbReadOptions.fromBeginning());
+    public Stream<E> query(DcbCriteria criteria) {
+        return query(criteria, DcbReadOptions.fromBeginning());
     }
 
     /**
@@ -92,27 +92,27 @@ public class DcbDomainEventQueries<E> {
      * events lazily, so terminal short-circuiting operations such as {@code findFirst} or {@code limit} avoid
      * converting events that are never consumed.
      */
-    public Stream<E> query(DcbCriteria query, DcbReadOptions options) {
-        requireNonNull(query, "Query cannot be null");
+    public Stream<E> query(DcbCriteria criteria, DcbReadOptions options) {
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return domainEventQueries.toDomainEvents(dcbEventStore.read(query, options).stream());
+        return domainEventQueries.toDomainEvents(dcbEventStore.read(criteria, options).stream());
     }
 
     /**
      * Queries matching DCB events and returns both the domain events and the observed DCB sequence position.
      */
-    public DcbDomainEventStream<E> queryWithPosition(DcbCriteria query) {
-        return queryWithPosition(query, DcbReadOptions.fromBeginning());
+    public DcbDomainEventStream<E> queryWithPosition(DcbCriteria criteria) {
+        return queryWithPosition(criteria, DcbReadOptions.fromBeginning());
     }
 
     /**
      * Queries matching DCB events using the supplied read options and returns the domain events, the observed DCB
      * sequence position, and the consistency token for a later conditional append.
      */
-    public DcbDomainEventStream<E> queryWithPosition(DcbCriteria query, DcbReadOptions options) {
-        requireNonNull(query, "Query cannot be null");
+    public DcbDomainEventStream<E> queryWithPosition(DcbCriteria criteria, DcbReadOptions options) {
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        DcbEventStream eventStream = dcbEventStore.read(query, options);
+        DcbEventStream eventStream = dcbEventStore.read(criteria, options);
         List<E> events = domainEventQueries.toDomainEvents(eventStream.stream()).toList();
         return new DcbDomainEventStream<>(events, eventStream.lastSequencePosition(), eventStream.consistencyToken());
     }

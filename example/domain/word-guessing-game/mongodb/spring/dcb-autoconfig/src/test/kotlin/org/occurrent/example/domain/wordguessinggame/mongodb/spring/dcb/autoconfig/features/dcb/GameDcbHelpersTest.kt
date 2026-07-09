@@ -89,14 +89,14 @@ class GameDcbHelpersTest {
         )
     }
 
-    private fun itemsOf(query: DcbCriteria): List<DcbCriterion> = when (query) {
-        is DcbCriterion -> listOf(query)
-        is DcbCriteria.Items -> query.items()
+    private fun itemsOf(criteria: DcbCriteria): List<DcbCriterion> = when (criteria) {
+        is DcbCriterion -> listOf(criteria)
+        is DcbCriteria.Items -> criteria.items()
         is DcbCriteria.MatchAll -> emptyList()
     }
 
-    private fun assertSingleQueryItem(query: DcbCriteria, types: Set<String> = emptySet(), tags: Set<Tag>) {
-        assertThat(itemsOf(query)).containsExactly(queryItem(types, tags))
+    private fun assertSingleQueryItem(criteria: DcbCriteria, types: Set<String> = emptySet(), tags: Set<Tag>) {
+        assertThat(itemsOf(criteria)).containsExactly(queryItem(types, tags))
     }
 
     private fun queryItem(types: Set<String> = emptySet(), tags: Set<Tag>) = DcbCriterion(types, tags)

@@ -215,8 +215,14 @@ class DcbDomainEventQueriesTest {
     }
 
     @Test
-    void a_malformed_string_tag_is_rejected() {
-        assertThatThrownBy(() -> dcbQueries.tags("not-a-tag")).isInstanceOf(IllegalArgumentException.class);
+    void a_colon_less_string_is_a_value_less_tag() {
+        // A tag no longer has to be key:value, so a colon-less string is a valid value-less tag rather than an error.
+        assertThat(dcbQueries.tags("premium")).isNotNull();
+    }
+
+    @Test
+    void a_blank_string_tag_is_rejected() {
+        assertThatThrownBy(() -> dcbQueries.tags(" ")).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

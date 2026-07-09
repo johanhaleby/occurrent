@@ -25,40 +25,40 @@ import static java.util.Objects.requireNonNull;
 /**
  * Optimistic conflict condition for a DCB append.
  * <p>
- * {@code query} describes the events that would conflict with the append. {@code consistencyToken} optionally limits the
+ * {@code criteria} describes the events that would conflict with the append. {@code consistencyToken} optionally limits the
  * conflict check to events committed after a boundary observed by a prior read (see
- * {@link DcbEventStream#consistencyToken()}); when empty, the append fails if any existing event matches {@code query}.
+ * {@link DcbEventStream#consistencyToken()}); when empty, the append fails if any existing event matches {@code criteria}.
  */
 @NullMarked
-public record DcbAppendCondition(DcbCriteria query, Optional<DcbConsistencyToken> consistencyToken) {
+public record DcbAppendCondition(DcbCriteria criteria, Optional<DcbConsistencyToken> consistencyToken) {
 
     public DcbAppendCondition {
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(consistencyToken, "Consistency token cannot be null");
     }
 
     /**
-     * Creates a condition that fails if any existing event matches {@code query}.
+     * Creates a condition that fails if any existing event matches {@code criteria}.
      * <p>
      * A {@code MatchAll} query (from {@link DcbCriteria#all()}) makes this a whole-store optimistic lock that is not
      * skew-safe against concurrent tag-scoped or type-scoped appends, so use it only for single-writer or empty-store
-     * guards (see ADR 30). Prefer a scoped {@code query} for a real consistency boundary on a multi-writer store. Prefer
+     * guards (see ADR 30). Prefer a scoped {@code criteria} for a real consistency boundary on a multi-writer store. Prefer
      * {@link #wholeStoreLock()} over spelling this out as {@code failIfEventsMatch(DcbCriteria.all())}: the dedicated
      * factory names the whole-store boundary explicitly at the call site instead of relying on a reader recognizing
      * {@code all()} as a lock rather than a read-everything query.
      */
-    public static DcbAppendCondition failIfEventsMatch(DcbCriteria query) {
-        return new DcbAppendCondition(query, Optional.empty());
+    public static DcbAppendCondition failIfEventsMatch(DcbCriteria criteria) {
+        return new DcbAppendCondition(criteria, Optional.empty());
     }
 
     /**
-     * Creates a condition that fails if an event matching {@code query} was committed after the read that produced
-     * {@code consistencyToken}. Prefer {@link #wholeStoreLock(DcbConsistencyToken)} when {@code query} would otherwise
+     * Creates a condition that fails if an event matching {@code criteria} was committed after the read that produced
+     * {@code consistencyToken}. Prefer {@link #wholeStoreLock(DcbConsistencyToken)} when {@code criteria} would otherwise
      * be {@link DcbCriteria#all()}.
      */
-    public static DcbAppendCondition failIfEventsMatch(DcbCriteria query, DcbConsistencyToken consistencyToken) {
+    public static DcbAppendCondition failIfEventsMatch(DcbCriteria criteria, DcbConsistencyToken consistencyToken) {
         requireNonNull(consistencyToken, "Consistency token cannot be null");
-        return new DcbAppendCondition(query, Optional.of(consistencyToken));
+        return new DcbAppendCondition(criteria, Optional.of(consistencyToken));
     }
 
     /**

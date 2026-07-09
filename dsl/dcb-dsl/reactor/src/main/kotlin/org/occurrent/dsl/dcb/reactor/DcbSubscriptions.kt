@@ -32,10 +32,10 @@ import reactor.core.publisher.Mono
 @JvmName("subscribeDcb")
 fun <E : Any> DcbSubscriptions<E>.subscribeDcb(
     subscriptionId: String,
-    query: DcbCriteria = DcbCriteria.all(),
+    criteria: DcbCriteria = DcbCriteria.all(),
     startAt: DcbStartAt? = null,
     fn: (E) -> Mono<Void>
-): Subscription = subscribeWithMetadata(subscriptionId, query, startAt) { _, event -> fn(event) }
+): Subscription = subscribeWithMetadata(subscriptionId, criteria, startAt) { _, event -> fn(event) }
 
 /**
  * Kotlin-idiomatic sugar over [DcbSubscriptions], including DCB metadata in the callback. See [subscribeDcb] for why
@@ -44,7 +44,7 @@ fun <E : Any> DcbSubscriptions<E>.subscribeDcb(
 @JvmName("subscribeDcbWithMetadata")
 fun <E : Any> DcbSubscriptions<E>.subscribeDcbWithMetadata(
     subscriptionId: String,
-    query: DcbCriteria = DcbCriteria.all(),
+    criteria: DcbCriteria = DcbCriteria.all(),
     startAt: DcbStartAt? = null,
     fn: (DcbEventMetadata, E) -> Mono<Void>
-): Subscription = subscribeWithMetadata(subscriptionId, query, startAt, fn)
+): Subscription = subscribeWithMetadata(subscriptionId, criteria, startAt, fn)

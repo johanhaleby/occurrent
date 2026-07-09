@@ -37,15 +37,15 @@ import java.util.function.Consumer;
 public interface DcbSubscriptionModel extends SubscriptionModelLifeCycle {
 
     /**
-     * Subscribe to DCB events matching {@code query}, starting at {@code startAt}.
+     * Subscribe to DCB events matching {@code criteria}, starting at {@code startAt}.
      */
-    Subscription subscribe(String subscriptionId, DcbCriteria query, DcbStartAt startAt, Consumer<CloudEvent> action);
+    Subscription subscribe(String subscriptionId, DcbCriteria criteria, DcbStartAt startAt, Consumer<CloudEvent> action);
 
     /**
-     * Subscribe to DCB events matching {@code query} at the subscription model default position.
+     * Subscribe to DCB events matching {@code criteria} at the subscription model default position.
      */
-    default Subscription subscribe(String subscriptionId, DcbCriteria query, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, query, DcbStartAt.subscriptionModelDefault(), action);
+    default Subscription subscribe(String subscriptionId, DcbCriteria criteria, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, criteria, DcbStartAt.subscriptionModelDefault(), action);
     }
 
     /**

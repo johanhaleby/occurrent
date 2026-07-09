@@ -190,8 +190,8 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Li
                 // Requires isDcbEvent (the DCB tags extension) rather than a positive position, since with
                 // stream position on by default, stream events also carry a global position. A "position > 0"
                 // guard would leak stream events into a DCB subscription.
-                DcbCriteria query = dcbSubscriptionFilter.criteria();
-                return cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query);
+                DcbCriteria criteria = dcbSubscriptionFilter.criteria();
+                return cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria);
             }
             default ->
                     throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports filters of type " + StreamSubscriptionFilter.class.getName() + " and " + DcbSubscriptionFilter.class.getName());

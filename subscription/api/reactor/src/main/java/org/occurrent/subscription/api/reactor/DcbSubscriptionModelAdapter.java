@@ -31,7 +31,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Translates {@link DcbSubscriptionModel} calls into the shared reactive {@link SubscriptionModel}, building a
- * {@link DcbSubscriptionFilter} from the query and converting the {@link DcbStartAt} to a generic start position.
+ * {@link DcbSubscriptionFilter} from the criteria and converting the {@link DcbStartAt} to a generic start position.
  * <p>
  * The named, lifecycle-managed {@code subscribe} methods additionally require the {@code delegate} to implement
  * {@link Subscribable} and {@link SubscriptionModelLifeCycle}, since a bare {@link SubscriptionModel} has no notion
@@ -48,20 +48,20 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
     }
 
     @Override
-    public Flux<CloudEvent> subscribe(DcbCriteria query, DcbStartAt startAt) {
-        requireNonNull(query, "Criteria cannot be null");
+    public Flux<CloudEvent> subscribe(DcbCriteria criteria, DcbStartAt startAt) {
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");
         // The DcbSubscriptionFilter is honored server-side for live delivery. The in-process check keeps the
-        // subscription scoped to its own query for any backend that does not honor the filter, matching the blocking
+        // subscription scoped to its own criteria for any backend that does not honor the filter, matching the blocking
         // adapter.
-        return delegate.subscribe(DcbSubscriptionFilter.filter(query), startAt.toStartAt())
-                .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query));
+        return delegate.subscribe(DcbSubscriptionFilter.filter(criteria), startAt.toStartAt())
+                .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria));
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, DcbCriteria query, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria criteria, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireNonNull(query, "Criteria cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");
         requireNonNull(action, "Subscription action cannot be null");
         if (!(delegate instanceof Subscribable subscribable)) {
@@ -69,15 +69,15 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
                     " to also implement " + Subscribable.class.getSimpleName() + ", but " + delegate.getClass().getName() + " does not.");
         }
         // The DcbSubscriptionFilter is honored server-side for live delivery, but a DCB catch-up replays by the
-        // model-level query, so an in-process check keeps the subscription scoped to its own query during catch-up too
+        // model-level criteria, so an in-process check keeps the subscription scoped to its own criteria during catch-up too
         // (and stays correct for any backend that does not honor the filter), matching the blocking adapter.
-        Function<CloudEvent, Mono<Void>> scopedToQuery = cloudEvent -> {
-            if (DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query)) {
+        Function<CloudEvent, Mono<Void>> scopedToCriteria = cloudEvent -> {
+            if (DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria)) {
                 return action.apply(cloudEvent);
             }
             return Mono.empty();
         };
-        return subscribable.subscribe(subscriptionId, DcbSubscriptionFilter.filter(query), startAt.toStartAt(), scopedToQuery);
+        return subscribable.subscribe(subscriptionId, DcbSubscriptionFilter.filter(criteria), startAt.toStartAt(), scopedToCriteria);
     }
 
     @Override

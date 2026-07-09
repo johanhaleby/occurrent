@@ -143,11 +143,11 @@ class DcbApiTest {
     void cloud_event_helper_matches_any_query_item() {
         io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("OrderPlaced"), List.of(Tag.of("order", "1")));
 
-        DcbCriteria query = DcbCriteria.anyOf(List.of(
+        DcbCriteria criteria = DcbCriteria.anyOf(List.of(
                 DcbCriteria.tags(List.of(Tag.of("name", "1"))),
                 DcbCriteria.types(List.of("OrderPlaced"))));
 
-        assertThat(DcbCloudEvents.matches(event, query)).isTrue();
+        assertThat(DcbCloudEvents.matches(event, criteria)).isTrue();
     }
 
     @Test

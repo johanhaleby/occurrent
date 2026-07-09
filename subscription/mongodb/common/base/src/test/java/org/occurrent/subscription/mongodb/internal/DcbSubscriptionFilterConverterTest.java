@@ -130,12 +130,12 @@ class DcbSubscriptionFilterConverterTest {
 
     @Test
     void any_of_multiple_items_produces_one_dollar_or_entry_per_item() {
-        DcbCriteria query = DcbCriteria.anyOf(
+        DcbCriteria criteria = DcbCriteria.anyOf(
                 DcbCriteria.type("OrderPlaced"),
                 DcbCriteria.tags(Set.of(Tag.parse("customer:99")))
         );
 
-        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(query);
+        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(criteria);
 
         Document match = stage.get("$match", Document.class);
         assertDcbTagsConditionPresent(match);
@@ -157,8 +157,8 @@ class DcbSubscriptionFilterConverterTest {
 
     @Test
     void every_produced_match_stage_contains_the_top_level_dollar_match_key() {
-        for (DcbCriteria query : List.of(DcbCriteria.all(), DcbCriteria.type("T"), DcbCriteria.tags(Tag.parse("x:1")))) {
-            Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(query);
+        for (DcbCriteria criteria : List.of(DcbCriteria.all(), DcbCriteria.type("T"), DcbCriteria.tags(Tag.parse("x:1")))) {
+            Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(criteria);
             assertThat(stage).containsKey("$match");
         }
     }

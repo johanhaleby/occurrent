@@ -36,26 +36,26 @@ import java.util.function.Function;
 public interface DcbApplicationService<E> {
 
     /**
-     * Executes a domain function for the events selected by {@code query}.
+     * Executes a domain function for the events selected by {@code criteria}.
      *
-     * @param query the DCB query that defines which existing events are relevant to the decision
+     * @param criteria the DCB query that defines which existing events are relevant to the decision
      * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
      * @return the append result, or {@link Optional#empty()} when the domain function produced no new events
      */
-    default Optional<DcbAppendResult> execute(DcbCriteria query, Function<List<E>, List<E>> functionThatCallsDomainModel) {
-        return execute(query, DcbExecuteOptions.empty(), functionThatCallsDomainModel);
+    default Optional<DcbAppendResult> execute(DcbCriteria criteria, Function<List<E>, List<E>> functionThatCallsDomainModel) {
+        return execute(criteria, DcbExecuteOptions.empty(), functionThatCallsDomainModel);
     }
 
     /**
-     * Executes a domain function for the events selected by {@code query}, with the supplied {@link DcbExecuteOptions}.
+     * Executes a domain function for the events selected by {@code criteria}, with the supplied {@link DcbExecuteOptions}.
      * <p>
      * When the options carry a side-effect, it is invoked once with the newly produced domain events after they have
      * been appended successfully. It is not invoked when the domain function produced no new events.
      *
-     * @param query the DCB query that defines which existing events are relevant to the decision
+     * @param criteria the DCB query that defines which existing events are relevant to the decision
      * @param options the execute options (for example a post-append side-effect)
      * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
      * @return the append result, or {@link Optional#empty()} when the domain function produced no new events
      */
-    Optional<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel);
+    Optional<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel);
 }

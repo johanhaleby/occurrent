@@ -79,75 +79,75 @@ public final class DcbSubscriptions<E> {
     }
 
     /**
-     * Subscribes to live DCB events that match {@code query}, converting each to a domain event.
+     * Subscribes to live DCB events that match {@code criteria}, converting each to a domain event.
      */
-    public Flux<E> subscribe(DcbCriteria query) {
-        return subscribe(query, DcbStartAt.subscriptionModelDefault());
+    public Flux<E> subscribe(DcbCriteria criteria) {
+        return subscribe(criteria, DcbStartAt.subscriptionModelDefault());
     }
 
     /**
-     * Subscribes to live DCB events that match {@code query}, starting at {@code startAt}, converting each to a domain
+     * Subscribes to live DCB events that match {@code criteria}, starting at {@code startAt}, converting each to a domain
      * event.
      */
-    public Flux<E> subscribe(DcbCriteria query, DcbStartAt startAt) {
-        return subscriptionModel.subscribe(query, startAt).map(cloudEventConverter::toDomainEvent);
+    public Flux<E> subscribe(DcbCriteria criteria, DcbStartAt startAt) {
+        return subscriptionModel.subscribe(criteria, startAt).map(cloudEventConverter::toDomainEvent);
     }
 
     /**
-     * Subscribes to live DCB events that match {@code query}, delivering each domain event together with its DCB
+     * Subscribes to live DCB events that match {@code criteria}, delivering each domain event together with its DCB
      * metadata.
      */
-    public Flux<DcbEvent<E>> subscribeWithMetadata(DcbCriteria query) {
-        return subscribeWithMetadata(query, DcbStartAt.subscriptionModelDefault());
+    public Flux<DcbEvent<E>> subscribeWithMetadata(DcbCriteria criteria) {
+        return subscribeWithMetadata(criteria, DcbStartAt.subscriptionModelDefault());
     }
 
     /**
-     * Subscribes to live DCB events that match {@code query}, starting at {@code startAt}, delivering each domain event
+     * Subscribes to live DCB events that match {@code criteria}, starting at {@code startAt}, delivering each domain event
      * together with its DCB metadata.
      */
-    public Flux<DcbEvent<E>> subscribeWithMetadata(DcbCriteria query, DcbStartAt startAt) {
-        return subscriptionModel.subscribe(query, startAt)
+    public Flux<DcbEvent<E>> subscribeWithMetadata(DcbCriteria criteria, DcbStartAt startAt) {
+        return subscriptionModel.subscribe(criteria, startAt)
                 .map(cloudEvent -> new DcbEvent<>(DcbEventMetadata.from(EventMetadata.from(cloudEvent)), cloudEventConverter.toDomainEvent(cloudEvent)));
     }
 
     /**
-     * Subscribes to live DCB events that match {@code query}, tracked by {@code subscriptionId}.
+     * Subscribes to live DCB events that match {@code criteria}, tracked by {@code subscriptionId}.
      */
-    public Subscription subscribe(String subscriptionId, DcbCriteria query, Function<E, Mono<Void>> fn) {
-        return subscribe(subscriptionId, query, null, fn);
+    public Subscription subscribe(String subscriptionId, DcbCriteria criteria, Function<E, Mono<Void>> fn) {
+        return subscribe(subscriptionId, criteria, null, fn);
     }
 
     /**
-     * Subscribes to live DCB events that match {@code query}, starting at {@code startAt}, tracked by
+     * Subscribes to live DCB events that match {@code criteria}, starting at {@code startAt}, tracked by
      * {@code subscriptionId}.
      */
-    public Subscription subscribe(String subscriptionId, DcbCriteria query, @Nullable DcbStartAt startAt, Function<E, Mono<Void>> fn) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria criteria, @Nullable DcbStartAt startAt, Function<E, Mono<Void>> fn) {
         requireNonNull(fn, "Subscription function cannot be null");
-        return subscribeWithMetadata(subscriptionId, query, startAt, (metadata, event) -> fn.apply(event));
+        return subscribeWithMetadata(subscriptionId, criteria, startAt, (metadata, event) -> fn.apply(event));
     }
 
     /**
-     * Subscribes to live DCB events that match {@code query}, tracked by {@code subscriptionId}, exposing DCB metadata
+     * Subscribes to live DCB events that match {@code criteria}, tracked by {@code subscriptionId}, exposing DCB metadata
      * to the callback.
      * <p>
      * This is a distinct method rather than an overload of {@link #subscribe} so that a method reference stays
      * unambiguous on the {@link Function} overloads.
      */
-    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria query, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
-        return subscribeWithMetadata(subscriptionId, query, null, fn);
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria criteria, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
+        return subscribeWithMetadata(subscriptionId, criteria, null, fn);
     }
 
     /**
-     * Subscribes to live DCB events that match {@code query}, starting at {@code startAt} and tracked by
+     * Subscribes to live DCB events that match {@code criteria}, starting at {@code startAt} and tracked by
      * {@code subscriptionId}, exposing DCB metadata to the callback. Returns without waiting for the subscription to
      * start.
      */
-    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria query, @Nullable DcbStartAt startAt, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria criteria, @Nullable DcbStartAt startAt, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(fn, "Subscription function cannot be null");
 
-        // The DcbSubscriptionModel scopes delivery to the query (server-side where the backend supports it, and an
+        // The DcbSubscriptionModel scopes delivery to the criteria (server-side where the backend supports it, and an
         // in-process floor in the typed adapter otherwise), so this callback only converts and dispatches.
         Function<CloudEvent, Mono<Void>> action = cloudEvent -> {
             E event = cloudEventConverter.toDomainEvent(cloudEvent);
@@ -155,7 +155,7 @@ public final class DcbSubscriptions<E> {
         };
 
         DcbStartAt startAtToUse = startAt == null ? DcbStartAt.subscriptionModelDefault() : startAt;
-        return subscriptionModel.subscribe(subscriptionId, query, startAtToUse, action);
+        return subscriptionModel.subscribe(subscriptionId, criteria, startAtToUse, action);
     }
 
     /**

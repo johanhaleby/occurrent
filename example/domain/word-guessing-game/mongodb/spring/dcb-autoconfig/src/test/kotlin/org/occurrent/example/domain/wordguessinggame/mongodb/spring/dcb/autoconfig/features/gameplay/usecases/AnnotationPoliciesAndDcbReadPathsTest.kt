@@ -152,27 +152,27 @@ class AnnotationPoliciesAndDcbReadPathsTest {
         listOf(Word("alpha"), Word("bravo"), Word("crane"), Word("delta"))
     )
 
-    private inline fun <reified E : GameEvent> eventuallySingle(query: DcbCriteria): E =
+    private inline fun <reified E : GameEvent> eventuallySingle(criteria: DcbCriteria): E =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
-            assertThat(events<E>(query)).hasSize(1)
-        }.let { events<E>(query).single() }
+            assertThat(events<E>(criteria)).hasSize(1)
+        }.let { events<E>(criteria).single() }
 
-    private inline fun <reified E : GameEvent> eventuallyAtLeast(query: DcbCriteria, size: Int): List<E> =
+    private inline fun <reified E : GameEvent> eventuallyAtLeast(criteria: DcbCriteria, size: Int): List<E> =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
-            assertThat(events<E>(query)).hasSizeGreaterThanOrEqualTo(size)
-        }.let { events<E>(query) }
+            assertThat(events<E>(criteria)).hasSizeGreaterThanOrEqualTo(size)
+        }.let { events<E>(criteria) }
 
     private inline fun <reified T> eventuallyReadModel(gameId: UUID): T =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
             assertThat(findGameById.execute(gameId)).isInstanceOf(T::class.java)
         }.let { findGameById.execute(gameId) as T }
 
-    private inline fun <reified E : GameEvent> events(query: DcbCriteria): List<E> =
-        domainEventQueries.queryForList(query).filterIsInstance<E>()
+    private inline fun <reified E : GameEvent> events(criteria: DcbCriteria): List<E> =
+        domainEventQueries.queryForList(criteria).filterIsInstance<E>()
 
-    private fun cloudEvents(query: DcbCriteria): List<io.cloudevents.CloudEvent> =
-        eventStore.read(query).events()
+    private fun cloudEvents(criteria: DcbCriteria): List<io.cloudevents.CloudEvent> =
+        eventStore.read(criteria).events()
 
-    private fun cloudEventTags(query: DcbCriteria): List<Set<Tag>> =
-        cloudEvents(query).map(DcbCloudEvents::getTags)
+    private fun cloudEventTags(criteria: DcbCriteria): List<Set<Tag>> =
+        cloudEvents(criteria).map(DcbCloudEvents::getTags)
 }

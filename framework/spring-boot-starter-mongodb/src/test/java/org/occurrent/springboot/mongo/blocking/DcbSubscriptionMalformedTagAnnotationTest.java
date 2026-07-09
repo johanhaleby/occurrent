@@ -34,10 +34,10 @@ import java.net.URI;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * A {@code @DcbSubscription} whose {@link DcbSubscription#tags() tags} carries a value that is not in
- * {@code key:value} form must fail fast at startup, and the failure must name the subscription id and the offending
- * tag so it is diagnosable. The tag is parsed in {@code OccurrentBlockingAnnotationBeanPostProcessor} before the
- * subscription model is ever consulted, so this reproduces the failure without a running store (no Docker).
+ * A {@code @DcbSubscription} whose {@link DcbSubscription#tags() tags} carries a malformed value, such as a blank
+ * tag, must fail fast at startup, and the failure must name the subscription id and the offending tag so it is
+ * diagnosable. The tag is parsed in {@code OccurrentBlockingAnnotationBeanPostProcessor} before the subscription
+ * model is ever consulted, so this reproduces the failure without a running store (no Docker).
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbSubscriptionMalformedTagAnnotationTest {
@@ -57,8 +57,7 @@ class DcbSubscriptionMalformedTagAnnotationTest {
                             .cause()
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining(SUBSCRIPTION_ID)
-                            .hasMessageContaining("nope")
-                            .hasMessageContaining("key:value");
+                            .hasMessageContaining("blank");
                 });
     }
 
@@ -94,7 +93,7 @@ class DcbSubscriptionMalformedTagAnnotationTest {
     }
 
     static class MalformedTagSubscriber {
-        @DcbSubscription(id = SUBSCRIPTION_ID, eventTypes = TestEvent.class, tags = "nope", startAt = DcbStartPosition.NOW)
+        @DcbSubscription(id = SUBSCRIPTION_ID, eventTypes = TestEvent.class, tags = " ", startAt = DcbStartPosition.NOW)
         void on(TestEvent event, DcbEventMetadata metadata) {
         }
     }

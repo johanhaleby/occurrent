@@ -82,34 +82,34 @@ public class DcbDomainEventQueries<E> {
     /**
      * Queries matching DCB events from the beginning of the DCB sequence.
      */
-    public Flux<E> query(DcbCriteria query) {
-        return query(query, DcbReadOptions.fromBeginning());
+    public Flux<E> query(DcbCriteria criteria) {
+        return query(criteria, DcbReadOptions.fromBeginning());
     }
 
     /**
      * Queries matching DCB events using the supplied read options, converting the matched CloudEvents to domain events.
      */
-    public Flux<E> query(DcbCriteria query, DcbReadOptions options) {
-        requireNonNull(query, "Query cannot be null");
+    public Flux<E> query(DcbCriteria criteria, DcbReadOptions options) {
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return dcbEventStore.read(query, options).flatMapMany(eventStream -> domainEventQueries.toDomainEvents(Flux.fromStream(eventStream.stream())));
+        return dcbEventStore.read(criteria, options).flatMapMany(eventStream -> domainEventQueries.toDomainEvents(Flux.fromStream(eventStream.stream())));
     }
 
     /**
      * Queries matching DCB events and returns both the domain events and the observed DCB sequence position.
      */
-    public Mono<DcbDomainEventStream<E>> queryWithPosition(DcbCriteria query) {
-        return queryWithPosition(query, DcbReadOptions.fromBeginning());
+    public Mono<DcbDomainEventStream<E>> queryWithPosition(DcbCriteria criteria) {
+        return queryWithPosition(criteria, DcbReadOptions.fromBeginning());
     }
 
     /**
      * Queries matching DCB events using the supplied read options and returns the domain events, the observed DCB
      * sequence position, and the consistency token for a later conditional append.
      */
-    public Mono<DcbDomainEventStream<E>> queryWithPosition(DcbCriteria query, DcbReadOptions options) {
-        requireNonNull(query, "Query cannot be null");
+    public Mono<DcbDomainEventStream<E>> queryWithPosition(DcbCriteria criteria, DcbReadOptions options) {
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return dcbEventStore.read(query, options).flatMap(eventStream ->
+        return dcbEventStore.read(criteria, options).flatMap(eventStream ->
                 domainEventQueries.<E>toDomainEvents(Flux.fromStream(eventStream.stream())).collectList()
                         .map(events -> new DcbDomainEventStream<>(events, eventStream.lastSequencePosition(), eventStream.consistencyToken())));
     }

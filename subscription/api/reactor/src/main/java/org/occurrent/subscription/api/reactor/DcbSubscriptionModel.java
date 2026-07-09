@@ -35,7 +35,7 @@ import java.util.function.Function;
  * {@code ReactorMongoSubscriptionModel} has no DCB catch-up and treats such a start as live, whereas a model composed
  * with {@code ReactorDcbCatchupSubscriptionModel} replays history from that position before going live.
  * <p>
- * The {@code subscribe(query)}/{@code subscribe(query, startAt)} methods above return a bare {@link Flux}: the
+ * The {@code subscribe(criteria)}/{@code subscribe(criteria, startAt)} methods above return a bare {@link Flux}: the
  * subscription lives as long as something is subscribed to the {@code Flux} and is cancelled by disposing that
  * subscription. The named {@link #subscribe(String, DcbCriteria, DcbStartAt, Function)} methods below are the
  * lifecycle-managed counterpart, mirroring {@link Subscribable}: they track the subscription by id so it can be
@@ -46,17 +46,17 @@ import java.util.function.Function;
 public interface DcbSubscriptionModel {
 
     /**
-     * Subscribe to DCB events matching {@code query}, starting at {@code startAt}.
+     * Subscribe to DCB events matching {@code criteria}, starting at {@code startAt}.
      *
      * @return a {@link Flux} of the matching cloud events.
      */
-    Flux<CloudEvent> subscribe(DcbCriteria query, DcbStartAt startAt);
+    Flux<CloudEvent> subscribe(DcbCriteria criteria, DcbStartAt startAt);
 
     /**
-     * Subscribe to DCB events matching {@code query} at the subscription model default position.
+     * Subscribe to DCB events matching {@code criteria} at the subscription model default position.
      */
-    default Flux<CloudEvent> subscribe(DcbCriteria query) {
-        return subscribe(query, DcbStartAt.subscriptionModelDefault());
+    default Flux<CloudEvent> subscribe(DcbCriteria criteria) {
+        return subscribe(criteria, DcbStartAt.subscriptionModelDefault());
     }
 
     /**
@@ -67,25 +67,25 @@ public interface DcbSubscriptionModel {
     }
 
     /**
-     * Subscribe to DCB events matching {@code query}, starting at {@code startAt}, tracked by {@code subscriptionId}
+     * Subscribe to DCB events matching {@code criteria}, starting at {@code startAt}, tracked by {@code subscriptionId}
      * so it can be cancelled with {@link #cancelSubscription(String)}. Unlike the {@link Flux}-returning
      * {@code subscribe} methods above, this requires the underlying {@link SubscriptionModel} to also support named,
      * lifecycle-managed subscriptions.
      *
      * @param subscriptionId The id of the subscription, must be unique!
-     * @param action         This action will be invoked for each cloud event matching {@code query}. The next event
+     * @param action         This action will be invoked for each cloud event matching {@code criteria}. The next event
      *                       is not processed until the returned {@link Mono} completes.
      */
-    Subscription subscribe(String subscriptionId, DcbCriteria query, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action);
+    Subscription subscribe(String subscriptionId, DcbCriteria criteria, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action);
 
     /**
-     * Subscribe to DCB events matching {@code query} at the subscription model default position, tracked by
+     * Subscribe to DCB events matching {@code criteria} at the subscription model default position, tracked by
      * {@code subscriptionId}.
      *
      * @see #subscribe(String, DcbCriteria, DcbStartAt, Function)
      */
-    default Subscription subscribe(String subscriptionId, DcbCriteria query, Function<CloudEvent, Mono<Void>> action) {
-        return subscribe(subscriptionId, query, DcbStartAt.subscriptionModelDefault(), action);
+    default Subscription subscribe(String subscriptionId, DcbCriteria criteria, Function<CloudEvent, Mono<Void>> action) {
+        return subscribe(subscriptionId, criteria, DcbStartAt.subscriptionModelDefault(), action);
     }
 
     /**

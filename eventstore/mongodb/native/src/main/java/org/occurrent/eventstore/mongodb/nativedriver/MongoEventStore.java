@@ -316,18 +316,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     @Override
-    public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
+    public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
         requireDcbCapability();
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
 
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
         // false conflict that retries) rather than miss the conflict.
-        long consistencyTokenValue = consistencyToken(null, query);
+        long consistencyTokenValue = consistencyToken(null, criteria);
         long highWatermark = currentPosition();
         long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
-        Bson mongoQuery = toDcbBsonQuery(query, options.afterPosition().orElse(0), upperBound);
+        Bson mongoQuery = toDcbBsonQuery(criteria, options.afterPosition().orElse(0), upperBound);
         FindIterable<Document> documents = eventCollection.find(mongoQuery).sort(ascending(OccurrentCloudEventExtension.POSITION));
         List<CloudEvent> events = StreamSupport.stream(queryOptions.apply(documents).spliterator(), false)
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
@@ -376,19 +376,19 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     @Override
-    public boolean exists(DcbCriteria query, DcbReadOptions options) {
+    public boolean exists(DcbCriteria criteria, DcbReadOptions options) {
         requireDcbCapability();
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return eventCollection.countDocuments(toDcbBsonQuery(query, lowerBound(options), upperBound(options))) > 0;
+        return eventCollection.countDocuments(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options))) > 0;
     }
 
     @Override
-    public long count(DcbCriteria query, DcbReadOptions options) {
+    public long count(DcbCriteria criteria, DcbReadOptions options) {
         requireDcbCapability();
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return eventCollection.countDocuments(toDcbBsonQuery(query, lowerBound(options), upperBound(options)));
+        return eventCollection.countDocuments(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options)));
     }
 
     private long lowerBound(DcbReadOptions options) {
@@ -405,7 +405,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // Place by the condition's boundary tags when it constrains tags, so the same boundary always lands
         // in the same partition regardless of per-event tags. Otherwise fall back to the events' tags, so
         // tagless boundaries do not all collapse onto one hot partition.
-        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
+        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.criteria());
         Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
@@ -459,13 +459,13 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             // committed after the read, so the condition fails. This is immune to read-watermark overshoot,
             // unlike a position-based check, because marker versions bump inside the append transaction at
             // commit, not when positions are reserved (ADR 0021).
-            conflict = consistencyToken(clientSession, condition.query()) != expectedToken.get().value();
+            conflict = consistencyToken(clientSession, condition.criteria()) != expectedToken.get().value();
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than
             // marker versions, so it means "currently exists" (surviving deletes and marker pruning) rather than
             // "ever appended". The marker increments below still serialize concurrent unconditional guards on the
             // same boundary, so two of them cannot both pass.
-            conflict = eventCollection.find(clientSession, toDcbBsonQuery(condition.query(), 0, Long.MAX_VALUE)).limit(1).first() != null;
+            conflict = eventCollection.find(clientSession, toDcbBsonQuery(condition.criteria(), 0, Long.MAX_VALUE)).limit(1).first() != null;
         }
         if (conflict) {
             throw new DcbAppendConditionNotFulfilledException(condition, currentPosition(), "Append condition was not fulfilled.");
@@ -474,7 +474,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // forces a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs
         // this check against the winner's committed increment. The query's markers are always incremented, so a
         // concurrent matching append is serialized even when this append's own events do not match the query.
-        TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.query()));
+        TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
         markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
         incrementConflictMarkers(clientSession, markerKeys, lastPosition);
     }
@@ -506,8 +506,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // append touched one of the query's markers since the reader observed it. Because versions bump inside the
     // append transaction, not when positions are reserved, this token reflects only committed appends and is
     // immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
-    private long consistencyToken(@Nullable ClientSession clientSession, DcbCriteria query) {
-        Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(query);
+    private long consistencyToken(@Nullable ClientSession clientSession, DcbCriteria criteria) {
+        Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         if (markerKeys.isEmpty()) {
             return 0;
         }
@@ -910,13 +910,13 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return and(streamIdEqualTo(streamId), lte(STREAM_VERSION, version));
     }
 
-    private static Bson toDcbBsonQuery(DcbCriteria query, long afterPosition, long upperSequencePosition) {
+    private static Bson toDcbBsonQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition) {
         Bson positionFilter = and(gt(OccurrentCloudEventExtension.POSITION, afterPosition), lte(OccurrentCloudEventExtension.POSITION, upperSequencePosition));
         Bson dcbTagsExistsFilter = Filters.exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD);
-        if (query instanceof DcbCriteria.MatchAll) {
+        if (criteria instanceof DcbCriteria.MatchAll) {
             return and(positionFilter, dcbTagsExistsFilter);
         }
-        List<Bson> itemFilters = DcbMarkerModel.dcbQueryItems(query).stream()
+        List<Bson> itemFilters = DcbMarkerModel.dcbQueryItems(criteria).stream()
                 .map(MongoEventStore::toBsonFilter)
                 .toList();
         return and(positionFilter, dcbTagsExistsFilter, or(itemFilters));

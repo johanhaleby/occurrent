@@ -183,8 +183,8 @@ class MongoEventStoreDcbTest {
     @Test
     void append_condition_conservatively_conflicts_on_an_excluded_type_sharing_a_tag() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbCriteria query = tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot"));
-        DcbEventStream readModel = eventStore.read(query);
+        DcbCriteria criteria = tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot"));
+        DcbEventStream readModel = eventStore.read(criteria);
 
         // An excluded-type event is appended after the read. It does not match the query (reads exclude it precisely,
         // see reads_tagged_events_except_excluded_types), but it shares the positive tag name:1, whose marker the consistency
@@ -195,21 +195,21 @@ class MongoEventStoreDcbTest {
 
         assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameChanged", "name:1")),
-                failIfEventsMatch(query, readModel.consistencyToken())))
+                failIfEventsMatch(criteria, readModel.consistencyToken())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
     @Test
     void append_condition_rejects_non_excluded_event_types_after_condition_position() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbCriteria query = tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot"));
-        DcbEventStream readModel = eventStore.read(query);
+        DcbCriteria criteria = tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot"));
+        DcbEventStream readModel = eventStore.read(criteria);
 
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameImported", "name:1")),
-                failIfEventsMatch(query, readModel.consistencyToken())))
+                failIfEventsMatch(criteria, readModel.consistencyToken())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
@@ -252,19 +252,19 @@ class MongoEventStoreDcbTest {
 
     @Test
     void no_token_append_condition_reflects_current_existence_not_past_appends() {
-        DcbCriteria query = tags(Tag.parse("name:1"));
+        DcbCriteria criteria = tags(Tag.parse("name:1"));
         CloudEvent existing = taggedEvent("NameDefined", "name:1");
         eventStore.append(List.of(existing));
 
         // While a matching event exists, the no-token guard conflicts.
-        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(query)))
+        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(criteria)))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
 
         // After the matching event is deleted, the no-token guard succeeds again. It means "currently exists", not
         // "ever appended": the no-token path checks the live events, not the never-decremented marker versions, so it
         // matches the in-memory store and survives deletes.
         eventStore.deleteEvent(existing.getId(), existing.getSource());
-        DcbAppendResult result = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(query));
+        DcbAppendResult result = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(criteria));
         assertThat(result.eventCount()).isEqualTo(1);
     }
 

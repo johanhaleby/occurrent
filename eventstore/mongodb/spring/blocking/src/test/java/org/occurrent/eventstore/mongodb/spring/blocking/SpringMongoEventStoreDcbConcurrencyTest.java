@@ -620,7 +620,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     // closes that gap and acts as a regression guard for the single-read token capture logic.
     //
     // N threads share one multi-marker boundary token (tags("t1_i","t2_i"), two markers) and
-    // concurrently append an event tagged with BOTH markers using failIfEventsMatch(query, token).
+    // concurrently append an event tagged with BOTH markers using failIfEventsMatch(criteria, token).
     // Exactly one must win; the rest must throw DcbAppendConditionNotFulfilledException. The shared
     // upfront token is what makes "exactly one" deterministic: an in-worker capture would let a late
     // reader observe a fresher token and legitimately also succeed. Each worker additionally re-reads
@@ -688,10 +688,10 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     // ---------------------------------------------------------------------------
     // Scenario 6: no-token conditional append prevents double-commit (Finding 4 coverage gap)
     //
-    // DcbAppendCondition.failIfEventsMatch(query) — the single-arg form — omits the consistency
+    // DcbAppendCondition.failIfEventsMatch(criteria), the single-arg form, omits the consistency
     // token entirely, meaning the condition check scans the full event history for the given query.
-    // Two concurrent threads both call failIfEventsMatch(query) (no token) on the same scoped
-    // boundary and both try to append an event that satisfies that query. Exactly one must succeed;
+    // Two concurrent threads both call failIfEventsMatch(criteria) (no token) on the same scoped
+    // boundary and both try to append an event that satisfies that criteria. Exactly one must succeed;
     // the other must fail with DcbAppendConditionNotFulfilledException.
     // ---------------------------------------------------------------------------
     @Test

@@ -77,18 +77,18 @@ class InMemoryEventStoreDcbTest {
     @Test
     void no_token_append_condition_reflects_current_existence_not_past_appends() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        DcbCriteria query = tags(tag("name:1"));
+        DcbCriteria criteria = tags(tag("name:1"));
         CloudEvent existing = taggedEvent("NameDefined", "name:1");
         eventStore.append(List.of(existing));
 
         // While a matching event exists, the no-token guard conflicts.
-        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(query)))
+        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(criteria)))
                 .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
 
         // After the matching event is deleted, the no-token guard succeeds again: it means "currently exists". This is
         // the cross-store contract the Spring Mongo store now matches.
         eventStore.deleteEvent(existing.getId(), existing.getSource());
-        DcbAppendResult result = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(query));
+        DcbAppendResult result = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(criteria));
         assertThat(result.eventCount()).isEqualTo(1);
     }
 
@@ -227,14 +227,14 @@ class InMemoryEventStoreDcbTest {
     void append_condition_ignores_excluded_event_types_after_condition_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbCriteria query = tags(List.of(tag("name:1"))).excludingTypes(List.of("NameSnapshot"));
-        DcbEventStream readModel = eventStore.read(query);
+        DcbCriteria criteria = tags(List.of(tag("name:1"))).excludingTypes(List.of("NameSnapshot"));
+        DcbEventStream readModel = eventStore.read(criteria);
 
         eventStore.append(List.of(taggedEvent("NameSnapshot", "name:1")));
 
         DcbAppendResult result = eventStore.append(
                 List.of(taggedEvent("NameChanged", "name:1")),
-                failIfEventsMatch(query, readModel.consistencyToken()));
+                failIfEventsMatch(criteria, readModel.consistencyToken()));
 
         assertThat(result.firstSequencePosition()).isEqualTo(3);
     }
@@ -243,14 +243,14 @@ class InMemoryEventStoreDcbTest {
     void append_condition_rejects_non_excluded_event_types_after_condition_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbCriteria query = tags(List.of(tag("name:1"))).excludingTypes(List.of("NameSnapshot"));
-        DcbEventStream readModel = eventStore.read(query);
+        DcbCriteria criteria = tags(List.of(tag("name:1"))).excludingTypes(List.of("NameSnapshot"));
+        DcbEventStream readModel = eventStore.read(criteria);
 
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameImported", "name:1")),
-                failIfEventsMatch(query, readModel.consistencyToken())))
+                failIfEventsMatch(criteria, readModel.consistencyToken())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
@@ -298,12 +298,12 @@ class InMemoryEventStoreDcbTest {
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:2")));
 
-        // The query matches only the two "name:1" events (positions 1 and 2), but the store head is 3.
+        // The criteria matches only the two "name:1" events (positions 1 and 2), but the store head is 3.
         DcbEventStream matchesSome = eventStore.read(tags(tag("name:1")));
         assertThat(matchesSome.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
         assertThat(matchesSome.lastSequencePosition()).isEqualTo(3);
 
-        // A query that matches nothing still observes the store head.
+        // A criteria that matches nothing still observes the store head.
         DcbEventStream matchesNone = eventStore.read(tags(tag("name:absent")));
         assertThat(matchesNone.events()).isEmpty();
         assertThat(matchesNone.lastSequencePosition()).isEqualTo(3);
@@ -361,11 +361,11 @@ class InMemoryEventStoreDcbTest {
         eventStore.append(List.of(taggedEvent("OrderPlaced", "order:1")));
         eventStore.append(List.of(taggedEvent("Unrelated", "other:1")));
 
-        DcbCriteria query = anyOf(
+        DcbCriteria criteria = anyOf(
                 DcbCriteria.types(List.of("NameDefined")),
                 DcbCriteria.tags(List.of(tag("order:1"))));
 
-        assertThat(eventStore.read(query).events())
+        assertThat(eventStore.read(criteria).events())
                 .extracting(CloudEvent::getType)
                 .containsExactly("NameDefined", "OrderPlaced");
     }

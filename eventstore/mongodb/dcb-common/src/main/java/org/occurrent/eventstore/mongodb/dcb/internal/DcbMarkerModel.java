@@ -63,16 +63,16 @@ public final class DcbMarkerModel {
         return MARKER_ID_PREFIX + key;
     }
 
-    public static Set<String> queryMarkerKeys(DcbCriteria query) {
-        if (query instanceof DcbCriteria.MatchAll) {
+    public static Set<String> queryMarkerKeys(DcbCriteria criteria) {
+        if (criteria instanceof DcbCriteria.MatchAll) {
             return Set.of("all");
         }
         // Decompose into one key per attribute (a key per tag, a key per type) and NEVER combine them into a single
         // "type:X+tag:t" key. Skew-safety (ADR 0021) depends on this: a conflicting event shares a marker via whichever
         // single attribute made it match, and a combined key would share nothing with an event that carries only one
-        // of the attributes through a different query.
+        // of the attributes through a different criteria.
         TreeSet<String> keys = new TreeSet<>();
-        for (DcbCriterion item : dcbQueryItems(query)) {
+        for (DcbCriterion item : dcbQueryItems(criteria)) {
             item.tags().forEach(tag -> keys.add("tag:" + tag.canonical()));
             item.types().forEach(type -> keys.add("type:" + type));
         }
@@ -80,8 +80,8 @@ public final class DcbMarkerModel {
     }
 
     // MatchAll has no per-item markers. A DcbCriterion is one alternative, and Items contains several.
-    public static List<DcbCriterion> dcbQueryItems(DcbCriteria query) {
-        return switch (query) {
+    public static List<DcbCriterion> dcbQueryItems(DcbCriteria criteria) {
+        return switch (criteria) {
             case DcbCriteria.MatchAll ignored -> List.of();
             case DcbCriterion item -> List.of(item);
             case DcbCriteria.Items items -> items.items();

@@ -31,10 +31,10 @@ import reactor.core.publisher.Mono
  * @see DcbDomainEventQueries.query
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForList(
-    query: DcbCriteria,
+    criteria: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Mono<List<T>> =
-    this.query(query, options).collectList()
+    this.query(criteria, options).collectList()
 
 /**
  * Query that returns the matching domain events as a [List] together with the observed DCB sequence position and the
@@ -43,10 +43,10 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForList(
  * @see DcbDomainEventQueries.queryWithPosition
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
-    query: DcbCriteria,
+    criteria: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Mono<Triple<List<T>, Long, DcbConsistencyToken>> =
-    this.queryWithPosition(query, options).map { Triple(it.events(), it.lastSequencePosition(), it.consistencyToken()) }
+    this.queryWithPosition(criteria, options).map { Triple(it.events(), it.lastSequencePosition(), it.consistencyToken()) }
 
 /**
  * Queries DCB events of the reified type [T] as a [Flux].

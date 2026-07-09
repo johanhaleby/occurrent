@@ -51,11 +51,11 @@ public final class DcbSubscriptionFilterConverter {
     }
 
     /**
-     * Returns the single {@code {$match: ...}} aggregation stage that selects the events matching {@code query}.
+     * Returns the single {@code {$match: ...}} aggregation stage that selects the events matching {@code criteria}.
      */
-    public static Document toChangeStreamMatchStage(DcbCriteria query) {
+    public static Document toChangeStreamMatchStage(DcbCriteria criteria) {
         Document conditions = new Document(TAGS_FIELD, new Document("$exists", true));
-        List<DcbCriterion> items = itemsOf(query);
+        List<DcbCriterion> items = itemsOf(criteria);
         if (!items.isEmpty()) {
             List<Document> itemConditions = items.stream()
                     .map(DcbSubscriptionFilterConverter::toItemCondition)
@@ -66,8 +66,8 @@ public final class DcbSubscriptionFilterConverter {
     }
 
     // A bare DcbCriterion is a single alternative, Items is several, and MatchAll yields no constraint (position only).
-    private static List<DcbCriterion> itemsOf(DcbCriteria query) {
-        return switch (query) {
+    private static List<DcbCriterion> itemsOf(DcbCriteria criteria) {
+        return switch (criteria) {
             case DcbCriteria.MatchAll ignored -> List.of();
             case DcbCriterion item -> List.of(item);
             case DcbCriteria.Items items -> items.items();

@@ -139,18 +139,18 @@ class DeciderCommandHandlersTest {
     private fun List<io.cloudevents.CloudEvent>.toDomainEvents(): List<GameEvent> =
         cloudEventConverter.toDomainEvents(stream()).toList()
 
-    private inline fun <reified E : GameEvent> eventuallySingle(query: DcbCriteria): E =
+    private inline fun <reified E : GameEvent> eventuallySingle(criteria: DcbCriteria): E =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
-            assertThat(events<E>(query)).hasSize(1)
-        }.let { events<E>(query).single() }
+            assertThat(events<E>(criteria)).hasSize(1)
+        }.let { events<E>(criteria).single() }
 
-    private inline fun <reified E : GameEvent> eventuallyAtLeast(query: DcbCriteria, size: Int): List<E> =
+    private inline fun <reified E : GameEvent> eventuallyAtLeast(criteria: DcbCriteria, size: Int): List<E> =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
-            assertThat(events<E>(query)).hasSizeGreaterThanOrEqualTo(size)
-        }.let { events<E>(query) }
+            assertThat(events<E>(criteria)).hasSizeGreaterThanOrEqualTo(size)
+        }.let { events<E>(criteria) }
 
-    private inline fun <reified E : GameEvent> events(query: DcbCriteria): List<E> =
-        domainEventQueries.queryForList(query).filterIsInstance<E>()
+    private inline fun <reified E : GameEvent> events(criteria: DcbCriteria): List<E> =
+        domainEventQueries.queryForList(criteria).filterIsInstance<E>()
 
     private fun wordList(): WordList = WordList(
         WordCategory("test"),
