@@ -292,7 +292,7 @@ internal fun <T : Any, E_SPECIFIC : T> ExecuteOptions<*>.addTypedSideEffect(
     // The star-projected receiver is intentional for the same reason as addSideEffect:
     // this helper rebuilds a typed options chain from an options instance whose concrete
     // event type may still be unresolved at the call site.
-    addSideEffect(PolicySideEffect.executePolicy(eventType, Consumer(sideEffect)))
+    addSideEffect(SideEffect.executeSideEffect(eventType, Consumer(sideEffect)))
 
 /**
  * Create typed empty [ExecuteOptions] for internal helper composition.

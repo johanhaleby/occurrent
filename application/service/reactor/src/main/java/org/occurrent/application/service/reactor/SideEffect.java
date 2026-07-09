@@ -23,38 +23,37 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 /**
- * A reactive utility that makes it easier to run policies (a.k.a. triggers) as side-effects after events are written to
- * the event store. A policy takes a single domain event of a specific type and returns a {@code Mono<Void>} that
- * completes when the policy is done. This is the reactive counterpart of the blocking {@code PolicySideEffect}.
+ * A reactive utility that makes it easier to run side-effects (a.k.a. triggers/policies) after events are written to
+ * the event store. A side-effect takes a single domain event of a specific type and returns a {@code Mono<Void>} that
+ * completes when the side-effect is done. This is the reactive counterpart of the blocking {@code SideEffect}.
  *
  * @param <E> The type of your domain event.
  */
 @NullMarked
-public interface PolicySideEffect<E> extends Function<List<E>, Mono<Void>> {
+public interface SideEffect<E> extends Function<List<E>, Mono<Void>> {
 
     /**
-     * Run a single policy for every event of {@code eventType} produced by the command, in order. Events that are not
+     * Run a single side-effect for every event of {@code eventType} produced by the command, in order. Events that are not
      * assignable to {@code eventType} are ignored.
      */
-    static <E, E_SPECIFIC extends E> PolicySideEffect<E> executePolicy(Class<E_SPECIFIC> eventType, Function<E_SPECIFIC, Mono<Void>> policy) {
+    static <E, E_SPECIFIC extends E> SideEffect<E> executeSideEffect(Class<E_SPECIFIC> eventType, Function<E_SPECIFIC, Mono<Void>> sideEffect) {
         Objects.requireNonNull(eventType, "Event type cannot be null");
-        Objects.requireNonNull(policy, "Policy cannot be null");
+        Objects.requireNonNull(sideEffect, "Side-effect cannot be null");
         return events -> Flux.fromIterable(events)
                 .filter(e -> eventType.isAssignableFrom(e.getClass()))
                 .map(eventType::cast)
-                .concatMap(policy::apply)
+                .concatMap(sideEffect::apply)
                 .then();
     }
 
     /**
-     * Compose this policy with another one, running them in order against the same produced events.
+     * Compose this side-effect with another one, running them in order against the same produced events.
      */
-    default <E_SPECIFIC extends E> PolicySideEffect<E> andThenExecuteAnotherPolicy(Class<E_SPECIFIC> eventType, Function<E_SPECIFIC, Mono<Void>> policy) {
-        PolicySideEffect<E> first = this;
-        PolicySideEffect<E> second = executePolicy(eventType, policy);
+    default <E_SPECIFIC extends E> SideEffect<E> andThenExecuteAnotherSideEffect(Class<E_SPECIFIC> eventType, Function<E_SPECIFIC, Mono<Void>> sideEffect) {
+        SideEffect<E> first = this;
+        SideEffect<E> second = executeSideEffect(eventType, sideEffect);
         return events -> first.apply(events).then(second.apply(events));
     }
 }
