@@ -16,7 +16,7 @@ Add a reactive stream `ApplicationService` in `application-service-reactor`, pac
 
 - `ApplicationService<E>` returns `Mono<WriteResult>` from `execute(streamId, ExecuteOptions<E>, Function<Stream<E>, Stream<E>>)`, plus the same `String`/`UUID`/`ExecuteFilter` convenience overloads as the blocking interface. The already-deprecated `Consumer`-side-effect overloads are not carried over.
 - `generic.GenericApplicationService<E>` runs read, decide, and write as one unit with `Mono.defer(...).retryWhen(...)`, retrying from a fresh read on a `WriteConditionNotFulfilledException` (default five attempts with exponential backoff, rethrowing the original failure when exhausted), exactly like the blocking service and the reactive DCB service. The domain function stays a synchronous `Function<Stream<E>, Stream<E>>`, and the post-write side-effect is reactive (`Function<Stream<E>, Mono<Void>>`), composed after the retry so it runs once on success.
-- `ExecuteOptions<E>` carries a read filter (a raw `StreamReadFilter` or an `ExecuteFilter`) and the reactive side-effect. A reactive `PolicySideEffect` and Kotlin extension functions mirror the blocking ergonomics.
+- `ExecuteOptions<E>` carries a read filter (a raw `StreamReadFilter` or an `ExecuteFilter`) and the reactive side-effect. A reactive `SideEffect` and Kotlin extension functions mirror the blocking ergonomics.
 
 ### ExecuteFilter moved to a shared module
 

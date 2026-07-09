@@ -25,7 +25,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.ExecuteFilter;
-import org.occurrent.application.service.blocking.PolicySideEffect;
+import org.occurrent.application.service.blocking.SideEffect;
 import org.occurrent.application.service.blocking.generic.support.CountNumberOfNamesDefinedPolicy;
 import org.occurrent.application.service.blocking.generic.support.WhenNameDefinedThenCountAverageSizeOfNamePolicy;
 import org.occurrent.domain.*;
@@ -51,7 +51,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.application.service.blocking.ExecuteOptions.options;
-import static org.occurrent.application.service.blocking.PolicySideEffect.executePolicy;
+import static org.occurrent.application.service.blocking.SideEffect.executeSideEffect;
 
 @SuppressWarnings("removal")
 @DisplayName("generic application service")
@@ -178,7 +178,7 @@ public class GenericApplicationServiceTest {
             WhenNameDefinedThenCountAverageSizeOfNamePolicy averageSizePolicy = new WhenNameDefinedThenCountAverageSizeOfNamePolicy();
 
             // When
-            PolicySideEffect<DomainEvent> sideEffect = executePolicy(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName);
+            SideEffect<DomainEvent> sideEffect = executeSideEffect(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName);
             applicationService.execute(UUID.randomUUID(),
                     events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
                     sideEffect);
@@ -200,22 +200,22 @@ public class GenericApplicationServiceTest {
         }
 
         @Test
-        void are_composable_using_and_then_execute_another_policy() {
+        void are_composable_using_and_then_execute_another_side_effect() {
             // Given
             CountNumberOfNamesDefinedPolicy countPolicy = new CountNumberOfNamesDefinedPolicy();
             WhenNameDefinedThenCountAverageSizeOfNamePolicy averageSizePolicy = new WhenNameDefinedThenCountAverageSizeOfNamePolicy();
 
-            PolicySideEffect<DomainEvent> policy = PolicySideEffect.<DomainEvent, NameDefined>executePolicy(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName)
-                    .andThenExecuteAnotherPolicy(NameDefined.class, countPolicy::whenNameDefinedThenCountHowManyNamesThatHaveBeenDefined);
+            SideEffect<DomainEvent> sideEffect = SideEffect.<DomainEvent, NameDefined>executeSideEffect(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName)
+                    .andThenExecuteAnotherSideEffect(NameDefined.class, countPolicy::whenNameDefinedThenCountHowManyNamesThatHaveBeenDefined);
 
             // When
             applicationService.execute(UUID.randomUUID(),
                     events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
-                    policy);
+                    sideEffect);
 
             applicationService.execute(UUID.randomUUID(),
                     events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "agnes", "Agnes"),
-                    policy);
+                    sideEffect);
 
             // Then
             assertAll(
@@ -235,7 +235,7 @@ public class GenericApplicationServiceTest {
 
             applicationService.execute(streamId,
                     events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "tina", "Tina"),
-                    executePolicy(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName));
+                    executeSideEffect(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName));
 
             // Then
             assertThat(averageSizePolicy.getAverageSizeOfName()).isEqualTo(0);

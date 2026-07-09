@@ -20,8 +20,8 @@ import reactor.core.publisher.Mono
 import java.util.function.Function
 
 /**
- * Build a reactive side-effect that runs [policy] for every produced event of the reified type [E]. The result can be
+ * Build a reactive side-effect that runs [sideEffect] for every produced event of the reified type [E]. The result can be
  * passed to [ExecuteOptions.sideEffect].
  */
-inline fun <T : Any, reified E : T> executePolicy(noinline policy: (E) -> Mono<Void>): Function<List<T>, Mono<Void>> =
-    PolicySideEffect.executePolicy(E::class.java, Function { event: E -> policy(event) })
+inline fun <T : Any, reified E : T> executeSideEffect(noinline sideEffect: (E) -> Mono<Void>): Function<List<T>, Mono<Void>> =
+    SideEffect.executeSideEffect(E::class.java, Function { event: E -> sideEffect(event) })

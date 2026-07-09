@@ -24,7 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
-import org.occurrent.application.service.blocking.PolicySideEffect;
+import org.occurrent.application.service.blocking.SideEffect;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.DomainEventConverter;
 import org.occurrent.domain.NameDefined;
@@ -90,14 +90,14 @@ class DcbApplicationServiceSideEffectTest {
     }
 
     @Test
-    void reused_policy_side_effect_fires_only_for_the_matching_event_type() {
+    void reused_side_effect_fires_only_for_the_matching_event_type() {
         AtomicReference<String> definedName = new AtomicReference<>("not-called");
         AtomicReference<String> changedName = new AtomicReference<>("not-called");
-        PolicySideEffect<DomainEvent> policy = PolicySideEffect.<DomainEvent, NameDefined>executePolicy(NameDefined.class, e -> definedName.set(e.name()))
-                .andThenExecuteAnotherPolicy(NameWasChanged.class, e -> changedName.set(e.name()));
+        SideEffect<DomainEvent> sideEffect = SideEffect.<DomainEvent, NameDefined>executeSideEffect(NameDefined.class, e -> definedName.set(e.name()))
+                .andThenExecuteAnotherSideEffect(NameWasChanged.class, e -> changedName.set(e.name()));
 
         applicationService.execute(tags(Tag.parse("name:1")),
-                DcbExecuteOptions.<DomainEvent>options().sideEffect(policy),
+                DcbExecuteOptions.<DomainEvent>options().sideEffect(sideEffect),
                 events -> List.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
 
         assertThat(definedName.get()).isEqualTo("Johan");
