@@ -26,7 +26,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.time.LocalDateTime
 import java.util.*
 
-class SequenceCommandCompositionTest {
+class ListCommandCompositionKotlinTest {
 
     private lateinit var eventStore: InMemoryEventStore
     private lateinit var applicationService: ApplicationService
@@ -38,17 +38,17 @@ class SequenceCommandCompositionTest {
     }
 
     @Test
-    fun `compose sequence commands using andThen`() {
+    fun `compose list commands using andThen`() {
         // Given
         val eventId1 = UUID.randomUUID().toString()
         val eventId2 = UUID.randomUUID().toString()
         val now = LocalDateTime.now()
 
         // When
-        applicationService.executeSequenceCommand(
+        applicationService.executeListCommand(
             "name1",
-            NameWithSequenceCommand::defineName.partial(eventId1, now, "name", "My Name 1")
-                andThen NameWithSequenceCommand::changeName.partial(eventId2, now, "name", "My Name 2")
+            NameWithListCommand::defineName.partial(eventId1, now, "name", "My Name 1")
+                andThen NameWithListCommand::changeName.partial(eventId2, now, "name", "My Name 2")
         )
 
         // Then
@@ -62,7 +62,7 @@ class SequenceCommandCompositionTest {
     }
 
     @Test
-    fun `compose sequence commands using composeCommands`() {
+    fun `compose list commands using composeCommands`() {
         // Given
         val eventId1 = UUID.randomUUID().toString()
         val eventId2 = UUID.randomUUID().toString()
@@ -70,12 +70,12 @@ class SequenceCommandCompositionTest {
         val now = LocalDateTime.now()
 
         // When
-        applicationService.executeSequenceCommand(
+        applicationService.executeListCommand(
             "name1",
             composeCommands(
-                NameWithSequenceCommand::defineName.partial(eventId1, now, "name", "My Name 1"),
-                NameWithSequenceCommand::changeName.partial(eventId2, now, "name", "My Name 2"),
-                NameWithSequenceCommand::changeName.partial(eventId3, now, "name", "My Name 3")
+                NameWithListCommand::defineName.partial(eventId1, now, "name", "My Name 1"),
+                NameWithListCommand::changeName.partial(eventId2, now, "name", "My Name 2"),
+                NameWithListCommand::changeName.partial(eventId3, now, "name", "My Name 3")
             )
         )
 
@@ -91,7 +91,7 @@ class SequenceCommandCompositionTest {
     }
 
     @Test
-    fun `compose sequence commands using composeCommands when an event already exists`() {
+    fun `compose list commands using composeCommands when an event already exists`() {
         // Given
         val eventId1 = UUID.randomUUID().toString()
         val eventId2 = UUID.randomUUID().toString()
@@ -100,19 +100,19 @@ class SequenceCommandCompositionTest {
         val now = LocalDateTime.now()
 
         // When
-        applicationService.executeSequenceCommand(
+        applicationService.executeListCommand(
             "name1",
             composeCommands(
-                NameWithSequenceCommand::defineName.partial(eventId1, now, "name", "My Name 1"),
-                NameWithSequenceCommand::changeName.partial(eventId2, now, "name", "My Name 2")
+                NameWithListCommand::defineName.partial(eventId1, now, "name", "My Name 1"),
+                NameWithListCommand::changeName.partial(eventId2, now, "name", "My Name 2")
             )
         )
 
-        applicationService.executeSequenceCommand(
+        applicationService.executeListCommand(
             "name1",
             composeCommands(
-                NameWithSequenceCommand::changeName.partial(eventId3, now, "name", "My Name 3"),
-                NameWithSequenceCommand::changeName.partial(eventId4, now, "name", "My Name 4")
+                NameWithListCommand::changeName.partial(eventId3, now, "name", "My Name 3"),
+                NameWithListCommand::changeName.partial(eventId4, now, "name", "My Name 4")
             )
         )
 
@@ -142,12 +142,12 @@ class SequenceCommandCompositionTest {
         val now = LocalDateTime.now()
 
         val events = composeCommands(
-            NameWithSequenceCommand::changeName.partial(eventId2, now, "name", "My Name 2"),
-            NameWithSequenceCommand::changeName.partial(eventId3, now, "name", "My Name 3"),
-            NameWithSequenceCommand::changeName.partial(eventId4, now, "name", "My Name 4")
+            NameWithListCommand::changeName.partial(eventId2, now, "name", "My Name 2"),
+            NameWithListCommand::changeName.partial(eventId3, now, "name", "My Name 3"),
+            NameWithListCommand::changeName.partial(eventId4, now, "name", "My Name 4")
         )
-        val currentEvents = NameWithSequenceCommand.defineName(emptySequence(), eventId1, now, "name", "My Name 1")
-        val newEvents = events(currentEvents).toList()
+        val currentEvents = NameWithListCommand.defineName(emptyList(), eventId1, now, "name", "My Name 1")
+        val newEvents = events(currentEvents)
         assertThat(newEvents.size).isEqualTo(3)
         assertThat(newEvents.map { event -> event.name() }).containsExactly(
             "My Name 2",

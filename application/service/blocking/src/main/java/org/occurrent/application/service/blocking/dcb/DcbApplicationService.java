@@ -20,9 +20,9 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 /**
  * Runs domain decisions against events selected by a Dynamic Consistency Boundary query.
@@ -42,7 +42,7 @@ public interface DcbApplicationService<E> {
      * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
      * @return the append result, or {@link Optional#empty()} when the domain function produced no new events
      */
-    default Optional<DcbAppendResult> execute(DcbCriteria query, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default Optional<DcbAppendResult> execute(DcbCriteria query, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         return execute(query, DcbExecuteOptions.empty(), functionThatCallsDomainModel);
     }
 
@@ -57,5 +57,5 @@ public interface DcbApplicationService<E> {
      * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
      * @return the append result, or {@link Optional#empty()} when the domain function produced no new events
      */
-    Optional<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
+    Optional<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel);
 }

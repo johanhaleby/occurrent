@@ -20,4 +20,3 @@ import org.occurrent.example.domain.uno.Event
 
 inline fun <reified T : Event> List<Event>.find(): T = first { it is T } as T
 inline fun <reified E1 : Event, reified E2 : Event> List<Event>.findMany(): Pair<E1, E2> = find<E1>() to find()
-inline fun <reified T : Event> Sequence<Event>.find(): T = first { it is T } as T

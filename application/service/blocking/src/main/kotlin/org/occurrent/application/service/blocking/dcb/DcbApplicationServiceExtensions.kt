@@ -18,44 +18,22 @@ package org.occurrent.application.service.blocking.dcb
 
 import org.occurrent.eventstore.api.dcb.DcbAppendResult
 import org.occurrent.eventstore.api.dcb.DcbCriteria
-import java.util.function.Function
-import java.util.stream.Stream
-import kotlin.streams.asSequence
-import kotlin.streams.asStream
 
 /**
- * Kotlin-friendly counterparts to [DcbApplicationService.execute] that take a [Sequence] or [List] domain function and
- * return a nullable [DcbAppendResult] instead of the Java `Optional<DcbAppendResult>`.
- *
- * The result is `null` when the domain function produced no new events (a no-op command), mirroring the empty
- * `Optional` the Java API returns. The naming follows the stream `ApplicationService` extensions
- * (`executeSequence` / `executeList`) so there is no overload clash with the Java `execute` taking a `Function`.
+ * Kotlin-friendly counterparts to [DcbApplicationService.execute] that return a nullable [DcbAppendResult] instead of
+ * the Java `Optional<DcbAppendResult>`. The result is `null` when the domain function produced no new events (a no-op
+ * command), mirroring the empty `Optional` the Java API returns.
  */
 
 /**
- * Execute a domain function for the events selected by [query], working with lazy [Sequence]s.
+ * Execute a domain function for the events selected by [query].
  */
-fun <E : Any> DcbApplicationService<E>.executeSequence(query: DcbCriteria, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): DcbAppendResult? =
-    execute(query) { streamOfEvents: Stream<E> -> functionThatCallsDomainModel(streamOfEvents.asSequence()).asStream() }.orElse(null)
+fun <E : Any> DcbApplicationService<E>.executeOrNull(query: DcbCriteria, functionThatCallsDomainModel: (List<E>) -> List<E>): DcbAppendResult? =
+    execute(query) { events -> functionThatCallsDomainModel(events) }.orElse(null)
 
 /**
- * Execute a domain function for the events selected by [query], with the supplied [DcbExecuteOptions], working with lazy [Sequence]s.
+ * Execute a domain function for the events selected by [query], with the supplied [DcbExecuteOptions].
  */
 @Suppress("UNCHECKED_CAST")
-fun <E : Any> DcbApplicationService<E>.executeSequence(query: DcbCriteria, options: DcbExecuteOptions<*>, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): DcbAppendResult? =
-    execute(query, options as DcbExecuteOptions<E>) { streamOfEvents: Stream<E> -> functionThatCallsDomainModel(streamOfEvents.asSequence()).asStream() }.orElse(null)
-
-/**
- * Execute a domain function for the events selected by [query], working with eager [List]s.
- */
-fun <E : Any> DcbApplicationService<E>.executeList(query: DcbCriteria, functionThatCallsDomainModel: (List<E>) -> List<E>): DcbAppendResult? =
-    execute(query) { eventStream: Stream<E> -> functionThatCallsDomainModel(eventStream.toList()).stream() }.orElse(null)
-
-/**
- * Execute a domain function for the events selected by [query], with the supplied [DcbExecuteOptions], working with eager [List]s.
- */
-@Suppress("UNCHECKED_CAST")
-fun <E : Any> DcbApplicationService<E>.executeList(query: DcbCriteria, options: DcbExecuteOptions<*>, functionThatCallsDomainModel: (List<E>) -> List<E>): DcbAppendResult? {
-    val f = Function<Stream<E>, Stream<E>> { eventStream: Stream<E> -> functionThatCallsDomainModel(eventStream.toList()).stream() }
-    return execute(query, options as DcbExecuteOptions<E>, f).orElse(null)
-}
+fun <E : Any> DcbApplicationService<E>.executeOrNull(query: DcbCriteria, options: DcbExecuteOptions<*>, functionThatCallsDomainModel: (List<E>) -> List<E>): DcbAppendResult? =
+    execute(query, options as DcbExecuteOptions<E>) { events -> functionThatCallsDomainModel(events) }.orElse(null)

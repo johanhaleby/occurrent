@@ -45,7 +45,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -81,7 +80,7 @@ class StreamSubscriptionAnnotationMongoTest {
     @Test
     void both_the_new_and_the_deprecated_annotation_receive_an_appended_event() {
         TestEvent event = new TestEvent(UUID.randomUUID().toString(), new Date(), "name");
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(event));
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(event));
 
         await().atMost(ofSeconds(10)).untilAsserted(() -> {
             assertThat(streamAnnotatedSubscriber.received()).extracting(TestEvent::eventId).contains(event.eventId());

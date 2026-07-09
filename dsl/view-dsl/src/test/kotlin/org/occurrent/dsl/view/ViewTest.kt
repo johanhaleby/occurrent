@@ -27,7 +27,6 @@ import org.occurrent.dsl.view.testsupport.NameState
 import org.occurrent.dsl.view.testsupport.nameChanged
 import org.occurrent.dsl.view.testsupport.nameDefined
 import java.util.*
-import java.util.stream.Stream
 
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class ViewTest {
@@ -102,7 +101,7 @@ class ViewTest {
             // When
             val state = nullableView.evolveFrom(
                 null,
-                sequenceOf(
+                listOf(
                     nameDefined(userId, "name1"),
                     nameChanged(userId, "name2"),
                     nameChanged(userId, "name3"),
@@ -123,7 +122,7 @@ class ViewTest {
             // When
             val state = nullableView.evolve(
                 null,
-                sequenceOf(
+                listOf(
                     nameDefined(userId, "name1"),
                     nameChanged(userId, "name2"),
                     nameChanged(userId, "name3"),
@@ -143,7 +142,7 @@ class ViewTest {
 
             // When
             val state = nullableView.evolveAll(
-                sequenceOf(
+                listOf(
                     nameDefined(userId, "name1"),
                     nameChanged(userId, "name2"),
                     nameChanged(userId, "name3"),
@@ -197,46 +196,6 @@ class ViewTest {
             assertThat(state).isEqualTo(NameState(userId, "name5"))
         }
 
-        @Test
-        fun `evolve from Stream when specifying initial state explicitly`() {
-            // Given
-            val userId = UUID.randomUUID().toString()
-
-            // When
-            val state = nullableView.evolve(
-                null,
-                Stream.of(
-                    nameDefined(userId, "name1"),
-                    nameChanged(userId, "name2"),
-                    nameChanged(userId, "name3"),
-                    nameChanged(userId, "name4"),
-                    nameChanged(userId, "name5")
-                ),
-            )
-
-            // Then
-            assertThat(state).isEqualTo(NameState(userId, "name5"))
-        }
-
-        @Test
-        fun `evolve from Stream when null initial state`() {
-            // Given
-            val userId = UUID.randomUUID().toString()
-
-            // When
-            val state = nullableView.evolve(
-                Stream.of(
-                    nameDefined(userId, "name1"),
-                    nameChanged(userId, "name2"),
-                    nameChanged(userId, "name3"),
-                    nameChanged(userId, "name4"),
-                    nameChanged(userId, "name5")
-                ),
-            )
-
-            // Then
-            assertThat(state).isEqualTo(NameState(userId, "name5"))
-        }
     }
 
     @Nested
@@ -288,7 +247,7 @@ class ViewTest {
             // When
             val state = nonNullableView.evolveFrom(
                 Name.Undefined,
-                sequenceOf(
+                listOf(
                     nameDefined(userId, "name1"),
                     nameChanged(userId, "name2"),
                     nameChanged(userId, "name3"),
@@ -308,7 +267,7 @@ class ViewTest {
 
             // When
             val state = nonNullableView.evolveAll(
-                sequenceOf(
+                listOf(
                     nameDefined(userId, "name1"),
                     nameChanged(userId, "name2"),
                     nameChanged(userId, "name3"),
@@ -329,7 +288,7 @@ class ViewTest {
             // When
             val state = nonNullableView.evolve(
                 Name.Undefined,
-                sequenceOf(
+                listOf(
                     nameDefined(userId, "name1"),
                     nameChanged(userId, "name2"),
                     nameChanged(userId, "name3"),
@@ -383,45 +342,5 @@ class ViewTest {
             assertThat(state).isEqualTo(Defined(NameState(userId, "name5")))
         }
 
-        @Test
-        fun `evolve from Stream when specifying state explicitly`() {
-            // Given
-            val userId = UUID.randomUUID().toString()
-
-            // When
-            val state = nonNullableView.evolveFrom(
-                Name.Undefined,
-                Stream.of(
-                    nameDefined(userId, "name1"),
-                    nameChanged(userId, "name2"),
-                    nameChanged(userId, "name3"),
-                    nameChanged(userId, "name4"),
-                    nameChanged(userId, "name5")
-                ),
-            )
-
-            // Then
-            assertThat(state).isEqualTo(Defined(NameState(userId, "name5")))
-        }
-
-        @Test
-        fun `evolve from Stream from initial state`() {
-            // Given
-            val userId = UUID.randomUUID().toString()
-
-            // When
-            val state = nullableView.evolveAll(
-                Stream.of(
-                    nameDefined(userId, "name1"),
-                    nameChanged(userId, "name2"),
-                    nameChanged(userId, "name3"),
-                    nameChanged(userId, "name4"),
-                    nameChanged(userId, "name5")
-                ),
-            )
-
-            // Then
-            assertThat(state).isEqualTo(NameState(userId, "name5"))
-        }
     }
 }

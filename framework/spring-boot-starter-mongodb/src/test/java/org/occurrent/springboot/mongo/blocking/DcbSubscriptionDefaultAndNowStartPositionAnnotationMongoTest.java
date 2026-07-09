@@ -52,7 +52,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -117,7 +116,8 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
     }
 
     private void append(TestEvent event) {
-        List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(event))
+        List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(event))
+                .stream()
                 .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                 .toList();
         dcbEventStore.append(cloudEvents);
@@ -183,7 +183,8 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
 
         @PostConstruct
         void appendHistory() {
-            List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(new TestEvent("historic")))
+            List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(new TestEvent("historic")))
+                    .stream()
                     .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                     .toList();
             dcbEventStore.append(cloudEvents);

@@ -5,7 +5,6 @@ import org.jspecify.annotations.NullMarked;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 /**
  * A utility that makes it easier to execute policies (a.k.a triggers) as side-effects after events are written to
@@ -15,7 +14,7 @@ import java.util.stream.Stream;
  * @param <E> The type of your domain event
  */
 @NullMarked
-public interface PolicySideEffect<E> extends Consumer<Stream<E>> {
+public interface PolicySideEffect<E> extends Consumer<List<E>> {
 
     /**
      * Execute a single policy, for example let's say you have this policy:
@@ -45,12 +44,12 @@ public interface PolicySideEffect<E> extends Consumer<Stream<E>> {
      * @param policy    The policy
      * @param <E>       The type of your domain events
      * @param <E_SPECIFIC>       The specific event type that the policy is interested in
-     * @return A {@link PolicySideEffect}, which is a {@code Consumer<Stream<T>>} that allows composing policies.
+     * @return A {@link PolicySideEffect}, which is a {@code Consumer<List<T>>} that allows composing policies.
      */
     static <E, E_SPECIFIC extends E> PolicySideEffect<E> executePolicy(Class<E_SPECIFIC> eventType, Consumer<E_SPECIFIC> policy) {
         Objects.requireNonNull(eventType, "Event type cannot be null");
         Objects.requireNonNull(policy, "Policy cannot be null");
-        return stream -> stream
+        return events -> events.stream()
                 .filter(e -> eventType.isAssignableFrom(e.getClass()))
                 .map(eventType::cast)
                 .forEach(policy);
@@ -91,14 +90,13 @@ public interface PolicySideEffect<E> extends Consumer<Stream<E>> {
      * @param eventType The type of the domain event
      * @param policy    The policy
      * @param <E_SPECIFIC>       The specific event type that the policy is interested in
-     * @return A {@link PolicySideEffect}, which is a {@code Consumer<Stream<T>>} that allows composing policies.
+     * @return A {@link PolicySideEffect}, which is a {@code Consumer<List<T>>} that allows composing policies.
      */
     default <E_SPECIFIC extends E> PolicySideEffect<E> andThenExecuteAnotherPolicy(Class<E_SPECIFIC> eventType, Consumer<E_SPECIFIC> policy) {
-        return stream -> {
-            List<E> list = stream.toList();
-            accept(list.stream());
+        return events -> {
+            accept(events);
             PolicySideEffect<E> secondPolicy = executePolicy(eventType, policy);
-            secondPolicy.accept(list.stream());
+            secondPolicy.accept(events);
         };
     }
 }

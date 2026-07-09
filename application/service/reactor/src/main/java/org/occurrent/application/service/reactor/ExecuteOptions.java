@@ -24,6 +24,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.List;
 import java.util.stream.Stream;
 
 /**
@@ -39,9 +40,9 @@ import java.util.stream.Stream;
 public final class ExecuteOptions<E> {
     private final @Nullable StreamReadFilter filter;
     private final @Nullable ExecuteFilter<? extends E> executeFilter;
-    private final @Nullable Function<Stream<E>, Mono<Void>> sideEffect;
+    private final @Nullable Function<List<E>, Mono<Void>> sideEffect;
 
-    private ExecuteOptions(@Nullable StreamReadFilter filter, @Nullable ExecuteFilter<? extends E> executeFilter, @Nullable Function<Stream<E>, Mono<Void>> sideEffect) {
+    private ExecuteOptions(@Nullable StreamReadFilter filter, @Nullable ExecuteFilter<? extends E> executeFilter, @Nullable Function<List<E>, Mono<Void>> sideEffect) {
         this.filter = filter;
         this.executeFilter = executeFilter;
         this.sideEffect = sideEffect;
@@ -88,7 +89,7 @@ public final class ExecuteOptions<E> {
      * execution and returns a {@link Mono} that completes when the side-effect is done.
      */
     @SuppressWarnings("unchecked")
-    public <E_SPECIFIC extends E> ExecuteOptions<E_SPECIFIC> sideEffect(Function<Stream<E_SPECIFIC>, Mono<Void>> sideEffect) {
+    public <E_SPECIFIC extends E> ExecuteOptions<E_SPECIFIC> sideEffect(Function<List<E_SPECIFIC>, Mono<Void>> sideEffect) {
         return new ExecuteOptions<>(filter, (ExecuteFilter<? extends E_SPECIFIC>) executeFilter, Objects.requireNonNull(sideEffect, "sideEffect cannot be null"));
     }
 
@@ -109,7 +110,7 @@ public final class ExecuteOptions<E> {
     /**
      * Return the configured post-write side-effect, or {@code null} if none has been configured.
      */
-    public @Nullable Function<Stream<E>, Mono<Void>> sideEffect() {
+    public @Nullable Function<List<E>, Mono<Void>> sideEffect() {
         return sideEffect;
     }
 

@@ -33,7 +33,6 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,7 +60,7 @@ class InMemorySubscriptionModelDcbFilterTest {
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("TypeA", 1L, List.of("x:1"));
-        subscriptionModel.accept(Stream.of(matching));
+        subscriptionModel.accept(List.of(matching));
 
         await().untilAsserted(() -> assertThat(received).extracting(CloudEvent::getId).containsExactly(matching.getId()));
     }
@@ -73,7 +72,7 @@ class InMemorySubscriptionModelDcbFilterTest {
                 .waitUntilStarted();
 
         CloudEvent nonMatching = dcbEvent("TypeA", 1L, List.of("y:2"));
-        subscriptionModel.accept(Stream.of(nonMatching));
+        subscriptionModel.accept(List.of(nonMatching));
 
         // Give the async dispatcher a window to (incorrectly) deliver; then assert nothing arrived.
         await().during(java.time.Duration.ofMillis(200)).atMost(java.time.Duration.ofSeconds(2))
@@ -96,7 +95,7 @@ class InMemorySubscriptionModelDcbFilterTest {
                 .withSource(URI.create("urn:test"))
                 .withTime(OffsetDateTime.now())
                 .build(), 1L);
-        subscriptionModel.accept(Stream.of(streamEvent));
+        subscriptionModel.accept(List.of(streamEvent));
 
         await().during(java.time.Duration.ofMillis(200)).atMost(java.time.Duration.ofSeconds(2))
                 .untilAsserted(() -> assertThat(received).isEmpty());
@@ -110,7 +109,7 @@ class InMemorySubscriptionModelDcbFilterTest {
 
         CloudEvent matching = dcbEvent("TypeA", 1L, List.of("x:1", "y:2"));
         CloudEvent nonMatching = dcbEvent("TypeB", 2L, List.of("y:2"));
-        subscriptionModel.accept(Stream.of(matching, nonMatching));
+        subscriptionModel.accept(List.of(matching, nonMatching));
 
         await().untilAsserted(() ->
                 assertThat(received).extracting(CloudEvent::getId).containsExactly(matching.getId()));
@@ -124,7 +123,7 @@ class InMemorySubscriptionModelDcbFilterTest {
 
         CloudEvent matching = dcbEvent("OrderPlaced", 1L, List.of("order:1"));
         CloudEvent nonMatching = dcbEvent("OrderCancelled", 2L, List.of("order:1"));
-        subscriptionModel.accept(Stream.of(matching, nonMatching));
+        subscriptionModel.accept(List.of(matching, nonMatching));
 
         await().untilAsserted(() ->
                 assertThat(received).extracting(CloudEvent::getId).containsExactly(matching.getId()));

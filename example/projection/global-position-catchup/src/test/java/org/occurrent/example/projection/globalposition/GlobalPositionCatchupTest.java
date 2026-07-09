@@ -37,7 +37,6 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
 import static org.occurrent.application.composition.command.partial.PartialFunctionApplication.partial;
 
 /**
@@ -66,11 +65,11 @@ class GlobalPositionCatchupTest {
         LocalDateTime time = LocalDateTime.now();
 
         // When events are written to three different streams, interleaved with each other
-        applicationService.execute("alice", toStreamCommand(partial(Name::defineName, "event-1", time, "alice", "Alice")));       // position 1
-        applicationService.execute("bob", toStreamCommand(partial(Name::defineName, "event-2", time, "bob", "Bob")));             // position 2
-        applicationService.execute("alice", toStreamCommand(partial(Name::changeName, "event-3", time, "alice", "Alice Smith"))); // position 3
-        applicationService.execute("carol", toStreamCommand(partial(Name::defineName, "event-4", time, "carol", "Carol")));       // position 4
-        applicationService.execute("bob", toStreamCommand(partial(Name::changeName, "event-5", time, "bob", "Bob Jones")));       // position 5
+        applicationService.execute("alice", partial(Name::defineName, "event-1", time, "alice", "Alice"));       // position 1
+        applicationService.execute("bob", partial(Name::defineName, "event-2", time, "bob", "Bob"));             // position 2
+        applicationService.execute("alice", partial(Name::changeName, "event-3", time, "alice", "Alice Smith")); // position 3
+        applicationService.execute("carol", partial(Name::defineName, "event-4", time, "carol", "Carol"));       // position 4
+        applicationService.execute("bob", partial(Name::changeName, "event-5", time, "bob", "Bob Jones"));       // position 5
 
         // Then the query DSL reads events across all three streams in a single, unified position order
         List<DomainEvent> all = queries.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()).toList();
@@ -96,10 +95,10 @@ class GlobalPositionCatchupTest {
 
         LocalDateTime time = LocalDateTime.now();
 
-        applicationService.execute("alice", toStreamCommand(partial(Name::defineName, "event-1", time, "alice", "Alice")));
-        applicationService.execute("bob", toStreamCommand(partial(Name::defineName, "event-2", time, "bob", "Bob")));
-        applicationService.execute("alice", toStreamCommand(partial(Name::changeName, "event-3", time, "alice", "Alice Smith")));
-        applicationService.execute("bob", toStreamCommand(partial(Name::changeName, "event-4", time, "bob", "Bob Jones")));
+        applicationService.execute("alice", partial(Name::defineName, "event-1", time, "alice", "Alice"));
+        applicationService.execute("bob", partial(Name::defineName, "event-2", time, "bob", "Bob"));
+        applicationService.execute("alice", partial(Name::changeName, "event-3", time, "alice", "Alice Smith"));
+        applicationService.execute("bob", partial(Name::changeName, "event-4", time, "bob", "Bob Jones"));
 
         // When a new projection is rebuilt from position 0, reading in global position order rather than per stream
         NameProjection projection = new NameProjection();
@@ -124,7 +123,7 @@ class GlobalPositionCatchupTest {
         DomainEventQueries<DomainEvent> queries = new DomainEventQueries<>(eventStoreWithoutPosition, cloudEventConverter);
 
         LocalDateTime time = LocalDateTime.now();
-        applicationService.execute("alice", toStreamCommand(partial(Name::defineName, "event-1", time, "alice", "Alice")));
+        applicationService.execute("alice", partial(Name::defineName, "event-1", time, "alice", "Alice"));
 
         // Then the position-based read APIs are rejected rather than silently returning an empty or wrong result
         assertThatThrownBy(() -> queries.afterPosition(0))

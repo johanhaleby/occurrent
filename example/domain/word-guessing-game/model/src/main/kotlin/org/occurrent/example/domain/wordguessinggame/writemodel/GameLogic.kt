@@ -24,9 +24,9 @@ import java.util.*
  * Start game
  */
 fun startGame(
-    previousEvents: Sequence<GameEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordList: WordList,
+    previousEvents: List<GameEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordList: WordList,
     maxNumberOfGuessesPerPlayer: MaxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal: MaxNumberOfGuessesTotal
-): Sequence<GameEvent> {
+): List<GameEvent> {
     val state = previousEvents.evolve()
 
     if (state !is NotStarted) {
@@ -40,10 +40,10 @@ fun startGame(
         wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = maxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = maxNumberOfGuessesTotal.value
     )
 
-    return sequenceOf(gameStarted)
+    return listOf(gameStarted)
 }
 
-fun guessWord(previousEvents: Sequence<GameEvent>, timestamp: Timestamp, playerId: PlayerId, word: Word): Sequence<GameEvent> = when (val game = previousEvents.evolve()) {
+fun guessWord(previousEvents: List<GameEvent>, timestamp: Timestamp, playerId: PlayerId, word: Word): List<GameEvent> = when (val game = previousEvents.evolve()) {
     NotStarted -> throw IllegalStateException("Cannot guess word for a game that is not started")
     is Ended -> throw IllegalStateException("Cannot guess word for a game that is already ended")
     is Ongoing -> {
@@ -68,7 +68,7 @@ fun guessWord(previousEvents: Sequence<GameEvent>, timestamp: Timestamp, playerI
             }
         }
 
-        events.asSequence()
+        events
     }
 }
 
@@ -89,7 +89,7 @@ private object Ended : GameState()
 
 
 // Evolve
-private fun Sequence<GameEvent>.evolve(): GameState = fold<GameEvent, GameState>(NotStarted) { state, event ->
+private fun List<GameEvent>.evolve(): GameState = fold<GameEvent, GameState>(NotStarted) { state, event ->
     when (event) {
         is GameWasStarted -> Ongoing(event.gameId, event.wordToGuess, event.maxNumberOfGuessesPerPlayer, event.maxNumberOfGuessesTotal, event.startedBy)
         is PlayerGuessedTheWrongWord -> state.coerce<Ongoing> { copy(guesses = guesses.add(Guess(event.playerId, event.timestamp, event.guessedWord))) }

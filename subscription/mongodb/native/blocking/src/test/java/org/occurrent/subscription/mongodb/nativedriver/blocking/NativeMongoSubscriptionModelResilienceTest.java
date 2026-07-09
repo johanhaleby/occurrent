@@ -66,7 +66,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
@@ -299,8 +298,8 @@ public class NativeMongoSubscriptionModelResilienceTest {
         }
     }
 
-    private Stream<CloudEvent> serialize(DomainEvent e) {
-        return Stream.of(CloudEventBuilder.v1()
+    private List<CloudEvent> serialize(DomainEvent e) {
+        return List.of(CloudEventBuilder.v1()
                 .withId(e.eventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())

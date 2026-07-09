@@ -59,7 +59,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
@@ -278,7 +277,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
     }
 
     private void write(DomainEvent event) {
-        Stream<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(event));
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(event));
         eventStore.write(event.eventId(), WriteCondition.anyStreamVersion(), cloudEvents);
     }
 }

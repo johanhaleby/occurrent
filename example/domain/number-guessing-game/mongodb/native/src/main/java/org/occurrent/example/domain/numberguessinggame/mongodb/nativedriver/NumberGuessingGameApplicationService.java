@@ -21,9 +21,10 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.GameEvent;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Function;
-import java.util.stream.Stream;
+import java.util.stream.Collectors;
 
 public class NumberGuessingGameApplicationService {
 
@@ -35,12 +36,13 @@ public class NumberGuessingGameApplicationService {
         this.serialization = serialization;
     }
 
-    public void play(UUID gameId, Function<Stream<GameEvent>, Stream<GameEvent>> domainFn) {
+    public void play(UUID gameId, Function<List<GameEvent>, List<GameEvent>> domainFn) {
         EventStream<CloudEvent> eventStream = eventStore.read(gameId.toString());
-        Stream<GameEvent> persistedGameEvents = eventStream.events().map(serialization::deserialize);
+        List<GameEvent> persistedGameEvents = eventStream.events().map(serialization::deserialize).collect(Collectors.toList());
 
-        Stream<GameEvent> newGameEvents = domainFn.apply(persistedGameEvents);
+        List<GameEvent> newGameEvents = domainFn.apply(persistedGameEvents);
 
-        eventStore.write(gameId.toString(), eventStream.version(), newGameEvents.map(serialization::serialize));
+        List<CloudEvent> newCloudEvents = newGameEvents.stream().map(serialization::serialize).collect(Collectors.toList());
+        eventStore.write(gameId.toString(), eventStream.version(), newCloudEvents);
     }
 }

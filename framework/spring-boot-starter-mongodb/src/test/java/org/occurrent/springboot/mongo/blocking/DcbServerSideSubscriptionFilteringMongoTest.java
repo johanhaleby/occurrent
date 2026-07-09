@@ -52,7 +52,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -172,7 +171,7 @@ class DcbServerSideSubscriptionFilteringMongoTest {
     // the event back through the converter.
     private CloudEvent dcbEvent(String type, List<String> tags) {
         TestEvent event = new TestEvent(UUID.randomUUID().toString(), new Date(), "user", type);
-        CloudEvent ce = cloudEventConverter.toCloudEvents(Stream.of(event)).findFirst().orElseThrow();
+        CloudEvent ce = cloudEventConverter.toCloudEvents(List.of(event)).getFirst();
         CloudEvent withType = CloudEventBuilder.v1(ce).withType(type).build();
         return DcbCloudEvents.withTags(withType, tags.stream().map(Tag::parse).toList());
     }

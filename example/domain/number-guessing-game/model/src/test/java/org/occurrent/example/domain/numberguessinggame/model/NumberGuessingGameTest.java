@@ -25,8 +25,6 @@ import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -48,7 +46,7 @@ class NumberGuessingGameTest {
             MaxNumberOfGuesses maxNumberOfGuesses = new MaxNumberOfGuesses(5);
 
             // When
-            List<GameEvent> events = NumberGuessingGame.startNewGame(gameId, now, gameStarter, secretNumberToGuess, maxNumberOfGuesses).collect(Collectors.toList());
+            List<GameEvent> events = NumberGuessingGame.startNewGame(gameId, now, gameStarter, secretNumberToGuess, maxNumberOfGuesses);
 
             // Then
             assertThat(events).hasSize(1);
@@ -69,7 +67,7 @@ class NumberGuessingGameTest {
     class WhenNewGameIsOngoing {
 
         private final UUID gameId = UUID.randomUUID();
-        private Stream<GameEvent> state;
+        private List<GameEvent> state;
 
         @Nested
         @DisplayName("and player guessed the right number")
@@ -77,7 +75,7 @@ class NumberGuessingGameTest {
 
             @BeforeEach
             void state_is_initialized() {
-                state = Stream.of(new NumberGuessingGameWasStarted(UUID.randomUUID(), gameId, LocalDateTime.now(), UUID.randomUUID(), 10, 1));
+                state = List.of(new NumberGuessingGameWasStarted(UUID.randomUUID(), gameId, LocalDateTime.now(), UUID.randomUUID(), 10, 1));
             }
 
             @Test
@@ -88,7 +86,7 @@ class NumberGuessingGameTest {
                 Guess guess = new Guess(10);
 
                 // When
-                Stream<GameEvent> events = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
+                List<GameEvent> events = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
 
                 // Then
                 NumberGuessingGameEnded event = find(NumberGuessingGameEnded.class, events);
@@ -107,7 +105,7 @@ class NumberGuessingGameTest {
                 Guess guess = new Guess(10);
 
                 // When
-                Stream<GameEvent> events = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
+                List<GameEvent> events = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
 
                 // Then
                 PlayerGuessedTheRightNumber event = find(PlayerGuessedTheRightNumber.class, events);
@@ -125,7 +123,7 @@ class NumberGuessingGameTest {
 
             @BeforeEach
             void state_is_initialized() {
-                state = Stream.of(new NumberGuessingGameWasStarted(UUID.randomUUID(), gameId, LocalDateTime.now(), UUID.randomUUID(), 10, 3));
+                state = List.of(new NumberGuessingGameWasStarted(UUID.randomUUID(), gameId, LocalDateTime.now(), UUID.randomUUID(), 10, 3));
             }
 
             @Nested
@@ -140,7 +138,7 @@ class NumberGuessingGameTest {
                     Guess guess = new Guess(12);
 
                     // When
-                    List<GameEvent> newEvents = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess).collect(Collectors.toList());
+                    List<GameEvent> newEvents = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
 
                     // Then
                     assertThat(newEvents).hasSize(1);
@@ -162,7 +160,7 @@ class NumberGuessingGameTest {
                     Guess guess = new Guess(8);
 
                     // When
-                    List<GameEvent> newEvents = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess).collect(Collectors.toList());
+                    List<GameEvent> newEvents = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
 
                     // Then
                     assertThat(newEvents).hasSize(1);
@@ -183,7 +181,7 @@ class NumberGuessingGameTest {
 
                 @BeforeEach
                 void state_is_initialized() {
-                    state = Stream.of(new NumberGuessingGameWasStarted(UUID.randomUUID(), gameId, LocalDateTime.now(), UUID.randomUUID(), 10, 1));
+                    state = List.of(new NumberGuessingGameWasStarted(UUID.randomUUID(), gameId, LocalDateTime.now(), UUID.randomUUID(), 10, 1));
                 }
 
                 @Test
@@ -194,7 +192,7 @@ class NumberGuessingGameTest {
                     Guess guess = new Guess(12);
 
                     // When
-                    Stream<GameEvent> events = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
+                    List<GameEvent> events = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
 
                     // Then
                     GuessingAttemptsExhausted event = find(GuessingAttemptsExhausted.class, events);
@@ -213,7 +211,7 @@ class NumberGuessingGameTest {
                     Guess guess = new Guess(12);
 
                     // When
-                    Stream<GameEvent> events = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
+                    List<GameEvent> events = NumberGuessingGame.guessNumber(state, gameId, now, playerId, guess);
 
                     // Then
                     NumberGuessingGameEnded event = find(NumberGuessingGameEnded.class, events);
@@ -231,11 +229,11 @@ class NumberGuessingGameTest {
     @DisplayName("when game has ended")
     class WhenGameHasEnded {
         private final UUID gameId = UUID.randomUUID();
-        private Stream<GameEvent> state;
+        private List<GameEvent> state;
 
         @BeforeEach
         void state_is_initialized() {
-            state = Stream.of(
+            state = List.of(
                     new NumberGuessingGameWasStarted(UUID.randomUUID(), gameId, LocalDateTime.now(), UUID.randomUUID(), 10, 1),
                     new PlayerGuessedTheRightNumber(UUID.randomUUID(), gameId, LocalDateTime.now(), UUID.randomUUID(), 10),
                     new NumberGuessingGameEnded(UUID.randomUUID(), gameId, LocalDateTime.now())
@@ -279,7 +277,7 @@ class NumberGuessingGameTest {
                 Guess guess = new Guess(12);
 
                 // When
-                Throwable throwable = catchThrowable(() -> NumberGuessingGame.guessNumber(Stream.empty(), gameId, now, playerId, guess));
+                Throwable throwable = catchThrowable(() -> NumberGuessingGame.guessNumber(List.of(), gameId, now, playerId, guess));
 
                 // Then
                 assertThat(throwable).isEqualTo(new GameNotStarted(gameId));
@@ -287,8 +285,9 @@ class NumberGuessingGameTest {
         }
     }
 
-    private static <T extends GameEvent> T find(Class<T> t, Stream<GameEvent> events) {
-        return events.filter(t::isInstance)
+    private static <T extends GameEvent> T find(Class<T> t, List<GameEvent> events) {
+        return events.stream()
+                .filter(t::isInstance)
                 .map(t::cast)
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException(t.getSimpleName() + " wasn't found"));

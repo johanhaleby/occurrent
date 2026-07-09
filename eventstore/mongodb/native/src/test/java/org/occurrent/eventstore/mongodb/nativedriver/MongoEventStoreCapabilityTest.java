@@ -51,7 +51,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -222,7 +221,7 @@ class MongoEventStoreCapabilityTest {
     void stream_operations_fail_without_stream_capability() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(DCB).build());
 
-        assertUnsupportedStreamOperation(() -> eventStore.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined"))));
+        assertUnsupportedStreamOperation(() -> eventStore.write("name:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined"))));
         assertUnsupportedStreamOperation(() -> eventStore.read("name:1"));
         assertUnsupportedStreamOperation(() -> eventStore.read("name:1", 0, 10));
         assertUnsupportedStreamOperation(() -> eventStore.read("name:1", StreamReadFilter.type("NameDefined"), 0, 10));
@@ -240,7 +239,7 @@ class MongoEventStoreCapabilityTest {
     void both_stream_and_dcb_operations_work_when_both_capabilities_are_enabled() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM, DCB).build());
 
-        eventStore.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        eventStore.write("name:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThat(eventStore.read("name:1").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
@@ -282,7 +281,7 @@ class MongoEventStoreCapabilityTest {
         MongoEventStore both = newEventStore(eventStoreConfig(STREAM, DCB).build());
         CloudEvent dcbTaggedEvent = taggedEvent("NameDefined", "name:1");
 
-        assertThatThrownBy(() -> both.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(dcbTaggedEvent)))
+        assertThatThrownBy(() -> both.write("name:1", WriteCondition.anyStreamVersion(), List.of(dcbTaggedEvent)))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("A DCB-tagged event cannot be written through the stream write(...) API, use the DCB append(...) API instead.");
 
@@ -293,7 +292,7 @@ class MongoEventStoreCapabilityTest {
     @Test
     void capability_filter_excludes_appended_dcb_event_from_stream_and_includes_it_in_dcb() {
         MongoEventStore both = newEventStore(eventStoreConfig(STREAM, DCB).build());
-        both.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        both.write("name:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
         both.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         List<CloudEvent> streamCapabilityEvents = both.query(Filter.capability(STREAM), 0, 10, SortBy.unsorted()).toList();
@@ -306,7 +305,7 @@ class MongoEventStoreCapabilityTest {
     @Test
     void capability_filter_matches_an_empty_tag_dcb_append_by_the_dcb_tags_array() {
         MongoEventStore both = newEventStore(eventStoreConfig(STREAM, DCB).build());
-        both.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        both.write("name:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
         both.append(List.of(event("SystemInitialized")));
 
         List<CloudEvent> streamCapabilityEvents = both.query(Filter.capability(STREAM), 0, 10, SortBy.unsorted()).toList();

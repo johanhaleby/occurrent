@@ -50,7 +50,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -173,7 +172,8 @@ class DcbSubscriptionStartAtPositionAnnotationMongoTest {
     }
 
     private static void appendTagged(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> converter, TestEvent... events) {
-        List<io.cloudevents.CloudEvent> cloudEvents = converter.toCloudEvents(Stream.of(events))
+        List<io.cloudevents.CloudEvent> cloudEvents = converter.toCloudEvents(List.of(events))
+                .stream()
                 .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                 .toList();
         dcbEventStore.append(cloudEvents);

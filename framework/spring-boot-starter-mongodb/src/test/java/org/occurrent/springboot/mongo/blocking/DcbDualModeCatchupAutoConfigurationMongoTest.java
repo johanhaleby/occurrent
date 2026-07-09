@@ -64,7 +64,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -540,11 +539,12 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
 
     private void appendStream(TestEvent... events) {
         String streamId = UUID.randomUUID().toString();
-        applicationService.execute(streamId, __ -> Stream.of(events));
+        applicationService.execute(streamId, __ -> List.of(events));
     }
 
     private void appendDcb(TestEvent... events) {
-        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(events))
+                .stream()
                 .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(DCB_TAG))))
                 .toList();
         dcbEventStore.append(cloudEvents);

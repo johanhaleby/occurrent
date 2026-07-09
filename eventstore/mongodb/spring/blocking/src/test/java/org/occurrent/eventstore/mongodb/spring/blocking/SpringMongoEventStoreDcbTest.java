@@ -359,7 +359,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void dcb_all_only_matches_dcb_written_events_not_stream_written_events() {
-        eventStore.write("stream:1", java.util.stream.Stream.of(event("OrderPlaced")));
+        eventStore.write("stream:1", List.of(event("OrderPlaced")));
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
 
         assertThat(eventStore.read(all()).events())
@@ -369,7 +369,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void dcb_type_only_criterion_does_not_match_a_stream_written_event_of_that_type() {
-        eventStore.write("stream:1", java.util.stream.Stream.of(event("OrderPlaced")));
+        eventStore.write("stream:1", List.of(event("OrderPlaced")));
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
 
         assertThat(eventStore.read(types(List.of("OrderPlaced"))).events()).isEmpty();
@@ -377,7 +377,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void exists_and_count_are_false_and_zero_for_a_store_with_only_stream_written_events() {
-        eventStore.write("stream:1", java.util.stream.Stream.of(event("OrderPlaced")));
+        eventStore.write("stream:1", List.of(event("OrderPlaced")));
 
         assertThat(eventStore.exists(all())).isFalse();
         assertThat(eventStore.count(all())).isZero();

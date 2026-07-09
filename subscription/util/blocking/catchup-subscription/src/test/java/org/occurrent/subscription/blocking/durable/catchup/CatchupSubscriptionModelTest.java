@@ -882,8 +882,8 @@ public class CatchupSubscriptionModelTest {
         }
     }
 
-    private Stream<CloudEvent> serialize(DomainEvent e) {
-        return Stream.of(CloudEventBuilder.v1()
+    private List<CloudEvent> serialize(DomainEvent e) {
+        return List.of(CloudEventBuilder.v1()
                 .withId(e.eventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())

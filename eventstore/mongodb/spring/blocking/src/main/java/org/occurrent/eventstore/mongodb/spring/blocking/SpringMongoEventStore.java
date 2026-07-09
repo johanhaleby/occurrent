@@ -152,24 +152,21 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @SuppressWarnings("ConstantConditions")
     @Override
-    public WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+    public WriteResult write(String streamId, WriteCondition writeCondition, List<CloudEvent> events) {
         requireStreamCapability();
         if (writeCondition == null) {
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        // The transaction may retry, but a Stream cannot be consumed twice, so materialize the events into a list that
-        // every attempt re-reads. This also gives the event count needed to reserve positions before the transaction.
-        List<CloudEvent> cachedEvents = events.toList();
-        rejectDcbTaggedEvents(cachedEvents);
+        rejectDcbTaggedEvents(events);
 
         // Reserve the position block outside the transaction, like DCB does (see reservePositions), so the shared
         // counter does not become a transaction write-write conflict. The block is reused across retries, and a write
         // that never commits abandons it, so positions may have gaps. Reserve only when the store writes position and
         // there is at least one event.
         final long firstReservedPosition;
-        if (writesPosition() && !cachedEvents.isEmpty()) {
-            firstReservedPosition = reservePositions(cachedEvents.size());
+        if (writesPosition() && !events.isEmpty()) {
+            firstReservedPosition = reservePositions(events.size());
         } else {
             firstReservedPosition = 0;
         }
@@ -181,7 +178,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
             }
 
-            List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, cachedEvents.stream(), currentStreamVersion);
+            List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, events.stream(), currentStreamVersion);
 
             final long newStreamVersion;
             if (!cloudEventDocuments.isEmpty()) {
@@ -209,7 +206,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     @Override
-    public WriteResult write(String streamId, Stream<CloudEvent> events) {
+    public WriteResult write(String streamId, List<CloudEvent> events) {
         return write(streamId, StreamVersionWriteCondition.any(), events);
     }
 

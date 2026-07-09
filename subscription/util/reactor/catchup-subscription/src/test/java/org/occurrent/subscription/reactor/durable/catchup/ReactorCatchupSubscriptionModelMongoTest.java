@@ -210,12 +210,12 @@ class ReactorCatchupSubscriptionModelMongoTest {
     }
 
     private void appendToStream(String streamId, DomainEvent event) {
-        CloudEvent cloudEvent = converter.toCloudEvents(Stream.of(event)).collect(Collectors.toList()).get(0);
+        CloudEvent cloudEvent = converter.toCloudEvents(List.of(event)).get(0);
         eventStore.write(streamId, WriteCondition.anyStreamVersion(), Flux.just(cloudEvent)).block();
     }
 
     private void appendTagged(DomainEvent event, String tag) {
-        CloudEvent cloudEvent = converter.toCloudEvents(Stream.of(event)).collect(Collectors.toList()).get(0);
+        CloudEvent cloudEvent = converter.toCloudEvents(List.of(event)).get(0);
         eventStore.append(List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(Tag.parse(tag))))).block();
     }
 

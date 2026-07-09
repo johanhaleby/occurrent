@@ -46,7 +46,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -87,9 +86,9 @@ class ReactiveStreamSubscriptionHandlerReturnTypeAnnotationMongoTest {
 
     @Test
     void void_mono_void_and_non_void_mono_handlers_all_deliver() {
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("void-event"))).block();
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("mono-void-event"))).block();
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("mono-non-void-event"))).block();
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("void-event"))).block();
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("mono-void-event"))).block();
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("mono-non-void-event"))).block();
 
         await().atMost(ofSeconds(20)).untilAsserted(() ->
                 assertThat(voidReturningSubscriber.received()).extracting(TestEvent::name).contains("void-event"));

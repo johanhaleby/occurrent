@@ -76,12 +76,12 @@ class GameDcbHelpersTest {
                 tags = setOf(Tag.of("game", "$gameId"))
         )
 
-        assertThat(itemsOf(GameDcbQueries.wordHintBoundary(gameId))).containsExactlyInAnyOrder(
+        assertThat(itemsOf(GameDcbQueries.wordHintCriteria(gameId))).containsExactlyInAnyOrder(
                 queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf(Tag.of("game", "$gameId"))),
                 queryItem(types = setOf(CharacterInWordHintWasRevealed::class.eventType()), tags = setOf(Tag.of("wordhint", "$gameId")))
         )
 
-        assertThat(itemsOf(GameDcbQueries.pointsBoundary(gameId))).containsExactlyInAnyOrder(
+        assertThat(itemsOf(GameDcbQueries.pointsCriteria(gameId))).containsExactlyInAnyOrder(
                 queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf(Tag.of("game", "$gameId"))),
                 queryItem(types = setOf(PlayerGuessedTheWrongWord::class.eventType()), tags = setOf(Tag.of("gameplay", "$gameId"))),
                 queryItem(types = setOf(PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType()), tags = setOf(Tag.of("points", "$gameId"))),

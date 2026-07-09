@@ -54,7 +54,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -242,7 +241,7 @@ class DcbCatchupSubscriptionModelTest {
     }
 
     private void appendTagged(String tag, DomainEvent... events) {
-        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(events)).stream()
                 .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse(tag))))
                 .toList();
         eventStore.append(cloudEvents);

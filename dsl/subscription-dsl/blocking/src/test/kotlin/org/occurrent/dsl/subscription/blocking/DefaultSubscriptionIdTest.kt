@@ -87,7 +87,7 @@ class DefaultSubscriptionIdTest {
             subscribe<NameDefined> { received.add(it) }
         }
 
-        eventStore.write("stream", cloudEventConverter.toCloudEvents(Stream.of<DomainEvent>(nameDefined)))
+        eventStore.write("stream", cloudEventConverter.toCloudEvents(listOf<DomainEvent>(nameDefined)))
 
         await().untilAsserted {
             assertThat(received).containsExactly(nameDefined)

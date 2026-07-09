@@ -32,7 +32,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 
 /**
@@ -104,12 +103,12 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
      * Executes a domain function against the current events selected by the DCB query and appends any produced events.
      */
     @Override
-    public Optional<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    public Optional<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(query, "Query cannot be null");
         Objects.requireNonNull(options, DcbExecuteOptions.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
-        @Nullable Consumer<Stream<E>> sideEffect = options.sideEffect();
+        @Nullable Consumer<List<E>> sideEffect = options.sideEffect();
 
         // @formatter:off
         record Tuple<T1, T2>(T1 v1, T2 v2) {}
@@ -117,13 +116,13 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
             DcbEventStream eventStream = eventStore.read(query);
-            Stream<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream());
-            List<E> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(domainEvents)).toList();
-            if (newDomainEvents.isEmpty()) {
+            List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
+            List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
+            if (newDomainEvents == null || newDomainEvents.isEmpty()) {
                 return new Tuple<>(Optional.empty(), List.of());
             }
 
-            List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents.stream()).toList();
+            List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
             List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
             DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(query, eventStream.consistencyToken());
             return new Tuple<>(Optional.of(eventStore.append(dcbEvents, appendCondition)), newDomainEvents);
@@ -132,7 +131,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked
         // on the no-new-events path, and it is outside the retry so it does not run per attempt.
         if (sideEffect != null && result.v1.isPresent()) {
-            sideEffect.accept(result.v2.stream());
+            sideEffect.accept(result.v2);
         }
         return result.v1;
     }
@@ -152,9 +151,6 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         return dcbEvents;
     }
 
-    private static <T> Stream<T> emptyStreamIfNull(@Nullable Stream<T> stream) {
-        return stream == null ? Stream.empty() : stream;
-    }
 
     /**
      * Returns the default retry policy for optimistic DCB conflicts. It makes up to five attempts in total for a

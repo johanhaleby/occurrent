@@ -62,7 +62,6 @@ import java.net.URI
 import java.time.LocalDateTime
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.stream.Stream
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores::class)
@@ -236,9 +235,8 @@ class DcbReactorDslTest {
     )
 
     private fun append(vararg events: DomainEvent) {
-        val cloudEvents = converter.toCloudEvents(Stream.of(*events))
+        val cloudEvents = converter.toCloudEvents(listOf(*events))
             .map { event -> DcbCloudEvents.withTags(event, setOf(Tag.of("name", "name"))) }
-            .toList()
         eventStore.append(cloudEvents).block()
     }
 

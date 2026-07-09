@@ -18,7 +18,6 @@
 package org.occurrent.library.hederlig.initialization.occurrent
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeList
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.query.blocking.queryForSequence
 import org.occurrent.dsl.subscription.blocking.Subscriptions
@@ -75,7 +74,7 @@ class OccurrentModule<C : Any, E : Any, Q : Query<Any>>(
     override fun publish(c: C) {
         val commandHandler = handlers.cmds.find { it.type == c::class } ?: throw IllegalArgumentException("Cannot find a command handler for type ${c::class.qualifiedName}")
         val streamId = commandHandler.id(c)
-        applicationService.executeList(streamId) { events: List<E> ->
+        applicationService.execute(streamId) { events: List<E> ->
             commandHandler.fn(events, c)
         }
     }

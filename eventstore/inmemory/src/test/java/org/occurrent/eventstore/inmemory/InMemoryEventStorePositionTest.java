@@ -31,7 +31,6 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,7 +52,7 @@ class InMemoryEventStorePositionTest {
         InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
 
         eventStore.append(List.of(taggedEvent("DcbEvent1", "t:1")));                                     // position 1
-        eventStore.write("stream1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1"), event("StreamEvent2"))); // positions 2,3
+        eventStore.write("stream1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1"), event("StreamEvent2"))); // positions 2,3
         eventStore.append(List.of(taggedEvent("DcbEvent2", "t:1")));                                     // position 4
 
         List<CloudEvent> streamEvents = eventStore.read("stream1").events().toList();
@@ -66,10 +65,10 @@ class InMemoryEventStorePositionTest {
     void position_ordered_reader_returns_events_in_position_order_within_the_requested_range() {
         InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
 
-        eventStore.write("stream1", WriteCondition.anyStreamVersion(), Stream.of(event("A")));  // position 1
+        eventStore.write("stream1", WriteCondition.anyStreamVersion(), List.of(event("A")));  // position 1
         eventStore.append(List.of(taggedEvent("B", "t:1")));                                      // position 2
-        eventStore.write("stream1", WriteCondition.anyStreamVersion(), Stream.of(event("C")));  // position 3
-        eventStore.write("stream2", WriteCondition.anyStreamVersion(), Stream.of(event("D")));  // position 4
+        eventStore.write("stream1", WriteCondition.anyStreamVersion(), List.of(event("C")));  // position 3
+        eventStore.write("stream2", WriteCondition.anyStreamVersion(), List.of(event("D")));  // position 4
 
         List<CloudEvent> all = eventStore.readInPositionOrder(all(), PositionRange.fromBeginning()).toList();
         assertThat(all).extracting(CloudEvent::getType).containsExactly("A", "B", "C", "D");
@@ -87,7 +86,7 @@ class InMemoryEventStorePositionTest {
 
         assertThat(eventStore.writesPosition()).isFalse();
 
-        eventStore.write("stream1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1")));
+        eventStore.write("stream1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1")));
         CloudEvent writtenEvent = eventStore.read("stream1").events().findFirst().orElseThrow();
         assertThat(position(writtenEvent)).isZero();
 

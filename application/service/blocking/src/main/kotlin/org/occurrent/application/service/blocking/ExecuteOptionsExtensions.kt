@@ -4,15 +4,13 @@ import org.occurrent.application.service.ExecuteFilter
 
 import org.occurrent.eventstore.api.StreamReadFilter
 import java.util.function.Consumer
-import java.util.stream.Stream
-import kotlin.streams.asSequence
 
 /**
  * Create empty [ExecuteOptions] for Kotlin call sites.
  *
  * This helper exists so Kotlin code can start an options chain with `options()`
  * and let the event type be inferred later from chained `sideEffect(...)` or
- * the surrounding `executeSequence(...)` or `executeList(...)` call.
+ * the surrounding `execute(...)` call.
  * Standalone assignments may still require explicit type context.
  */
 fun options(): ExecuteOptions<Any> = ExecuteOptions.options()
@@ -24,7 +22,7 @@ fun options(): ExecuteOptions<Any> = ExecuteOptions.options()
  * instead of `options().filter(...)` when that reads better.
  *
  * Type inference is expected to come from the surrounding expression, typically
- * an `executeSequence(...)` or `executeList(...)` call.
+ * an `execute(...)` call.
  */
 fun filter(filter: StreamReadFilter): ExecuteOptions<Any> = options().filter(filter)
 
@@ -35,7 +33,7 @@ fun filter(filter: StreamReadFilter): ExecuteOptions<Any> = options().filter(fil
  * when the filter is expressed in terms of domain event classes.
  *
  * Type inference is expected to come from the surrounding expression, typically
- * an `executeSequence(...)` or `executeList(...)` call.
+ * an `execute(...)` call.
  */
 fun <E : Any> filter(filter: ExecuteFilter<out E>): ExecuteOptions<E> = ExecuteOptions.withExecuteFilter(filter)
 
@@ -52,7 +50,7 @@ fun <T : Any> ExecuteOptions<in T>.filter(filter: ExecuteFilter<out T>): Execute
     return if (sideEffect == null) {
         executeOptions
     } else {
-        executeOptions.sideEffect(sideEffect as Consumer<Stream<T>>)
+        executeOptions.sideEffect(sideEffect as Consumer<List<T>>)
     }
 }
 
@@ -60,8 +58,7 @@ fun <T : Any> ExecuteOptions<in T>.filter(filter: ExecuteFilter<out T>): Execute
  * Create [ExecuteOptions] with a typed [sideEffect] that is invoked for events
  * matching [E].
  *
- * Type inference typically comes from the surrounding `executeSequence(...)`
- * or `executeList(...)` call.
+ * Type inference typically comes from the surrounding `execute(...)` call.
  */
 inline fun <T : Any, reified E : T> sideEffect(noinline sideEffect: (E) -> Unit): ExecuteOptions<T> =
     typedOptions<T>().addTypedSideEffect(E::class.java, sideEffect)
@@ -153,20 +150,10 @@ inline fun <T : Any, reified E1 : T, reified E2 : T, reified E3 : T, reified E4 
 /**
  * Return new [ExecuteOptions] that invoke [sideEffect] with matching events as a list.
  */
-@JvmName("sideEffectOnList")
 inline fun <E : Any, reified E_SPECIFIC : E> ExecuteOptions<E>.sideEffectOnList(
     noinline sideEffect: (List<E_SPECIFIC>) -> Unit
 ): ExecuteOptions<E> =
-    addSideEffect(Consumer { stream -> sideEffect(stream.toList().filterIsInstance<E_SPECIFIC>()) })
-
-/**
- * Return new [ExecuteOptions] that invoke [sideEffect] with matching events as a sequence.
- */
-@JvmName("sideEffectOnSequence")
-inline fun <E : Any, reified E_SPECIFIC : E> ExecuteOptions<E>.sideEffectOnSequence(
-    noinline sideEffect: (Sequence<E_SPECIFIC>) -> Unit
-): ExecuteOptions<E> =
-    addSideEffect(Consumer { stream -> sideEffect(stream.asSequence().filterIsInstance<E_SPECIFIC>()) })
+    addSideEffect(Consumer { events -> sideEffect(events.filterIsInstance<E_SPECIFIC>()) })
 
 // These receiver overloads intentionally keep a star-projected ExecuteOptions receiver.
 // Kotlin callers often start from `options()` before a shared `T` is known, and the typed
@@ -269,18 +256,17 @@ inline fun <T : Any, reified E1 : T, reified E2 : T, reified E3 : T, reified E4 
  */
 @PublishedApi
 @Suppress("UNCHECKED_CAST")
-internal fun <E : Any> ExecuteOptions<*>.addSideEffect(sideEffect: Consumer<Stream<E>>): ExecuteOptions<E> {
+internal fun <E : Any> ExecuteOptions<*>.addSideEffect(sideEffect: Consumer<List<E>>): ExecuteOptions<E> {
     // The star-projected receiver is intentional: this helper is the bridge that turns an
     // as-yet-untyped Kotlin options chain into a concrete `ExecuteOptions<E>` once `E` has
     // been inferred from the appended side effect or the surrounding execute call.
-    val existingSideEffect = this.sideEffect() as Consumer<Stream<E>>?
+    val existingSideEffect = this.sideEffect() as Consumer<List<E>>?
     val composedSideEffect = if (existingSideEffect == null) {
         sideEffect
     } else {
-        Consumer<Stream<E>> { stream ->
-            val events = stream.toList()
-            existingSideEffect.accept(events.stream())
-            sideEffect.accept(events.stream())
+        Consumer<List<E>> { events ->
+            existingSideEffect.accept(events)
+            sideEffect.accept(events)
         }
     }
 

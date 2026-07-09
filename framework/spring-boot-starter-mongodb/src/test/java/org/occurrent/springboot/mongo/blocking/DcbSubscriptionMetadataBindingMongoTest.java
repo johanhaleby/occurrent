@@ -53,7 +53,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -141,7 +140,8 @@ class DcbSubscriptionMetadataBindingMongoTest {
     // --- helpers ---
 
     private void append(String tag, MyEvent... events) {
-        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(events))
+                .stream()
                 .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(tag))))
                 .toList();
         dcbEventStore.append(cloudEvents);
@@ -208,11 +208,12 @@ class DcbSubscriptionMetadataBindingMongoTest {
     static class HistorySeeder {
 
         HistorySeeder(DcbEventStore store, CloudEventConverter<MyEvent> converter) {
-            List<CloudEvent> batch = converter.toCloudEvents(Stream.of(
+            List<CloudEvent> batch = converter.toCloudEvents(List.of(
                             new MyEvent("meta-event-1"),
                             new MyEvent("meta-event-2"),
                             new MyEvent("meta-event-3")
                     ))
+                    .stream()
                     .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                     .toList();
             store.append(batch);

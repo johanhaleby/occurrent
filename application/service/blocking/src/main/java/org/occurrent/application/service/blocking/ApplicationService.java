@@ -8,11 +8,11 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteResult;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 /**
  * An application service interface that should be good enough for most scenarios.
@@ -29,14 +29,6 @@ public interface ApplicationService<E> {
      * also execute side-effects that are executed synchronously <i>after</i> the events have been written to the event store.
      * If the side-effects write data to the same datastore as the event store you can make use of transactions to write events
      * and side-effects atomically.
-     * <br>
-     * <br>
-     * <p>
-     * Note that if you domain model works with {@code java.util.List} as input and output, then depend on the
-     * command composition ({@code org.occurrent:command-composition:<version>}) library to convert {@code functionThatCallsDomainModel}
-     * from {@code Function<Stream<T>, Stream<T>>} to {@code Function<List<T>, List<T>>} by using
-     * {@code org.occurrent.application.command.composition.toListCommand(functionThatCallsDomainModel)}.
-     * </p>
      *
      * @param streamId                     The id of the stream to load events from and also write the events returned from {@code functionThatCallsDomainModel} to.
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model. Use partial application ({@code org.occurrent:command-composition:<version>})
@@ -45,7 +37,7 @@ public interface ApplicationService<E> {
      * @deprecated Use {@link #execute(String, ExecuteOptions, Function)}.
      */
     @Deprecated(forRemoval = true)
-    default WriteResult execute(String streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel, @Nullable Consumer<Stream<E>> sideEffect) {
+    default WriteResult execute(String streamId, Function<List<E>, List<E>> functionThatCallsDomainModel, @Nullable Consumer<List<E>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "functionThatCallsDomainModel cannot be null");
 
@@ -71,7 +63,7 @@ public interface ApplicationService<E> {
      * @param executeOptions               Options that control stream read filtering and optional side-effects.
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model.
      */
-    WriteResult execute(String streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
+    WriteResult execute(String streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel);
 
     /**
      * Execute a function that loads events from the event store and applies them to the domain model using an
@@ -90,7 +82,7 @@ public interface ApplicationService<E> {
      * @param executeFilter                Application-service-level filter that is resolved through the configured CloudEvent converter.
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model.
      */
-    default WriteResult execute(String streamId, ExecuteFilter<? extends E> executeFilter, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default WriteResult execute(String streamId, ExecuteFilter<? extends E> executeFilter, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(executeFilter, "ExecuteFilter cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "functionThatCallsDomainModel cannot be null");
@@ -100,7 +92,7 @@ public interface ApplicationService<E> {
     /**
      * Convenience function that lets you specify {@code streamId} as a {@code UUID} instead of a {@code String}.
      */
-    default WriteResult execute(UUID streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default WriteResult execute(UUID streamId, ExecuteOptions<E> executeOptions, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), executeOptions, functionThatCallsDomainModel);
     }
@@ -109,7 +101,7 @@ public interface ApplicationService<E> {
      * Convenience function that lets you specify {@code streamId} as a {@code UUID} instead of a {@code String}
      * when using an {@link ExecuteFilter}.
      */
-    default WriteResult execute(UUID streamId, ExecuteFilter<? extends E> executeFilter, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default WriteResult execute(UUID streamId, ExecuteFilter<? extends E> executeFilter, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), executeFilter, functionThatCallsDomainModel);
     }
@@ -125,27 +117,19 @@ public interface ApplicationService<E> {
      * @deprecated Use {@link #execute(UUID, ExecuteOptions, Function)}.
      */
     @Deprecated(forRemoval = true)
-    default WriteResult execute(UUID streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel, Consumer<Stream<E>> sideEffect) {
+    default WriteResult execute(UUID streamId, Function<List<E>, List<E>> functionThatCallsDomainModel, Consumer<List<E>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), functionThatCallsDomainModel, sideEffect);
     }
 
     /**
      * Execute a function that loads the events from the event store and apply them to the {@code functionThatCallsDomainModel}.
-     * <br>
-     * <br>
-     * <p>
-     * Note that if you domain model works with {@code java.util.List} as input and output, then depend on the
-     * command composition ({@code org.occurrent:command-composition:<version>}) library to convert {@code functionThatCallsDomainModel}
-     * from {@code Function<Stream<T>, Stream<T>>} to {@code Function<List<T>, List<T>>} by using
-     * {@code org.occurrent.application.command.composition.toListCommand(functionThatCallsDomainModel)}.
-     * </p>
      *
      * @param streamId                     The id of the stream to load events from and also write the events returned from {@code functionThatCallsDomainModel} to.
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model. Use partial application ({@code org.occurrent:command-composition:<version>})
      *                                     if required.
      */
-    default WriteResult execute(String streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default WriteResult execute(String streamId, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         return execute(streamId, ExecuteOptions.empty(), functionThatCallsDomainModel);
     }
 
@@ -157,7 +141,7 @@ public interface ApplicationService<E> {
      *                                     if required.
      * @see #execute(String, Function)
      */
-    default WriteResult execute(UUID streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default WriteResult execute(UUID streamId, Function<List<E>, List<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), functionThatCallsDomainModel);
     }

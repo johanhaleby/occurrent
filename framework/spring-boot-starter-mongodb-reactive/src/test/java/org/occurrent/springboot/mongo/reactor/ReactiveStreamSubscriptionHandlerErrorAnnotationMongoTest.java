@@ -48,7 +48,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -90,12 +89,12 @@ class ReactiveStreamSubscriptionHandlerErrorAnnotationMongoTest {
 
     @Test
     void an_erroring_handler_permanently_kills_the_subscription_so_a_later_event_never_arrives() {
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("poison"))).block();
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("poison"))).block();
 
         await().atMost(ofSeconds(15)).untilAsserted(() ->
                 assertThat(alwaysErroringSubscriber.invocationCount()).isGreaterThan(0));
 
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("should-not-arrive"))).block();
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new TestEvent("should-not-arrive"))).block();
 
         // The Flux died on the poison event's error, so the later event is never delivered, unlike a MongoDB-level
         // change-stream error, which the model retries automatically.

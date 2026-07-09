@@ -46,7 +46,6 @@ import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
 import java.net.URI
 import java.time.LocalDateTime
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.stream.Stream
 
 @DisplayNameGeneration(ReplaceUnderscores::class)
 class DcbDslKotlinTest {
@@ -230,13 +229,12 @@ class DcbDslKotlinTest {
 
     private fun append(tags: List<String>, vararg events: DomainEvent) {
         val parsedTags = tags.map { Tag.parse(it) }
-        val cloudEvents: List<CloudEvent> = cloudEventConverter.toCloudEvents(Stream.of(*events))
+        val cloudEvents: List<CloudEvent> = cloudEventConverter.toCloudEvents(listOf(*events))
             .map { event -> DcbCloudEvents.withTags(event, parsedTags) }
-            .toList()
         eventStore.append(cloudEvents)
     }
 
     private fun writeStreamEvent(event: DomainEvent) {
-        eventStore.write("stream", cloudEventConverter.toCloudEvents(Stream.of(event)))
+        eventStore.write("stream", cloudEventConverter.toCloudEvents(listOf(event)))
     }
 }

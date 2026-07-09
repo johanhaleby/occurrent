@@ -33,7 +33,7 @@ import java.util.stream.Stream;
  * @param <E> The type of your domain event.
  */
 @NullMarked
-public interface PolicySideEffect<E> extends Function<Stream<E>, Mono<Void>> {
+public interface PolicySideEffect<E> extends Function<List<E>, Mono<Void>> {
 
     /**
      * Run a single policy for every event of {@code eventType} produced by the command, in order. Events that are not
@@ -42,7 +42,7 @@ public interface PolicySideEffect<E> extends Function<Stream<E>, Mono<Void>> {
     static <E, E_SPECIFIC extends E> PolicySideEffect<E> executePolicy(Class<E_SPECIFIC> eventType, Function<E_SPECIFIC, Mono<Void>> policy) {
         Objects.requireNonNull(eventType, "Event type cannot be null");
         Objects.requireNonNull(policy, "Policy cannot be null");
-        return stream -> Flux.fromStream(stream)
+        return events -> Flux.fromIterable(events)
                 .filter(e -> eventType.isAssignableFrom(e.getClass()))
                 .map(eventType::cast)
                 .concatMap(policy::apply)
@@ -55,9 +55,6 @@ public interface PolicySideEffect<E> extends Function<Stream<E>, Mono<Void>> {
     default <E_SPECIFIC extends E> PolicySideEffect<E> andThenExecuteAnotherPolicy(Class<E_SPECIFIC> eventType, Function<E_SPECIFIC, Mono<Void>> policy) {
         PolicySideEffect<E> first = this;
         PolicySideEffect<E> second = executePolicy(eventType, policy);
-        return stream -> {
-            List<E> events = stream.toList();
-            return first.apply(events.stream()).then(second.apply(events.stream()));
-        };
+        return events -> first.apply(events).then(second.apply(events));
     }
 }

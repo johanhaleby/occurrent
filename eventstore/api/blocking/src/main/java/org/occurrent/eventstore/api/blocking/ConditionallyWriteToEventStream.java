@@ -23,8 +23,8 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
 
+import java.util.List;
 import java.util.Objects;
-import java.util.stream.Stream;
 
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 
@@ -47,7 +47,7 @@ public interface ConditionallyWriteToEventStream {
      */
     default WriteResult write(String streamId, long expectedStreamVersion, CloudEvent event) {
         Objects.requireNonNull(event, CloudEvent.class.getSimpleName() + " cannot be null");
-        return write(streamId, streamVersionEq(expectedStreamVersion), Stream.of(event));
+        return write(streamId, streamVersionEq(expectedStreamVersion), List.of(event));
     }
 
     /**
@@ -62,7 +62,7 @@ public interface ConditionallyWriteToEventStream {
      */
     default WriteResult write(String streamId, WriteCondition writeCondition, CloudEvent event) {
         Objects.requireNonNull(event, CloudEvent.class.getSimpleName() + " cannot be null");
-        return write(streamId, writeCondition, Stream.of(event));
+        return write(streamId, writeCondition, List.of(event));
     }
 
     /**
@@ -74,9 +74,9 @@ public interface ConditionallyWriteToEventStream {
      * @return The result of the write operation, includes useful metadata such as stream version.
      * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
      * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
-     * @see #write(String, WriteCondition, Stream) for more advanced write conditions
+     * @see #write(String, WriteCondition, List) for more advanced write conditions
      */
-    default WriteResult write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
+    default WriteResult write(String streamId, long expectedStreamVersion, List<CloudEvent> events) {
         return write(streamId, streamVersionEq(expectedStreamVersion), events);
     }
 
@@ -90,5 +90,5 @@ public interface ConditionallyWriteToEventStream {
      * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
      * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
      */
-    WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events);
+    WriteResult write(String streamId, WriteCondition writeCondition, List<CloudEvent> events);
 }

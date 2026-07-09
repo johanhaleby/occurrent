@@ -188,14 +188,14 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     private void write(InMemoryEventStore eventStore, DomainEvent event) {
-        Stream<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(event));
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(event));
         eventStore.write(event.eventId(), cloudEvents);
     }
 
     private static final class PositionOnlyInMemoryEventStore extends InMemoryEventStore {
         private PositionRange lastPositionRange;
 
-        private PositionOnlyInMemoryEventStore(Consumer<Stream<CloudEvent>> listener) {
+        private PositionOnlyInMemoryEventStore(Consumer<List<CloudEvent>> listener) {
             super(listener);
         }
 

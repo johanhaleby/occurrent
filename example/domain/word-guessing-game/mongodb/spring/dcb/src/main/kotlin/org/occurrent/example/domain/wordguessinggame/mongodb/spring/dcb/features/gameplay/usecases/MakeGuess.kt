@@ -28,17 +28,14 @@ import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Service
-import java.util.stream.Stream
-import kotlin.streams.asSequence
-import kotlin.streams.asStream
 
 @Service
 class MakeGuess(private val applicationService: DcbApplicationService<GameEvent>) {
 
     @Retryable(include = [DcbAppendConditionNotFulfilledException::class, DataIntegrityViolationException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(gameId: GameId, timeOfGuess: Timestamp, playerId: PlayerId, word: Word) {
-        applicationService.execute(GameDcbQueries.gameplay(gameId)) { events: Stream<GameEvent> ->
-            guessWord(events.asSequence(), timeOfGuess, playerId, word).asStream()
+        applicationService.execute(GameDcbQueries.gameplay(gameId)) { events ->
+            guessWord(events, timeOfGuess, playerId, word)
         }
     }
 }

@@ -20,10 +20,10 @@ package org.occurrent.dsl.view;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiFunction;
-import java.util.stream.Stream;
 
 /**
  * A structure for representing and updating views based on state and an event
@@ -63,11 +63,19 @@ public interface View<S extends @Nullable Object, E> {
      */
     @SuppressWarnings("unchecked")
     default S evolve(S state, @NonNull E event, @NonNull E event2, @NonNull E... moreEvents) {
-        return evolve(state, Stream.concat(Stream.of(event, event2), Arrays.stream(moreEvents)));
+        List<E> events = new ArrayList<>(moreEvents.length + 2);
+        events.add(event);
+        events.add(event2);
+        events.addAll(Arrays.asList(moreEvents));
+        return evolve(state, events);
     }
 
     default S evolve(S state, @NonNull List<E> events) {
-        return evolve(state, events.stream());
+        S result = state;
+        for (E event : events) {
+            result = evolve(result, event);
+        }
+        return result;
     }
 
     /**
@@ -76,19 +84,6 @@ public interface View<S extends @Nullable Object, E> {
      * @return The evolved state
      */
     default S evolve(@NonNull List<E> events) {
-        return evolve(initialState(), events.stream());
-    }
-
-    default S evolve(S state, @NonNull Stream<E> events) {
-        return events.sequential().reduce(state, this::evolve, (left, right) -> right);
-    }
-
-    /**
-     * Evolve initial state from events
-     *
-     * @return The evolved state
-     */
-    default S evolve(@NonNull Stream<E> events) {
         return evolve(initialState(), events);
     }
 

@@ -30,7 +30,6 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.subscription.blocking.streamSubscriptions
-import org.occurrent.eventstore.api.blocking.write
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
 import java.net.URI
@@ -64,7 +63,7 @@ class SubscriptionExtensionsTest {
         // When
         eventStore.write(
             "johan",
-            sequenceOf(
+            listOf(
                 NameDefined(UUID.randomUUID().toString(), Date(), "johan", "Johan"),
                 NameWasChanged(UUID.randomUUID().toString(), Date(), "johan", "Johan Haleb"),
                 NameWasChanged(UUID.randomUUID().toString(), Date(), "johan", "Johan Haleby"),

@@ -60,7 +60,6 @@ import reactor.core.publisher.Mono;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -146,7 +145,7 @@ class DcbDomainEventQueriesTest {
         // A matching event committed after the DSL read invalidates the token, so a conditional append carrying it back
         // to the store is correctly rejected. This proves the token flows through the DSL projection, not just the position.
         append("name:1", new NameWasChanged("eventId2", time, "name", "Jane Doe"));
-        List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(Stream.of(new NameWasChanged("eventId3", time, "name", "Joe Doe")))
+        List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(List.of(new NameWasChanged("eventId3", time, "name", "Joe Doe"))).stream()
                 .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse("name:1"))))
                 .toList();
 
@@ -251,7 +250,7 @@ class DcbDomainEventQueriesTest {
     }
 
     private void appendTagged(List<Tag> tags, DomainEvent... events) {
-        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(events)).stream()
                 .map(event -> DcbCloudEvents.withTags(event, tags))
                 .toList();
         eventStore.append(cloudEvents).block();

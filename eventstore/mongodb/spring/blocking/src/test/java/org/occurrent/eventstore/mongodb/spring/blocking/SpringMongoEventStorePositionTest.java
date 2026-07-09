@@ -49,7 +49,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -96,9 +95,9 @@ class SpringMongoEventStorePositionTest {
     void stream_events_get_a_monotonic_position_shared_with_dcb_when_stream_position_is_enabled() {
         SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM, DCB).build());
 
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameRenamed")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameRenamed")));
 
         List<CloudEvent> streamEvents = eventStore.read("stream:1").events().toList();
         assertThat(streamEvents).hasSize(2);
@@ -130,8 +129,8 @@ class SpringMongoEventStorePositionTest {
     void position_ordered_reader_returns_events_in_the_requested_range_and_clamps_to_the_watermark() {
         SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withStreamPosition().build());
 
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("A"), event("B")));
-        eventStore.write("stream:2", WriteCondition.anyStreamVersion(), Stream.of(event("C")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("A"), event("B")));
+        eventStore.write("stream:2", WriteCondition.anyStreamVersion(), List.of(event("C")));
 
         List<CloudEvent> all = eventStore.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()).toList();
         assertThat(all).extracting(CloudEvent::getType).containsExactly("A", "B", "C");
@@ -153,7 +152,7 @@ class SpringMongoEventStorePositionTest {
     void opted_out_stream_only_store_writes_no_stream_position_and_rejects_position_reads() {
         SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withoutStreamPosition().build());
 
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
 
         CloudEvent writtenEvent = eventStore.read("stream:1").events().findFirst().orElseThrow();
         assertThat(writtenEvent.getExtension(OccurrentCloudEventExtension.POSITION)).isNull();
@@ -176,7 +175,7 @@ class SpringMongoEventStorePositionTest {
     @Test
     void startup_logs_a_warning_but_does_not_fail_when_unpositioned_events_exist_and_backfill_is_not_required() {
         SpringMongoEventStore optedOut = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withoutStreamPosition().build());
-        optedOut.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        optedOut.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
 
         // Re-opening the same collection with stream position now enabled must not fail (default is WARN, not fail),
         // even though the existing event lacks a position.
@@ -187,7 +186,7 @@ class SpringMongoEventStorePositionTest {
     @Test
     void position_is_turned_off_on_an_existing_unpositioned_store_when_it_was_not_enabled_explicitly() {
         SpringMongoEventStore optedOut = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withoutStreamPosition().build());
-        optedOut.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        optedOut.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
 
         // Default (not explicit) position over a collection that already has unpositioned events turns itself off,
         // rather than building the position index over the whole collection at startup.
@@ -205,7 +204,7 @@ class SpringMongoEventStorePositionTest {
     @Test
     void position_stays_on_by_default_once_the_store_has_positioned_events() {
         SpringMongoEventStore first = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).build());
-        first.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        first.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
 
         // Re-opening a store whose events already have positions keeps position on.
         SpringMongoEventStore reopened = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).build());
@@ -215,7 +214,7 @@ class SpringMongoEventStorePositionTest {
     @Test
     void startup_fails_hard_when_unpositioned_events_exist_and_backfill_is_required() {
         SpringMongoEventStore optedOut = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withoutStreamPosition().build());
-        optedOut.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        optedOut.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
 
         assertThatThrownBy(() -> new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withStreamPosition().requireBackfilledPosition(true).build()))
                 .isExactlyInstanceOf(IllegalStateException.class)

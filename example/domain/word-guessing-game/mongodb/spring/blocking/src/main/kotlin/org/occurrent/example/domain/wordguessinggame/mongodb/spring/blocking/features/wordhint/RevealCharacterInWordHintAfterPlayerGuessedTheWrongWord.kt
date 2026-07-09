@@ -17,7 +17,6 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.wordhint
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.executeSequence
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintCharacterRevelation
@@ -39,10 +38,10 @@ class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
     operator fun invoke(playerGuessedTheWrongWord: PlayerGuessedTheWrongWord) {
         val gameId = playerGuessedTheWrongWord.gameId
         val gameWasStarted = gameEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))!!
-        applicationService.executeSequence("wordhint:$gameId") { events ->
+        applicationService.execute("wordhint:$gameId") { events ->
             val characterPositionsInWord = events.map { it as CharacterInWordHintWasRevealed }.map { it.characterPositionInWord }.toSet()
             val wordHintData = WordHintData(gameId, wordToGuess = gameWasStarted.wordToGuess, currentlyRevealedPositions = characterPositionsInWord)
-            WordHintCharacterRevelation.revealCharacterInWordHintWhenPlayerGuessedTheWrongWord(wordHintData)
+            WordHintCharacterRevelation.revealCharacterInWordHintWhenPlayerGuessedTheWrongWord(wordHintData).toList()
         }
     }
 }

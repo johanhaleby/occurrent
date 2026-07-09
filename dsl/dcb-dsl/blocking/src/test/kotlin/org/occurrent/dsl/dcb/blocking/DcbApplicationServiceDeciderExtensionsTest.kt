@@ -41,7 +41,6 @@ import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.net.URI
 import java.time.LocalDateTime
-import java.util.stream.Stream
 
 @DisplayNameGeneration(ReplaceUnderscores::class)
 class DcbApplicationServiceDeciderExtensionsTest {
@@ -214,9 +213,8 @@ class DcbApplicationServiceDeciderExtensionsTest {
     )
 
     private fun append(vararg events: DomainEvent) {
-        val cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(*events))
+        val cloudEvents = cloudEventConverter.toCloudEvents(listOf(*events))
             .map { event -> DcbCloudEvents.withTags(event, setOf(Tag.of("name", "name"))) }
-            .toList()
         eventStore.append(cloudEvents)
     }
 

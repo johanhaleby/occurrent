@@ -16,48 +16,6 @@
 
 package org.occurrent.application.composition.command
 
-// Sequebce Composition
-
-/**
- * Backward compose two commands using infix notation. The resulting command will be executed atomically in the event store.
- * For example:
- * ```kotlin
- * val cmd1 : (Sequence<DomainEvent>) -> Sequence<DomainEvent> = ..
- * val cmd2 : (Sequence<DomainEvent>) -> Sequence<DomainEvent> = ..
- * applicationService.execute("streamId", cmd1 andThen cmd2)
- * ```
- *
- * @param anotherCommand The other command to run after this one.
- */
-infix fun <T> ((Sequence<T>) -> Sequence<T>).andThen(anotherCommand: (Sequence<T>) -> Sequence<T>): (Sequence<T>) -> Sequence<T> =
-    composeCommands(this, anotherCommand)
-
-/**
- * Compose multiple commands
- */
-fun <T> composeCommands(
-    firstCommand: (Sequence<T>) -> Sequence<T>,
-    secondCommand: (Sequence<T>) -> Sequence<T>,
-    vararg additionalCommands: (Sequence<T>) -> Sequence<T>
-): ((Sequence<T>) -> Sequence<T>) {
-    return composeCommands(sequenceOf(firstCommand, secondCommand, *additionalCommands))
-}
-
-/**
- * Compose a sequence of commands
- */
-fun <T> composeCommands(commands: Sequence<(Sequence<T>) -> Sequence<T>>): (Sequence<T>) -> Sequence<T> {
-    return { initial ->
-        val historicEvents = initial.toList()
-        val historicAndNewEvents = commands.fold(historicEvents) { allEvents, cmd ->
-            val eventsReturnedByCommand = cmd(allEvents.asSequence())
-            allEvents + eventsReturnedByCommand
-        }
-        historicAndNewEvents.drop(historicEvents.size).asSequence()
-    }
-}
-
-// List Composition
 /**
  * Compose two commands using infix notation. The resulting command will be executed atomically in the event store.
  * For example:
@@ -69,14 +27,12 @@ fun <T> composeCommands(commands: Sequence<(Sequence<T>) -> Sequence<T>>): (Sequ
  *
  * @param anotherCommand The other command to run after this one.
  */
-@JvmName("andThenList")
 infix fun <T> ((List<T>) -> List<T>).andThen(anotherCommand: (List<T>) -> List<T>): (List<T>) -> List<T> =
     composeCommands(this, anotherCommand)
 
 /**
  * Compose multiple commands
  */
-@JvmName("commandsListCommands")
 fun <T> composeCommands(
     firstCommand: (List<T>) -> List<T>,
     secondCommand: (List<T>) -> List<T>,
@@ -86,7 +42,7 @@ fun <T> composeCommands(
 }
 
 /**
- * Compose a sequence of commands
+ * Compose a list of commands
  */
 fun <T> composeCommands(commands: List<(List<T>) -> List<T>>): (List<T>) -> List<T> {
     return { initial ->

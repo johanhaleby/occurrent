@@ -48,7 +48,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
@@ -86,7 +85,7 @@ class ReactiveStreamSubscriptionHistoryReplayMongoTest {
     void stream_subscription_from_beginning_of_time_replays_historic_events() {
         TestEvent historic1 = new TestEvent(UUID.randomUUID().toString(), new Date(), "historic-1");
         TestEvent historic2 = new TestEvent(UUID.randomUUID().toString(), new Date(), "historic-2");
-        applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(historic1, historic2)).block();
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(historic1, historic2)).block();
 
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(replaySubscriber.received()).extracting(TestEvent::eventId).contains(historic1.eventId(), historic2.eventId()));

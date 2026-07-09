@@ -15,7 +15,6 @@ import org.occurrent.eventstore.api.StreamReadFilter;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -62,9 +61,9 @@ class ExecuteOptionsTest {
 
             // When
             var executeOptions = ExecuteOptions.<DomainEvent>options()
-                    .sideEffect(events -> events.map(DomainEvent::name).forEach(observedNames::add));
+                    .sideEffect(events -> events.stream().map(DomainEvent::name).forEach(observedNames::add));
 
-            executeOptions.sideEffect().accept(Stream.of(nameDefined("Ada"), nameWasChanged("Lovelace")));
+            executeOptions.sideEffect().accept(List.of(nameDefined("Ada"), nameWasChanged("Lovelace")));
 
             // Then
             assertThat(observedNames).containsExactly("Ada", "Lovelace");
@@ -79,9 +78,9 @@ class ExecuteOptionsTest {
             // When
             var executeOptions = ExecuteOptions.<DomainEvent>options()
                     .filter(filter)
-                    .sideEffect(events -> events.map(DomainEvent::name).forEach(observedNames::add));
+                    .sideEffect(events -> events.stream().map(DomainEvent::name).forEach(observedNames::add));
 
-            executeOptions.sideEffect().accept(Stream.of(nameDefined("Ada"), nameWasChanged("Lovelace")));
+            executeOptions.sideEffect().accept(List.of(nameDefined("Ada"), nameWasChanged("Lovelace")));
 
             // Then
             assertAll(

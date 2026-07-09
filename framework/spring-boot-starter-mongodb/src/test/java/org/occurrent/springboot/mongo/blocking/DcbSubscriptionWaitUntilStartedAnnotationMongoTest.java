@@ -50,7 +50,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -96,7 +95,8 @@ class DcbSubscriptionWaitUntilStartedAnnotationMongoTest {
     void a_live_event_appended_immediately_after_context_startup_is_received_with_no_race() {
         // By the time the context is up, WAIT_UNTIL_STARTED already forced the BEGINNING replay (of nothing, here)
         // and the live change stream to be fully attached, so this event, appended with no delay, is not missed.
-        List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(new TestEvent("live-1")))
+        List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(List.of(new TestEvent("live-1")))
+                .stream()
                 .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                 .toList();
         dcbEventStore.append(cloudEvents);

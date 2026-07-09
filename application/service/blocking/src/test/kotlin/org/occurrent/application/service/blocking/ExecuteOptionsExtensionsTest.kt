@@ -12,7 +12,6 @@ import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.eventstore.api.StreamReadFilter
 import java.time.LocalDateTime
-import java.util.stream.Stream
 
 @DisplayName("ExecuteOptions extensions")
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
@@ -33,7 +32,7 @@ class ExecuteOptionsExtensionsTest {
                 { event: NameWasChanged -> observedEvents += "changed:${event.name()}" }
             )
 
-            executeOptions.sideEffect()!!.accept(Stream.of(nameDefined("Ada"), nameWasChanged("Lovelace")))
+            executeOptions.sideEffect()!!.accept(listOf(nameDefined("Ada"), nameWasChanged("Lovelace")))
 
             // Then
             assertThat(observedEvents).containsExactly("defined:Ada", "changed:Lovelace")
@@ -50,7 +49,7 @@ class ExecuteOptionsExtensionsTest {
                 { event: NameWasChanged -> observedEvents += "changed:${event.name()}" }
             )
 
-            executeOptions.sideEffect()!!.accept(Stream.of(nameDefined("Ada"), nameWasChanged("Lovelace")))
+            executeOptions.sideEffect()!!.accept(listOf(nameDefined("Ada"), nameWasChanged("Lovelace")))
 
             // Then
             assertThat(observedEvents).containsExactly("defined:Ada", "changed:Lovelace")
@@ -68,7 +67,7 @@ class ExecuteOptionsExtensionsTest {
                 { event: NameWasChanged -> observedEvents += event.name() }
             )
 
-            executeOptions.sideEffect()!!.accept(Stream.of(nameDefined("Ada"), nameWasChanged("Lovelace")))
+            executeOptions.sideEffect()!!.accept(listOf(nameDefined("Ada"), nameWasChanged("Lovelace")))
 
             // Then
             assertAll(
@@ -164,22 +163,7 @@ class ExecuteOptionsExtensionsTest {
             val executeOptions = ExecuteOptions.options<DomainEvent>()
                 .sideEffectOnList { events: List<NameDefined> -> observedNames = events.map(NameDefined::name) }
 
-            executeOptions.sideEffect()!!.accept(Stream.of(nameDefined("Ada"), nameWasChanged("Ignored"), nameDefined("Grace")))
-
-            // Then
-            assertThat(observedNames).containsExactly("Ada", "Grace")
-        }
-
-        @Test
-        fun `side effect on sequence receives matching events only`() {
-            // Given
-            var observedNames = emptyList<String>()
-
-            // When
-            val executeOptions = ExecuteOptions.options<DomainEvent>()
-                .sideEffectOnSequence { events: Sequence<NameDefined> -> observedNames = events.map(NameDefined::name).toList() }
-
-            executeOptions.sideEffect()!!.accept(Stream.of(nameDefined("Ada"), nameWasChanged("Ignored"), nameDefined("Grace")))
+            executeOptions.sideEffect()!!.accept(listOf(nameDefined("Ada"), nameWasChanged("Ignored"), nameDefined("Grace")))
 
             // Then
             assertThat(observedNames).containsExactly("Ada", "Grace")

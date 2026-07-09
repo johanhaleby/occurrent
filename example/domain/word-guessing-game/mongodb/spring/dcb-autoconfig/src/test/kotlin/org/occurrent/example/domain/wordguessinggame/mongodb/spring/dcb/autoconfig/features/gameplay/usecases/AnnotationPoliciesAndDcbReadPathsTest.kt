@@ -103,18 +103,18 @@ class AnnotationPoliciesAndDcbReadPathsTest {
 
         startGame(gameId, Date(1), startedBy, wordList())
         val gameWasStarted = eventuallySingle<GameWasStarted>(GameDcbQueries.gameplay(gameId))
-        val initialHints = eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintBoundary(gameId), 1)
+        val initialHints = eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), 1)
         val ongoingGame = eventuallyReadModel<OngoingGameReadModel>(gameId)
 
         assertThat(ongoingGame.hint.count { it != '_' && it != '-' }).isGreaterThanOrEqualTo(initialHints.size)
         assertThat(ongoingGamesQuery.execute(10).map { it.gameId }.toList()).contains(gameId)
-        assertThat(cloudEventTags(GameDcbQueries.wordHintBoundary(gameId)).filter { GameDcbTags.wordHint(gameId) in it })
+        assertThat(cloudEventTags(GameDcbQueries.wordHintCriteria(gameId)).filter { GameDcbTags.wordHint(gameId) in it })
             .allSatisfy { tags -> assertThat(tags).containsExactlyInAnyOrder(GameDcbTags.game(gameId), GameDcbTags.wordHint(gameId)) }
 
         makeGuess(gameId, Date(2), playerId, Word("wrong"))
         val wrongGuess = eventuallySingle<PlayerGuessedTheWrongWord>(GameDcbQueries.gameplay(gameId))
         val hintsAfterWrongGuess = eventuallyAtLeast<CharacterInWordHintWasRevealed>(
-            GameDcbQueries.wordHintBoundary(gameId),
+            GameDcbQueries.wordHintCriteria(gameId),
             initialHints.size + 1
         )
         assertThat(eventuallyReadModel<OngoingGameReadModel>(gameId).guesses).hasSize(1)
@@ -122,12 +122,12 @@ class AnnotationPoliciesAndDcbReadPathsTest {
         makeGuess(gameId, Date(3), playerId, Word(gameWasStarted.wordToGuess))
         eventuallySingle<PlayerGuessedTheRightWord>(GameDcbQueries.gameplay(gameId))
         eventuallySingle<GameWasWon>(GameDcbQueries.gameplay(gameId))
-        val points = eventuallySingle<PlayerWasAwardedPointsForGuessingTheRightWord>(GameDcbQueries.pointsBoundary(gameId))
+        val points = eventuallySingle<PlayerWasAwardedPointsForGuessingTheRightWord>(GameDcbQueries.pointsCriteria(gameId))
         val wonGame = eventuallyReadModel<GameWasWonReadModel>(gameId)
 
         assertThat(points.playerId).isEqualTo(playerId)
         assertThat(points.points).isEqualTo(3)
-        assertThat(cloudEvents(GameDcbQueries.pointsBoundary(gameId)).filter { GameDcbTags.points(gameId) in DcbCloudEvents.getTags(it) })
+        assertThat(cloudEvents(GameDcbQueries.pointsCriteria(gameId)).filter { GameDcbTags.points(gameId) in DcbCloudEvents.getTags(it) })
             .allSatisfy { cloudEvent ->
                 assertThat(OccurrentCloudEventExtension.getPosition(cloudEvent)).isGreaterThan(0)
                 assertThat(OccurrentExtensionGetter.getStreamId(cloudEvent)).startsWith("dcb:partition:")
@@ -136,15 +136,15 @@ class AnnotationPoliciesAndDcbReadPathsTest {
         assertThat(wonGame.pointsAwardedToWinner).isEqualTo(3)
         assertThat(ongoingGamesQuery.execute(10).map { it.gameId }.toList()).doesNotContain(gameId)
         assertThat(endedGamesOverviewQuery.execute(10).map { it.gameId }.toList()).contains(gameId)
-        assertThat(cloudEventTags(GameDcbQueries.pointsBoundary(gameId)).filter { GameDcbTags.points(gameId) in it })
+        assertThat(cloudEventTags(GameDcbQueries.pointsCriteria(gameId)).filter { GameDcbTags.points(gameId) in it })
             .allSatisfy { tags -> assertThat(tags).containsExactlyInAnyOrder(GameDcbTags.game(gameId), GameDcbTags.points(gameId)) }
 
         revealInitialCharacters(gameWasStarted)
         revealCharacterAfterWrongGuess(wrongGuess)
         awardPoints(PlayerGuessedTheRightWord(UUID.randomUUID(), Date(4), gameId, playerId, gameWasStarted.wordToGuess))
 
-        assertThat(events<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintBoundary(gameId))).hasSize(hintsAfterWrongGuess.size)
-        assertThat(events<PlayerWasAwardedPointsForGuessingTheRightWord>(GameDcbQueries.pointsBoundary(gameId))).hasSize(1)
+        assertThat(events<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId))).hasSize(hintsAfterWrongGuess.size)
+        assertThat(events<PlayerWasAwardedPointsForGuessingTheRightWord>(GameDcbQueries.pointsCriteria(gameId))).hasSize(1)
     }
 
     private fun wordList() = WordList(
