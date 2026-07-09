@@ -266,8 +266,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
-        requireNonNull(query, "Query cannot be null");
+    public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
 
         synchronized (state) {
@@ -277,7 +277,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             List<CloudEvent> matchingEvents = allEvents()
                     .filter(event -> position(event) > afterPosition)
                     .filter(event -> position(event) <= upperBound)
-                    .filter(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, query))
+                    .filter(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, criteria))
                     .sorted(Comparator.comparingLong(InMemoryEventStore::position))
                     .toList();
             return new DcbEventStream(matchingEvents, highWatermark);
@@ -285,26 +285,26 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public boolean exists(DcbCriteria query) {
-        requireNonNull(query, "Query cannot be null");
+    public boolean exists(DcbCriteria criteria) {
+        requireNonNull(criteria, "Criteria cannot be null");
         synchronized (state) {
-            return matchingDcbEvents(query).findAny().isPresent();
+            return matchingDcbEvents(criteria).findAny().isPresent();
         }
     }
 
     @Override
-    public long count(DcbCriteria query) {
-        requireNonNull(query, "Query cannot be null");
+    public long count(DcbCriteria criteria) {
+        requireNonNull(criteria, "Criteria cannot be null");
         synchronized (state) {
-            return matchingDcbEvents(query).count();
+            return matchingDcbEvents(criteria).count();
         }
     }
 
-    private Stream<CloudEvent> matchingDcbEvents(DcbCriteria query) {
+    private Stream<CloudEvent> matchingDcbEvents(DcbCriteria criteria) {
         long highWatermark = nextPosition.get() - 1;
         return allEvents()
                 .filter(event -> position(event) > 0 && position(event) <= highWatermark)
-                .filter(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, query));
+                .filter(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, criteria));
     }
 
     @Override
@@ -323,7 +323,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         // Place by the condition's boundary tags when it constrains tags, so the same boundary always lands
         // in the same partition regardless of per-event tags. Otherwise fall back to the events' tags, so
         // tagless boundaries do not all collapse onto one hot partition.
-        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
+        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.criteria());
         Set<Tag> placementTags = conditionTags.isEmpty() ? tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
@@ -336,7 +336,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 long afterPosition = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
                 boolean fulfilled = allEvents()
                         .filter(event -> position(event) > afterPosition)
-                        .noneMatch(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, condition.query()));
+                        .noneMatch(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, condition.criteria()));
                 long currentPosition = nextPosition.get() - 1;
                 if (!fulfilled) {
                     throw new DcbAppendConditionNotFulfilledException(condition, currentPosition, "Append condition was not fulfilled.");

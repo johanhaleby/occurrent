@@ -34,10 +34,9 @@ import static java.util.Objects.requireNonNull;
  * {@link #tagsAnyOf(Tag, Tag...)} shortcut) to OR several. The model is deliberately an OR of items rather than a general
  * boolean tree (see ADR 32).
  * <p>
- * Naming note: this type is {@code DcbCriteria}, but {@link DcbEventStore#read(DcbCriteria)} and
- * {@link DcbAppendCondition#query()} both name their parameter {@code query}. Same value, two names depending on
- * whether the surrounding API is talking about the type/builder ({@code criteria}) or a call-site argument
- * ({@code query}); there is no semantic difference.
+ * Naming note: this type is {@code DcbCriteria}, and {@link DcbEventStore#read(DcbCriteria)} and
+ * {@link DcbAppendCondition#criteria()} both name their parameter/component {@code criteria}. Same value, same name,
+ * whether the surrounding API is talking about the type/builder or a call-site argument.
  */
 @NullMarked
 public sealed interface DcbCriteria permits DcbCriteria.MatchAll, DcbCriteria.Items, DcbCriterion {

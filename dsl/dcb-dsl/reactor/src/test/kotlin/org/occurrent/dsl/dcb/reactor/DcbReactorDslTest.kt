@@ -261,7 +261,7 @@ class DcbReactorDslTest {
     ) : DcbEventStore {
         private val conflictInserted = AtomicBoolean()
 
-        override fun read(query: DcbCriteria, options: DcbReadOptions): Mono<DcbEventStream> = delegate.read(query, options)
+        override fun read(criteria: DcbCriteria, options: DcbReadOptions): Mono<DcbEventStream> = delegate.read(criteria, options)
 
         override fun append(events: MutableList<CloudEvent>): Mono<DcbAppendResult> = delegate.append(events)
 

@@ -85,7 +85,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final DcbEventStore dcbEventStore;
-    private final @Nullable DcbCriteria defaultQuery;
+    private final @Nullable DcbCriteria defaultCriteria;
     private final long windowSize;
     private final int handoverCacheSize;
 
@@ -103,14 +103,14 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      * takes a shared {@code DcbCriteria.all()}, so the reactive starter can wire one model that every DCB subscription
      * narrows with its own query in the consumer.
      */
-    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery) {
-        this(subscriptionModel, dcbEventStore, defaultQuery, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
+    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultCriteria) {
+        this(subscriptionModel, dcbEventStore, defaultCriteria, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
-    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, long windowSize, int handoverCacheSize) {
+    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultCriteria, long windowSize, int handoverCacheSize) {
         this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.dcbEventStore = requireNonNull(dcbEventStore, DcbEventStore.class.getSimpleName() + " cannot be null");
-        this.defaultQuery = defaultQuery;
+        this.defaultCriteria = defaultCriteria;
         if (windowSize <= 0) {
             throw new IllegalArgumentException("Window size must be greater than zero");
         }
@@ -130,18 +130,18 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        final DcbCriteria query;
+        final DcbCriteria criteria;
         if (filter == null) {
-            if (defaultQuery == null) {
+            if (defaultCriteria == null) {
                 return Flux.error(new IllegalArgumentException("A " + DcbSubscriptionFilter.class.getSimpleName() + " is required unless a default " + DcbCriteria.class.getSimpleName() + " was supplied to the constructor."));
             }
-            query = defaultQuery;
+            criteria = defaultCriteria;
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
-            query = dcbSubscriptionFilter.criteria();
+            criteria = dcbSubscriptionFilter.criteria();
         } else {
             return Flux.error(new IllegalArgumentException(ReactorDcbCatchupSubscriptionModel.class.getSimpleName() + " only supports a " + DcbSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName()));
         }
-        return subscribe(query, startAt);
+        return subscribe(criteria, startAt);
     }
 
     @Override
@@ -150,50 +150,50 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     }
 
     /**
-     * Subscribe to DCB events matching {@code query}. A {@link DcbStartAt} that carries a {@code position} (for
+     * Subscribe to DCB events matching {@code criteria}. A {@link DcbStartAt} that carries a {@code position} (for
      * example {@link DcbStartAt#beginning()} or {@link DcbStartAt#afterPosition(long)}) replays history from that
      * position and then goes live. Any other start (now or the subscription model default) goes straight to live.
      */
-    public Flux<CloudEvent> subscribe(DcbCriteria query, DcbStartAt startAt) {
-        requireNonNull(query, "Query cannot be null");
+    public Flux<CloudEvent> subscribe(DcbCriteria criteria, DcbStartAt startAt) {
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");
-        return subscribe(query, startAt.toStartAt());
+        return subscribe(criteria, startAt.toStartAt());
     }
 
-    private Flux<CloudEvent> subscribe(DcbCriteria query, StartAt startAt) {
-        requireNonNull(query, "Query cannot be null");
+    private Flux<CloudEvent> subscribe(DcbCriteria criteria, StartAt startAt) {
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorDcbCatchupSubscriptionModel.class));
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             // Not a DCB catch-up position, so go straight to live. Apply the same in-process DCB floor the replay-to-live
             // path and the DcbSubscriptionModel adapter apply, so a backend that does not honor the filter server-side
-            // still only delivers events matching the query.
-            return subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), resolved == null ? startAt : resolved)
-                    .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query));
+            // still only delivers events matching the criteria.
+            return subscriptionModel.subscribe(DcbSubscriptionFilter.filter(criteria), resolved == null ? startAt : resolved)
+                    .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria));
         }
 
         long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
-        CatchupReader reader = new DcbCatchupReader(dcbEventStore, query);
+        CatchupReader reader = new DcbCatchupReader(dcbEventStore, criteria);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
-        Predicate<CloudEvent> livePredicate = cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query);
-        return pipeline.catchup(subscriptionModel, DcbSubscriptionFilter.filter(query), livePredicate, startPosition);
+        Predicate<CloudEvent> livePredicate = cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria);
+        return pipeline.catchup(subscriptionModel, DcbSubscriptionFilter.filter(criteria), livePredicate, startPosition);
     }
 
     // Reads DCB events in position order through the DcbEventStore, wrapping each with its position so a durable
     // model layered on top can persist replay progress.
-    private record DcbCatchupReader(DcbEventStore dcbEventStore, DcbCriteria query) implements CatchupReader {
+    private record DcbCatchupReader(DcbEventStore dcbEventStore, DcbCriteria criteria) implements CatchupReader {
         @Override
         public Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
-            return dcbEventStore.read(query, DcbReadOptions.between(fromExclusive, toInclusive))
+            return dcbEventStore.read(criteria, DcbReadOptions.between(fromExclusive, toInclusive))
                     .flatMapMany(stream -> Flux.fromIterable(stream.events())
                             .map(event -> (CloudEvent) new CheckpointAwareCloudEvent(event, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(event)))));
         }
 
         @Override
         public Mono<Long> currentHead() {
-            // lastSequencePosition is the global head at read time regardless of whether the query matched anything.
-            return dcbEventStore.read(query, DcbReadOptions.between(0, 0)).map(stream -> stream.lastSequencePosition());
+            // lastSequencePosition is the global head at read time regardless of whether the criteria matched anything.
+            return dcbEventStore.read(criteria, DcbReadOptions.between(0, 0)).map(stream -> stream.lastSequencePosition());
         }
     }
 }

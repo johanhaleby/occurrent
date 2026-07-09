@@ -103,8 +103,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     @Override
-    public Mono<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel) {
-        Objects.requireNonNull(query, "Query cannot be null");
+    public Mono<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel) {
+        Objects.requireNonNull(criteria, "Criteria cannot be null");
         Objects.requireNonNull(options, DcbExecuteOptions.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
@@ -115,7 +115,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // success, not per attempt.
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
-        Mono<Result<E>> readDecideAppend = Mono.defer(() -> eventStore.read(query).flatMap(eventStream -> {
+        Mono<Result<E>> readDecideAppend = Mono.defer(() -> eventStore.read(criteria).flatMap(eventStream -> {
             List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
             List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
             if (newDomainEvents == null || newDomainEvents.isEmpty()) {
@@ -123,7 +123,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             }
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
             List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
-            DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(query, eventStream.consistencyToken());
+            DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(criteria, eventStream.consistencyToken());
             return eventStore.append(dcbEvents, appendCondition).map(result -> new Result<>(result, newDomainEvents));
         })).retryWhen(retry);
 

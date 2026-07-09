@@ -241,7 +241,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     @SuppressWarnings("unchecked")
     private <E> void processDcbSubscribeAnnotation(Object bean, Method method, DcbSubscription annotation) {
         String id = annotation.id();
-        final DcbCriteria query;
+        final DcbCriteria criteria;
         final List<Class<?>> parameterTypes;
         if (method.getParameterCount() >= 1) {
             CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
@@ -257,7 +257,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                     throw new IllegalArgumentException("@DcbSubscription(id=\"%s\") has a malformed tag \"%s\", expected \"key:value\": %s".formatted(id, tag, e.getMessage()), e);
                 }
             }
-            query = SubscriptionAnnotations.buildDcbCriteria(cloudEventTypes, tags);
+            criteria = SubscriptionAnnotations.buildDcbCriteria(cloudEventTypes, tags);
         } else {
             throw new IllegalArgumentException("A @DcbSubscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }
@@ -278,7 +278,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
 
         applyStartupWorkarounds();
 
-        var subscription = dcbSubscriptions.subscribeWithMetadata(id, query, startAt, consumer);
+        var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer);
         if (shouldWaitUntilStarted) {
             subscription.waitUntilStarted();
         }

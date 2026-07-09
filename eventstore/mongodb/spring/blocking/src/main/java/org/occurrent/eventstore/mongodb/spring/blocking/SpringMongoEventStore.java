@@ -211,18 +211,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     @Override
-    public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
+    public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
         requireDcbCapability();
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
 
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
         // false conflict that retries) rather than miss the conflict.
-        long consistencyTokenValue = consistencyToken(query);
+        long consistencyTokenValue = consistencyToken(criteria);
         long highWatermark = currentPosition();
         long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
-        Query mongoQuery = toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound);
+        Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
         mongoQuery.with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
         List<CloudEvent> events = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
@@ -244,19 +244,19 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     @Override
-    public boolean exists(DcbCriteria query, DcbReadOptions options) {
+    public boolean exists(DcbCriteria criteria, DcbReadOptions options) {
         requireDcbCapability();
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(query, lowerBound(options), upperBound(options))), eventStoreCollectionName);
+        return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(criteria, lowerBound(options), upperBound(options))), eventStoreCollectionName);
     }
 
     @Override
-    public long count(DcbCriteria query, DcbReadOptions options) {
+    public long count(DcbCriteria criteria, DcbReadOptions options) {
         requireDcbCapability();
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(query, lowerBound(options), upperBound(options))), eventStoreCollectionName);
+        return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(criteria, lowerBound(options), upperBound(options))), eventStoreCollectionName);
     }
 
     private long lowerBound(DcbReadOptions options) {
@@ -371,7 +371,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // Place by the condition's boundary tags when it constrains tags, so the same boundary always lands
         // in the same partition regardless of per-event tags. Otherwise fall back to the events' tags, so
         // tagless boundaries do not all collapse onto one hot partition.
-        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
+        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.criteria());
         Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
@@ -465,13 +465,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             // committed after the read, so the condition fails. This is immune to read-watermark overshoot,
             // unlike a position-based check, because marker versions bump inside the append transaction at
             // commit, not when positions are reserved (ADR 0021).
-            conflict = consistencyToken(condition.query()) != expectedToken.get().value();
+            conflict = consistencyToken(condition.criteria()) != expectedToken.get().value();
         } else {
             // No token: an absolute "fail if any matching event exists" guard. Checks the live events rather than
             // marker versions, so it means "currently exists" (surviving deletes and marker pruning) rather than
             // "ever appended". The marker increments below still serialize concurrent unconditional guards on the
             // same boundary, so two of them cannot both pass.
-            conflict = mongoTemplate.exists(toDcbMongoQuery(condition.query(), 0, Long.MAX_VALUE), eventStoreCollectionName);
+            conflict = mongoTemplate.exists(toDcbMongoQuery(condition.criteria(), 0, Long.MAX_VALUE), eventStoreCollectionName);
         }
         if (conflict) {
             throw new DcbAppendConditionNotFulfilledException(condition, currentPosition(), "Append condition was not fulfilled.");
@@ -480,7 +480,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // forces a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs
         // this check against the winner's committed increment. The query's markers are always incremented, so a
         // concurrent matching append is serialized even when this append's own events do not match the query.
-        TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.query()));
+        TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.criteria()));
         markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
         incrementConflictMarkers(markerKeys, lastPosition);
     }
@@ -513,8 +513,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // append touched one of the query's markers since the reader observed it. Because versions bump inside the
     // append transaction, not when positions are reserved, this token reflects only committed appends and is
     // immune to the read-watermark overshoot a position-based check suffers (ADR 0021).
-    private long consistencyToken(DcbCriteria query) {
-        Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(query);
+    private long consistencyToken(DcbCriteria criteria) {
+        Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(criteria);
         if (markerKeys.isEmpty()) {
             return 0;
         }
@@ -697,13 +697,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return Query.query(streamIdEqualToCriteria(streamId));
     }
 
-    private static Query toDcbMongoQuery(DcbCriteria query, long afterPosition, long upperSequencePosition) {
+    private static Query toDcbMongoQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition) {
         Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterPosition).lte(upperSequencePosition);
         Criteria dcbEventCriteria = where(DCB_TAGS_INDEX_FIELD).exists(true);
-        if (query instanceof DcbCriteria.MatchAll) {
+        if (criteria instanceof DcbCriteria.MatchAll) {
             return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria));
         }
-        List<Criteria> itemCriteria = DcbMarkerModel.dcbQueryItems(query).stream()
+        List<Criteria> itemCriteria = DcbMarkerModel.dcbQueryItems(criteria).stream()
                 .map(SpringMongoEventStore::toCriteria)
                 .toList();
         return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria, new Criteria().orOperator(itemCriteria)));

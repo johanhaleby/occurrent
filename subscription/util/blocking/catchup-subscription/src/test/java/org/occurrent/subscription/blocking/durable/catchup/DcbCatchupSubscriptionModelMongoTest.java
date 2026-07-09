@@ -279,8 +279,8 @@ class DcbCatchupSubscriptionModelMongoTest {
         }
 
         @Override
-        public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
-            DcbEventStream result = delegate.read(query, options);
+        public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+            DcbEventStream result = delegate.read(criteria, options);
             boolean windowRead = options.afterPosition().isPresent() && options.upToPosition().isPresent()
                     && options.afterPosition().getAsLong() != options.upToPosition().getAsLong();
             if (windowRead && blockedOnce.compareAndSet(false, true)) {

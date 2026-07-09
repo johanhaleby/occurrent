@@ -34,7 +34,7 @@ import java.util.function.Consumer;
  * <p>
  * A typical usage pattern is:
  * <pre>{@code
- * dcbApplicationService.execute(query,
+ * dcbApplicationService.execute(criteria,
  *         DcbExecuteOptions.<DomainEvent>options().sideEffect(mySideEffect),
  *         functionThatCallsDomainModel);
  * }</pre>

@@ -103,8 +103,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
      * Executes a domain function against the current events selected by the DCB query and appends any produced events.
      */
     @Override
-    public Optional<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel) {
-        Objects.requireNonNull(query, "Query cannot be null");
+    public Optional<DcbAppendResult> execute(DcbCriteria criteria, DcbExecuteOptions<E> options, Function<List<E>, List<E>> functionThatCallsDomainModel) {
+        Objects.requireNonNull(criteria, "Criteria cannot be null");
         Objects.requireNonNull(options, DcbExecuteOptions.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
@@ -115,7 +115,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // @formatter:on
 
         Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
-            DcbEventStream eventStream = eventStore.read(query);
+            DcbEventStream eventStream = eventStore.read(criteria);
             List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
             List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
             if (newDomainEvents == null || newDomainEvents.isEmpty()) {
@@ -124,7 +124,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
             List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
-            DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(query, eventStream.consistencyToken());
+            DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(criteria, eventStream.consistencyToken());
             return new Tuple<>(Optional.of(eventStore.append(dcbEvents, appendCondition)), newDomainEvents);
         });
 

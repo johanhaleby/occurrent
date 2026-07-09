@@ -29,7 +29,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Translates {@link DcbSubscriptionModel} calls into the shared {@link SubscriptionModel}, building a
- * {@link DcbSubscriptionFilter} from the query and converting the {@link DcbStartAt} to a generic start position. All
+ * {@link DcbSubscriptionFilter} from the criteria and converting the {@link DcbStartAt} to a generic start position. All
  * life-cycle calls forward to the delegate (see {@link AbstractDelegatingSubscriptionModelAdapter}).
  */
 @NullMarked
@@ -40,22 +40,22 @@ final class DcbSubscriptionModelAdapter extends AbstractDelegatingSubscriptionMo
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, DcbCriteria query, DcbStartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria criteria, DcbStartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireNonNull(query, "Criteria cannot be null");
+        requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");
         requireNonNull(action, "Subscription action cannot be null");
         // The DcbSubscriptionFilter is honored server-side for live delivery, but a DCB catch-up replays by the
-        // model-level query, so an in-process check keeps the subscription scoped to its own query during catch-up too
+        // model-level criteria, so an in-process check keeps the subscription scoped to its own criteria during catch-up too
         // (and stays correct for any backend that does not honor the filter).
         Consumer<CloudEvent> scopedToQuery = cloudEvent -> {
-            // Scope to DCB-written events matching the query. The discriminator is isDcbEvent (the DCB tags extension),
+            // Scope to DCB-written events matching the criteria. The discriminator is isDcbEvent (the DCB tags extension),
             // not a positive position: with stream position on by default, stream events also carry a position, so a
             // "position > 0" guard would leak stream events into a DCB subscription.
-            if (DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query)) {
+            if (DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria)) {
                 action.accept(cloudEvent);
             }
         };
-        return delegate.subscribe(subscriptionId, DcbSubscriptionFilter.filter(query), startAt.toStartAt(), scopedToQuery);
+        return delegate.subscribe(subscriptionId, DcbSubscriptionFilter.filter(criteria), startAt.toStartAt(), scopedToQuery);
     }
 }

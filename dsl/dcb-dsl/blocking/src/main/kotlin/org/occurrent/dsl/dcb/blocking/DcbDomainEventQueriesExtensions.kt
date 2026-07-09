@@ -28,10 +28,10 @@ import kotlin.streams.asSequence
  * @see DcbDomainEventQueries.query
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForSequence(
-    query: DcbCriteria,
+    criteria: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Sequence<T> =
-    this.query(query, options).asSequence()
+    this.query(criteria, options).asSequence()
 
 /**
  * Query that returns a [List] instead of a [java.util.stream.Stream].
@@ -39,10 +39,10 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForSequence(
  * @see DcbDomainEventQueries.query
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForList(
-    query: DcbCriteria,
+    criteria: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): List<T> =
-    this.query(query, options).toList()
+    this.query(criteria, options).toList()
 
 /**
  * Query that returns the matching domain events as a [List] together with the observed DCB sequence position and the
@@ -51,10 +51,10 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForList(
  * @see DcbDomainEventQueries.queryWithPosition
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
-    query: DcbCriteria,
+    criteria: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Triple<List<T>, Long, DcbConsistencyToken> =
-    this.queryWithPosition(query, options).let { Triple(it.events(), it.lastSequencePosition(), it.consistencyToken()) }
+    this.queryWithPosition(criteria, options).let { Triple(it.events(), it.lastSequencePosition(), it.consistencyToken()) }
 
 /**
  * Query that returns the matching domain events as a [Sequence] together with the observed DCB sequence position and the
@@ -63,10 +63,10 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
  * @see DcbDomainEventQueries.queryWithPosition
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForSequenceWithPosition(
-    query: DcbCriteria,
+    criteria: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Triple<Sequence<T>, Long, DcbConsistencyToken> =
-    this.queryWithPosition(query, options).let { Triple(it.events().asSequence(), it.lastSequencePosition(), it.consistencyToken()) }
+    this.queryWithPosition(criteria, options).let { Triple(it.events().asSequence(), it.lastSequencePosition(), it.consistencyToken()) }
 
 /**
  * Queries DCB events of the reified type [T] as a [List].

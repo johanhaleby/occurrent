@@ -149,7 +149,7 @@ class ReactorCatchupSubscriptionModelRoutingTest {
 
     private static final class UnusedDcbEventStore implements DcbEventStore {
         @Override
-        public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
+        public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
             return Mono.error(new AssertionError("read must not be called when the catch-up fails loudly"));
         }
 

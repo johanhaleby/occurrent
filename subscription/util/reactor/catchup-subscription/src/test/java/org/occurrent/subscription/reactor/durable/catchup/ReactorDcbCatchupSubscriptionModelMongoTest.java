@@ -246,15 +246,15 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
         }
 
         @Override
-        public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
+        public Mono<DcbEventStream> read(DcbCriteria criteria, DcbReadOptions options) {
             boolean isHeadProbe = options.afterPosition().orElse(0) == options.upToPosition().orElse(0);
             if (!isHeadProbe && windowDelayed.compareAndSet(false, true)) {
                 return Mono.defer(() -> {
                     firstReadStarted.set(true);
-                    return delegate.read(query, options).delayElement(delay);
+                    return delegate.read(criteria, options).delayElement(delay);
                 });
             }
-            return delegate.read(query, options);
+            return delegate.read(criteria, options);
         }
 
         @Override

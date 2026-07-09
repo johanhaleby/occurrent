@@ -177,7 +177,7 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
     // Never actually read from since these tests only exercise cancelSubscription/shutdown, not subscribe.
     private static final class UnusedDcbEventStore implements DcbEventStore {
         @Override
-        public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
+        public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
             throw new AssertionError("read must not be called by this test");
         }
 

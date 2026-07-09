@@ -30,11 +30,11 @@ import org.occurrent.subscription.api.blocking.Subscription
 @JvmName("subscribeDcb")
 fun <E : Any> DcbSubscriptions<E>.subscribeDcb(
     subscriptionId: String,
-    query: DcbCriteria = DcbCriteria.all(),
+    criteria: DcbCriteria = DcbCriteria.all(),
     startAt: DcbStartAt? = null,
     waitUntilStarted: Boolean = true,
     fn: (E) -> Unit
-): Subscription = subscribeWithMetadata(subscriptionId, query, startAt, waitUntilStarted) { _, event -> fn(event) }
+): Subscription = subscribeWithMetadata(subscriptionId, criteria, startAt, waitUntilStarted) { _, event -> fn(event) }
 
 /**
  * Kotlin-idiomatic sugar over [DcbSubscriptions], including DCB metadata in the callback. See [subscribeDcb] for the
@@ -43,8 +43,8 @@ fun <E : Any> DcbSubscriptions<E>.subscribeDcb(
 @JvmName("subscribeDcbWithMetadata")
 fun <E : Any> DcbSubscriptions<E>.subscribeDcbWithMetadata(
     subscriptionId: String,
-    query: DcbCriteria = DcbCriteria.all(),
+    criteria: DcbCriteria = DcbCriteria.all(),
     startAt: DcbStartAt? = null,
     waitUntilStarted: Boolean = true,
     fn: (DcbEventMetadata, E) -> Unit
-): Subscription = subscribeWithMetadata(subscriptionId, query, startAt, waitUntilStarted, fn)
+): Subscription = subscribeWithMetadata(subscriptionId, criteria, startAt, waitUntilStarted, fn)

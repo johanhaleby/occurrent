@@ -67,7 +67,7 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
  * {@code read()} reports {@code lastSequencePosition() == currentPosition()}, i.e. the global position counter. That
  * counter is incremented by {@code reservePositions} <em>outside</em> the append transaction, before the events
  * commit. So a reader that runs while an append holds reserved-but-uncommitted positions inherits a watermark that
- * points past data it cannot see. The reader's command then derives {@code failIfEventsMatch(query, watermark)}, and the
+ * points past data it cannot see. The reader's command then derives {@code failIfEventsMatch(criteria, watermark)}, and the
  * append-time check {@code position > watermark} structurally excludes the very events the appender reserved — once they
  * commit, the conflict is silently lost and the reader's conditional append wrongly succeeds.
  * <p>

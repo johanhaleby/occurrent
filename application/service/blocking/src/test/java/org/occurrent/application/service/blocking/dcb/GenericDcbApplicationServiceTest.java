@@ -174,8 +174,8 @@ class GenericDcbApplicationServiceTest {
         }
 
         @Override
-        public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
-            return delegate.read(query, options);
+        public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+            return delegate.read(criteria, options);
         }
 
         @Override
@@ -202,8 +202,8 @@ class GenericDcbApplicationServiceTest {
         }
 
         @Override
-        public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
-            return delegate.read(query, options);
+        public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+            return delegate.read(criteria, options);
         }
 
         @Override
