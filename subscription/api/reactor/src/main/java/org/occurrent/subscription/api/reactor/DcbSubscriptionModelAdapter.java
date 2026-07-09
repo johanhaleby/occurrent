@@ -71,13 +71,13 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
         // The DcbSubscriptionFilter is honored server-side for live delivery, but a DCB catch-up replays by the
         // model-level criteria, so an in-process check keeps the subscription scoped to its own criteria during catch-up too
         // (and stays correct for any backend that does not honor the filter), matching the blocking adapter.
-        Function<CloudEvent, Mono<Void>> scopedToQuery = cloudEvent -> {
+        Function<CloudEvent, Mono<Void>> scopedToCriteria = cloudEvent -> {
             if (DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria)) {
                 return action.apply(cloudEvent);
             }
             return Mono.empty();
         };
-        return subscribable.subscribe(subscriptionId, DcbSubscriptionFilter.filter(criteria), startAt.toStartAt(), scopedToQuery);
+        return subscribable.subscribe(subscriptionId, DcbSubscriptionFilter.filter(criteria), startAt.toStartAt(), scopedToCriteria);
     }
 
     @Override

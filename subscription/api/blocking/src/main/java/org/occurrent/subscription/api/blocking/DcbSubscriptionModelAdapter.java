@@ -48,7 +48,7 @@ final class DcbSubscriptionModelAdapter extends AbstractDelegatingSubscriptionMo
         // The DcbSubscriptionFilter is honored server-side for live delivery, but a DCB catch-up replays by the
         // model-level criteria, so an in-process check keeps the subscription scoped to its own criteria during catch-up too
         // (and stays correct for any backend that does not honor the filter).
-        Consumer<CloudEvent> scopedToQuery = cloudEvent -> {
+        Consumer<CloudEvent> scopedToCriteria = cloudEvent -> {
             // Scope to DCB-written events matching the criteria. The discriminator is isDcbEvent (the DCB tags extension),
             // not a positive position: with stream position on by default, stream events also carry a position, so a
             // "position > 0" guard would leak stream events into a DCB subscription.
@@ -56,6 +56,6 @@ final class DcbSubscriptionModelAdapter extends AbstractDelegatingSubscriptionMo
                 action.accept(cloudEvent);
             }
         };
-        return delegate.subscribe(subscriptionId, DcbSubscriptionFilter.filter(criteria), startAt.toStartAt(), scopedToQuery);
+        return delegate.subscribe(subscriptionId, DcbSubscriptionFilter.filter(criteria), startAt.toStartAt(), scopedToCriteria);
     }
 }

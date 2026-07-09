@@ -254,7 +254,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 try {
                     tags.add(Tag.parse(tag));
                 } catch (IllegalArgumentException e) {
-                    throw new IllegalArgumentException("@DcbSubscription(id=\"%s\") has a malformed tag \"%s\", expected \"key:value\": %s".formatted(id, tag, e.getMessage()), e);
+                    throw new IllegalArgumentException("@DcbSubscription(id=\"%s\") has a malformed tag \"%s\": %s".formatted(id, tag, e.getMessage()), e);
                 }
             }
             criteria = SubscriptionAnnotations.buildDcbCriteria(cloudEventTypes, tags);
