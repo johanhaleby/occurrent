@@ -86,6 +86,28 @@ Mongo `dcbTags` index field, and the `"tag:"` marker prefix are byte-identical t
 (stores, DSLs, application services, the annotation processors, and the examples) is updated in this change.
 
 This extends [ADR 17](0017-introduce-dcb-as-shared-cloudevent-capability.md) and [ADR 32](0032-fluent-dcb-query-construction.md):
-the OR-of-items model and its construction ergonomics are unchanged in shape; only the vocabulary (criteria, tag) and
-the typed-`Class` convenience are new. The `@DcbSubscription` `tagsAllOf` attribute name is left as-is here; aligning it
+the OR-of-items model and its construction ergonomics are unchanged in shape, only the vocabulary (criteria, tag) and
+the typed-`Class` convenience are new. The `@DcbSubscription` `tagsAllOf` attribute name is left as-is here, aligning it
 with the DSL's unqualified `tags` default is a separate follow-up.
+
+## Update (2026-07-09): Tag is an opaque string, and the criteria naming is applied consistently
+
+A review against the DCB specification at [dcb.events/specification](https://dcb.events/specification) revised the
+`Tag` decision above. The spec treats a tag as an opaque string that *may*, but need not, represent a key/value pair
+such as `product:123`. Requiring a key and a value, as the original decision did, is a narrowing of the spec with no
+real justification: matching is string containment, partition placement orders by the canonical string, and storage is
+a set of canonical strings, none of which need the string to be split.
+
+`Tag` is therefore now a single-component record `Tag(String value)` holding the whole non-blank, newline-free tag
+string. `Tag.of(key, value)` remains a convenience that builds the `key:value` form (the key may not be blank or
+contain a `:`), and `Tag.of(String)` and `Tag.parse(String)` accept any tag string, including a value-less marker such
+as `premium`. The `key:value` form and the string form of the same text are the same tag, and equality and ordering are
+by the string value. The `key()` and `value()`-as-parts accessors are gone, and `canonical()` now equals `value()`. The
+stored wire form is unchanged: `canonical()` still produces the same string the old convention used, so the `dcbtags`
+extension, the Mongo `dcbTags` index array, and the `"tag:"` marker keys are byte-identical.
+
+Separately, the "criteria covers both roles" decision above was applied consistently to the identifiers that had still
+been named `query`. The `DcbCriteria`-typed parameters on `read`, `exists`, `count`, `execute`, and `subscribe`, and the
+`DcbAppendCondition` record component (its accessor is now `criteria()`), are all named `criteria`. The separate query
+read API (`DcbDomainEventQueries` and its `query(...)` method) keeps its name, since it is a read that returns events
+rather than a consistency selection.

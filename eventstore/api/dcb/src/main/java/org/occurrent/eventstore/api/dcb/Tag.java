@@ -21,71 +21,82 @@ import org.jspecify.annotations.NullMarked;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A DCB tag, a {@code key:value} pair that scopes events to a consistency boundary.
+ * A DCB tag, an opaque string marker that scopes events to a consistency boundary.
  * <p>
- * Keys and values are stripped of surrounding whitespace. A key may not be blank, contain a
- * {@code ':'} (the key/value separator), or contain a newline. A value may not be blank or contain
- * a newline, but it may contain {@code ':'}. Tags order by their {@link #canonical()} form so that a
- * tag set has a stable canonical encoding for partition placement.
+ * The DCB specification treats a tag as a string that <em>may</em>, but need not, represent a
+ * key/value pair such as {@code product:123}. Use {@link #of(String, String)} to build the key/value
+ * form and {@link #of(String)} (or {@link #parse(String)}) for a tag from its string form, including a
+ * value-less marker such as {@code premium}. A tag is stripped of surrounding whitespace and may not be
+ * blank or contain a newline. Tags order by their string value so that a tag set has a stable canonical
+ * encoding for partition placement.
  */
 @NullMarked
-public record Tag(String key, String value) implements Comparable<Tag> {
+public record Tag(String value) implements Comparable<Tag> {
 
     static final char SEPARATOR = ':';
     private static final char NEWLINE = '\n';
 
     public Tag {
-        requireNonNull(key, "Tag key cannot be null");
-        requireNonNull(value, "Tag value cannot be null");
-        key = key.strip();
+        requireNonNull(value, "Tag cannot be null");
         value = value.strip();
-        if (key.isEmpty()) {
-            throw new IllegalArgumentException("Tag key cannot be blank");
-        }
         if (value.isEmpty()) {
-            throw new IllegalArgumentException("Tag value cannot be blank");
+            throw new IllegalArgumentException("Tag cannot be blank");
         }
-        if (key.indexOf(SEPARATOR) >= 0) {
-            throw new IllegalArgumentException("Tag key cannot contain '" + SEPARATOR + "'");
-        }
-        if (key.indexOf(NEWLINE) >= 0 || value.indexOf(NEWLINE) >= 0) {
-            throw new IllegalArgumentException("Tag key/value cannot contain a newline");
+        if (value.indexOf(NEWLINE) >= 0) {
+            throw new IllegalArgumentException("Tag cannot contain a newline");
         }
     }
 
     /**
-     * Creates a tag from a key and value.
+     * Creates a tag from its string form, for example {@code premium} or {@code course:c1}.
+     */
+    public static Tag of(String tag) {
+        return new Tag(tag);
+    }
+
+    /**
+     * Creates a {@code key:value} tag. The key may not be blank or contain a {@code ':'}, and the value
+     * may not be blank. The value may itself contain {@code ':'}.
      */
     public static Tag of(String key, String value) {
-        return new Tag(key, value);
+        requireNonNull(key, "Tag key cannot be null");
+        requireNonNull(value, "Tag value cannot be null");
+        String strippedKey = key.strip();
+        String strippedValue = value.strip();
+        if (strippedKey.isEmpty()) {
+            throw new IllegalArgumentException("Tag key cannot be blank");
+        }
+        if (strippedValue.isEmpty()) {
+            throw new IllegalArgumentException("Tag value cannot be blank");
+        }
+        if (strippedKey.indexOf(SEPARATOR) >= 0) {
+            throw new IllegalArgumentException("Tag key cannot contain '" + SEPARATOR + "'");
+        }
+        return new Tag(strippedKey + SEPARATOR + strippedValue);
     }
 
     /**
-     * Parses a tag from its {@code key:value} canonical form, splitting on the first {@code ':'}.
+     * Reconstructs a tag from its {@link #canonical()} string form. Equivalent to {@link #of(String)},
+     * and accepts both the {@code key:value} form and a value-less marker.
      */
     public static Tag parse(String s) {
-        requireNonNull(s, "Tag cannot be null");
-        int idx = s.indexOf(SEPARATOR);
-        if (idx < 0) {
-            throw new IllegalArgumentException("Tag must be in 'key:value' form: " + s);
-        }
-        return new Tag(s.substring(0, idx), s.substring(idx + 1));
+        return new Tag(s);
     }
 
     /**
-     * Returns the canonical {@code key:value} string form of this tag.
+     * Returns the canonical string form of this tag, identical to {@link #value()}.
      */
     public String canonical() {
-        return key + SEPARATOR + value;
+        return value;
     }
 
     @Override
     public int compareTo(Tag other) {
-        return canonical().compareTo(other.canonical());
+        return value.compareTo(other.value);
     }
 
     @Override
     public String toString() {
-        return canonical();
+        return value;
     }
 }

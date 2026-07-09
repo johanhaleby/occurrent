@@ -29,45 +29,42 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TagTest {
 
     @Test
-    void canonical_joins_key_and_value_with_a_colon() {
+    void of_joins_key_and_value_with_a_colon() {
         assertThat(Tag.of("k", "v").canonical()).isEqualTo("k:v");
+        assertThat(Tag.of("k", "v").value()).isEqualTo("k:v");
     }
 
     @Test
-    void parse_round_trips_a_canonical_tag() {
-        Tag tag = Tag.of("k", "v");
-        assertThat(Tag.parse("k:v")).isEqualTo(tag);
+    void of_supports_a_value_less_tag() {
+        Tag tag = Tag.of("premium");
+        assertThat(tag.canonical()).isEqualTo("premium");
+        assertThat(tag.value()).isEqualTo("premium");
+    }
+
+    @Test
+    void the_key_value_form_and_the_string_form_are_the_same_tag() {
+        assertThat(Tag.of("course", "c1")).isEqualTo(Tag.of("course:c1"));
+        assertThat(Tag.parse("course:c1")).isEqualTo(Tag.of("course", "c1"));
+    }
+
+    @Test
+    void parse_round_trips_the_canonical_form() {
+        assertThat(Tag.parse(Tag.of("k", "v").canonical())).isEqualTo(Tag.of("k", "v"));
+        assertThat(Tag.parse(Tag.of("premium").canonical())).isEqualTo(Tag.of("premium"));
+    }
+
+    @Test
+    void a_value_may_contain_colons() {
+        Tag tag = Tag.of("email", "a:b@x");
+        assertThat(tag.canonical()).isEqualTo("email:a:b@x");
         assertThat(Tag.parse(tag.canonical())).isEqualTo(tag);
     }
 
     @Test
-    void parse_splits_on_the_first_colon_so_a_value_may_contain_colons() {
-        Tag tag = Tag.parse("email:a:b@x");
-        assertThat(tag.key()).isEqualTo("email");
-        assertThat(tag.value()).isEqualTo("a:b@x");
-        // The value keeps its colons through a canonical round-trip.
-        assertThat(Tag.parse(tag.canonical())).isEqualTo(tag);
-    }
-
-    @Test
-    void parse_rejects_a_string_without_a_colon() {
-        assertThatThrownBy(() -> Tag.parse("nocolon"))
+    void of_rejects_a_blank_tag() {
+        assertThatThrownBy(() -> Tag.of(" "))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Tag must be in 'key:value' form: nocolon");
-    }
-
-    @Test
-    void parse_rejects_a_blank_value() {
-        assertThatThrownBy(() -> Tag.parse("k:"))
-                .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Tag value cannot be blank");
-    }
-
-    @Test
-    void parse_rejects_a_blank_key() {
-        assertThatThrownBy(() -> Tag.parse(":v"))
-                .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Tag key cannot be blank");
+                .hasMessage("Tag cannot be blank");
     }
 
     @Test
@@ -81,18 +78,19 @@ class TagTest {
     }
 
     @Test
-    void of_rejects_a_newline_in_key_or_value() {
-        assertThatThrownBy(() -> Tag.of("k\nk", "v"))
+    void of_rejects_a_newline() {
+        assertThatThrownBy(() -> Tag.of("a\nb"))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Tag key/value cannot contain a newline");
+                .hasMessage("Tag cannot contain a newline");
         assertThatThrownBy(() -> Tag.of("k", "v\nv"))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Tag key/value cannot contain a newline");
+                .hasMessage("Tag cannot contain a newline");
     }
 
     @Test
-    void of_strips_surrounding_whitespace_from_key_and_value() {
+    void of_strips_surrounding_whitespace() {
         assertThat(Tag.of(" k ", " v ")).isEqualTo(Tag.of("k", "v"));
+        assertThat(Tag.of("  premium  ")).isEqualTo(Tag.of("premium"));
     }
 
     @Test
@@ -103,10 +101,11 @@ class TagTest {
     }
 
     @Test
-    void tags_order_by_their_canonical_form() {
+    void tags_order_by_their_string_value() {
         TreeSet<Tag> tags = new TreeSet<>();
         tags.add(Tag.of("b", "1"));
         tags.add(Tag.of("a", "2"));
-        assertThat(tags).containsExactly(Tag.of("a", "2"), Tag.of("b", "1"));
+        tags.add(Tag.of("premium"));
+        assertThat(tags).containsExactly(Tag.of("a", "2"), Tag.of("b", "1"), Tag.of("premium"));
     }
 }
