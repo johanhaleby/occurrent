@@ -73,4 +73,45 @@ class DeciderTest {
             { assertThat(events[0].name()).isEqualTo("Another Name") },
         )
     }
+
+    // Regression: over a non-null state type, one decision's resulting state must feed straight into the
+    // next decide call. A @Nullable S return would type these as SwitchState? and fail to compile under
+    // the module's JSpecify null-marking.
+    @Test
+    fun `chaining decideOnStateAndReturnState compiles and transitions for a non-null state`() {
+        // Given
+        val decider = decider<ToggleCommand, SwitchState, SwitchEvent>(
+            initialState = SwitchState.Off,
+            decide = { _, _ -> listOf(SwitchEvent.Toggled) },
+            evolve = { state, _ ->
+                when (state) {
+                    SwitchState.Off -> SwitchState.On
+                    SwitchState.On -> SwitchState.Off
+                }
+            }
+        )
+
+        // When
+        val state1: SwitchState = decider.decideOnStateAndReturnState(SwitchState.Off, ToggleCommand.Toggle)
+        val state2: SwitchState = decider.decideOnStateAndReturnState(state1, ToggleCommand.Toggle)
+
+        // Then
+        assertAll(
+            { assertThat(state1).isEqualTo(SwitchState.On) },
+            { assertThat(state2).isEqualTo(SwitchState.Off) },
+        )
+    }
+}
+
+private sealed interface SwitchState {
+    object Off : SwitchState
+    object On : SwitchState
+}
+
+private sealed interface ToggleCommand {
+    object Toggle : ToggleCommand
+}
+
+private sealed interface SwitchEvent {
+    object Toggled : SwitchEvent
 }
