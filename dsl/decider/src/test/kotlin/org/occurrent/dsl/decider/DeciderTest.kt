@@ -101,6 +101,29 @@ class DeciderTest {
             { assertThat(state2).isEqualTo(SwitchState.Off) },
         )
     }
+
+    // Same regression guard for the events-based overload: its result must be a non-null state type, so a
+    // @Nullable S return would not compile against the non-null `val state` below.
+    @Test
+    fun `decideOnEventsAndReturnState returns a non-null state for a non-null state type`() {
+        // Given
+        val decider = decider<ToggleCommand, SwitchState, SwitchEvent>(
+            initialState = SwitchState.Off,
+            decide = { _, _ -> listOf(SwitchEvent.Toggled) },
+            evolve = { state, _ ->
+                when (state) {
+                    SwitchState.Off -> SwitchState.On
+                    SwitchState.On -> SwitchState.Off
+                }
+            }
+        )
+
+        // When: initial Off, the prior Toggled event evolves to On, then the command toggles back to Off
+        val state: SwitchState = decider.decideOnEventsAndReturnState(listOf(SwitchEvent.Toggled), ToggleCommand.Toggle)
+
+        // Then
+        assertThat(state).isEqualTo(SwitchState.Off)
+    }
 }
 
 private sealed interface SwitchState {
