@@ -1,0 +1,143 @@
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateOccurrentRenames_0_30
+displayName: Migrate Occurrent renamed types, methods, and packages (0.20.5 -> 0.30.0)
+description: >-
+  Applies the mechanical type, method, and package renames introduced between Occurrent 0.20.5 and 0.30.0.
+recipeList:
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.SubscriptionPosition
+      newFullyQualifiedTypeName: org.occurrent.subscription.Checkpoint
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.StringBasedSubscriptionPosition
+      newFullyQualifiedTypeName: org.occurrent.subscription.StringBasedCheckpoint
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition
+      newFullyQualifiedTypeName: org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition
+      newFullyQualifiedTypeName: org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.TimeBasedSubscriptionPosition
+      newFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.CheckpointStorage
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.SubscriptionPositionStorage
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.CheckpointStorage
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage
+      newFullyQualifiedTypeName: org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionPositionStorage
+      newFullyQualifiedTypeName: org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.mongodb.spring.reactor.ReactorSubscriptionPositionStorage
+      newFullyQualifiedTypeName: org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.redis.spring.blocking.SpringRedisSubscriptionPositionStorage
+      newFullyQualifiedTypeName: org.occurrent.subscription.redis.spring.blocking.SpringRedisCheckpointStorage
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.PositionAwareCloudEvent
+      newFullyQualifiedTypeName: org.occurrent.subscription.CheckpointAwareCloudEvent
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig
+      newFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig$UseSubscriptionPositionInStorage
+      newFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig$UseCheckpointInStorage
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig$DontUseSubscriptionPositionInStorage
+      newFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig$DontUseCheckpointInStorage
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig$UseOnlySubscriptionPositionInStorage
+      newFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig$UseOnlyCheckpointInStorage
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig$PersistSubscriptionPositionDuringCatchupPhase
+      newFullyQualifiedTypeName: org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig$PersistCheckpointDuringCatchupPhase
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.StartAt$StartAtSubscriptionPosition
+      newFullyQualifiedTypeName: org.occurrent.subscription.StartAt$StartAtCheckpoint
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.OccurrentSubscriptionFilter
+      newFullyQualifiedTypeName: org.occurrent.subscription.StreamSubscriptionFilter
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.application.service.blocking.ExecuteFilter
+      newFullyQualifiedTypeName: org.occurrent.application.service.ExecuteFilter
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.blocking.OccurrentProperties
+      newFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OccurrentProperties
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.application.service.blocking.PolicySideEffect
+      newFullyQualifiedTypeName: org.occurrent.application.service.blocking.SideEffect
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.dsl.subscription.blocking.EventMetadata
+      newFullyQualifiedTypeName: org.occurrent.dsl.subscription.EventMetadata
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.application.service.blocking.SideEffect executePolicy(..)
+      newMethodName: executeSideEffect
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.application.service.blocking.SideEffect andThenExecuteAnotherPolicy(..)
+      newMethodName: andThenExecuteAnotherSideEffect
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel globalSubscriptionPosition(..)
+      newMethodName: globalCheckpoint
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel globalSubscriptionPosition(..)
+      newMethodName: globalCheckpoint
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.CheckpointAwareCloudEvent getSubscriptionPosition(..)
+      newMethodName: getCheckpoint
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.CheckpointAwareCloudEvent hasSubscriptionPosition(..)
+      newMethodName: hasCheckpoint
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.CheckpointAwareCloudEvent getSubscriptionPositionOrThrowIAE(..)
+      newMethodName: getCheckpointOrThrowIAE
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.StartAt subscriptionPosition(..)
+      newMethodName: checkpoint
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig dontUseSubscriptionPositionStorage(..)
+      newMethodName: dontUseCheckpointStorage
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig useSubscriptionPositionStorage(..)
+      newMethodName: useCheckpointStorage
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage andPersistSubscriptionPositionDuringCatchupPhaseWhen(..)
+      newMethodName: andPersistCheckpointDuringCatchupPhaseWhen
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(..)
+      newMethodName: andPersistCheckpointDuringCatchupPhaseForEveryNEvents
