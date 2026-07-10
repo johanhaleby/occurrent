@@ -34,6 +34,9 @@ import java.util.function.Predicate;
  * @param <S> The state that the decider work
  * @param <E> The type of events that the decider returns
  */
+// State returns below use the plain type variable S so its nullness follows the type argument
+// (parametric nullness). Do not annotate them @Nullable S. That forces the return nullable even when
+// S is a non-null type, which breaks Kotlin callers that feed one decision's state into the next.
 public interface Decider<C, S extends @Nullable Object, E> {
     /**
      * The state a decider starts from, before any events have been applied.
@@ -106,7 +109,7 @@ public interface Decider<C, S extends @Nullable Object, E> {
      * Convenience for {@link #decideOnEvents} that returns only the resulting state.
      */
     @SuppressWarnings("unchecked")
-    default @Nullable S decideOnEventsAndReturnState(List<E> events, C command, C... additionalCommands) {
+    default S decideOnEventsAndReturnState(List<E> events, C command, C... additionalCommands) {
         return decideOnEvents(events, command, additionalCommands).state;
     }
 
@@ -121,7 +124,7 @@ public interface Decider<C, S extends @Nullable Object, E> {
     /**
      * Convenience for {@link #decideOnEvents} that returns only the resulting state.
      */
-    default @Nullable S decideOnEventsAndReturnState(List<E> events, List<C> commands) {
+    default S decideOnEventsAndReturnState(List<E> events, List<C> commands) {
         return decideOnEvents(events, commands).state;
     }
 
@@ -162,7 +165,7 @@ public interface Decider<C, S extends @Nullable Object, E> {
     /**
      * Convenience for {@link #decideOnState} that returns only the resulting state.
      */
-    default @Nullable S decideOnStateAndReturnState(S state, List<C> commands) {
+    default S decideOnStateAndReturnState(S state, List<C> commands) {
         return decideOnState(state, commands).state;
     }
 
@@ -178,7 +181,7 @@ public interface Decider<C, S extends @Nullable Object, E> {
     /**
      * Convenience for {@link #decideOnState} that returns only the resulting state.
      */
-    default @Nullable S decideOnStateAndReturnState(S state, C command, C... additionalCommands) {
+    default S decideOnStateAndReturnState(S state, C command, C... additionalCommands) {
         return decideOnState(state, command, additionalCommands).state;
     }
 
@@ -197,7 +200,7 @@ public interface Decider<C, S extends @Nullable Object, E> {
         return new Decision<>(newState, newEvents);
     }
 
-    private @Nullable S fold(S state, List<E> events) {
+    private S fold(S state, List<E> events) {
         for (E event : events) {
             state = evolve(state, event);
             if (isTerminal(state)) {
