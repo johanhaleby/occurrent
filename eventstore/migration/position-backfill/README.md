@@ -5,6 +5,8 @@ event store can turn stream position on without losing sight of its old events.
 
 Maven coordinates: `org.occurrent:eventstore-mongodb-position-backfill`.
 
+Upgrading to 0.30.0? Start with the [upgrade guide](../../../doc/migration/upgrading-to-0.30.0.md) and the [operational runbook](../../../doc/runbooks/position-backfill.md), which place this tool in the full upgrade sequence (create the index, seed, deploy, backfill, verify).
+
 ## The problem
 
 Occurrent gives every event a global, always-increasing `position`. Position is what lets catch-up
