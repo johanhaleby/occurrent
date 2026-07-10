@@ -131,6 +131,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
     consumers on one axis.
   * `EventMetadata.position` is now a general accessor available on subscribed events from both stacks, not only
     DCB events.
+  * `EventMetadata` moved from `org.occurrent.dsl.subscription.blocking` to `org.occurrent.dsl.subscription` so the
+    blocking and reactive subscription DSLs share one type. This is a breaking change, the old
+    `org.occurrent.dsl.subscription.blocking.EventMetadata` is gone, so update the import to
+    `org.occurrent.dsl.subscription.EventMetadata`.
   * **Upgrade hazard: read this before upgrading an existing deployment.** Because stream position defaults on, an
     existing deployment that upgrades in place gets position on new stream events but not on the events already in
     its collection. The store detects this on startup and logs a loud warning naming the migration runbook, with a
@@ -220,8 +224,8 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * `MongoEventStore`, the plain synchronous-driver store, implements the same DCB read and append API as the Spring store, with the same per-attribute marker model and consistency-token semantics. The shared model now lives in a new `eventstore-mongodb-dcb-common` module so the two stores cannot drift on the storage contract, and the capability set moved to a shared `EventStoreCapability` enum in `eventstore-api-common`. The native store defaults to stream-only, so existing applications are untouched.
   * See [ADR 33](doc/architecture/decisions/0033-native-mongodb-driver-dcb-parity-via-shared-marker-model.md).
 
-* The stream subscription DSL `Subscriptions` was renamed to `StreamSubscriptions`.
-  * The canonical class is now `StreamSubscriptions` and the builder is `streamSubscriptions(...)`, so the stream DSL name matches `@StreamSubscription`, `StreamSubscriptionModel`, and the DCB counterpart `DcbSubscriptions`. The released `Subscriptions` class is kept as a deprecated subclass of `StreamSubscriptions`, and the `subscriptions(...)` builder as a deprecated shim, so existing Java, Kotlin, and already-compiled callers keep working. A subclass is used rather than a typealias on purpose, because a Kotlin typealias preserves only Kotlin source compatibility and not Java or binary compatibility for a released type.
+* The stream-only subscription DSL is now named `StreamSubscriptions`.
+  * The stream DSL is now `StreamSubscriptions` with builder `streamSubscriptions(...)`, so its name matches `@StreamSubscription`, `StreamSubscriptionModel`, and the DCB counterpart `DcbSubscriptions`. The `Subscriptions` name and its `subscriptions(...)` builder were not retired, they were repurposed as the capability-neutral DSL (see the "Revived `@Subscription` and the `Subscriptions` DSL" entry above), so a `0.20.5` caller's `subscriptions(...)` keeps compiling and behaves the same on a stream-only store, and picks up DCB events only once a store also enables the `DCB` capability.
   * See [ADR 29](doc/architecture/decisions/0029-rename-subscriptions-dsl-to-stream-subscriptions.md).
 
 * DCB append conditions capture the consistency token for a multi-marker boundary in a single read.
