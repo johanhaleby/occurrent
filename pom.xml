@@ -36,6 +36,7 @@
         <module>deadline</module>
         <module>library</module>
         <module>bom</module>
+        <module>rewrite</module>
     </modules>
 
     <name>${mavenProjectName}</name>
@@ -184,6 +185,15 @@
                 <groupId>org.springframework.retry</groupId>
                 <artifactId>spring-retry</artifactId>
                 <version>${spring-retry.version}</version>
+            </dependency>
+
+            <!-- OpenRewrite -->
+            <dependency>
+                <groupId>org.openrewrite.recipe</groupId>
+                <artifactId>rewrite-recipe-bom</artifactId>
+                <version>3.34.0</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
 
             <!-- Test -->

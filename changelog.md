@@ -274,6 +274,8 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * Request a replay from the start with `DcbStartAt.beginning()`. A STREAM-and-DCB application uses the dual-mode catch-up route described above.
   * See [ADR 22](doc/architecture/decisions/0022-wire-dcb-catch-up-in-dcb-only-mode.md).
 
+* 0.30.0 ships an OpenRewrite recipe, `org.occurrent:occurrent-rewrite`, that automates the mechanical renames and package moves in this release and the safe part of the `Stream` to `List` write-side migration. See [the migration guide](doc/migration/upgrading-to-0.30.0.md) for the plugin setup and what still needs a manual pass.
+
 #### Details
 
 * `DcbEventStore.append` derives the Occurrent storage stream from the appended events' DCB tags, so callers reason in DCB terms (tags and append conditions) rather than storage stream ids. Placement is configured on the store through a `DcbStreamIdGenerator` (in the `eventstore-api-dcb` module, defaulting to `PartitionedDcbStreamIdGenerator`), set on `InMemoryEventStore` via a constructor and on the Spring Mongo store via `EventStoreConfig.Builder.dcbStreamIdGenerator(..)`.
