@@ -395,5 +395,22 @@ class ViewTest {
             assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
         }
 
+        @Test
+        fun `evolve from a java Stream from initial state`() {
+            // Given
+            val userId = UUID.randomUUID().toString()
+
+            // When
+            val state = nonNullableView.evolve(
+                listOf<DomainEvent>(
+                    nameDefined(userId, "name1"),
+                    nameChanged(userId, "name2")
+                ).stream()
+            )
+
+            // Then
+            assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
+        }
+
     }
 }

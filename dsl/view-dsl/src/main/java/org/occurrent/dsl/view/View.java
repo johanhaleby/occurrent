@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiFunction;
+import java.util.stream.Stream;
 
 /**
  * A structure for representing and updating views based on state and an event
@@ -85,6 +86,26 @@ public interface View<S extends @Nullable Object, E> {
      */
     default S evolve(@NonNull List<E> events) {
         return evolve(initialState(), events);
+    }
+
+    /**
+     * Evolve initial state from a lazily-produced stream of events, for example a query result. The stream
+     * is collected and folded into the state.
+     *
+     * @return The evolved state
+     */
+    default S evolve(@NonNull Stream<E> events) {
+        return evolve(events.toList());
+    }
+
+    /**
+     * Evolve from an explicit state and a lazily-produced stream of events. The stream is collected and
+     * folded into the state.
+     *
+     * @return The evolved state
+     */
+    default S evolve(S state, @NonNull Stream<E> events) {
+        return evolve(state, events.toList());
     }
 
     static <S extends @Nullable Object, E> View<S, E> create(S initialState, @NonNull BiFunction<S, E, S> evolve) {
