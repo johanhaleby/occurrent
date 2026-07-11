@@ -148,7 +148,10 @@ inline fun <T : Any, reified E1 : T, reified E2 : T, reified E3 : T, reified E4 
     typedOptions<T>().sideEffect(sideEffect1, sideEffect2, sideEffect3, sideEffect4, sideEffect5, sideEffect6, sideEffect7, sideEffect8)
 
 /**
- * Return new [ExecuteOptions] that invoke [sideEffect] with matching events as a list.
+ * Return new [ExecuteOptions] whose [sideEffect] runs once with the whole list of events matching [E_SPECIFIC],
+ * in contrast to the per-event `sideEffect(...)` builders that fire once per matching event. It composes with any
+ * side effect already set. The name is not `sideEffect` because the Java `ExecuteOptions.sideEffect(Consumer)`
+ * member would shadow a Kotlin extension of that name.
  */
 inline fun <E : Any, reified E_SPECIFIC : E> ExecuteOptions<E>.sideEffectOnList(
     noinline sideEffect: (List<E_SPECIFIC>) -> Unit
