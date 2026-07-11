@@ -18,13 +18,13 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>example-number-guessing-game-es-mongodb-spring</artifactId>
+        <artifactId>example-number-guessing-game-eventstore-mongodb-spring</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>example-number-guessing-game-es-mongodb-spring-blocking</artifactId>
+    <artifactId>example-number-guessing-game-eventstore-mongodb-spring-blocking</artifactId>
 
     <dependencies>
         <dependency>

@@ -595,10 +595,10 @@
                                 <excludeArtifact>example-mastermind</excludeArtifact>
                                 <excludeArtifact>example-number-guessing-game</excludeArtifact>
                                 <excludeArtifact>example-number-guessing-game-model</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-es-mongodb</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-es-mongodb-native</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-es-mongodb-spring</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-es-mongodb-spring-blocking
+                                <excludeArtifact>example-number-guessing-game-eventstore-mongodb</excludeArtifact>
+                                <excludeArtifact>example-number-guessing-game-eventstore-mongodb-native</excludeArtifact>
+                                <excludeArtifact>example-number-guessing-game-eventstore-mongodb-spring</excludeArtifact>
+                                <excludeArtifact>example-number-guessing-game-eventstore-mongodb-spring-blocking
                                 </excludeArtifact>
                                 <excludeArtifact>example-rps</excludeArtifact>
                                 <excludeArtifact>example-rps-decider-model</excludeArtifact>
@@ -608,20 +608,20 @@
                                 <excludeArtifact>example-pragmatic-rps-model</excludeArtifact>
                                 <excludeArtifact>example-uno</excludeArtifact>
                                 <excludeArtifact>example-uno-model</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb-common</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb-native</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb-spring</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb-spring-blocking</excludeArtifact>
+                                <excludeArtifact>example-uno-eventstore-mongodb</excludeArtifact>
+                                <excludeArtifact>example-uno-eventstore-mongodb-common</excludeArtifact>
+                                <excludeArtifact>example-uno-eventstore-mongodb-native</excludeArtifact>
+                                <excludeArtifact>example-uno-eventstore-mongodb-spring</excludeArtifact>
+                                <excludeArtifact>example-uno-eventstore-mongodb-spring-blocking</excludeArtifact>
                                 <excludeArtifact>example-domain-word-guessing-game</excludeArtifact>
                                 <excludeArtifact>example-domain-word-guessing-game-model</excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb</excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring</excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-blocking
+                                <excludeArtifact>example-domain-word-guessing-game-eventstore-mongodb</excludeArtifact>
+                                <excludeArtifact>example-domain-word-guessing-game-eventstore-mongodb-spring</excludeArtifact>
+                                <excludeArtifact>example-domain-word-guessing-game-eventstore-mongodb-spring-blocking
                                 </excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-dcb
+                                <excludeArtifact>example-domain-word-guessing-game-eventstore-mongodb-spring-dcb
                                 </excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-dcb-autoconfig
+                                <excludeArtifact>example-domain-word-guessing-game-eventstore-mongodb-spring-dcb-autoconfig
                                 </excludeArtifact>
                             </excludeArtifacts>
                         </configuration>
