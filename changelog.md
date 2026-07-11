@@ -225,7 +225,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * See [ADR 33](doc/architecture/decisions/0033-native-mongodb-driver-dcb-parity-via-shared-marker-model.md).
 
 * The stream-only subscription DSL is now named `StreamSubscriptions`.
-  * The stream DSL is now `StreamSubscriptions` with builder `streamSubscriptions(...)`, so its name matches `@StreamSubscription`, `StreamSubscriptionModel`, and the DCB counterpart `DcbSubscriptions`. The `Subscriptions` name and its `subscriptions(...)` builder were not retired, they were repurposed as the capability-neutral DSL (see the "Revived `@Subscription` and the `Subscriptions` DSL" entry above), so a `0.20.5` caller's `subscriptions(...)` keeps compiling and behaves the same on a stream-only store, and picks up DCB events only once a store also enables the `DCB` capability.
+  * The stream DSL is now `StreamSubscriptions` with builder `streamSubscriptions(...)`, so its name matches `@StreamSubscription`, `StreamSubscriptionModel`, and the DCB counterpart `DcbSubscriptions`. The `Subscriptions` name and its `subscriptions(...)` builder were not retired, they were repurposed as the capability-neutral DSL (see the entry above about `@Subscription` and `Subscriptions` becoming capability-neutral), so a `0.20.5` caller's `subscriptions(...)` keeps compiling and behaves the same on a stream-only store, and picks up DCB events only once a store also enables the `DCB` capability.
   * See [ADR 29](doc/architecture/decisions/0029-rename-subscriptions-dsl-to-stream-subscriptions.md).
 
 * DCB append conditions capture the consistency token for a multi-marker boundary in a single read.
