@@ -196,6 +196,24 @@ class ViewTest {
             assertThat(state).isEqualTo(NameState(userId, "name5"))
         }
 
+        @Test
+        fun `evolveAll from a lazy Sequence when null initial state`() {
+            // Given
+            val userId = UUID.randomUUID().toString()
+
+            // When
+            val state = nullableView.evolveAll(
+                sequenceOf(
+                    nameDefined(userId, "name1"),
+                    nameChanged(userId, "name2"),
+                    nameChanged(userId, "name3")
+                )
+            )
+
+            // Then
+            assertThat(state).isEqualTo(NameState(userId, "name3"))
+        }
+
     }
 
     @Nested
@@ -340,6 +358,93 @@ class ViewTest {
 
             // Then
             assertThat(state).isEqualTo(Defined(NameState(userId, "name5")))
+        }
+
+        @Test
+        fun `evolveAll from a lazy Sequence from initial state`() {
+            // Given
+            val userId = UUID.randomUUID().toString()
+
+            // When
+            val state = nonNullableView.evolveAll(
+                sequenceOf(
+                    nameDefined(userId, "name1"),
+                    nameChanged(userId, "name2")
+                )
+            )
+
+            // Then
+            assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
+        }
+
+        @Test
+        fun `evolveFrom a lazy Sequence when specifying state explicitly`() {
+            // Given
+            val userId = UUID.randomUUID().toString()
+
+            // When
+            val state = nonNullableView.evolveFrom(
+                Name.Undefined,
+                sequenceOf(
+                    nameDefined(userId, "name1"),
+                    nameChanged(userId, "name2")
+                )
+            )
+
+            // Then
+            assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
+        }
+
+        @Test
+        fun `evolve from a java Stream from initial state`() {
+            // Given
+            val userId = UUID.randomUUID().toString()
+
+            // When
+            val state = nonNullableView.evolve(
+                listOf<DomainEvent>(
+                    nameDefined(userId, "name1"),
+                    nameChanged(userId, "name2")
+                ).stream()
+            )
+
+            // Then
+            assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
+        }
+
+        @Test
+        fun `evolveAll from an Iterable from initial state`() {
+            // Given
+            val userId = UUID.randomUUID().toString()
+
+            // When
+            val state = nonNullableView.evolveAll(
+                listOf(
+                    nameDefined(userId, "name1"),
+                    nameChanged(userId, "name2")
+                ).asIterable()
+            )
+
+            // Then
+            assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
+        }
+
+        @Test
+        fun `evolveFrom an Iterable when specifying state explicitly`() {
+            // Given
+            val userId = UUID.randomUUID().toString()
+
+            // When
+            val state = nonNullableView.evolveFrom(
+                Name.Undefined,
+                listOf(
+                    nameDefined(userId, "name1"),
+                    nameChanged(userId, "name2")
+                ).asIterable()
+            )
+
+            // Then
+            assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
         }
 
     }

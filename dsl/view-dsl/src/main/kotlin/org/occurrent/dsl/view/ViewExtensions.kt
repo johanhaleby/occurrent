@@ -82,3 +82,58 @@ fun <S : Any, E : Any> View<S, E>.evolveFrom(state: S, events: List<E>): S =
 @JvmName("evolveFromListNullable")
 fun <S : Any, E : Any> View<S?, E>.evolveFrom(state: S?, events: List<E>): S? =
     evolve(state, events)
+
+
+// ===================================
+// Sequence and Iterable entry-points
+// ===================================
+// Folding events into a view is a read-side operation, and a lazily-queried Sequence (from the query
+// DSL) or any Iterable is a natural source. These fold the source directly rather than materializing it
+// into a List first, so a large or lazy Sequence stays lazy.
+
+/**
+ * Fold a lazily-produced [Sequence] of events, for example a `queryForSequence` result, into the view.
+ * The sequence is consumed once and folded directly without being copied into a `List`.
+ */
+@JvmName("evolveAllSequenceNonNull")
+fun <S : Any, E : Any> View<S, E>.evolveAll(events: Sequence<E>): S =
+    events.fold(initialState()) { state, event -> evolve(state, event) }
+
+@JvmName("evolveAllSequenceNullable")
+fun <S : Any, E : Any> View<S?, E>.evolveAll(events: Sequence<E>): S? =
+    events.fold(initialState()) { state, event -> evolve(state, event) }
+
+/**
+ * Fold any [Iterable] of events into the view, folding directly without an intermediate `List`.
+ */
+@JvmName("evolveAllIterableNonNull")
+fun <S : Any, E : Any> View<S, E>.evolveAll(events: Iterable<E>): S =
+    events.fold(initialState()) { state, event -> evolve(state, event) }
+
+@JvmName("evolveAllIterableNullable")
+fun <S : Any, E : Any> View<S?, E>.evolveAll(events: Iterable<E>): S? =
+    events.fold(initialState()) { state, event -> evolve(state, event) }
+
+/**
+ * Fold a lazily-produced [Sequence] of events into the view from an explicit [state], consuming the
+ * sequence once and folding directly.
+ */
+@JvmName("evolveFromSequenceNonNull")
+fun <S : Any, E : Any> View<S, E>.evolveFrom(state: S, events: Sequence<E>): S =
+    events.fold(state) { acc, event -> evolve(acc, event) }
+
+@JvmName("evolveFromSequenceNullable")
+fun <S : Any, E : Any> View<S?, E>.evolveFrom(state: S?, events: Sequence<E>): S? =
+    events.fold(state) { acc, event -> evolve(acc, event) }
+
+/**
+ * Fold any [Iterable] of events into the view from an explicit [state], folding directly without an
+ * intermediate `List`.
+ */
+@JvmName("evolveFromIterableNonNull")
+fun <S : Any, E : Any> View<S, E>.evolveFrom(state: S, events: Iterable<E>): S =
+    events.fold(state) { acc, event -> evolve(acc, event) }
+
+@JvmName("evolveFromIterableNullable")
+fun <S : Any, E : Any> View<S?, E>.evolveFrom(state: S?, events: Iterable<E>): S? =
+    events.fold(state) { acc, event -> evolve(acc, event) }
