@@ -412,5 +412,40 @@ class ViewTest {
             assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
         }
 
+        @Test
+        fun `evolveAll from an Iterable from initial state`() {
+            // Given
+            val userId = UUID.randomUUID().toString()
+
+            // When
+            val state = nonNullableView.evolveAll(
+                listOf(
+                    nameDefined(userId, "name1"),
+                    nameChanged(userId, "name2")
+                ).asIterable()
+            )
+
+            // Then
+            assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
+        }
+
+        @Test
+        fun `evolveFrom an Iterable when specifying state explicitly`() {
+            // Given
+            val userId = UUID.randomUUID().toString()
+
+            // When
+            val state = nonNullableView.evolveFrom(
+                Name.Undefined,
+                listOf(
+                    nameDefined(userId, "name1"),
+                    nameChanged(userId, "name2")
+                ).asIterable()
+            )
+
+            // Then
+            assertThat(state).isEqualTo(Defined(NameState(userId, "name2")))
+        }
+
     }
 }
