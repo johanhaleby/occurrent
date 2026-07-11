@@ -23,29 +23,29 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>module-dsl-blocking</artifactId>
+    <artifactId>occurrent-module-dsl-blocking</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-blocking</artifactId>
+            <artifactId>occurrent-application-service-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>catchup-subscription</artifactId>
+            <artifactId>occurrent-subscription-catchup-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-dsl-blocking</artifactId>
+            <artifactId>occurrent-subscription-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-blocking</artifactId>
+            <artifactId>occurrent-eventstore-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
 
@@ -68,25 +68,25 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-generic</artifactId>
+            <artifactId>occurrent-cloudevent-converter-generic</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-inmemory</artifactId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-inmemory</artifactId>
+            <artifactId>occurrent-subscription-inmemory</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>command-composition</artifactId>
+            <artifactId>occurrent-command-composition</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

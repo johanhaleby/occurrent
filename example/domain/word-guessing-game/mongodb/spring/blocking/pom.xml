@@ -57,42 +57,42 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking-position-storage</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking-position-storage</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>durable-subscription</artifactId>
+            <artifactId>occurrent-subscription-durable-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-blocking</artifactId>
+            <artifactId>occurrent-application-service-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>catchup-subscription</artifactId>
+            <artifactId>occurrent-subscription-catchup-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-dsl-blocking</artifactId>
+            <artifactId>occurrent-subscription-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>query-dsl-blocking</artifactId>
+            <artifactId>occurrent-query-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

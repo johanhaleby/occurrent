@@ -30,60 +30,60 @@
         <!-- Native (non-Spring) MongoDB event store with the DCB capability -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-native</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-native</artifactId>
             <version>${project.version}</version>
         </dependency>
         <!-- DCB application service (blocking) -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-blocking</artifactId>
+            <artifactId>occurrent-application-service-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-common</artifactId>
+            <artifactId>occurrent-application-service-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <!-- Tags generated from @DcbTag on the events -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>dcb-annotation-taggenerator</artifactId>
+            <artifactId>occurrent-dcb-annotation-taggenerator</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>annotations</artifactId>
+            <artifactId>occurrent-annotations</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb</artifactId>
+            <artifactId>occurrent-eventstore-api-dcb</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>decider</artifactId>
+            <artifactId>occurrent-decider</artifactId>
             <version>${project.version}</version>
         </dependency>
         <!-- DCB query DSL for the read side (returns domain events for a DcbCriteria) -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>dcb-dsl-blocking</artifactId>
+            <artifactId>occurrent-dcb-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>query-dsl-blocking</artifactId>
+            <artifactId>occurrent-query-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson3</artifactId>
+            <artifactId>occurrent-cloudevent-converter-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-type-mapper-reflection</artifactId>
+            <artifactId>occurrent-cloudevent-type-mapper-reflection</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

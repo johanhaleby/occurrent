@@ -3,7 +3,7 @@
 Adds the global `position` field to events that were written before `position` existed, so an existing MongoDB
 event store can turn stream position on without losing sight of its old events.
 
-Maven coordinates: `org.occurrent:eventstore-mongodb-position-backfill`.
+Maven coordinates: `org.occurrent:occurrent-eventstore-mongodb-position-backfill`.
 
 Upgrading to 0.30.0? Start with the [upgrade guide](../../../doc/migration/upgrading-to-0.30.0.md) and the [operational runbook](../../../doc/runbooks/position-backfill.md), which place this tool in the full upgrade sequence (create the index, seed, deploy, backfill, verify).
 

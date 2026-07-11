@@ -24,7 +24,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>spring-boot-starter-mongodb</artifactId>
+    <artifactId>occurrent-mongodb-spring-boot-starter</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -53,62 +53,62 @@
         <!-- Occurrent -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>spring-boot-autoconfigure-mongodb-common</artifactId>
+            <artifactId>occurrent-mongodb-spring-boot-autoconfigure</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-dsl-blocking</artifactId>
+            <artifactId>occurrent-subscription-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking-position-storage</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking-position-storage</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>durable-subscription</artifactId>
+            <artifactId>occurrent-subscription-durable-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>catchup-subscription</artifactId>
+            <artifactId>occurrent-subscription-catchup-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>competing-consumer-subscription</artifactId>
+            <artifactId>occurrent-subscription-competing-consumer-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-blocking</artifactId>
+            <artifactId>occurrent-application-service-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>command-composition</artifactId>
+            <artifactId>occurrent-command-composition</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson3</artifactId>
+            <artifactId>occurrent-cloudevent-converter-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <!-- Jackson 3 still relies on com.fasterxml.jackson annotations -->
@@ -119,22 +119,22 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>query-dsl-blocking</artifactId>
+            <artifactId>occurrent-query-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>dcb-dsl-blocking</artifactId>
+            <artifactId>occurrent-dcb-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>annotations</artifactId>
+            <artifactId>occurrent-annotations</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>dcb-annotation-taggenerator</artifactId>
+            <artifactId>occurrent-dcb-annotation-taggenerator</artifactId>
             <version>${project.version}</version>
             <optional>true</optional>
         </dependency>

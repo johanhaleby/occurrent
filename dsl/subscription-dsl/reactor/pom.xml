@@ -24,24 +24,24 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-dsl-reactor</artifactId>
+    <artifactId>occurrent-subscription-dsl-reactor</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-dsl-common</artifactId>
+            <artifactId>occurrent-subscription-dsl-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
+            <artifactId>occurrent-cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-api-reactor</artifactId>
+            <artifactId>occurrent-subscription-api-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

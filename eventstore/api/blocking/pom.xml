@@ -23,14 +23,14 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>eventstore-api-blocking</artifactId>
+    <artifactId>occurrent-eventstore-api-blocking</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-common</artifactId>
+            <artifactId>occurrent-eventstore-api-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

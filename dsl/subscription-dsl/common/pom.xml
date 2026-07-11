@@ -24,7 +24,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-dsl-common</artifactId>
+    <artifactId>occurrent-subscription-dsl-common</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -35,22 +35,22 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevents-extension</artifactId>
+            <artifactId>occurrent-cloudevents-extension</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
+            <artifactId>occurrent-cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-core</artifactId>
+            <artifactId>occurrent-subscription-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>filter</artifactId>
+            <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

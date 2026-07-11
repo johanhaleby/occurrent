@@ -39,12 +39,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>spring-boot-starter-mongodb</artifactId>
+            <artifactId>occurrent-mongodb-spring-boot-starter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-generic</artifactId>
+            <artifactId>occurrent-cloudevent-converter-generic</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

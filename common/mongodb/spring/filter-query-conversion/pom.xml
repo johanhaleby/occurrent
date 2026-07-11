@@ -23,7 +23,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>mongodb-spring-filter-query-conversion</artifactId>
+    <artifactId>occurrent-common-mongodb-spring-filter-query-conversion</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -39,17 +39,17 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>filter</artifactId>
+            <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>mongodb-timerepresentation</artifactId>
+            <artifactId>occurrent-common-mongodb-timerepresentation</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>mongodb-specialfilterhandling</artifactId>
+            <artifactId>occurrent-common-mongodb-specialfilterhandling</artifactId>
             <version>${project.version}</version>
         </dependency>
     </dependencies>

@@ -14,7 +14,7 @@ consumers reconcile on one ordering axis. Events written before position existed
 they are backfilled, they are invisible to position-ordered reads and to position-based catch-up.
 
 The backfill tool performs the seed and backfill steps below (steps 2 and 4). It lives at
-`eventstore/migration/position-backfill` (artifact `org.occurrent:eventstore-mongodb-position-backfill`) and reuses
+`eventstore/migration/position-backfill` (artifact `org.occurrent:occurrent-eventstore-mongodb-position-backfill`) and reuses
 the store's own position document mapper and counter contract, so the schema it writes is exactly what a live store
 writes. The other steps (create the index, deploy, verify) are things you do around the tool, not things the tool
 does.

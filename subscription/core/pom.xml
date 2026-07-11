@@ -24,7 +24,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-core</artifactId>
+    <artifactId>occurrent-subscription-core</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -35,12 +35,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>filter</artifactId>
+            <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb</artifactId>
+            <artifactId>occurrent-eventstore-api-dcb</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

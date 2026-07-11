@@ -24,24 +24,24 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-dsl-blocking</artifactId>
+    <artifactId>occurrent-subscription-dsl-blocking</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-dsl-common</artifactId>
+            <artifactId>occurrent-subscription-dsl-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
+            <artifactId>occurrent-cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-api-blocking</artifactId>
+            <artifactId>occurrent-subscription-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -50,19 +50,19 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-inmemory</artifactId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-inmemory</artifactId>
+            <artifactId>occurrent-subscription-inmemory</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson</artifactId>
+            <artifactId>occurrent-cloudevent-converter-jackson</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

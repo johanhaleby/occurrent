@@ -1,8 +1,100 @@
 # Upgrading to Occurrent 0.30.0
 
-0.30.0 renames several types, moves the write side from `Stream` to `List`, and changes a few runtime defaults. Most of the mechanical work is handled by an OpenRewrite recipe. This guide splits the change into three groups: what the recipe fixes for you, what needs a manual pass, and what to read before you deploy.
+0.30.0 renames every published artifact coordinate, renames several types, moves the write side from `Stream` to `List`, and changes a few runtime defaults. Most of the mechanical work is handled by an OpenRewrite recipe. This guide covers the coordinate change first, then splits the code change into three groups: what the recipe fixes for you, what needs a manual pass, and what to read before you deploy.
 
-## 1. Run the recipe first
+## 1. Update your dependency coordinates
+
+0.30.0 gives every published artifact an `occurrent-` prefix. The `org.occurrent` groupId is unchanged, and this is a coordinate-only change, so no package or type imports move because of it. The two Spring Boot starters also move to Spring's third-party convention, so `spring-boot-starter-mongodb` becomes `occurrent-mongodb-spring-boot-starter` and `spring-boot-starter-mongodb-reactive` becomes `occurrent-mongodb-reactive-spring-boot-starter`.
+
+The recipe in the next section rewrites these coordinates for Maven and Gradle automatically, so you can skip ahead if you use one of those. For any other build tool, or to check the result by hand, the full mapping is below.
+
+| Old artifactId | New artifactId |
+|----------------|----------------|
+| `annotations` | `occurrent-annotations` |
+| `application-service-blocking` | `occurrent-application-service-blocking` |
+| `application-service-common` | `occurrent-application-service-common` |
+| `application-service-reactor` | `occurrent-application-service-reactor` |
+| `catchup-subscription` | `occurrent-subscription-catchup-blocking` |
+| `cloudevent-converter-api` | `occurrent-cloudevent-converter-api` |
+| `cloudevent-converter-core` | `occurrent-cloudevent-converter-core` |
+| `cloudevent-converter-generic` | `occurrent-cloudevent-converter-generic` |
+| `cloudevent-converter-jackson` | `occurrent-cloudevent-converter-jackson` |
+| `cloudevent-converter-jackson3` | `occurrent-cloudevent-converter-jackson3` |
+| `cloudevent-converter-xstream` | `occurrent-cloudevent-converter-xstream` |
+| `cloudevent-type-mapper-api` | `occurrent-cloudevent-type-mapper-api` |
+| `cloudevent-type-mapper-reflection` | `occurrent-cloudevent-type-mapper-reflection` |
+| `cloudevents-extension` | `occurrent-cloudevents-extension` |
+| `command-composition` | `occurrent-command-composition` |
+| `competing-consumer-subscription` | `occurrent-subscription-competing-consumer-blocking` |
+| `dcb-annotation-taggenerator` | `occurrent-dcb-annotation-taggenerator` |
+| `dcb-dsl-blocking` | `occurrent-dcb-dsl-blocking` |
+| `dcb-dsl-common` | `occurrent-dcb-dsl-common` |
+| `dcb-dsl-reactor` | `occurrent-dcb-dsl-reactor` |
+| `deadline-api-blocking` | `occurrent-deadline-api-blocking` |
+| `deadline-inmemory` | `occurrent-deadline-inmemory` |
+| `deadline-jobrunr` | `occurrent-deadline-jobrunr` |
+| `decider` | `occurrent-decider` |
+| `decider-arrow` | `occurrent-decider-arrow` |
+| `durable-subscription` | `occurrent-subscription-durable-blocking` |
+| `eventstore-api-blocking` | `occurrent-eventstore-api-blocking` |
+| `eventstore-api-common` | `occurrent-eventstore-api-common` |
+| `eventstore-api-dcb` | `occurrent-eventstore-api-dcb` |
+| `eventstore-api-dcb-reactor` | `occurrent-eventstore-api-dcb-reactor` |
+| `eventstore-api-reactor` | `occurrent-eventstore-api-reactor` |
+| `eventstore-capability` | `occurrent-eventstore-capability` |
+| `eventstore-inmemory` | `occurrent-eventstore-inmemory` |
+| `eventstore-mongodb-common` | `occurrent-eventstore-mongodb-common` |
+| `eventstore-mongodb-dcb-common` | `occurrent-eventstore-mongodb-dcb-common` |
+| `eventstore-mongodb-native` | `occurrent-eventstore-mongodb-native` |
+| `eventstore-mongodb-position-backfill` | `occurrent-eventstore-mongodb-position-backfill` |
+| `eventstore-mongodb-spring-blocking` | `occurrent-eventstore-mongodb-spring-blocking` |
+| `eventstore-mongodb-spring-reactor` | `occurrent-eventstore-mongodb-spring-reactor` |
+| `filter` | `occurrent-filter` |
+| `functional-support` | `occurrent-functional-support` |
+| `hederlig` | `occurrent-hederlig` |
+| `inmemory-filter-matching` | `occurrent-common-inmemory-filter-matching` |
+| `module-dsl-blocking` | `occurrent-module-dsl-blocking` |
+| `mongodb-native-filter-bsonfilter-conversion` | `occurrent-common-mongodb-native-filter-bsonfilter-conversion` |
+| `mongodb-specialfilterhandling` | `occurrent-common-mongodb-specialfilterhandling` |
+| `mongodb-spring-filter-query-conversion` | `occurrent-common-mongodb-spring-filter-query-conversion` |
+| `mongodb-spring-sort-conversion` | `occurrent-common-mongodb-spring-sort-conversion` |
+| `mongodb-timerepresentation` | `occurrent-common-mongodb-timerepresentation` |
+| `query-dsl-blocking` | `occurrent-query-dsl-blocking` |
+| `query-dsl-reactor` | `occurrent-query-dsl-reactor` |
+| `reactor-catchup-subscription` | `occurrent-subscription-catchup-reactor` |
+| `reactor-durable-subscription` | `occurrent-subscription-durable-reactor` |
+| `reactor-stream-catchup-subscription` | `occurrent-subscription-stream-catchup-reactor` |
+| `retry` | `occurrent-retry` |
+| `spring-boot-autoconfigure-mongodb-common` | `occurrent-mongodb-spring-boot-autoconfigure` |
+| `spring-boot-starter-mongodb` | `occurrent-mongodb-spring-boot-starter` |
+| `spring-boot-starter-mongodb-reactive` | `occurrent-mongodb-reactive-spring-boot-starter` |
+| `stream-catchup-subscription` | `occurrent-subscription-stream-catchup-blocking` |
+| `subscription-api-blocking` | `occurrent-subscription-api-blocking` |
+| `subscription-api-reactor` | `occurrent-subscription-api-reactor` |
+| `subscription-core` | `occurrent-subscription-core` |
+| `subscription-dsl-blocking` | `occurrent-subscription-dsl-blocking` |
+| `subscription-dsl-common` | `occurrent-subscription-dsl-common` |
+| `subscription-dsl-reactor` | `occurrent-subscription-dsl-reactor` |
+| `subscription-inmemory` | `occurrent-subscription-inmemory` |
+| `subscription-mongodb-base` | `occurrent-subscription-mongodb-common-base` |
+| `subscription-mongodb-common-blocking-competing-consumer-strategy` | `occurrent-subscription-mongodb-common-blocking-competing-consumer-strategy` |
+| `subscription-mongodb-native-blocking` | `occurrent-subscription-mongodb-native-blocking` |
+| `subscription-mongodb-native-blocking-competing-consumer-strategy` | `occurrent-subscription-mongodb-native-blocking-competing-consumer-strategy` |
+| `subscription-mongodb-native-blocking-position-storage` | `occurrent-subscription-mongodb-native-blocking-position-storage` |
+| `subscription-mongodb-spring-blocking` | `occurrent-subscription-mongodb-spring-blocking` |
+| `subscription-mongodb-spring-blocking-competing-consumer-strategy` | `occurrent-subscription-mongodb-spring-blocking-competing-consumer-strategy` |
+| `subscription-mongodb-spring-blocking-position-storage` | `occurrent-subscription-mongodb-spring-blocking-position-storage` |
+| `subscription-mongodb-spring-common` | `occurrent-subscription-mongodb-spring-common` |
+| `subscription-mongodb-spring-reactor` | `occurrent-subscription-mongodb-spring-reactor` |
+| `subscription-mongodb-spring-reactor-position-storage` | `occurrent-subscription-mongodb-spring-reactor-position-storage` |
+| `subscription-redis-spring-blocking-position-storage` | `occurrent-subscription-redis-spring-blocking-position-storage` |
+| `subscription-util-predicates` | `occurrent-subscription-util-predicates` |
+| `time` | `occurrent-time` |
+| `view-dsl` | `occurrent-view-dsl` |
+
+Unpublished modules keep their names. The aggregator POMs, `test-support`, and the `example-*` modules are not renamed, because you never depend on them.
+
+## 2. Run the recipe first
 
 Add the `rewrite-maven-plugin` and point it at the umbrella recipe, `org.occurrent.UpgradeToOccurrent_0_30`:
 
@@ -32,8 +124,9 @@ Then run:
 mvn org.openrewrite.maven:rewrite-maven-plugin:run
 ```
 
-`UpgradeToOccurrent_0_30` composes two recipes:
+`UpgradeToOccurrent_0_30` composes three recipes:
 
+* `org.occurrent.MigrateCoordinates_0_30`, the artifact-coordinate rewrite from section 1. Safe to run and commit without review.
 * `org.occurrent.MigrateOccurrentRenames_0_30`, the pure renames. Safe to run and commit without review.
 * `org.occurrent.MigrateStreamToList_0_30`, the `Stream` to `List` migration. It rewrites what it can prove is safe and leaves the rest for you (bucket 2 below).
 
@@ -41,7 +134,7 @@ The renames cover the `SubscriptionPosition` to `Checkpoint` family (about 16 ty
 
 The renames run on Kotlin too, both the type renames and instance-method renames. One case does not carry over: a call to the static factory `StartAt.subscriptionPosition(...)` is left untouched in Kotlin, so change it to `StartAt.checkpoint(...)` by hand.
 
-## 2. Manual: the `Stream` to `List` write side
+## 3. Manual: the `Stream` to `List` write side
 
 The write side of the API moved from `Stream`/`Sequence` to `List`. A decider's domain function is now `Function<List<E>, List<E>>` (was `Function<Stream<E>, Stream<E>>`), `EventStore.write` takes `List<CloudEvent>`, `CloudEventConverter.toCloudEvents` returns `List`, the view DSL's `evolve*` methods take `List` or varargs, and command composition uses `ListCommandComposition` (`StreamCommandComposition` and `CommandConversion` are gone). Reads stay lazy and are unaffected.
 
@@ -68,7 +161,7 @@ The renames in group 1 cover Kotlin, but the `Stream` to `List` rewrites above r
 * In the Kotlin DSL, `subscriptions { }` is now the neutral form and its `subscribe(filter = ...)` takes a capability-neutral filter. Renaming `OccurrentSubscriptionFilter` to `StreamSubscriptionFilter` (which the recipe does) is not enough to make a filtered `subscriptions { }` block compile, because the neutral builder no longer accepts a stream filter. Move those blocks to `streamSubscriptions { }`.
 * On the reactive stack, `ReactorDurableSubscriptionModel` was redesigned around the `Subscribable` lifecycle. Its old `subscribe(subscriptionId, action)` and `subscribe(subscriptionId, filter, action)` methods that returned `Mono<Void>`, and `findStartAtForSubscription`, are gone. Use `subscribe(subscriptionId, filter, startAt, action)`, which returns a `Subscription`. See [ADR 44](../architecture/decisions/0044-reactive-spring-boot-starter.md).
 
-## 3. Read before you upgrade
+## 4. Read before you upgrade
 
 No code transform applies here. These are runtime and behavioral changes.
 

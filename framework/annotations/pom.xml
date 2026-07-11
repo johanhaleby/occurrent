@@ -23,7 +23,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>annotations</artifactId>
+    <artifactId>occurrent-annotations</artifactId>
 
     <name>${mavenProjectName}</name>
 

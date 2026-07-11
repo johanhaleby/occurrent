@@ -24,44 +24,44 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>eventstore-mongodb-spring-blocking</artifactId>
+    <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-blocking</artifactId>
+            <artifactId>occurrent-eventstore-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb</artifactId>
+            <artifactId>occurrent-eventstore-api-dcb</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-common</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-dcb-common</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-dcb-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>mongodb-spring-filter-query-conversion</artifactId>
+            <artifactId>occurrent-common-mongodb-spring-filter-query-conversion</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>mongodb-spring-sort-conversion</artifactId>
+            <artifactId>occurrent-common-mongodb-spring-sort-conversion</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>retry</artifactId>
+            <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

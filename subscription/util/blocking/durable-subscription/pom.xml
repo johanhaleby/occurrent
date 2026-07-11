@@ -24,19 +24,19 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>durable-subscription</artifactId>
+    <artifactId>occurrent-subscription-durable-blocking</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-api-blocking</artifactId>
+            <artifactId>occurrent-subscription-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-util-predicates</artifactId>
+            <artifactId>occurrent-subscription-util-predicates</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency> <!-- Required for @PreDestroy -->

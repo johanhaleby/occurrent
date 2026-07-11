@@ -41,17 +41,17 @@
         <!-- Occurrent: the reactive Spring Boot starter auto-configures the reactive DCB application service and DSL -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>spring-boot-starter-mongodb-reactive</artifactId>
+            <artifactId>occurrent-mongodb-reactive-spring-boot-starter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>decider</artifactId>
+            <artifactId>occurrent-decider</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>dcb-dsl-reactor</artifactId>
+            <artifactId>occurrent-dcb-dsl-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
 

@@ -26,27 +26,27 @@
 
     <name>${mavenProjectName}</name>
 
-    <artifactId>application-service-reactor</artifactId>
+    <artifactId>occurrent-application-service-reactor</artifactId>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-common</artifactId>
+            <artifactId>occurrent-application-service-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-reactor</artifactId>
+            <artifactId>occurrent-eventstore-api-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb-reactor</artifactId>
+            <artifactId>occurrent-eventstore-api-dcb-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
+            <artifactId>occurrent-cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -67,7 +67,7 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-reactor</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
@@ -99,7 +99,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-generic</artifactId>
+            <artifactId>occurrent-cloudevent-converter-generic</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

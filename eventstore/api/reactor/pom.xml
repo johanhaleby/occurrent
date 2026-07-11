@@ -23,7 +23,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>eventstore-api-reactor</artifactId>
+    <artifactId>occurrent-eventstore-api-reactor</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -35,7 +35,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-common</artifactId>
+            <artifactId>occurrent-eventstore-api-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

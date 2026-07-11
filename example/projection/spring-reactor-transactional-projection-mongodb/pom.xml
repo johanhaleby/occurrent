@@ -33,7 +33,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-reactor</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
