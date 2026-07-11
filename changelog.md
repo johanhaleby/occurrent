@@ -65,10 +65,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 * Fixed example-profile compilation after recent DSL and query cleanup. The RPS decider web example now uses the stream
   subscription DSL expected by the view DSL, and the course-enrollment student management use case points at the renamed
   DCB query helper.
-* Revived `@Subscription` and the `Subscriptions` DSL, previously deprecated aliases for the stream forms, as the
-  capability-neutral default. On a store with both `STREAM` and `DCB` capabilities they deliver both stream-written and
+* `@Subscription` and the `Subscriptions` DSL, which have always driven stream subscriptions, are now
+  capability-neutral. On a store with both `STREAM` and `DCB` capabilities they deliver both stream-written and
   DCB-appended events, filtered only by event type, with catch-up over the unified global position and resume via
-  `GlobalCheckpoint`. `@StreamSubscription` and `@DcbSubscription` stay as the explicit capability-scoped forms. This is
+  `GlobalCheckpoint`. `@StreamSubscription` and `@DcbSubscription` are the explicit capability-scoped forms. This is
   safe for existing applications because the neutral form only ever also sees DCB events on a DCB-enabled store, and
   those are new since DCB is unreleased. On a stream-only store it behaves exactly as `@Subscription` did before.
   * See [ADR 51](doc/architecture/decisions/0051-capability-agnostic-subscription.md).
@@ -110,9 +110,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   is absent, so an existing subscription resumes correctly on first read after upgrading. All Mongo checkpoint
   storage adapters persist by replacing the whole document, so the first save after upgrade rewrites it under the
   new `checkpoint` field and the legacy field does not survive.
-* Added a global, monotonic `position` to every event, stream and DCB alike, replacing the old DCB-only
-  `dcbposition` and giving stream consumers the same ordering guarantee DCB already had.
-  * `position` is intrinsic to DCB, unchanged from before other than the name. For a STREAM-only store it is a
+* Added a global, monotonic `position` to every event, stream and DCB alike, giving all consumers a single
+  ordering axis across the whole store.
+  * `position` is intrinsic to DCB. For a STREAM-only store it is a
     stream-scoped option that is on by default, so new stores get a global position out of the box. Opt out with
     `EventStoreConfig.withoutStreamPosition()` (blocking, native, and reactor builders) or
     `occurrent.event-store.stream.position=false` in Spring, for a store such as `entity-history` that only ever
