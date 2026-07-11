@@ -23,7 +23,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>example-projection-spring-adhoc-evenstore-mongodb-queries</artifactId>
+    <artifactId>example-projection-spring-adhoc-eventstore-mongodb-queries</artifactId>
 
     <dependencies>
         <dependency>

@@ -29,7 +29,7 @@
     <modules>
         <module>spring-subscription-based-mongodb-projections</module>
         <module>spring-transactional-projection-mongodb</module>
-        <module>spring-adhoc-evenstore-mongodb-queries</module>
+        <module>spring-adhoc-eventstore-mongodb-queries</module>
         <module>spring-reactor-transactional-projection-mongodb</module>
         <module>global-position-catchup</module>
     </modules>

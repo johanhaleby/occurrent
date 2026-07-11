@@ -580,7 +580,7 @@
                                 <!-- Examples -->
                                 <excludeArtifact>example</excludeArtifact>
                                 <excludeArtifact>example-projection</excludeArtifact>
-                                <excludeArtifact>example-projection-spring-adhoc-evenstore-mongodb-queries
+                                <excludeArtifact>example-projection-spring-adhoc-eventstore-mongodb-queries
                                 </excludeArtifact>
                                 <excludeArtifact>example-projection-spring-reactor-transactional-projection-mongodb
                                 </excludeArtifact>
