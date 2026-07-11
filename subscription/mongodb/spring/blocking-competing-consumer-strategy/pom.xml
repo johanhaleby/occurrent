@@ -8,7 +8,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
+    <artifactId>occurrent-subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -23,22 +23,22 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-common</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-common-blocking-competing-consumer-strategy</artifactId>
+            <artifactId>occurrent-subscription-mongodb-common-blocking-competing-consumer-strategy</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-api-blocking</artifactId>
+            <artifactId>occurrent-subscription-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>retry</artifactId>
+            <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -54,13 +54,13 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

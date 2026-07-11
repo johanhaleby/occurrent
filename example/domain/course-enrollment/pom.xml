@@ -41,17 +41,17 @@
         <!-- Occurrent: the Spring Boot starter auto-configures the DCB application service and DSL -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>spring-boot-starter-mongodb</artifactId>
+            <artifactId>occurrent-mongodb-spring-boot-starter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>decider</artifactId>
+            <artifactId>occurrent-decider</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>dcb-dsl-blocking</artifactId>
+            <artifactId>occurrent-dcb-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
 

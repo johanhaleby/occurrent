@@ -33,7 +33,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -51,7 +51,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson3</artifactId>
+            <artifactId>occurrent-cloudevent-converter-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

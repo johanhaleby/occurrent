@@ -33,22 +33,22 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-reactor-position-storage</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-reactor-position-storage</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-reactor</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-native</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-native</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>reactor-durable-subscription</artifactId>
+            <artifactId>occurrent-subscription-durable-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -66,7 +66,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson3</artifactId>
+            <artifactId>occurrent-cloudevent-converter-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

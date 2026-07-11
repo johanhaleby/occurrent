@@ -24,7 +24,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>spring-boot-autoconfigure-mongodb-common</artifactId>
+    <artifactId>occurrent-mongodb-spring-boot-autoconfigure</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -49,42 +49,42 @@
         <!-- Occurrent -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-common</artifactId>
+            <artifactId>occurrent-eventstore-api-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>mongodb-timerepresentation</artifactId>
+            <artifactId>occurrent-common-mongodb-timerepresentation</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson3</artifactId>
+            <artifactId>occurrent-cloudevent-converter-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>annotations</artifactId>
+            <artifactId>occurrent-annotations</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-dsl-common</artifactId>
+            <artifactId>occurrent-subscription-dsl-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>dcb-dsl-common</artifactId>
+            <artifactId>occurrent-dcb-dsl-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb</artifactId>
+            <artifactId>occurrent-eventstore-api-dcb</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-common</artifactId>
+            <artifactId>occurrent-application-service-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

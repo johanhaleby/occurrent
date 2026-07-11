@@ -23,7 +23,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>command-composition</artifactId>
+    <artifactId>occurrent-command-composition</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -42,7 +42,7 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-inmemory</artifactId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

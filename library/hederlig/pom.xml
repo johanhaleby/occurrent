@@ -6,7 +6,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>hederlig</artifactId>
+    <artifactId>occurrent-hederlig</artifactId>
     <packaging>jar</packaging>
 
     <name>hederlig</name>
@@ -27,27 +27,27 @@
         <!-- Occurrent initialization deps -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-inmemory</artifactId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-blocking</artifactId>
+            <artifactId>occurrent-application-service-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-dsl-blocking</artifactId>
+            <artifactId>occurrent-subscription-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson</artifactId>
+            <artifactId>occurrent-cloudevent-converter-jackson</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>query-dsl-blocking</artifactId>
+            <artifactId>occurrent-query-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
 
@@ -60,13 +60,13 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>command-composition</artifactId>
+            <artifactId>occurrent-command-composition</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-inmemory</artifactId>
+            <artifactId>occurrent-subscription-inmemory</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

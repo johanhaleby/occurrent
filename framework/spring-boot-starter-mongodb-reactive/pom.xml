@@ -24,7 +24,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>spring-boot-starter-mongodb-reactive</artifactId>
+    <artifactId>occurrent-mongodb-reactive-spring-boot-starter</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -57,57 +57,57 @@
         <!-- Occurrent -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>spring-boot-autoconfigure-mongodb-common</artifactId>
+            <artifactId>occurrent-mongodb-spring-boot-autoconfigure</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-reactor</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-dsl-reactor</artifactId>
+            <artifactId>occurrent-subscription-dsl-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-reactor</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-reactor-position-storage</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-reactor-position-storage</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>reactor-durable-subscription</artifactId>
+            <artifactId>occurrent-subscription-durable-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>reactor-catchup-subscription</artifactId>
+            <artifactId>occurrent-subscription-catchup-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>reactor-stream-catchup-subscription</artifactId>
+            <artifactId>occurrent-subscription-stream-catchup-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-reactor</artifactId>
+            <artifactId>occurrent-application-service-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>command-composition</artifactId>
+            <artifactId>occurrent-command-composition</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson3</artifactId>
+            <artifactId>occurrent-cloudevent-converter-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
         <!-- Jackson 3 still relies on com.fasterxml.jackson annotations -->
@@ -118,22 +118,22 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>query-dsl-reactor</artifactId>
+            <artifactId>occurrent-query-dsl-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>dcb-dsl-reactor</artifactId>
+            <artifactId>occurrent-dcb-dsl-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>annotations</artifactId>
+            <artifactId>occurrent-annotations</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>dcb-annotation-taggenerator</artifactId>
+            <artifactId>occurrent-dcb-annotation-taggenerator</artifactId>
             <version>${project.version}</version>
             <optional>true</optional>
         </dependency>

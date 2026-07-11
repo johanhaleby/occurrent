@@ -28,6 +28,6 @@
         <module>spring</module>
     </modules>
 
-    <artifactId>example-number-guessing-game-es-mongodb</artifactId>
+    <artifactId>example-number-guessing-game-eventstore-mongodb</artifactId>
 
 </project>

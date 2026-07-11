@@ -24,19 +24,19 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-mongodb-spring-reactor-position-storage</artifactId>
+    <artifactId>occurrent-subscription-mongodb-spring-reactor-position-storage</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-api-reactor</artifactId>
+            <artifactId>occurrent-subscription-api-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-base</artifactId>
+            <artifactId>occurrent-subscription-mongodb-common-base</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -60,13 +60,13 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-reactor</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-reactor</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

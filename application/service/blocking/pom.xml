@@ -26,37 +26,37 @@
 
     <name>${mavenProjectName}</name>
 
-    <artifactId>application-service-blocking</artifactId>
+    <artifactId>occurrent-application-service-blocking</artifactId>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-common</artifactId>
+            <artifactId>occurrent-application-service-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-blocking</artifactId>
+            <artifactId>occurrent-eventstore-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb</artifactId>
+            <artifactId>occurrent-eventstore-api-dcb</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
+            <artifactId>occurrent-cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-type-mapper-api</artifactId>
+            <artifactId>occurrent-cloudevent-type-mapper-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>retry</artifactId>
+            <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -73,13 +73,13 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>command-composition</artifactId>
+            <artifactId>occurrent-command-composition</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-inmemory</artifactId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
@@ -111,7 +111,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-generic</artifactId>
+            <artifactId>occurrent-cloudevent-converter-generic</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

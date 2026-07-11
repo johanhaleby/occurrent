@@ -23,7 +23,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-mongodb-spring-common</artifactId>
+    <artifactId>occurrent-subscription-mongodb-spring-common</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -34,12 +34,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-base</artifactId>
+            <artifactId>occurrent-subscription-mongodb-common-base</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>mongodb-spring-filter-query-conversion</artifactId>
+            <artifactId>occurrent-common-mongodb-spring-filter-query-conversion</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

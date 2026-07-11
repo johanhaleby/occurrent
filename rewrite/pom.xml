@@ -40,6 +40,15 @@
             <groupId>org.openrewrite</groupId>
             <artifactId>rewrite-kotlin</artifactId>
         </dependency>
+        <!-- Maven and Gradle recipes for the 0.30.0 artifact-coordinate migration. -->
+        <dependency>
+            <groupId>org.openrewrite</groupId>
+            <artifactId>rewrite-maven</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.openrewrite</groupId>
+            <artifactId>rewrite-gradle</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>

@@ -17,13 +17,13 @@
 
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>example-uno-es-mongodb</artifactId>
+        <artifactId>example-uno-eventstore-mongodb</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>example-uno-es-mongodb-native</artifactId>
+    <artifactId>example-uno-eventstore-mongodb-native</artifactId>
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
@@ -32,27 +32,27 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>example-uno-es-mongodb-common</artifactId>
+            <artifactId>example-uno-eventstore-mongodb-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-native</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-native</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-native-blocking-position-storage</artifactId>
+            <artifactId>occurrent-subscription-mongodb-native-blocking-position-storage</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-blocking</artifactId>
+            <artifactId>occurrent-application-service-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>command-composition</artifactId>
+            <artifactId>occurrent-command-composition</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

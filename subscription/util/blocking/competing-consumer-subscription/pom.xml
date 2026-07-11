@@ -8,19 +8,19 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>competing-consumer-subscription</artifactId>
+    <artifactId>occurrent-subscription-competing-consumer-blocking</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-api-blocking</artifactId>
+            <artifactId>occurrent-subscription-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>functional-support</artifactId>
+            <artifactId>occurrent-functional-support</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency> <!-- Required for @PreDestroy -->
@@ -41,13 +41,13 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
@@ -59,19 +59,19 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>durable-subscription</artifactId>
+            <artifactId>occurrent-subscription-durable-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking-position-storage</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking-position-storage</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

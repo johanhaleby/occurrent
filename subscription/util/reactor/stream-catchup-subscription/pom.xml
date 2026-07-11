@@ -24,29 +24,29 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>reactor-stream-catchup-subscription</artifactId>
+    <artifactId>occurrent-subscription-stream-catchup-reactor</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-api-reactor</artifactId>
+            <artifactId>occurrent-subscription-api-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-reactor</artifactId>
+            <artifactId>occurrent-eventstore-api-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>filter</artifactId>
+            <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>inmemory-filter-matching</artifactId>
+            <artifactId>occurrent-common-inmemory-filter-matching</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -62,25 +62,25 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-reactor</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-reactor</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
+            <artifactId>occurrent-cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson</artifactId>
+            <artifactId>occurrent-cloudevent-converter-jackson</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

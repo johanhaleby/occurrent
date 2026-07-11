@@ -23,7 +23,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>cloudevent-converter-xstream</artifactId>
+    <artifactId>occurrent-cloudevent-converter-xstream</artifactId>
 
     <name>${mavenProjectName}</name>
     <description>CloudEvent Converter for XStream</description>
@@ -36,12 +36,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
+            <artifactId>occurrent-cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-type-mapper-api</artifactId>
+            <artifactId>occurrent-cloudevent-type-mapper-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

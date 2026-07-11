@@ -24,7 +24,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>eventstore-mongodb-position-backfill</artifactId>
+    <artifactId>occurrent-eventstore-mongodb-position-backfill</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -35,7 +35,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-dcb-common</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-dcb-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -60,7 +60,7 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

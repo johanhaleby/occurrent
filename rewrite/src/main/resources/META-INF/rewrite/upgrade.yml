@@ -18,10 +18,12 @@ type: specs.openrewrite.org/v1beta/recipe
 name: org.occurrent.UpgradeToOccurrent_0_30
 displayName: Upgrade to Occurrent 0.30.0
 description: >-
-  Migrates an application from Occurrent 0.20.5 to 0.30.0. First applies the mechanical type, method, and
-  package renames, then the best-effort Stream-to-List write-side migration, which rewrites the cases it can
-  prove safe and leaves a review comment on the call sites it cannot. It does not cover the behavioral and
-  Kotlin changes; see doc/migration/upgrading-to-0.30.0.md for the manual steps.
+  Migrates an application from Occurrent 0.20.5 to 0.30.0. First rewrites the Maven and Gradle artifact
+  coordinates to the occurrent- prefixed scheme, then applies the mechanical type, method, and package
+  renames, then the best-effort Stream-to-List write-side migration, which rewrites the cases it can prove
+  safe and leaves a review comment on the call sites it cannot. It does not cover the behavioral and Kotlin
+  changes, see doc/migration/upgrading-to-0.30.0.md for the manual steps.
 recipeList:
+  - org.occurrent.MigrateCoordinates_0_30
   - org.occurrent.MigrateOccurrentRenames_0_30
   - org.occurrent.MigrateStreamToList_0_30

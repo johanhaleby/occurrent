@@ -24,29 +24,29 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>application-service-common</artifactId>
+    <artifactId>occurrent-application-service-common</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-type-mapper-api</artifactId>
+            <artifactId>occurrent-cloudevent-type-mapper-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>filter</artifactId>
+            <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-common</artifactId>
+            <artifactId>occurrent-eventstore-api-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb</artifactId>
+            <artifactId>occurrent-eventstore-api-dcb</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

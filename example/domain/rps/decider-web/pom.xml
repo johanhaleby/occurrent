@@ -39,7 +39,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>decider</artifactId>
+            <artifactId>occurrent-decider</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -49,12 +49,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>spring-boot-starter-mongodb</artifactId>
+            <artifactId>occurrent-mongodb-spring-boot-starter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>view-dsl</artifactId>
+            <artifactId>occurrent-view-dsl</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

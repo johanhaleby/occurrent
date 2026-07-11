@@ -23,7 +23,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>mongodb-timerepresentation</artifactId>
+    <artifactId>occurrent-common-mongodb-timerepresentation</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -35,7 +35,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>time</artifactId>
+            <artifactId>occurrent-time</artifactId>
             <version>${project.version}</version>
         </dependency>
     </dependencies>

@@ -24,7 +24,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>cloudevent-converter-core</artifactId>
+    <artifactId>occurrent-cloudevent-converter-core</artifactId>
 
     <name>${mavenProjectName}</name>
     <description>Internal shared support for CloudEvent converters</description>
@@ -37,7 +37,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
+            <artifactId>occurrent-cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -46,7 +46,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-type-mapper-reflection</artifactId>
+            <artifactId>occurrent-cloudevent-type-mapper-reflection</artifactId>
             <version>${project.version}</version>
         </dependency>
     </dependencies>

@@ -6,7 +6,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>deadline-api-blocking</artifactId>
+    <artifactId>occurrent-deadline-api-blocking</artifactId>
     <packaging>jar</packaging>
 
     <name>deadline-api-blocking</name>

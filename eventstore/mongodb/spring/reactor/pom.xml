@@ -24,39 +24,39 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>eventstore-mongodb-spring-reactor</artifactId>
+    <artifactId>occurrent-eventstore-mongodb-spring-reactor</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-reactor</artifactId>
+            <artifactId>occurrent-eventstore-api-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb-reactor</artifactId>
+            <artifactId>occurrent-eventstore-api-dcb-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>mongodb-spring-filter-query-conversion</artifactId>
+            <artifactId>occurrent-common-mongodb-spring-filter-query-conversion</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-common</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-dcb-common</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-dcb-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>mongodb-spring-sort-conversion</artifactId>
+            <artifactId>occurrent-common-mongodb-spring-sort-conversion</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
