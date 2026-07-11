@@ -66,6 +66,9 @@ in-memory subscription model that consumes it, move from `Consumer<Stream<CloudE
 `Consumer<List<CloudEvent>>` for the same reason as the write API, since they are always handed an
 already-materialized batch.
 
-The view DSL's `evolve`, `evolveAll`, and `evolveFrom` helpers were collapsed to `List` and varargs in the
-same change, dropping their `Stream` and `Sequence` overloads. A view fold operates on a materialized set of
-events already in hand, so it follows the same reasoning as the write side rather than the lazy read side.
+The view DSL's `evolve`, `evolveAll`, and `evolveFrom` helpers gained `List` and `Iterable` overloads but keep
+their `Stream` (Java) and `Sequence` (Kotlin) forms. A view fold is a read-side operation, so a lazily-queried
+`Stream` or `Sequence` (for example a `queryForSequence` result) composes with it directly, without a caller
+having to materialize first. Every collection form delegates to the `List` fold. An earlier revision of this
+change dropped the `Stream` and `Sequence` overloads by treating the fold like the write side, which was
+corrected before release.
