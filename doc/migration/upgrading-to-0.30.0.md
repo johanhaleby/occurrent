@@ -136,7 +136,7 @@ The renames run on Kotlin too, both the type renames and instance-method renames
 
 ## 3. Manual: the `Stream` to `List` write side
 
-The write side of the API moved from `Stream`/`Sequence` to `List`. A decider's domain function is now `Function<List<E>, List<E>>` (was `Function<Stream<E>, Stream<E>>`), `EventStore.write` takes `List<CloudEvent>`, `CloudEventConverter.toCloudEvents` returns `List`, the view DSL's `evolve*` methods take `List` or varargs, and command composition uses `ListCommandComposition` (`StreamCommandComposition` and `CommandConversion` are gone). Reads stay lazy and are unaffected.
+The write side of the API moved from `Stream`/`Sequence` to `List`. A decider's domain function is now `Function<List<E>, List<E>>` (was `Function<Stream<E>, Stream<E>>`), `EventStore.write` takes `List<CloudEvent>`, `CloudEventConverter.toCloudEvents` returns `List`, the view DSL's `evolve*` fold helpers gained `List` and `Iterable` overloads while keeping their `Stream` (Java) and `Sequence` (Kotlin) forms (folding a view is read-side, so those stay), and command composition uses `ListCommandComposition` (`StreamCommandComposition` and `CommandConversion` are gone). Reads stay lazy and are unaffected.
 
 `MigrateStreamToList_0_30` rewrites the safe cases: call sites that only pass a `Stream` through, and signatures with no method body to reinterpret. It cannot rewrite a lambda body that calls `Stream` operations like `.filter()` or `.map()` on the events, since turning that into `List` code is a judgment call OpenRewrite can't make safely. Anything like that is left in place for you to fix by hand, and the compiler will point you at every remaining spot once you've run the recipe.
 
@@ -157,7 +157,7 @@ The renames in group 1 cover Kotlin, but the `Stream` to `List` rewrites above r
 0.30.0 splits subscriptions into three forms: `@StreamSubscription` and `@DcbSubscription` for the capability-scoped cases, and a revived capability-neutral `@Subscription`. The recipe does not migrate these, so a 0.20.5 application that uses the following needs a manual pass:
 
 * `@Subscription` no longer has `startAtTimeEpochMillis` or `startAtISO8601`. A neutral subscription can't honor a specific historical start time, so those attributes moved to `@StreamSubscription`. If you start a subscription from a point in time, change the annotation to `@StreamSubscription`.
-* `StartPosition.BEGINNING_OF_TIME` is renamed to `BEGINNING`.
+* On the neutral `@Subscription`, the start constant `StartPosition.BEGINNING_OF_TIME` is now `StartPosition.BEGINNING`. The new `@StreamSubscription` keeps its own `StartPosition.BEGINNING_OF_TIME`, so only the neutral annotation's constant changed name.
 * In the Kotlin DSL, `subscriptions { }` is now the neutral form and its `subscribe(filter = ...)` takes a capability-neutral filter. Renaming `OccurrentSubscriptionFilter` to `StreamSubscriptionFilter` (which the recipe does) is not enough to make a filtered `subscriptions { }` block compile, because the neutral builder no longer accepts a stream filter. Move those blocks to `streamSubscriptions { }`.
 * On the reactive stack, `ReactorDurableSubscriptionModel` was redesigned around the `Subscribable` lifecycle. Its old `subscribe(subscriptionId, action)` and `subscribe(subscriptionId, filter, action)` methods that returned `Mono<Void>`, and `findStartAtForSubscription`, are gone. Use `subscribe(subscriptionId, filter, startAt, action)`, which returns a `Subscription`. See [ADR 44](../architecture/decisions/0044-reactive-spring-boot-starter.md).
 
