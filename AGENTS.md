@@ -56,6 +56,7 @@ Unreleased changes go under the existing `### Changelog next version` heading, n
 - Focused module test: `mvn -pl <module-path> -am test`.
 - Focused test class: `mvn -pl <module-path> -am -Dtest=<TestClass> -Dsurefire.failIfNoSpecifiedTests=false test`.
 - Release: `mvn_release.sh` (Java 21, `mvn deploy -Prelease`, GPG signing, Sonatype Central publishing).
+- Publishing exclusions: when you add a new aggregate parent POM (a `packaging` of `pom` that only groups `<modules>` and has no publishable artifact of its own), add its `artifactId` to `<excludeArtifacts>` in the root `pom.xml` under the `central-publishing-maven-plugin` config. Aggregate POMs flatten to metadata-less POMs, so if one is left in the release it fails Central validation with missing name, description, url, license, scm, and developers. The `bom` is the only pom-packaged module that is published (it uses `flattenMode=bom` to keep that metadata), so it stays off the exclude list.
 
 ## Deeper context
 
