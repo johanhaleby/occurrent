@@ -17,9 +17,14 @@
 package org.occurrent.example.domain.appointmentscheduling.application;
 
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
+import org.occurrent.application.service.dcb.TagGenerator;
+import org.occurrent.application.service.dcb.annotation.AnnotationTagGenerator;
+import org.occurrent.dsl.dcb.DcbDecider;
+import org.occurrent.dsl.dcb.blocking.DcbDeciderApplicationService;
 import org.occurrent.example.domain.appointmentscheduling.event.DomainEvent;
 import org.occurrent.example.domain.appointmentscheduling.model.Appointment;
 import org.occurrent.example.domain.appointmentscheduling.model.Clinician;
+import org.occurrent.example.domain.appointmentscheduling.model.Commands.AppointmentCommand;
 import org.occurrent.example.domain.appointmentscheduling.model.Commands.BookAppointment;
 import org.occurrent.example.domain.appointmentscheduling.model.Commands.CancelAppointment;
 import org.occurrent.example.domain.appointmentscheduling.model.Commands.DefineSlot;
@@ -29,39 +34,44 @@ import org.occurrent.example.domain.appointmentscheduling.model.Patient;
 import org.occurrent.example.domain.appointmentscheduling.model.Slot;
 
 /**
- * Runs each command by reading the events its decider's criteria selects, deciding, and appending. The plain
- * decider does the folding, the criteria defines the DCB read and append boundary, and the application
- * service supplies the optimistic append condition and tags the new events.
+ * Runs each command through a {@link DcbDecider} that bundles the feature's decider, its DCB read boundary, and the
+ * tags for the events it writes. {@link DcbDeciderApplicationService#execute} reads the events the boundary selects,
+ * decides, tags the new events, and appends them under the DCB optimistic condition.
  */
 public class AppointmentSchedulingService {
-    private final DcbApplicationService<DomainEvent> applicationService;
+
+    // The tags are derived from the events themselves via their annotations, so one stateless generator serves every
+    // decider.
+    private static final TagGenerator<DomainEvent> TAGS = new AnnotationTagGenerator<>();
+
+    private static final DcbDecider<RegisterClinician, ?, DomainEvent> CLINICIAN = DcbDecider.from(Clinician.DECIDER, Clinician::criteria, TAGS);
+    private static final DcbDecider<RegisterPatient, ?, DomainEvent> PATIENT = DcbDecider.from(Patient.DECIDER, Patient::criteria, TAGS);
+    private static final DcbDecider<DefineSlot, ?, DomainEvent> SLOT = DcbDecider.from(Slot.DECIDER, Slot::criteria, TAGS);
+    private static final DcbDecider<AppointmentCommand, ?, DomainEvent> APPOINTMENT = DcbDecider.from(Appointment.DECIDER, Appointment::criteria, TAGS);
+
+    private final DcbDeciderApplicationService<DomainEvent> applicationService;
 
     public AppointmentSchedulingService(DcbApplicationService<DomainEvent> applicationService) {
-        this.applicationService = applicationService;
+        this.applicationService = new DcbDeciderApplicationService<>(applicationService);
     }
 
     public void registerClinician(RegisterClinician command) {
-        applicationService.execute(Clinician.criteria(command),
-                events -> Clinician.DECIDER.decideOnEventsAndReturnEvents(events, command));
+        applicationService.execute(command, CLINICIAN);
     }
 
     public void registerPatient(RegisterPatient command) {
-        applicationService.execute(Patient.criteria(command),
-                events -> Patient.DECIDER.decideOnEventsAndReturnEvents(events, command));
+        applicationService.execute(command, PATIENT);
     }
 
     public void defineSlot(DefineSlot command) {
-        applicationService.execute(Slot.criteria(command),
-                events -> Slot.DECIDER.decideOnEventsAndReturnEvents(events, command));
+        applicationService.execute(command, SLOT);
     }
 
     public void bookAppointment(BookAppointment command) {
-        applicationService.execute(Appointment.criteria(command),
-                events -> Appointment.DECIDER.decideOnEventsAndReturnEvents(events, command));
+        applicationService.execute(command, APPOINTMENT);
     }
 
     public void cancelAppointment(CancelAppointment command) {
-        applicationService.execute(Appointment.criteria(command),
-                events -> Appointment.DECIDER.decideOnEventsAndReturnEvents(events, command));
+        applicationService.execute(command, APPOINTMENT);
     }
 }

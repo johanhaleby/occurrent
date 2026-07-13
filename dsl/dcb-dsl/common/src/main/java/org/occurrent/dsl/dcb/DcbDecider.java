@@ -190,4 +190,36 @@ public record DcbDecider<C, S extends @Nullable Object, E>(
 
         return new DcbDecider<>(composedDecider, composedCriteria, composedTags);
     }
+
+    /**
+     * Resolve the DCB read boundary for a single {@code command}. Throws {@link IllegalArgumentException} if this
+     * decider does not recognize the command (its {@link #criteria} returns {@code null}), since then there is no
+     * boundary to read and no decision to make.
+     */
+    public DcbCriteria criteriaFor(C command) {
+        DcbCriteria boundary = criteria.apply(command);
+        if (boundary == null) {
+            throw new IllegalArgumentException("The decider does not recognize command " + command + ", so there is no boundary to read and no decision to make");
+        }
+        return boundary;
+    }
+
+    /**
+     * Resolve the single DCB read boundary shared by all of {@code commands}. Requires at least one command, and
+     * requires every command to resolve to the same boundary, since the events they produce are appended atomically
+     * under one append condition. Throws {@link IllegalArgumentException} otherwise.
+     */
+    public DcbCriteria criteriaFor(List<C> commands) {
+        if (commands.isEmpty()) {
+            throw new IllegalArgumentException("Must supply at least one command");
+        }
+        DcbCriteria first = criteriaFor(commands.getFirst());
+        for (int i = 1; i < commands.size(); i++) {
+            DcbCriteria boundary = criteriaFor(commands.get(i));
+            if (!boundary.equals(first)) {
+                throw new IllegalArgumentException("All commands in a single execute must resolve to the same DcbCriteria boundary, they are appended atomically under one condition");
+            }
+        }
+        return first;
+    }
 }
