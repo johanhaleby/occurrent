@@ -75,6 +75,37 @@ class InMemoryEventStoreDcbTest {
     }
 
     @Test
+    void direction_and_limit_select_matches_without_changing_ascending_order_or_the_token() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        for (int i = 0; i < 5; i++) {
+            eventStore.append(List.of(taggedEvent("E", "seq:1")));
+        }
+        DcbCriteria criteria = tags(tag("seq:1"));
+        List<String> all = ids(eventStore.read(criteria));
+        assertThat(all).hasSize(5);
+
+        // forward limit keeps the lowest-position matches, ascending
+        assertThat(ids(eventStore.read(criteria, DcbReadOptions.fromBeginning().forwards().limit(2))))
+                .containsExactly(all.get(0), all.get(1));
+        // backwardsLimited(1) returns the single highest-position match
+        assertThat(ids(eventStore.read(criteria, DcbReadOptions.backwardsLimited(1))))
+                .containsExactly(all.get(4));
+        // backwardsLimited(n) returns the highest n, still ascending
+        assertThat(ids(eventStore.read(criteria, DcbReadOptions.backwardsLimited(3))))
+                .containsExactly(all.get(2), all.get(3), all.get(4));
+        // a limit larger than the match count returns all
+        assertThat(ids(eventStore.read(criteria, DcbReadOptions.backwardsLimited(99)))).isEqualTo(all);
+
+        // the invariant: direction/limit never change the consistency token (it reflects the whole matching set)
+        assertThat(eventStore.read(criteria, DcbReadOptions.backwardsLimited(1)).consistencyToken())
+                .isEqualTo(eventStore.read(criteria).consistencyToken());
+    }
+
+    private static List<String> ids(DcbEventStream stream) {
+        return stream.events().stream().map(CloudEvent::getId).toList();
+    }
+
+    @Test
     void no_token_append_condition_reflects_current_existence_not_past_appends() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         DcbCriteria criteria = tags(tag("name:1"));

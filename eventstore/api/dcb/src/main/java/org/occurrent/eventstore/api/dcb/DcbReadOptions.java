@@ -19,21 +19,64 @@ package org.occurrent.eventstore.api.dcb;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.PositionRange;
 
+import java.util.OptionalInt;
 import java.util.OptionalLong;
 
 import static java.util.Objects.requireNonNull;
 
 /**
  * Options that scope a DCB read. Uses the shared {@link PositionRange} window, the same window used by stream
- * position reads and the query DSL.
+ * position reads and the query DSL, and optionally caps the number of matching events returned and selects which end
+ * of the matching range the cap keeps.
+ * <p>
+ * {@code direction} and {@code limit} do not change the order in which events are returned: a {@link DcbEventStream}
+ * always lists its events in ascending DCB sequence-position order. They only select <em>which</em> matching events are
+ * returned. {@code direction} chooses the end the {@code limit} keeps &mdash; {@link Direction#FORWARD} keeps the
+ * lowest-position matches (the oldest), {@link Direction#BACKWARD} keeps the highest-position matches (the newest)
+ * &mdash; and {@code limit} caps the count. So {@code fromBeginning().backwards().limit(1)} returns the single
+ * highest-position event that matches the criteria, which is how a gapless sequence reads its last entry in one round
+ * trip instead of folding the whole stream (see ADR 0056).
+ * <p>
+ * {@code direction} and {@code limit} never affect the {@link DcbEventStream#consistencyToken() consistency token}: the
+ * token reflects the whole matching set observed at read time, not the returned page, so a limited read still guards an
+ * append against <em>any</em> later matching event.
  *
  * @param positionRange the position window to read
+ * @param direction     which end of the matching range the {@code limit} keeps; never changes the returned order
+ * @param limit         optional cap on the number of matching events returned; when present must be positive
  */
 @NullMarked
-public record DcbReadOptions(PositionRange positionRange) {
+public record DcbReadOptions(PositionRange positionRange, Direction direction, OptionalInt limit) {
+
+    /**
+     * Selects which end of the matching range a {@link DcbReadOptions#limit() limit} keeps. Does not change the order
+     * of the returned events, which is always ascending by DCB sequence position.
+     */
+    public enum Direction {
+        /**
+         * Keep the lowest-position (oldest) matching events.
+         */
+        FORWARD,
+        /**
+         * Keep the highest-position (newest) matching events.
+         */
+        BACKWARD
+    }
 
     public DcbReadOptions {
         requireNonNull(positionRange, "Position range cannot be null");
+        requireNonNull(direction, "Direction cannot be null");
+        requireNonNull(limit, "Limit cannot be null");
+        if (limit.isPresent() && limit.getAsInt() <= 0) {
+            throw new IllegalArgumentException("Limit must be greater than 0");
+        }
+    }
+
+    /**
+     * Reads the whole position window forwards with no limit.
+     */
+    public DcbReadOptions(PositionRange positionRange) {
+        this(positionRange, Direction.FORWARD, OptionalInt.empty());
     }
 
     /**
@@ -50,6 +93,27 @@ public record DcbReadOptions(PositionRange positionRange) {
      */
     public OptionalLong upToPosition() {
         return positionRange.upToPosition();
+    }
+
+    /**
+     * Returns a copy of these options reading the highest-position matches first (see {@link Direction#BACKWARD}).
+     */
+    public DcbReadOptions backwards() {
+        return new DcbReadOptions(positionRange, Direction.BACKWARD, limit);
+    }
+
+    /**
+     * Returns a copy of these options reading the lowest-position matches first (see {@link Direction#FORWARD}).
+     */
+    public DcbReadOptions forwards() {
+        return new DcbReadOptions(positionRange, Direction.FORWARD, limit);
+    }
+
+    /**
+     * Returns a copy of these options capped to at most {@code max} matching events.
+     */
+    public DcbReadOptions limit(int max) {
+        return new DcbReadOptions(positionRange, direction, OptionalInt.of(max));
     }
 
     /**
@@ -78,5 +142,14 @@ public record DcbReadOptions(PositionRange positionRange) {
      */
     public static DcbReadOptions between(long afterPosition, long upToPosition) {
         return new DcbReadOptions(PositionRange.between(afterPosition, upToPosition));
+    }
+
+    /**
+     * Reads at most {@code max} matching events, keeping the highest-position (newest) ones. A gapless sequence uses
+     * {@code backwardsLimited(1)} to read its last entry in a single round trip. The events are still returned in
+     * ascending position order (a single event when {@code max} is 1).
+     */
+    public static DcbReadOptions backwardsLimited(int max) {
+        return new DcbReadOptions(PositionRange.fromBeginning(), Direction.BACKWARD, OptionalInt.of(max));
     }
 }

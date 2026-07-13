@@ -1,3 +1,8 @@
+### Changelog next version
+
+* DCB reads can now be capped and directed. `DcbReadOptions` gained an optional `Direction` (`FORWARD` or `BACKWARD`) and `limit`, with the convenience factory `backwardsLimited(n)`. `backwardsLimited(1)` reads the single highest-position event matching a criteria in one round trip, so a gapless business sequence (an invoice number) can look up its last entry without folding the whole history. Direction and limit only select which matching events are returned, never the order (a `DcbEventStream` is always ascending by position) and never the consistency token (it still reflects the whole matching set, so a limited read guards an append against any later matching event). Implemented on all four DCB stores. Rationale in [ADR 56](doc/architecture/decisions/0056-dcb-read-direction-and-limit.md).
+* Added the `dcb-patterns` example module, a catalog covering the remaining [dcb.events](https://dcb.events/examples/) patterns not already shown by `course-enrollment`, `hotel-booking`, and `word-guessing-game`: unique username, idempotency, dynamic product price, opt-in token, and gapless invoice numbers. Kotlin, in-memory, no Docker.
+
 ### 0.30.0 (2026-07-13)
 
 #### Highlights

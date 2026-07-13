@@ -383,6 +383,80 @@ class MongoEventStoreDcbTest {
         assertThat(eventStore.count(all())).isZero();
     }
 
+    @Test
+    void forward_limit_returns_the_first_n_matches_in_ascending_order() {
+        eventStore.append(List.of(
+                taggedEvent("E1", "t:1"),
+                taggedEvent("E2", "t:1"),
+                taggedEvent("E3", "t:1"),
+                taggedEvent("E4", "t:1")));
+
+        DcbEventStream eventStream = eventStore.read(tags(Tag.parse("t:1")), DcbReadOptions.fromBeginning().limit(2));
+
+        assertThat(eventStream.events())
+                .extracting(CloudEvent::getType)
+                .containsExactly("E1", "E2");
+    }
+
+    @Test
+    void backwards_limited_to_one_returns_the_single_highest_position_match() {
+        eventStore.append(List.of(
+                taggedEvent("E1", "t:1"),
+                taggedEvent("E2", "t:1"),
+                taggedEvent("E3", "t:1")));
+
+        DcbEventStream eventStream = eventStore.read(tags(Tag.parse("t:1")), DcbReadOptions.backwardsLimited(1));
+
+        assertThat(eventStream.events())
+                .extracting(CloudEvent::getType)
+                .containsExactly("E3");
+    }
+
+    @Test
+    void backwards_limited_to_n_returns_the_highest_n_matches_still_ascending() {
+        eventStore.append(List.of(
+                taggedEvent("E1", "t:1"),
+                taggedEvent("E2", "t:1"),
+                taggedEvent("E3", "t:1"),
+                taggedEvent("E4", "t:1")));
+
+        DcbEventStream eventStream = eventStore.read(tags(Tag.parse("t:1")), DcbReadOptions.backwardsLimited(3));
+
+        assertThat(eventStream.events())
+                .extracting(CloudEvent::getType)
+                .containsExactly("E2", "E3", "E4");
+    }
+
+    @Test
+    void limit_larger_than_the_match_count_returns_all_matches() {
+        eventStore.append(List.of(
+                taggedEvent("E1", "t:1"),
+                taggedEvent("E2", "t:1")));
+
+        DcbEventStream eventStream = eventStore.read(tags(Tag.parse("t:1")), DcbReadOptions.backwardsLimited(10));
+
+        assertThat(eventStream.events())
+                .extracting(CloudEvent::getType)
+                .containsExactly("E1", "E2");
+    }
+
+    @Test
+    void backwards_limited_read_returns_the_same_consistency_token_as_an_unlimited_forward_read() {
+        eventStore.append(List.of(
+                taggedEvent("E1", "t:1"),
+                taggedEvent("E2", "t:1"),
+                taggedEvent("E3", "t:1")));
+
+        DcbEventStream unlimitedForward = eventStore.read(tags(Tag.parse("t:1")), DcbReadOptions.fromBeginning().forwards());
+        DcbEventStream backwardsLimited = eventStore.read(tags(Tag.parse("t:1")), DcbReadOptions.backwardsLimited(1));
+
+        // The consistency token reflects the whole matching set observed at read time, not the returned page: a
+        // direction/limit that only selects which events to return must not change it.
+        assertThat(backwardsLimited.consistencyToken()).isEqualTo(unlimitedForward.consistencyToken());
+        assertThat(backwardsLimited.events()).extracting(CloudEvent::getType).containsExactly("E3");
+        assertThat(unlimitedForward.events()).extracting(CloudEvent::getType).containsExactly("E1", "E2", "E3");
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }

@@ -74,6 +74,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -247,11 +248,18 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     long highWatermark = tokenAndHighWatermark.getT2();
                     long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
                     Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
-                    mongoQuery.with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
-                    return mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
-                            .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
-                            .collectList()
-                            .map(events -> new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(token)));
+                    boolean backward = options.direction() == DcbReadOptions.Direction.BACKWARD && options.limit().isPresent();
+                    mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
+                    options.limit().ifPresent(mongoQuery::limit);
+                    Flux<CloudEvent> cloudEvents = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
+                            .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
+                    Mono<List<CloudEvent>> events = backward
+                            ? cloudEvents.collectList().map(list -> {
+                                Collections.reverse(list);
+                                return list;
+                            })
+                            : cloudEvents.collectList();
+                    return events.map(list -> new DcbEventStream(list, highWatermark, DcbConsistencyToken.of(token)));
                 });
     }
 
