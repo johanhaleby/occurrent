@@ -547,10 +547,12 @@
                                 <excludeArtifact>cloudevent-converter</excludeArtifact>
                                 <excludeArtifact>cloudevent-type-mapper</excludeArtifact>
                                 <excludeArtifact>common</excludeArtifact>
+                                <excludeArtifact>dcb-dsl</excludeArtifact>
                                 <excludeArtifact>deadline-api</excludeArtifact>
                                 <excludeArtifact>deadline</excludeArtifact>
                                 <excludeArtifact>dsl</excludeArtifact>
                                 <excludeArtifact>eventstore-api</excludeArtifact>
+                                <excludeArtifact>eventstore-migration</excludeArtifact>
                                 <excludeArtifact>eventstore-mongodb-spring</excludeArtifact>
                                 <excludeArtifact>eventstore-mongodb</excludeArtifact>
                                 <excludeArtifact>eventstore</excludeArtifact>
