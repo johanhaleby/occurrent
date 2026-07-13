@@ -105,18 +105,21 @@ class UniqueUsernameTest {
         val barrier = CyclicBarrier(2)
         val executor = Executors.newFixedThreadPool(2)
 
-        val results = listOf(UUID.randomUUID(), UUID.randomUUID()).map { accountId ->
-            executor.submit<Throwable?> {
-                barrier.await()
-                try {
-                    racingService.execute(UsernameCommand.RegisterAccount(accountId, "johan", now), usernameDcbDecider)
-                    null
-                } catch (e: Throwable) {
-                    e
+        val results = try {
+            listOf(UUID.randomUUID(), UUID.randomUUID()).map { accountId ->
+                executor.submit<Throwable?> {
+                    barrier.await(10, TimeUnit.SECONDS)
+                    try {
+                        racingService.execute(UsernameCommand.RegisterAccount(accountId, "johan", now), usernameDcbDecider)
+                        null
+                    } catch (e: Throwable) {
+                        e
+                    }
                 }
-            }
-        }.map { it.get(10, TimeUnit.SECONDS) }
-        executor.shutdown()
+            }.map { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            executor.shutdownNow()
+        }
 
         assertThat(results.count { it == null }).isEqualTo(1)
         val failure = results.single { it != null }!!
