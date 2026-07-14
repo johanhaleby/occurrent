@@ -61,3 +61,5 @@ Unreleased changes go under the existing `### Changelog next version` heading, n
 ## Deeper context
 
 `.context/ORCHESTRATOR.md`, when present, holds a maintained map of in-flight work, past decisions with their rationale, and known-fragile areas. An agent operating in an orchestrator-style session should read it. It is session-scoped working memory, not a substitute for this file.
+
+Keep it current: after every push or merge to `main`, update `.context/ORCHESTRATOR.md` when the change warrants it (a new capability, a shipped release, an architectural decision, a new fragile area, or a shift in in-flight work), and prune detail that has become git, changelog, or ADR history so the file stays a small durable map rather than a change log. Trivial changes need no update. `.context/ORCHESTRATOR.md` may be committed straight to `main` without a pull request, but prefix the commit message with `[ci skip]` so the update does not trigger a CI build.
