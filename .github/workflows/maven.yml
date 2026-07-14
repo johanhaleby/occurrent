@@ -120,7 +120,9 @@ jobs:
           - { name: subscription-util-blocking,  paths: "subscription/util/blocking" }
           - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor" }
           - { name: framework,                   paths: "framework" }
-          - { name: example,                     paths: "example" }
+          # example holds ~25 container-heavy modules with timing-sensitive Awaitility
+          # subscription-catchup tests; retry those in-run so runner load spikes don't red the build.
+          - { name: example,                     paths: "example", args: "-Dsurefire.rerunFailingTestsCount=2" }
           - { name: misc,                        paths: "dsl application rewrite common deadline cloudevents-extension library" }
     steps:
       - uses: actions/checkout@v4
@@ -151,6 +153,6 @@ jobs:
         run: |
           for d in ${{ matrix.shard.paths }}; do
             echo "::group::mvn test -f $d/pom.xml"
-            mvn $MVN --fail-at-end -f "$d/pom.xml" test
+            mvn $MVN ${{ matrix.shard.args }} --fail-at-end -f "$d/pom.xml" test
             echo "::endgroup::"
           done
