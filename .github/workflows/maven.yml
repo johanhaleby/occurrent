@@ -41,7 +41,11 @@ jobs:
       - name: Cache Maven dependencies
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.m2repo
+          # Cache only third-party deps and plugins; this commit's org/occurrent SNAPSHOTs
+          # travel to the test shards via the per-run artifact, so they never linger here.
+          path: |
+            ${{ github.workspace }}/.m2repo
+            !${{ github.workspace }}/.m2repo/org/occurrent
           key: ${{ runner.os }}-m2deps-java${{ matrix.java }}-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             ${{ runner.os }}-m2deps-java${{ matrix.java }}-
@@ -128,7 +132,10 @@ jobs:
       - name: Restore Maven dependencies
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/.m2repo
+          # Only third-party deps come from cache; org/occurrent arrives via the downloaded artifact.
+          path: |
+            ${{ github.workspace }}/.m2repo
+            !${{ github.workspace }}/.m2repo/org/occurrent
           key: ${{ runner.os }}-m2deps-java${{ matrix.java }}-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             ${{ runner.os }}-m2deps-java${{ matrix.java }}-
