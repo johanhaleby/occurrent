@@ -19,7 +19,7 @@ package org.occurrent.example.eventstore.mongodb.spring.reactor.transactional;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
+import static org.mockito.Mockito.mock;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.reactor.EventStream;
@@ -73,8 +73,7 @@ public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest
     @Autowired
     private CurrentNameProjection currentNameProjection;
 
-    @Mock
-    private CurrentNameProjection currentNameProjectionMock;
+    private final CurrentNameProjection currentNameProjectionMock = mock(CurrentNameProjection.class);
 
     @Autowired
     private DomainEventStore eventStore;

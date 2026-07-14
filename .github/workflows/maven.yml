@@ -144,6 +144,6 @@ jobs:
         run: |
           for d in ${{ matrix.shard.paths }}; do
             echo "::group::mvn test -f $d/pom.xml"
-            mvn $MVN -f "$d/pom.xml" test
+            mvn $MVN --fail-at-end -f "$d/pom.xml" test
             echo "::endgroup::"
           done
