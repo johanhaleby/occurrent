@@ -16,7 +16,7 @@
 
 package org.occurrent.example.springevent;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.assertj.core.api.Assertions;
