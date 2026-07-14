@@ -68,6 +68,7 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -328,10 +329,24 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         long highWatermark = currentPosition();
         long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
         Bson mongoQuery = toDcbBsonQuery(criteria, options.afterPosition().orElse(0), upperBound);
-        FindIterable<Document> documents = eventCollection.find(mongoQuery).sort(ascending(OccurrentCloudEventExtension.POSITION));
+
+        // Order/limit only decide which matching events are fetched, never the returned order: the DcbEventStream
+        // contract always lists events ascending. A BACKWARD read with a limit is fetched at the DB in descending
+        // position order (so Mongo only needs to touch the highest-position n matches) and then reversed back to
+        // ascending here. Without a limit, BACKWARD degenerates to the same ascending, uncapped scan as FORWARD.
+        boolean fetchDescending = options.direction() == DcbReadOptions.Direction.BACKWARD && options.limit().isPresent();
+        FindIterable<Document> documents = eventCollection.find(mongoQuery)
+                .sort(fetchDescending ? descending(OccurrentCloudEventExtension.POSITION) : ascending(OccurrentCloudEventExtension.POSITION));
+        if (options.limit().isPresent()) {
+            documents = documents.limit(options.limit().getAsInt());
+        }
         List<CloudEvent> events = StreamSupport.stream(queryOptions.apply(documents).spliterator(), false)
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
                 .toList();
+        if (fetchDescending) {
+            events = new ArrayList<>(events);
+            Collections.reverse(events);
+        }
         return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(consistencyTokenValue));
     }
 

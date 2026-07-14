@@ -383,6 +383,74 @@ class SpringMongoEventStoreDcbTest {
         assertThat(eventStore.count(all())).isZero();
     }
 
+    @Test
+    void forward_limit_keeps_the_lowest_position_matches_still_ascending() {
+        eventStore.append(List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("NameChanged", "name:1")));
+
+        DcbEventStream eventStream = eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.fromBeginning().limit(2));
+
+        assertThat(eventStream.events())
+                .extracting(event -> event.getExtension(OccurrentCloudEventExtension.POSITION))
+                .containsExactly(1L, 2L);
+    }
+
+    @Test
+    void backwards_limited_to_one_returns_the_single_highest_position_match() {
+        eventStore.append(List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("NameChanged", "name:1")));
+
+        DcbEventStream eventStream = eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.backwardsLimited(1));
+
+        assertThat(eventStream.events()).hasSize(1);
+        assertThat(eventStream.events().get(0).getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(3L);
+    }
+
+    @Test
+    void backwards_limited_to_n_returns_the_highest_n_matches_still_ascending() {
+        eventStore.append(List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("NameChanged", "name:1")));
+
+        DcbEventStream eventStream = eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.backwardsLimited(2));
+
+        assertThat(eventStream.events())
+                .extracting(event -> event.getExtension(OccurrentCloudEventExtension.POSITION))
+                .containsExactly(3L, 4L);
+    }
+
+    @Test
+    void limit_greater_than_match_count_returns_all_matches() {
+        eventStore.append(List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1")));
+
+        DcbEventStream eventStream = eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.backwardsLimited(10));
+
+        assertThat(eventStream.events())
+                .extracting(event -> event.getExtension(OccurrentCloudEventExtension.POSITION))
+                .containsExactly(1L, 2L);
+    }
+
+    @Test
+    void direction_and_limit_do_not_affect_the_returned_consistency_token() {
+        eventStore.append(List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("NameChanged", "name:1")));
+
+        DcbEventStream unlimitedForward = eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.fromBeginning());
+        DcbEventStream backwardsLimitedToOne = eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.backwardsLimited(1));
+
+        assertThat(backwardsLimitedToOne.consistencyToken()).isEqualTo(unlimitedForward.consistencyToken());
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }

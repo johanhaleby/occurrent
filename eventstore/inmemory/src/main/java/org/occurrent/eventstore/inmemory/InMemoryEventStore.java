@@ -280,8 +280,22 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                     .filter(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, criteria))
                     .sorted(Comparator.comparingLong(InMemoryEventStore::position))
                     .toList();
-            return new DcbEventStream(matchingEvents, highWatermark);
+            // highWatermark (the store head) is the consistency boundary and is deliberately independent of the
+            // direction/limit page, so a limited read still guards an append against any later matching event.
+            return new DcbEventStream(applyDirectionAndLimit(matchingEvents, options), highWatermark);
         }
+    }
+
+    // Selects which end of the ascending match list the limit keeps, then returns it still in ascending order.
+    private static List<CloudEvent> applyDirectionAndLimit(List<CloudEvent> ascendingMatches, DcbReadOptions options) {
+        if (options.limit().isEmpty()) {
+            return ascendingMatches;
+        }
+        int limit = Math.min(options.limit().getAsInt(), ascendingMatches.size());
+        return switch (options.direction()) {
+            case FORWARD -> ascendingMatches.subList(0, limit);
+            case BACKWARD -> ascendingMatches.subList(ascendingMatches.size() - limit, ascendingMatches.size());
+        };
     }
 
     @Override
