@@ -92,7 +92,7 @@ public final class DcbDeciderApplicationService<E> {
             decision.set(result);
             return result.events();
         });
-        return decision.get();
+        return Objects.requireNonNull(decision.get(), "The decider produced no decision");
     }
 
     /**
