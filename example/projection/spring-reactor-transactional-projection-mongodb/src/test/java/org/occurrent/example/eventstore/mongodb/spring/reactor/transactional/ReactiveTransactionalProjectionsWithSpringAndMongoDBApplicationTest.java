@@ -51,7 +51,7 @@ public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest
     private static final MongoDBContainer mongoDBContainer;
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"));
+        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
         mongoDBContainer.withReuse(true).setPortBindings(ports);

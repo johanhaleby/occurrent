@@ -116,7 +116,8 @@ jobs:
           - { name: subscription-util-blocking,  paths: "subscription/util/blocking" }
           - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor" }
           - { name: framework,                   paths: "framework" }
-          - { name: misc,                        paths: "dsl application rewrite common deadline example cloudevents-extension library" }
+          - { name: example,                     paths: "example" }
+          - { name: misc,                        paths: "dsl application rewrite common deadline cloudevents-extension library" }
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.java }}
