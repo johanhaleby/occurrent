@@ -42,21 +42,8 @@ import java.util.concurrent.atomic.AtomicReference
  * boundary-mismatch one, so the message points at the actual cause.
  */
 @PublishedApi
-internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: DcbDecider<C, *, E>): DcbCriteria {
-    require(commands.isNotEmpty()) { "Must supply at least one command" }
-    val first = requireRecognized(commands.first(), dcbDecider)
-    for (i in 1 until commands.size) {
-        val boundary = requireRecognized(commands[i], dcbDecider)
-        require(boundary == first) {
-            "All commands in a single execute must resolve to the same DcbCriteria boundary, they are appended atomically under one condition"
-        }
-    }
-    return first
-}
-
-private fun <C : Any, E : Any> requireRecognized(command: C, dcbDecider: DcbDecider<C, *, E>): DcbCriteria =
-    dcbDecider.criteria().apply(command)
-        ?: throw IllegalArgumentException("The decider does not recognize command $command, so there is no boundary to read and no decision to make")
+internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: DcbDecider<C, *, E>): DcbCriteria =
+    dcbDecider.criteriaFor(commands)
 
 /**
  * Execute a decider command. The [dcbDecider] carries the DCB decision boundary and the tags for the events it emits.
