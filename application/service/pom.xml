@@ -31,5 +31,6 @@
         <module>blocking</module>
         <module>reactor</module>
         <module>dcb-annotation</module>
+        <module>transaction-mongodb-native</module>
     </modules>
 </project>
