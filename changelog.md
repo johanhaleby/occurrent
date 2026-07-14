@@ -1,3 +1,10 @@
+### Changelog next version
+
+#### Changes
+
+* Added Java-friendly facades for running a `Decider` or `DcbDecider` through an application service, so Java callers get the same one-call ergonomics the Kotlin `execute(command, decider)` extensions already provide (those are Kotlin `inline`/`reified` and not callable from Java). Construct one around an existing application service and call `execute(command, decider)`. `org.occurrent.dsl.decider.DeciderApplicationService` wraps a blocking `ApplicationService` and runs a stream `Decider`, and `org.occurrent.dsl.dcb.blocking.DcbDeciderApplicationService` and `org.occurrent.dsl.dcb.reactor.DcbDeciderApplicationService` wrap the blocking and reactive DCB application services and run a `DcbDecider` (with `execute`, `executeAndReturnState`, `executeAndReturnEvents`, and `executeAndReturnDecision`). The decider's event type must equal the application service's event type. Widen a narrower feature decider first with `Decider.adapt(...)` or `DcbDecider.adapt(...)`.
+* Added `DcbDecider.criteriaFor(command)` and `criteriaFor(commands)` to resolve the DCB read boundary for one or more commands, rejecting an unrecognized command and requiring all commands in a single execute to share a boundary since they are appended atomically under one condition. The Kotlin DCB decider extensions now delegate to it.
+
 ### 0.30.0 (2026-07-13)
 
 #### Highlights
