@@ -34,6 +34,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 
 /**
@@ -139,29 +140,34 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         record Tuple<T1, T2>(T1 v1, T2 v2) {}
         // @formatter:on
 
-        Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> transactionExecutor.inTransaction(() -> {
-            DcbEventStream eventStream = eventStore.read(criteria);
-            List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
-            List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
-            if (newDomainEvents == null || newDomainEvents.isEmpty()) {
-                return new Tuple<>(Optional.empty(), List.of());
-            }
+        Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
+            Supplier<Tuple<Optional<DcbAppendResult>, List<E>>> readDecideAppend = () -> {
+                DcbEventStream eventStream = eventStore.read(criteria);
+                List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
+                List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
+                if (newDomainEvents == null || newDomainEvents.isEmpty()) {
+                    return new Tuple<>(Optional.empty(), List.of());
+                }
 
-            List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-            List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
-            DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(criteria, eventStream.consistencyToken());
-            DcbAppendResult appendResult = eventStore.append(dcbEvents, appendCondition);
+                List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
+                List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
+                DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(criteria, eventStream.consistencyToken());
+                DcbAppendResult appendResult = eventStore.append(dcbEvents, appendCondition);
 
-            if (dispatchSynchronously) {
-                // A successful append is assigned a contiguous global-position block, so re-read exactly that block
-                // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
-                List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
-                        DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
-                synchronousEventDispatcher.dispatch(writtenEnriched);
-            }
+                if (dispatchSynchronously) {
+                    // A successful append is assigned a contiguous global-position block, so re-read exactly that block
+                    // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
+                    List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
+                            DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
+                    synchronousEventDispatcher.dispatch(writtenEnriched);
+                }
 
-            return new Tuple<>(Optional.of(appendResult), newDomainEvents);
-        }));
+                return new Tuple<>(Optional.of(appendResult), newDomainEvents);
+            };
+            // Only open the transaction executor when synchronous dispatch must commit atomically with the append.
+            // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
+            return dispatchSynchronously ? transactionExecutor.inTransaction(readDecideAppend) : readDecideAppend.get();
+        });
 
         // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked
         // on the no-new-events path, and it is outside the retry so it does not run per attempt.

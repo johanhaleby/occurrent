@@ -38,6 +38,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /**
@@ -141,7 +142,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         // is composed after the retry so it runs once on success, not per attempt.
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
-        Mono<Result<E>> readDecideAppend = transactionExecutor.inTransaction(() -> eventStore.read(criteria).flatMap(eventStream -> {
+        Supplier<Mono<Result<E>>> readDecideAppendUnit = () -> eventStore.read(criteria).flatMap(eventStream -> {
             List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
             List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
             if (newDomainEvents == null || newDomainEvents.isEmpty()) {
@@ -160,7 +161,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 return eventStore.read(DcbCriteria.all(), DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition()))
                         .flatMap(enrichedStream -> synchronousEventDispatcher.dispatch(enrichedStream.events()).thenReturn(result));
             });
-        })).retryWhen(retry);
+        });
+        // Enter the transaction executor only when synchronous dispatch must commit atomically with the append.
+        // Otherwise the append keeps exactly its prior semantics and no transaction overhead is added.
+        Mono<Result<E>> readDecideAppend = (dispatchSynchronously ? transactionExecutor.inTransaction(readDecideAppendUnit) : Mono.defer(readDecideAppendUnit)).retryWhen(retry);
 
         return readDecideAppend.flatMap(result -> {
             if (sideEffect == null) {

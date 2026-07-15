@@ -58,7 +58,10 @@ application-service layer so the application service does not depend on the subs
 write that produces events the service re-reads the just-written events, enriched by the store with stream version
 and global position (a paginated tail read for stream, a position-range read of the appended block for DCB), and
 dispatches them, all inside the transaction executor. This is done only when at least one synchronous subscription is
-registered, so an application that uses none pays nothing.
+registered, so an application that uses none pays nothing. The application service also enters the
+`TransactionExecutor` only when there is synchronous dispatch to make atomic. Even where a real executor is wired (the
+Spring starter wires one by default), an `execute` with no synchronous subscription runs the read/decide/write exactly
+as before this feature, with no application-service transaction wrapped around it.
 
 **Transactions are opt-in and best-effort by default.** `TransactionExecutor` defaults to `noTransaction()` (a
 pass-through). A Spring-backed executor (`TransactionTemplate` / `TransactionalOperator`) makes the write and the

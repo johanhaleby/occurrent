@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * A generic application service that works in many scenarios. If you need more complex logic, such as transaction support, you may consider either wrapping it
@@ -130,28 +131,34 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
 
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
 
-        Tuple<WriteResult, List<E>> result = retryStrategy.execute(() -> transactionExecutor.inTransaction(() -> {
-            EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter);
-            List<E> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events()).toList();
+        Tuple<WriteResult, List<E>> result = retryStrategy.execute(() -> {
+            Supplier<Tuple<WriteResult, List<E>>> readDecideWrite = () -> {
+                EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter);
+                List<E> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events()).toList();
 
-            List<E> newDomainEvents = functionThatCallsDomainModel.apply(eventsInStream);
-            if (newDomainEvents == null) {
-                newDomainEvents = List.of();
-            }
+                List<E> newDomainEvents = functionThatCallsDomainModel.apply(eventsInStream);
+                if (newDomainEvents == null) {
+                    newDomainEvents = List.of();
+                }
 
-            List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-            WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
+                List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
+                WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
 
-            if (dispatchSynchronously && !newEvents.isEmpty()) {
-                // Re-read exactly the just-written tail so synchronous handlers get events enriched by the store
-                // (stream version and global position), then dispatch on this thread, inside the transaction.
-                int newEventCount = newEvents.size();
-                List<CloudEvent> writtenEnriched = eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newEventCount).events().toList();
-                synchronousEventDispatcher.dispatch(writtenEnriched);
-            }
+                if (dispatchSynchronously && !newEvents.isEmpty()) {
+                    // Re-read exactly the just-written tail so synchronous handlers get events enriched by the store
+                    // (stream version and global position), then dispatch on this thread, inside the transaction.
+                    int newEventCount = newEvents.size();
+                    List<CloudEvent> writtenEnriched = eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newEventCount).events().toList();
+                    synchronousEventDispatcher.dispatch(writtenEnriched);
+                }
 
-            return new Tuple<>(writeResult, newDomainEvents);
-        }));
+                return new Tuple<>(writeResult, newDomainEvents);
+            };
+            // Only open the transaction executor when synchronous dispatch must commit atomically with the write.
+            // Without synchronous subscriptions there is nothing extra to make atomic, so the write keeps exactly the
+            // semantics it had before this feature and applications that do not use it pay no transaction overhead.
+            return dispatchSynchronously ? transactionExecutor.inTransaction(readDecideWrite) : readDecideWrite.get();
+        });
 
         if (sideEffect != null) {
             sideEffect.accept(result.v2);

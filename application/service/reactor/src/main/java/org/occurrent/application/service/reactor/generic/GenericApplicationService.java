@@ -39,6 +39,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * The reactive counterpart of the blocking {@code GenericApplicationService}. It reads a stream, applies the events to a
@@ -114,10 +115,12 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         @Nullable Function<List<E>, Mono<Void>> sideEffect = executeOptions.sideEffect();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
 
-        // The read, decide, write, and synchronous dispatch run as one unit inside the transaction executor and retry
-        // from a fresh read on an optimistic-concurrency conflict, so the decision always runs against the current
-        // events. The side-effect is composed after the retry so it runs once on success, not per attempt.
-        Mono<Result<E>> readDecideWrite = transactionExecutor.inTransaction(() -> read(streamId, filter).flatMap(eventStream ->
+        // The read, decide, write, and synchronous dispatch run as one unit and retry from a fresh read on an
+        // optimistic-concurrency conflict, so the decision always runs against the current events. The transaction
+        // executor is entered only when synchronous dispatch must commit atomically with the write; otherwise the
+        // write keeps exactly its prior semantics and applications without synchronous subscriptions pay no transaction
+        // overhead. The side-effect is composed after the retry so it runs once on success, not per attempt.
+        Supplier<Mono<Result<E>>> readDecideWriteUnit = () -> read(streamId, filter).flatMap(eventStream ->
                 eventStream.events().collectList().flatMap(currentCloudEvents -> {
                     List<E> domainEvents = cloudEventConverter.toDomainEvents(currentCloudEvents.stream()).toList();
                     List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
@@ -138,7 +141,8 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                                         .flatMap(enrichedStream -> enrichedStream.events().collectList())
                                         .flatMap(enriched -> synchronousEventDispatcher.dispatch(enriched).thenReturn(result));
                             });
-                }))).retryWhen(retry);
+                }));
+        Mono<Result<E>> readDecideWrite = (dispatchSynchronously ? transactionExecutor.inTransaction(readDecideWriteUnit) : Mono.defer(readDecideWriteUnit)).retryWhen(retry);
 
         return readDecideWrite.flatMap(result -> {
             if (sideEffect == null) {
