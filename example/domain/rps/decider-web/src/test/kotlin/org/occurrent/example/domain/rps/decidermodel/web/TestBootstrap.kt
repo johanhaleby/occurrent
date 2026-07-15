@@ -34,7 +34,7 @@ class TestBootstrap {
     @Bean
     @ServiceConnection
     @RestartScope
-    fun mongoDbContainer(): MongoDBContainer = MongoDBContainer("mongo:4.2.8").apply {
+    fun mongoDbContainer(): MongoDBContainer = MongoDBContainer("mongo:4.2.8").withReplicaSet().apply {
         portBindings = listOf("27017:27017")
     }
 }

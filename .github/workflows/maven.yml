@@ -5,33 +5,158 @@ on:
     paths-ignore:
       - '**/*.md'
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+# Cancel superseded runs on the same ref so pushes don't queue up behind stale builds.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
+env:
+  # Keep the Maven local repository inside the workspace so cache and artifact paths are
+  # deterministic across jobs (avoids '~' expansion differences in actions/cache and
+  # upload/download-artifact). Unquoted expansion is intentional: the value word-splits into
+  # separate mvn arguments.
+  MVN: -B -ntp -Dmaven.repo.local=${{ github.workspace }}/.m2repo
+
+jobs:
+  # Stage 1: compile and install every module artifact into the local repo, skipping tests.
+  # -DskipTests (not -Dmaven.test.skip) still test-compiles, so test-scoped dependencies
+  # (Testcontainers, JUnit, Awaitility) are resolved and cached for the test shards. Runs on
+  # both JDKs to preserve the "compiles on 21 and 25" signal. Compilation is a small fraction of
+  # the old ~13 min single-job build (measured: tests dominate), so this stage is cheap.
+  build:
+    name: build (java-${{ matrix.java }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
         java: [ 21, 25 ]
-
     steps:
-      - uses: actions/checkout@main
+      - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.java }}
-        uses: actions/setup-java@main
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
-
-      - name: Enable Testcontainers reuse on this runner
-        run: |
-          echo "testcontainers.reuse.enable=true" > "$HOME/.testcontainers.properties"
-          cat "$HOME/.testcontainers.properties"
-
-      - name: Cache Maven packages
-        uses: actions/cache@main
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
         with:
-          path: ~/.m2
-          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2
+          # Cache only third-party deps and plugins; this commit's org/occurrent SNAPSHOTs
+          # travel to the test shards via the per-run artifact, so they never linger here.
+          path: |
+            ${{ github.workspace }}/.m2repo
+            !${{ github.workspace }}/.m2repo/org/occurrent
+          key: ${{ runner.os }}-m2deps-java${{ matrix.java }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2deps-java${{ matrix.java }}-
+            ${{ runner.os }}-m2deps-
+      - name: Build and install (skip tests)
+        run: mvn $MVN -T1C -DskipTests install
+      # Hand this commit's freshly built SNAPSHOTs to the test shards as an immutable per-run
+      # artifact, so fresh jars never linger in the long-lived dependency cache.
+      - name: Upload project artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: occurrent-m2-java${{ matrix.java }}
+          path: ${{ github.workspace }}/.m2repo/org/occurrent
+          retention-days: 1
+          if-no-files-found: error
 
-      - name: Build with Maven
-        run: mvn -B package --file pom.xml
+  # Guard against silent coverage loss: every module that has tests must fall under exactly one
+  # test shard's paths. Parses the shard paths straight out of this file (no separate list to
+  # keep in sync) and fails if any test-bearing module is not covered, e.g. a newly added module.
+  verify-shard-coverage:
+    name: verify shard coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every test module is assigned to a shard
+        run: |
+          prefixes=()
+          while IFS= read -r p; do prefixes+=("$p"); done < <(grep -oE 'paths: "[^"]+"' .github/workflows/maven.yml \
+            | sed -E 's/paths: "//; s/"$//' | tr ' ' '\n' | sort -u)
+          echo "Shard path prefixes:"; printf '  %s\n' "${prefixes[@]}"
+          uncovered=()
+          while IFS= read -r d; do
+            covered=0
+            for p in "${prefixes[@]}"; do
+              if [[ "$d" == "$p" || "$d" == "$p/"* ]]; then covered=1; break; fi
+            done
+            [[ $covered -eq 0 ]] && uncovered+=("$d")
+          done < <(find . -type d -path '*/src/test' | sed 's#/src/test##; s#^\./##' | sort)
+          if [[ ${#uncovered[@]} -gt 0 ]]; then
+            echo "::error::These modules have tests but are not covered by any shard:"
+            printf '::error::  %s\n' "${uncovered[@]}"
+            exit 1
+          fi
+          echo "All test modules are covered by a shard."
+
+  # Stage 2: run each subtree's tests against the pre-built local repo, one shard per runner
+  # (isolated Docker daemon). Within a shard, modules stay sequential (no -T) so the
+  # fixed-port-27017 MongoDB tests never collide. Shards are balanced by MEASURED test time from a
+  # recent CI run (approx seconds shown); the two long poles (subscription ~382s, eventstore
+  # ~242s) are split, the rest merged, so the slowest shard is ~150s of tests instead of ~382s.
+  #
+  # Use -f <subtree>/pom.xml, NOT -pl: -pl on an aggregator does not descend into its children and
+  # would run zero tests. We do NOT pass -o: the build job's `install -DskipTests` does not resolve
+  # Surefire's JUnit-platform provider (that happens lazily at test execution), so a fully offline
+  # shard could fail to resolve it on a cold runner. The restored dependency cache + downloaded
+  # project artifacts still supply the bulk; only genuinely missing artifacts fall back to network.
+  test:
+    name: test (${{ matrix.shard.name }}, java-${{ matrix.java }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [ 21, 25 ]
+        shard:
+          - { name: eventstore-spring,           paths: "eventstore/mongodb/spring" }
+          - { name: eventstore-rest,             paths: "eventstore/api eventstore/inmemory eventstore/migration eventstore/mongodb/common eventstore/mongodb/native" }
+          - { name: subscription-mongodb-spring, paths: "subscription/mongodb/spring" }
+          - { name: subscription-mongodb-native, paths: "subscription/mongodb/native subscription/mongodb/common subscription/redis" }
+          - { name: subscription-util-blocking,  paths: "subscription/util/blocking" }
+          - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor" }
+          - { name: framework,                   paths: "framework" }
+          # example modules run real MongoDB replica-set containers with timing-sensitive
+          # Awaitility subscription-catchup tests. A single example shard started 12 containers
+          # sequentially on one runner, which tipped those waits over. Split by container load
+          # (projection+forwarder ~5 vs domain ~7) to cut per-runner churn, keeping an in-run
+          # retry as a backstop for residual timing flakiness.
+          - { name: example-projection,          paths: "example/projection example/forwarder", args: "-Dsurefire.rerunFailingTestsCount=2" }
+          - { name: example-domain,              paths: "example/domain", args: "-Dsurefire.rerunFailingTestsCount=2" }
+          - { name: misc,                        paths: "dsl application rewrite common deadline cloudevents-extension library" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Restore Maven dependencies
+        uses: actions/cache/restore@v4
+        with:
+          # Only third-party deps come from cache; org/occurrent arrives via the downloaded artifact.
+          path: |
+            ${{ github.workspace }}/.m2repo
+            !${{ github.workspace }}/.m2repo/org/occurrent
+          key: ${{ runner.os }}-m2deps-java${{ matrix.java }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2deps-java${{ matrix.java }}-
+            ${{ runner.os }}-m2deps-
+      - name: Download project artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: occurrent-m2-java${{ matrix.java }}
+          path: ${{ github.workspace }}/.m2repo/org/occurrent
+      - name: Enable Testcontainers reuse on this runner
+        run: echo "testcontainers.reuse.enable=true" > "$HOME/.testcontainers.properties"
+      - name: Run shard tests
+        run: |
+          for d in ${{ matrix.shard.paths }}; do
+            echo "::group::mvn test -f $d/pom.xml"
+            mvn $MVN ${{ matrix.shard.args }} --fail-at-end -f "$d/pom.xml" test
+            echo "::endgroup::"
+          done

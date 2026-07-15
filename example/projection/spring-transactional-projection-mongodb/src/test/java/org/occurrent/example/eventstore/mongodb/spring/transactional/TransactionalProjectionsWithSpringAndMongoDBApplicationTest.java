@@ -49,7 +49,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
     private static final MongoDBContainer mongoDBContainer;
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true);
+        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet().withReuse(true);
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
         mongoDBContainer.setPortBindings(ports);
