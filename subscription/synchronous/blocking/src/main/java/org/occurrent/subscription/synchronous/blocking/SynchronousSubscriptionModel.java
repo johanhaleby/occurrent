@@ -78,7 +78,7 @@ public class SynchronousSubscriptionModel implements Subscribable, SynchronousEv
      */
     @Override
     public void dispatch(List<CloudEvent> writtenCloudEvents) {
-        Objects.requireNonNull(writtenCloudEvents, "cloudEvents cannot be null");
+        Objects.requireNonNull(writtenCloudEvents, "writtenCloudEvents cannot be null");
         for (CloudEvent cloudEvent : writtenCloudEvents) {
             for (Registration registration : registrations) {
                 if (registration.matcher().test(cloudEvent)) {

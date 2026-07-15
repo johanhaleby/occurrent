@@ -27,10 +27,12 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SynchronousSubscriptionModelTest {
@@ -78,6 +80,27 @@ class SynchronousSubscriptionModelTest {
         model.subscribe("sub", cloudEvent -> Mono.empty());
 
         assertThat(model.hasSubscriptions()).isTrue();
+    }
+
+    @Test
+    void registering_the_same_subscription_id_twice_is_rejected() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        model.subscribe("sub", cloudEvent -> Mono.empty());
+
+        Throwable thrown = catchThrowable(() -> model.subscribe("sub", cloudEvent -> Mono.empty()));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("already registered");
+    }
+
+    @Test
+    void a_started_subscription_handle_is_returned() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+
+        var subscription = model.subscribe("sub", cloudEvent -> Mono.empty());
+
+        assertThat(subscription.id()).isEqualTo("sub");
+        StepVerifier.create(subscription.waitUntilStarted()).verifyComplete();
+        StepVerifier.create(subscription.waitUntilStarted(Duration.ofSeconds(5))).expectNext(true).verifyComplete();
     }
 
     private static CloudEvent cloudEvent(String id, String type) {

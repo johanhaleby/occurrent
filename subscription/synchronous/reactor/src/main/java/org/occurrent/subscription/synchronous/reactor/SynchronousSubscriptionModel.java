@@ -71,7 +71,7 @@ public class SynchronousSubscriptionModel implements Subscribable, ReactiveSynch
 
     @Override
     public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents) {
-        Objects.requireNonNull(writtenCloudEvents, "cloudEvents cannot be null");
+        Objects.requireNonNull(writtenCloudEvents, "writtenCloudEvents cannot be null");
         return Flux.fromIterable(writtenCloudEvents)
                 .concatMap(cloudEvent -> Flux.fromIterable(registrations)
                         .filter(registration -> registration.matcher().test(cloudEvent))

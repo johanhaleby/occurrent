@@ -194,7 +194,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
         // The synchronous subscription model has no lifecycle, start position, or background subscription, so there is
         // no start position to resolve and nothing to wait for.
-        synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), null, consumer);
+        synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), StartAt.subscriptionModelDefault(), consumer);
     }
 
     private static boolean shouldWaitUntilStartedAgnostic(boolean replaysHistory, Subscription.StartupMode startupMode) {

@@ -146,7 +146,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                 // Re-read exactly the just-written tail so synchronous handlers get events enriched by the store
                 // (stream version and global position), then dispatch on this thread, inside the transaction.
                 int newEventCount = newEvents.size();
-                List<CloudEvent> writtenEnriched = eventStore.read(streamId, (int) writeResult.oldStreamVersion(), newEventCount).events().toList();
+                List<CloudEvent> writtenEnriched = eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newEventCount).events().toList();
                 synchronousEventDispatcher.dispatch(writtenEnriched);
             }
 
