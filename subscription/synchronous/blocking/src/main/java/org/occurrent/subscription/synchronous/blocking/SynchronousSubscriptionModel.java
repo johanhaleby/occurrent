@@ -29,6 +29,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
@@ -55,14 +56,14 @@ public class SynchronousSubscriptionModel implements Subscribable, SynchronousEv
     private record Registration(String id, Predicate<CloudEvent> matcher, Consumer<CloudEvent> action) {
     }
 
-    private final ConcurrentHashMap<String, Boolean> subscriptionIds = new ConcurrentHashMap<>();
+    private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<Registration> registrations = new CopyOnWriteArrayList<>();
 
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
-        if (subscriptionIds.putIfAbsent(subscriptionId, Boolean.TRUE) != null) {
+        if (!subscriptionIds.add(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
         }
         registrations.add(new Registration(subscriptionId, SubscriptionFilterMatcher.matcherFor(filter), action));

@@ -302,14 +302,8 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         // @SynchronousSubscription handler is composed into the write chain, atomically with the write. Both are
         // resolved through ObjectProvider because they only exist when the feature is applicable, and either can be
         // absent or user-replaced.
-        ReactiveSynchronousEventDispatcher dispatcher = synchronousEventDispatcher.getIfAvailable();
-        if (dispatcher != null) {
-            builder.synchronousSubscriptions(dispatcher);
-        }
-        ReactiveTransactionExecutor executor = transactionExecutor.getIfAvailable();
-        if (executor != null) {
-            builder.transactionExecutor(executor);
-        }
+        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }
 
@@ -333,22 +327,13 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     public DcbApplicationService<E> occurrentDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter,
                                                                      ObjectProvider<TagGenerator<E>> tagGeneratorProvider, OccurrentProperties occurrentProperties,
                                                                      ObjectProvider<ReactiveSynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<ReactiveTransactionExecutor> transactionExecutor) {
-        TagGenerator<E> tagGenerator = tagGeneratorProvider.getIfAvailable();
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         Retry retry = enableDefaultRetryStrategy ? GenericDcbApplicationService.defaultRetry() : Retry.max(0);
         GenericDcbApplicationService.Builder<E> builder = GenericDcbApplicationService.builder(eventStore, cloudEventConverter).retry(retry);
-        if (tagGenerator != null) {
-            builder.tagGenerator(tagGenerator);
-        }
+        tagGeneratorProvider.ifAvailable(builder::tagGenerator);
         // Wire the synchronous subscription dispatcher and transaction executor when present (see occurrentApplicationService).
-        ReactiveSynchronousEventDispatcher dispatcher = synchronousEventDispatcher.getIfAvailable();
-        if (dispatcher != null) {
-            builder.synchronousSubscriptions(dispatcher);
-        }
-        ReactiveTransactionExecutor executor = transactionExecutor.getIfAvailable();
-        if (executor != null) {
-            builder.transactionExecutor(executor);
-        }
+        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }
 

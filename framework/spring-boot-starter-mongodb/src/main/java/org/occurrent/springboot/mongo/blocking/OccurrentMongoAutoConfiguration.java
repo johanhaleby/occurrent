@@ -321,23 +321,13 @@ public class OccurrentMongoAutoConfiguration<E> {
                                                              ObjectProvider<SynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<TransactionExecutor> transactionExecutor) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         RetryStrategy retryStrategy = enableDefaultRetryStrategy ? GenericApplicationService.defaultRetryStrategy() : RetryStrategy.none();
-        return buildApplicationService(GenericApplicationService.builder(eventStore, cloudEventConverter).retryStrategy(retryStrategy), synchronousEventDispatcher, transactionExecutor);
-    }
-
-    // Wire the synchronous subscription dispatcher and transaction executor into the builder when present, so a
-    // @SynchronousSubscription handler runs on the writer's thread, atomically with the write. Both are resolved
-    // through ObjectProvider because they only exist when the feature is applicable (subscriptions and event store
-    // enabled), and either can be absent or user-replaced.
-    private static <E> ApplicationService<E> buildApplicationService(GenericApplicationService.Builder<E> builder,
-                                                                     ObjectProvider<SynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<TransactionExecutor> transactionExecutor) {
-        SynchronousEventDispatcher dispatcher = synchronousEventDispatcher.getIfAvailable();
-        if (dispatcher != null) {
-            builder.synchronousSubscriptions(dispatcher);
-        }
-        TransactionExecutor executor = transactionExecutor.getIfAvailable();
-        if (executor != null) {
-            builder.transactionExecutor(executor);
-        }
+        GenericApplicationService.Builder<E> builder = GenericApplicationService.builder(eventStore, cloudEventConverter).retryStrategy(retryStrategy);
+        // Wire the synchronous subscription dispatcher and transaction executor when present, so a
+        // @SynchronousSubscription handler runs on the writer's thread, atomically with the write. Both are resolved
+        // through ObjectProvider because they only exist when the feature is applicable, and either can be absent or
+        // user-replaced.
+        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }
 
@@ -361,22 +351,13 @@ public class OccurrentMongoAutoConfiguration<E> {
     public DcbApplicationService<E> occurrentDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter,
                                                                      ObjectProvider<TagGenerator<E>> tagGeneratorProvider, OccurrentProperties occurrentProperties,
                                                                      ObjectProvider<SynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<TransactionExecutor> transactionExecutor) {
-        TagGenerator<E> tagGenerator = tagGeneratorProvider.getIfAvailable();
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         RetryStrategy retryStrategy = enableDefaultRetryStrategy ? GenericDcbApplicationService.defaultRetryStrategy() : RetryStrategy.none();
         GenericDcbApplicationService.Builder<E> builder = GenericDcbApplicationService.builder(eventStore, cloudEventConverter).retryStrategy(retryStrategy);
-        if (tagGenerator != null) {
-            builder.tagGenerator(tagGenerator);
-        }
+        tagGeneratorProvider.ifAvailable(builder::tagGenerator);
         // Wire the synchronous subscription dispatcher and transaction executor when present (see occurrentApplicationService).
-        SynchronousEventDispatcher dispatcher = synchronousEventDispatcher.getIfAvailable();
-        if (dispatcher != null) {
-            builder.synchronousSubscriptions(dispatcher);
-        }
-        TransactionExecutor executor = transactionExecutor.getIfAvailable();
-        if (executor != null) {
-            builder.transactionExecutor(executor);
-        }
+        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        transactionExecutor.ifAvailable(builder::transactionExecutor);
         return builder.build();
     }
 
