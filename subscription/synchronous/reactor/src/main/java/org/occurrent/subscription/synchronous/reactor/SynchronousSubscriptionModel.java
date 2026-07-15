@@ -62,10 +62,12 @@ public class SynchronousSubscriptionModel implements Subscribable, ReactiveSynch
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
+        // Build the matcher before reserving the id, so an unsupported filter does not leave the id permanently taken.
+        Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
         if (!subscriptionIds.add(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
         }
-        registrations.add(new Registration(subscriptionId, SubscriptionFilterMatcher.matcherFor(filter), action));
+        registrations.add(new Registration(subscriptionId, matcher, action));
         return new SynchronousSubscription(subscriptionId);
     }
 
