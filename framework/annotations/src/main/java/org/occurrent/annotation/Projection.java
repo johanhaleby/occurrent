@@ -159,46 +159,6 @@ public @interface Projection {
     }
 
     /**
-     * Specifies how a projection resumes once the application restarts.
-     */
-    enum ResumeBehavior {
-        /**
-         * Always start at the same position as specified by StartPosition. Even if a checkpoint
-         * is stored, it is ignored on restart and the projection resumes from the specified
-         * StartPosition.
-         */
-        SAME_AS_START_AT,
-        /**
-         * Use the default resume behavior. For example, if StartPosition is BEGINNING and
-         * ResumeBehavior is DEFAULT, the projection replays from the beginning on first run
-         * and resumes from the last received event on restart.
-         */
-        DEFAULT
-    }
-
-    /**
-     * Specifies how the projection behaves during startup.
-     */
-    enum StartupMode {
-        /**
-         * The framework determines the startup mode from other projection properties. It uses
-         * BACKGROUND when the projection needs to replay history, otherwise WAIT_UNTIL_STARTED.
-         */
-        DEFAULT,
-        /**
-         * The projection waits until fully started before Spring continues. Recommended to avoid
-         * missing events if the projection is brand new, though once it has received and stored
-         * an event it will never miss future events.
-         */
-        WAIT_UNTIL_STARTED,
-        /**
-         * The projection starts in the background without blocking application startup. Useful
-         * when replaying a large history would delay the application startup.
-         */
-        BACKGROUND
-    }
-
-    /**
      * Specifies the capability scope for a projection.
      */
     enum Capability {

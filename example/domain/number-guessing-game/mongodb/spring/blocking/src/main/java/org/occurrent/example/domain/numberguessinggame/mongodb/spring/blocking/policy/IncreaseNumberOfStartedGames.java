@@ -22,7 +22,7 @@ import org.occurrent.example.domain.numberguessinggame.model.domainevents.Number
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.numberofstartedgames.NumberOfStartedGames;
 import org.springframework.stereotype.Component;
 
-import static org.occurrent.annotation.StreamSubscription.ResumeBehavior.SAME_AS_START_AT;
+import static org.occurrent.annotation.ResumeBehavior.SAME_AS_START_AT;
 import static org.occurrent.annotation.StreamSubscription.StartPosition.BEGINNING_OF_TIME;
 
 @Component

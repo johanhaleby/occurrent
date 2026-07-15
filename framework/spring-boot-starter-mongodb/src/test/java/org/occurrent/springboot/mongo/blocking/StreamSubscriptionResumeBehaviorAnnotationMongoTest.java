@@ -24,7 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.StreamSubscription;
-import org.occurrent.annotation.StreamSubscription.ResumeBehavior;
+import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;

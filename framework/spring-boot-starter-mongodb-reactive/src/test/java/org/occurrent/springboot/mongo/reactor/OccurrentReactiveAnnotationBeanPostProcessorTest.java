@@ -20,7 +20,7 @@ package org.occurrent.springboot.mongo.reactor;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.annotation.StreamSubscription.StartupMode;
+import org.occurrent.annotation.StartupMode;
 
 import java.lang.reflect.Method;
 

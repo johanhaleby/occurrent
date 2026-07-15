@@ -145,46 +145,4 @@ public @interface DcbSubscription {
          */
         DEFAULT
     }
-
-    /**
-     * Specifies how a subscription should be resumed once the application is restarted.
-     */
-    enum ResumeBehavior {
-        /**
-         * Always start at the same position as specified by the {@link DcbStartPosition}. Even if a
-         * checkpoint is stored, it is ignored on restart and the subscription resumes from the specified
-         * {@link DcbStartPosition}.
-         */
-        SAME_AS_START_AT,
-        /**
-         * Use the default resume behavior. For example, if {@link DcbStartPosition} is {@link DcbStartPosition#BEGINNING}
-         * and {@code ResumeBehavior} is {@link ResumeBehavior#DEFAULT}, the subscription replays from the beginning the
-         * first time it runs, then resumes from the last received event on restart.
-         */
-        DEFAULT
-    }
-
-    /**
-     * Specify how the subscription should behave during startup.
-     */
-    enum StartupMode {
-        /**
-         * Occurrent determines the startup mode from the other properties of the subscription. It uses
-         * {@link #BACKGROUND} when the subscription needs to replay history before subscribing to new events (for
-         * example when {@link #startAt()} is {@link DcbStartPosition#BEGINNING}), otherwise {@link #WAIT_UNTIL_STARTED}.
-         */
-        DEFAULT,
-        /**
-         * The subscription waits until it has started fully before Spring continues starting the rest of the
-         * application. Most of the time this is recommended because otherwise a request could reach the application
-         * before the subscription has bootstrapped, which a brand new subscription could miss.
-         */
-        WAIT_UNTIL_STARTED,
-        /**
-         * The subscription does not wait until it has started fully, it starts in the background. This is mainly useful
-         * when the subscription replays a lot of history (such as from the beginning) and waiting for the replay to
-         * finish before the application starts would take too long.
-         */
-        BACKGROUND
-    }
 }
