@@ -564,6 +564,7 @@
                                 <excludeArtifact>mongodb-spring</excludeArtifact>
                                 <excludeArtifact>mongodb</excludeArtifact>
                                 <excludeArtifact>occurrent</excludeArtifact>
+                                <excludeArtifact>projection-dsl</excludeArtifact>
                                 <excludeArtifact>query-dsl</excludeArtifact>
                                 <excludeArtifact>subscription-api</excludeArtifact>
                                 <excludeArtifact>subscription-dsl</excludeArtifact>
