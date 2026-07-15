@@ -78,10 +78,10 @@ class AnnotationEnumRenameTest extends AnnotationEnumRenamesRecipeTest {
                         package org.occurrent.annotation;
 
                         public @interface StreamSubscription {
-                            StartupMode startupMode() default StartupMode.REPLAY;
+                            StartupMode startupMode() default StartupMode.DEFAULT;
 
                             enum StartupMode {
-                                REPLAY, CONTINUE
+                                DEFAULT, WAIT_UNTIL_STARTED, BACKGROUND
                             }
                         }
                         """
@@ -92,7 +92,7 @@ class AnnotationEnumRenameTest extends AnnotationEnumRenamesRecipeTest {
 
                         import org.occurrent.annotation.StreamSubscription;
 
-                        @StreamSubscription(startupMode = StreamSubscription.StartupMode.CONTINUE)
+                        @StreamSubscription(startupMode = StreamSubscription.StartupMode.BACKGROUND)
                         class Bar {
                         }
                         """,
@@ -102,7 +102,7 @@ class AnnotationEnumRenameTest extends AnnotationEnumRenamesRecipeTest {
                         import org.occurrent.annotation.StartupMode;
                         import org.occurrent.annotation.StreamSubscription;
 
-                        @StreamSubscription(startupMode = StartupMode.CONTINUE)
+                        @StreamSubscription(startupMode = StartupMode.BACKGROUND)
                         class Bar {
                         }
                         """
