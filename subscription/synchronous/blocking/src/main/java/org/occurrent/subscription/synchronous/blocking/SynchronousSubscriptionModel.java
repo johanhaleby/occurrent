@@ -62,6 +62,7 @@ public class SynchronousSubscriptionModel implements Subscribable, SynchronousEv
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
         // Build the matcher before reserving the id, so an unsupported filter does not leave the id permanently taken.
         Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
