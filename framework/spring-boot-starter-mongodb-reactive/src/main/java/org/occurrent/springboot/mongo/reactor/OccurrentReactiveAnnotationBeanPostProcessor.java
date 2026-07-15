@@ -25,12 +25,19 @@ import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.annotation.StreamSubscription.StartupMode;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
+import org.occurrent.dsl.projection.DcbProjection;
+import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.projection.reactor.ReactiveDcbProjectionRunner;
+import org.occurrent.dsl.projection.reactor.ReactiveProjectionRunner;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
+import org.occurrent.dsl.view.MaterializedView;
+import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -44,20 +51,27 @@ import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
+import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
+import org.springframework.util.ClassUtils;
 import reactor.core.publisher.Mono;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.stream.Stream;
 
@@ -78,7 +92,7 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
  * position, so {@code BEGINNING} replays from position 0 and {@code startAtGlobalPosition} from a specific position,
  * both delivering events of every capability.
  */
-class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
+class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton {
 
     /**
      * The bean name of the synchronous {@code Subscriptions} DSL declared by the auto-configuration. Resolved by name
@@ -88,6 +102,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     static final String SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME = "occurrentSynchronousSubscriptions";
 
     private ApplicationContext applicationContext;
+
+    // Every subscription and projection id must be unique, since it is the durable checkpoint key. Subscription ids are
+    // added as their annotations are processed (before singletons finish), projection ids when they register below.
+    private final Set<String> registeredIds = new HashSet<>();
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
@@ -401,6 +419,213 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 CheckpointStorage storage = applicationContext.getBean(CheckpointStorage.class);
                 return storage.read(subscriptionId).blockOptional().isPresent() ? DcbStartAt.subscriptionModelDefault() : replayStart;
             });
+        };
+    }
+
+    // @Projection factory methods are registered after all singletons are instantiated, not in
+    // postProcessBeforeInitialization: the factory has to be invoked to obtain the descriptor, and its collaborators
+    // (the store, the subscription model) must already be wired. First collect every subscription id so a projection
+    // cannot reuse one, then register each projection.
+    @Override
+    public void afterSingletonsInstantiated() {
+        if (applicationContext.getBeanProvider(Subscribable.class).getIfAvailable() == null
+                && applicationContext.getBeanProvider(SynchronousSubscriptionModel.class).getIfAvailable() == null) {
+            return;
+        }
+        List<Object[]> projectionMethods = new ArrayList<>();
+        for (String beanName : applicationContext.getBeanDefinitionNames()) {
+            Class<?> type;
+            try {
+                type = applicationContext.getType(beanName);
+            } catch (RuntimeException e) {
+                continue;
+            }
+            if (type == null) {
+                continue;
+            }
+            for (Method method : ClassUtils.getUserClass(type).getDeclaredMethods()) {
+                collectSubscriptionId(method);
+                org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
+                if (projection != null) {
+                    projectionMethods.add(new Object[]{beanName, method, projection});
+                }
+            }
+        }
+        for (Object[] pm : projectionMethods) {
+            processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
+        }
+    }
+
+    private void collectSubscriptionId(Method method) {
+        StreamSubscription s = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
+        if (s != null) registeredIds.add(s.id());
+        Subscription a = AnnotationUtils.findAnnotation(method, Subscription.class);
+        if (a != null) registeredIds.add(a.id());
+        DcbSubscription d = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
+        if (d != null) registeredIds.add(d.id());
+        SynchronousSubscription sy = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
+        if (sy != null) registeredIds.add(sy.id());
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E, S, ID> void processProjectionAnnotation(Object bean, Method method, org.occurrent.annotation.Projection annotation) {
+        String id = annotation.id();
+        if (!registeredIds.add(id)) {
+            throw new IllegalArgumentException("Duplicate subscription/projection id '%s' (used by @Projection on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(id, bean.getClass().getName(), method.getName()));
+        }
+        if (method.getParameterCount() != 0) {
+            throw new IllegalArgumentException("@Projection factory method %s#%s must take no parameters and return a Projection or DcbProjection.".formatted(bean.getClass().getName(), method.getName()));
+        }
+        boolean synchronous = annotation.mode() == org.occurrent.annotation.Projection.Mode.SYNCHRONOUS;
+        if (synchronous && (annotation.startAt() != org.occurrent.annotation.Projection.StartPosition.DEFAULT || annotation.startAtPosition() >= 0 || annotation.resumeBehavior() != org.occurrent.annotation.Projection.ResumeBehavior.DEFAULT)) {
+            throw new IllegalArgumentException("@Projection '%s' uses mode = SYNCHRONOUS, which cannot be combined with startAt, startAtPosition, or resumeBehavior (those configure catch-up for an async projection).".formatted(id));
+        }
+
+        CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
+        Object descriptor = invokeFactory(method, bean);
+
+        if (descriptor instanceof DcbProjection<?, ?, ?> raw) {
+            DcbProjection<S, E, ID> dcbProjection = (DcbProjection<S, E, ID>) raw;
+            if (synchronous) {
+                throw new IllegalArgumentException("@Projection '%s' returns a DcbProjection with mode = SYNCHRONOUS, which the reactive stack does not support in this version. Use mode = ASYNC for a DCB read model, or an agnostic Projection for synchronous read-your-writes.".formatted(id));
+            }
+            ReactiveDcbProjectionRunner<E> runner = new ReactiveDcbProjectionRunner<>(applicationContext.getBean(SubscriptionModel.class), converter);
+            boolean replaysHistory = annotation.startAtPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.Projection.StartPosition.BEGINNING;
+            DcbStartAt startAt = generateDcbStartAt(id, toDcbStartPosition(annotation.startAt()), annotation.startAtPosition(), toDcbResumeBehavior(annotation.resumeBehavior()));
+            applyStartupWorkarounds();
+            var subscription = projectDcb(runner, id, dcbProjection, resolveStore(annotation, id), startAt);
+            if (shouldWaitUntilStartedDcb(replaysHistory, toDcbStartupMode(annotation.startupMode()))) {
+                subscription.waitUntilStarted().block();
+            }
+        } else if (descriptor instanceof Projection<?, ?, ?> raw) {
+            Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
+            boolean stream = annotation.capability() == org.occurrent.annotation.Projection.Capability.STREAM;
+            if (synchronous) {
+                // The synchronous subscription model has no lifecycle or start position, so nothing to wait for. It
+                // delivers the just-written events on the write path (read-your-writes); the fold ignores unhandled types.
+                ReactiveProjectionRunner<E> runner = ReactiveProjectionRunner.agnostic(applicationContext.getBean(SynchronousSubscriptionModel.class), converter);
+                projectAgnosticOrStream(runner, id, projection, resolveStore(annotation, id), null);
+            } else {
+                Subscribable subscribable = applicationContext.getBean(Subscribable.class);
+                ReactiveProjectionRunner<E> runner = stream ? ReactiveProjectionRunner.stream(subscribable, converter) : ReactiveProjectionRunner.agnostic(subscribable, converter);
+                boolean replaysHistory = annotation.startAtPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.Projection.StartPosition.BEGINNING;
+                if (replaysHistory && stream && !streamHistoryReplaySupported()) {
+                    throw new IllegalArgumentException("@Projection '%s' (capability = STREAM) asks to replay history, but this store does not support reactive stream history replay. Use capability = AGNOSTIC, startAt = NOW/DEFAULT, or a DcbProjection.".formatted(id));
+                }
+                if (replaysHistory && !stream && !positionReplaySupported()) {
+                    throw new IllegalArgumentException("@Projection '%s' asks to replay history, but this store does not write a global position, so the reactive position-based catch-up cannot replay. Use startAt = NOW or DEFAULT.".formatted(id));
+                }
+                StartAt startAt = generateAgnosticStartAt(id, toAgnosticStartPosition(annotation.startAt()), annotation.startAtPosition(), toAgnosticResumeBehavior(annotation.resumeBehavior()));
+                applyStartupWorkarounds();
+                var subscription = projectAgnosticOrStream(runner, id, projection, resolveStore(annotation, id), startAt);
+                if (shouldWaitUntilStartedAgnostic(replaysHistory, toAgnosticStartupMode(annotation.startupMode()))) {
+                    subscription.waitUntilStarted().block();
+                }
+            }
+        } else {
+            throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor == null ? "null" : descriptor.getClass().getName()));
+        }
+    }
+
+    // Resolve the read-model store. On the reactive stack there is no zero-config Mongo default (the view DSL's
+    // materialization is blocking and a reactive Mongo store is a planned follow-up), so a store bean is required: a
+    // MaterializedView or a ViewStateRepository (any backend, driven reactively by the runner). Named by store() when
+    // set, otherwise the unique bean of either type.
+    private Object resolveStore(org.occurrent.annotation.Projection annotation, String id) {
+        if (!annotation.store().isBlank()) {
+            Object bean = applicationContext.getBean(annotation.store());
+            if (bean instanceof MaterializedView || bean instanceof ViewStateRepository) {
+                return bean;
+            }
+            throw new IllegalArgumentException("@Projection '%s' store bean '%s' must be a MaterializedView or a ViewStateRepository, but was %s.".formatted(id, annotation.store(), bean.getClass().getName()));
+        }
+        Object materializedView = uniqueStoreBeanOrThrow(MaterializedView.class, id);
+        if (materializedView != null) {
+            return materializedView;
+        }
+        Object repository = uniqueStoreBeanOrThrow(ViewStateRepository.class, id);
+        if (repository != null) {
+            return repository;
+        }
+        throw new IllegalArgumentException(("@Projection '%s' has no read-model store. On the reactive stack, declare a MaterializedView or ViewStateRepository bean and point at it with store = \"beanName\" (or make it the only bean of its type). A zero-config reactive Mongo default is a planned follow-up, the blocking stack already has the Mongo default.").formatted(id));
+    }
+
+    // Returns the single bean of the given store type, or null when there is none so the caller tries the next type.
+    // Throws when several beans of the type exist, since the application provided store beans but none is uniquely
+    // selectable, so it names the ambiguity instead of failing later with a misleading "no store" message.
+    private Object uniqueStoreBeanOrThrow(Class<?> storeType, String id) {
+        String[] names = applicationContext.getBeanNamesForType(storeType);
+        if (names.length == 0) {
+            return null;
+        }
+        if (names.length > 1) {
+            throw new IllegalStateException(("@Projection '%s' found %d %s beans (%s) and cannot pick one. Name the store bean with @Projection(store = \"beanName\").").formatted(id, names.length, storeType.getSimpleName(), String.join(", ", names)));
+        }
+        return applicationContext.getBean(names[0]);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectAgnosticOrStream(ReactiveProjectionRunner<E> runner, String id, Projection<S, E, ID> projection, Object store, @Nullable StartAt startAt) {
+        if (store instanceof MaterializedView) {
+            return runner.project(id, projection, (MaterializedView<E>) store, startAt);
+        }
+        return runner.project(id, projection, (ViewStateRepository<S, ID>) store, startAt);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectDcb(ReactiveDcbProjectionRunner<E> runner, String id, DcbProjection<S, E, ID> dcbProjection, Object store, @Nullable DcbStartAt startAt) {
+        if (store instanceof MaterializedView) {
+            return runner.project(id, dcbProjection, (MaterializedView<E>) store, startAt);
+        }
+        return runner.project(id, dcbProjection, (ViewStateRepository<S, ID>) store, startAt);
+    }
+
+    private static Object invokeFactory(Method method, Object bean) {
+        try {
+            method.setAccessible(true);
+            return method.invoke(bean);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to invoke @Projection factory %s#%s".formatted(bean.getClass().getName(), method.getName()), e);
+        }
+    }
+
+    private static Subscription.StartPosition toAgnosticStartPosition(org.occurrent.annotation.Projection.StartPosition p) {
+        return switch (p) {
+            case BEGINNING -> Subscription.StartPosition.BEGINNING;
+            case NOW -> Subscription.StartPosition.NOW;
+            case DEFAULT -> Subscription.StartPosition.DEFAULT;
+        };
+    }
+
+    private static Subscription.ResumeBehavior toAgnosticResumeBehavior(org.occurrent.annotation.Projection.ResumeBehavior r) {
+        return r == org.occurrent.annotation.Projection.ResumeBehavior.SAME_AS_START_AT ? Subscription.ResumeBehavior.SAME_AS_START_AT : Subscription.ResumeBehavior.DEFAULT;
+    }
+
+    private static Subscription.StartupMode toAgnosticStartupMode(org.occurrent.annotation.Projection.StartupMode m) {
+        return switch (m) {
+            case DEFAULT -> Subscription.StartupMode.DEFAULT;
+            case WAIT_UNTIL_STARTED -> Subscription.StartupMode.WAIT_UNTIL_STARTED;
+            case BACKGROUND -> Subscription.StartupMode.BACKGROUND;
+        };
+    }
+
+    private static DcbSubscription.DcbStartPosition toDcbStartPosition(org.occurrent.annotation.Projection.StartPosition p) {
+        return switch (p) {
+            case BEGINNING -> DcbSubscription.DcbStartPosition.BEGINNING;
+            case NOW -> DcbSubscription.DcbStartPosition.NOW;
+            case DEFAULT -> DcbSubscription.DcbStartPosition.DEFAULT;
+        };
+    }
+
+    private static DcbSubscription.ResumeBehavior toDcbResumeBehavior(org.occurrent.annotation.Projection.ResumeBehavior r) {
+        return r == org.occurrent.annotation.Projection.ResumeBehavior.SAME_AS_START_AT ? DcbSubscription.ResumeBehavior.SAME_AS_START_AT : DcbSubscription.ResumeBehavior.DEFAULT;
+    }
+
+    private static DcbSubscription.StartupMode toDcbStartupMode(org.occurrent.annotation.Projection.StartupMode m) {
+        return switch (m) {
+            case DEFAULT -> DcbSubscription.StartupMode.DEFAULT;
+            case WAIT_UNTIL_STARTED -> DcbSubscription.StartupMode.WAIT_UNTIL_STARTED;
+            case BACKGROUND -> DcbSubscription.StartupMode.BACKGROUND;
         };
     }
 }
