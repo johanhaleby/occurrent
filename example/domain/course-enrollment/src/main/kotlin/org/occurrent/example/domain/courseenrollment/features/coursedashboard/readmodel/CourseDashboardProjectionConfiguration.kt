@@ -18,7 +18,7 @@ package org.occurrent.example.domain.courseenrollment.features.coursedashboard.r
 
 import org.occurrent.annotation.Projection
 import org.occurrent.annotation.Projection.Mode
-import org.occurrent.annotation.Projection.ResumeBehavior
+import org.occurrent.annotation.ResumeBehavior
 import org.occurrent.annotation.Projection.StartPosition
 import org.occurrent.dsl.projection.DcbProjection
 import org.occurrent.dsl.projection.dcbProjection

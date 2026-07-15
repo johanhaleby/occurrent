@@ -18,7 +18,7 @@ package org.occurrent.example.domain.hotelbooking.features.hoteldashboard.readmo
 
 import org.occurrent.annotation.DcbSubscription
 import org.occurrent.annotation.DcbSubscription.DcbStartPosition
-import org.occurrent.annotation.DcbSubscription.ResumeBehavior
+import org.occurrent.annotation.ResumeBehavior
 import org.occurrent.example.domain.hotelbooking.common.DomainEvent
 import org.occurrent.example.domain.hotelbooking.features.booking.model.BookingCancelled
 import org.occurrent.example.domain.hotelbooking.features.booking.model.RoomBooked

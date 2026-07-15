@@ -19,10 +19,10 @@ package org.occurrent.springboot.mongo.common;
 
 import org.jspecify.annotations.NonNull;
 import org.occurrent.annotation.DcbSubscription;
+import org.occurrent.annotation.ResumeBehavior;
+import org.occurrent.annotation.StartupMode;
 import org.occurrent.annotation.StreamSubscription;
-import org.occurrent.annotation.StreamSubscription.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
-import org.occurrent.annotation.StreamSubscription.StartupMode;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.DcbEventMetadata;

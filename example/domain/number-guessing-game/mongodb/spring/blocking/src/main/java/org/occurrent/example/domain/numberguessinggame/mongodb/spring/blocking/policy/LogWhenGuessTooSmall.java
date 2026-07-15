@@ -23,9 +23,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import static org.occurrent.annotation.StreamSubscription.ResumeBehavior.SAME_AS_START_AT;
+import static org.occurrent.annotation.ResumeBehavior.SAME_AS_START_AT;
 import static org.occurrent.annotation.StreamSubscription.StartPosition.BEGINNING_OF_TIME;
-import static org.occurrent.annotation.StreamSubscription.StartupMode.BACKGROUND;
+import static org.occurrent.annotation.StartupMode.BACKGROUND;
 
 @Component
 public class LogWhenGuessTooSmall {

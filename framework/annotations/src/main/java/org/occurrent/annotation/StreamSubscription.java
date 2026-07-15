@@ -154,49 +154,4 @@ public @interface StreamSubscription {
          */
         DEFAULT
     }
-
-    /**
-     * Specifies how a subscription should be resumed once the application is restarted.
-     */
-    enum ResumeBehavior {
-        /**
-         * Always start at the same position as specified by the {@link StartPosition}. I.e. even if there's a checkpoint stored for the subscription
-         * it'll be ignored on application restart and the subscription will resume from the specified {@link StartPosition}.
-         */
-        SAME_AS_START_AT,
-        /**
-         * Use the default resume behavior of the underlying subscription model. For example, if the {@link StartPosition} is set to {@link StartPosition#BEGINNING_OF_TIME},
-         * and {@code ResumeBehavior} is set to {@link ResumeBehavior#DEFAULT}, then the subscription will <i>start</i> from the beginning of time the first time it's run,
-         * then on application restart, it'll continue from the last received event (the checkpoint for the subscription) on restart.
-         */
-        DEFAULT
-    }
-
-    /**
-     * Specify how the subscription should behave during startup.
-     */
-    enum StartupMode {
-        /**
-         * Occurrent will determine the startup mode based on the other properties of the subscription (such as {@link #startAt()} and {@link #resumeBehavior()}).
-         * It'll use {@link #BACKGROUND} if the subscription needs to replay historic events before subscribing to new ones (e.g. if {@link #startAt()} is {@link StartPosition#BEGINNING_OF_TIME}),
-         * otherwise {@link #WAIT_UNTIL_STARTED} will be used.
-         */
-        DEFAULT,
-        /**
-         * The subscription will wait until it's started up fully before Spring continues starting the rest of the application.
-         * Most of the time this is recommended because otherwise there could be a small chance that a request is received to your application before
-         * the subscription has bootstrapped completely. This can lead to the subscription missing this event. This is only true if the subscription is
-         * brand new. As soon as the subscription has received an event that is stored in a {@link org.occurrent.subscription.api.blocking.CheckpointStorage}
-         * (checkpointing), it'll never miss an event during startup.
-         */
-        WAIT_UNTIL_STARTED,
-        /**
-         * The subscription will NOT wait until it's started up fully before Spring continues starting the rest of the application, instead it will be started in the background.
-         * Typically, this is mainly useful if you instruct the subscription to start at an earlier date (such as beginning of time), and you have a lot of events to read before
-         * the subscription has caught up. In this case, you may wish to start the Spring application before the subscription has fully started (i.e. before all historic events
-         * have been replayed) because waiting for all events to replay takes too long. The subscription will then replay all historic events in the background, before
-         * switching to continuous mode.
-         */
-        BACKGROUND
-    }
 }

@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.DcbSubscription.DcbStartPosition;
-import org.occurrent.annotation.DcbSubscription.ResumeBehavior;
+import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
