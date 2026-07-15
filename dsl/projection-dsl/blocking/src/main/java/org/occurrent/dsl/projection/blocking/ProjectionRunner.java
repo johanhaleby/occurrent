@@ -48,7 +48,7 @@ import static java.util.Objects.requireNonNull;
  * consistency-boundary read model use {@link DcbProjectionRunner} instead.
  * <p>
  * The subscription filter is derived from the projection: its explicit {@link Projection#filter() filter} if set, else a
- * type filter over its handled event types (see {@link Projections#filterFor}). The returned {@link Subscription} has
+ * type filter over its handled event types (see {@link ProjectionFilters#filterFor}). The returned {@link Subscription} has
  * already been waited on until started.
  *
  * @param <E> the domain event type
@@ -63,7 +63,7 @@ public final class ProjectionRunner<E> {
     private ProjectionRunner(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter, Function<Filter, SubscriptionFilter> toSubscriptionFilter) {
         this.subscriptionModel = requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.cloudEventConverter = requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null");
-        this.toSubscriptionFilter = toSubscriptionFilter;
+        this.toSubscriptionFilter = requireNonNull(toSubscriptionFilter, "toSubscriptionFilter cannot be null");
     }
 
     /**

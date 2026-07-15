@@ -136,6 +136,13 @@ public record Projection<S extends @Nullable Object, E, ID>(
          * {@code type}; a concrete event with no exact handler falls back to a handler registered for a superclass or
          * implemented interface (nearest superclass first, then interfaces). Registering the same {@code type} twice
          * replaces the earlier handler.
+         * <p>
+         * The registered types also become the projection's {@link Projection#eventTypes()}, which is what a runner
+         * derives the subscription or query filter from when no explicit {@link #filter(Filter) filter} is set. Events
+         * are stored under their concrete runtime type, so register the concrete event types here. A handler keyed on an
+         * abstract supertype or an interface still folds every matching event through the runtime-type dispatch above,
+         * but a type filter derived from that supertype key matches no stored event, so set an explicit
+         * {@link #filter(Filter) filter} whenever you fold by a supertype.
          *
          * @param type    the event type this handler folds
          * @param handler the fold: current state and the event, returning the new state

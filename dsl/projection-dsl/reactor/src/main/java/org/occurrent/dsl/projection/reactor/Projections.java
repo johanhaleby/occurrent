@@ -61,7 +61,7 @@ public final class Projections {
         View<S, E> view = projection.view();
         Function<E, @Nullable ID> id = projection.id();
         return event -> Mono.<Void>fromRunnable(() -> {
-            ID instanceId = id.apply(event);
+            @Nullable ID instanceId = id.apply(event);
             if (instanceId == null) {
                 return;
             }

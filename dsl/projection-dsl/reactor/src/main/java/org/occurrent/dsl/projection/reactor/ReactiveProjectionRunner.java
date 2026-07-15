@@ -64,7 +64,7 @@ public final class ReactiveProjectionRunner<E> {
     private ReactiveProjectionRunner(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter, Function<Filter, SubscriptionFilter> toSubscriptionFilter) {
         this.subscriptionModel = requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.cloudEventConverter = requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null");
-        this.toSubscriptionFilter = toSubscriptionFilter;
+        this.toSubscriptionFilter = requireNonNull(toSubscriptionFilter, "toSubscriptionFilter cannot be null");
     }
 
     /**
