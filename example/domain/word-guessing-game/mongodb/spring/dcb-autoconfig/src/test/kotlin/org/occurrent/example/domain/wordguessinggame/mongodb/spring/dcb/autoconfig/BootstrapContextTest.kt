@@ -45,7 +45,7 @@ class BootstrapContextTest {
     fun `starts dcb-only occurrent context`() {
         assertThat(applicationContext.getBeansOfType(SpringMongoEventStore::class.java)).hasSize(1)
         assertThat(applicationContext.getBean(EventStoreConfig::class.java).eventStoreCapabilities).containsExactly(DCB)
-        assertThat(applicationContext.getBeansOfType(Subscriptions::class.java)).hasSize(1)
+        assertThat(applicationContext.getBeansOfType(Subscriptions::class.java)).containsOnlyKeys("occurrentSubscriptionDsl", "occurrentSynchronousSubscriptionDsl")
         assertThat(applicationContext.getBeansOfType(ApplicationService::class.java)).isEmpty()
         assertThat(applicationContext.getBeansOfType(DomainEventQueries::class.java)).containsOnlyKeys("occurrentDomainEventQueries")
         assertThat(applicationContext.getBeansOfType(DcbApplicationService::class.java))
