@@ -52,9 +52,13 @@ class CourseDashboard : ViewStateRepository<DashboardState, String> {
 
     private val slot = AtomicReference(DashboardState.EMPTY)
 
-    override fun findById(id: String): Optional<DashboardState> = Optional.of(slot.get())
+    // This is a single-instance store, so it only serves COURSE_DASHBOARD_ID. Rejecting any other id surfaces a
+    // misconfigured projection (an id function returning the wrong key) at once rather than silently losing writes.
+    override fun findById(id: String): Optional<DashboardState> =
+        if (id == COURSE_DASHBOARD_ID) Optional.of(slot.get()) else Optional.empty()
 
     override fun save(id: String, state: DashboardState) {
+        require(id == COURSE_DASHBOARD_ID) { "This dashboard store only serves '$COURSE_DASHBOARD_ID', got '$id'" }
         slot.set(state)
     }
 

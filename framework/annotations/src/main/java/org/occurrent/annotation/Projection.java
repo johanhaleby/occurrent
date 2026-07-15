@@ -26,13 +26,18 @@ import java.lang.annotation.*;
  * management. For example:
  *
  * <pre lang="java">
- * &#64;Projection(id = "myProjection")
- * Projection createProjection(ProjectionStore store) {
- *     return Projection.newProjection(..)
- *         .handle(MyDomainEvent.class, (event, ctx) -> { .. })
+ * &#64;Projection(id = "orderStatus")
+ * Projection&lt;OrderStatus, OrderEvent, String&gt; orderStatusProjection() {
+ *     return Projection.&lt;OrderStatus, OrderEvent, String&gt;builder(OrderStatus.EMPTY)
+ *         .id(OrderEvent::orderId)
+ *         .on(OrderPlaced.class, (state, event) -> state.placed(event))
+ *         .on(OrderShipped.class, (state, event) -> state.shipped(event))
  *         .build();
  * }
  * </pre>
+ * The annotated method takes no arguments. The Kotlin DSL equivalent is
+ * {@code projection(OrderStatus.EMPTY) { id { it.orderId }; on<OrderPlaced> { s, e -> s.placed(e) } }},
+ * and a DCB read model returns a {@code DcbProjection} built with {@code dcbProjection { .. }}.
  *
  * <h4>Projection Descriptor Type</h4>
  * <p>
@@ -43,10 +48,11 @@ import java.lang.annotation.*;
  *
  * <h4>Mode and Startup Behavior</h4>
  * <p>
- * {@link #mode()} controls whether the projection processes events asynchronously (the default) or
- * synchronously (read-your-writes semantics, eventually consistent). Synchronous mode is mutually
- * exclusive with {@link #startAt()}, {@link #startAtPosition()}, and {@link #resumeBehavior()};
- * the framework enforces this constraint during bean post-processing.
+ * {@link #mode()} controls whether the projection processes events asynchronously (the default, an
+ * eventually-consistent subscription that catches up from history) or synchronously (read-your-writes,
+ * updated on the write path inside the write transaction). Synchronous mode is mutually exclusive with
+ * {@link #startAt()}, {@link #startAtPosition()}, and {@link #resumeBehavior()}, and the framework
+ * enforces this constraint during bean post-processing.
  * </p>
  * <p>
  * {@link #startupMode()} specifies how the projection behaves at application startup: in the default

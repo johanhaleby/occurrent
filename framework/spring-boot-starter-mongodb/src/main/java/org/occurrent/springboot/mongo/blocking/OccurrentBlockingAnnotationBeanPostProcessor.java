@@ -248,19 +248,34 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (!annotation.store().isBlank()) {
             return toMaterializedView(applicationContext.getBean(annotation.store()), projection, id);
         }
-        MaterializedView<?> materializedView = applicationContext.getBeanProvider(MaterializedView.class).getIfUnique();
+        Object materializedView = uniqueStoreBeanOrThrow(MaterializedView.class, id);
         if (materializedView != null) {
             return (MaterializedView<E>) materializedView;
         }
-        ViewStateRepository<?, ?> repository = applicationContext.getBeanProvider(ViewStateRepository.class).getIfUnique();
+        Object repository = uniqueStoreBeanOrThrow(ViewStateRepository.class, id);
         if (repository != null) {
             return Projections.materializedView(projection, (ViewStateRepository<S, ID>) repository);
         }
-        CrudRepository<?, ?> crudRepository = applicationContext.getBeanProvider(CrudRepository.class).getIfUnique();
+        Object crudRepository = uniqueStoreBeanOrThrow(CrudRepository.class, id);
         if (crudRepository != null) {
             return Projections.materializedView(projection, crudBackedRepository((CrudRepository<S, ID>) crudRepository));
         }
+        // No candidate store bean of any type exists, so fall back to the zero-config MongoDB default.
         return Projections.materializedView(projection, mongoBackedRepository((Class<S>) reflectStateType(factoryMethod, id)));
+    }
+
+    // Returns the single bean of the given store type, or null when there is none so the caller tries the next type
+    // (and finally the MongoDB default). Throws when several beans of the type exist, since the application provided
+    // store beans but none is uniquely selectable, and silently materializing into MongoDB would hide that.
+    private Object uniqueStoreBeanOrThrow(Class<?> storeType, String id) {
+        String[] names = applicationContext.getBeanNamesForType(storeType);
+        if (names.length == 0) {
+            return null;
+        }
+        if (names.length > 1) {
+            throw new IllegalStateException(("@Projection '%s' found %d %s beans (%s) and cannot pick one. Name the store bean with @Projection(store = \"beanName\").").formatted(id, names.length, storeType.getSimpleName(), String.join(", ", names)));
+        }
+        return applicationContext.getBean(names[0]);
     }
 
     @SuppressWarnings("unchecked")

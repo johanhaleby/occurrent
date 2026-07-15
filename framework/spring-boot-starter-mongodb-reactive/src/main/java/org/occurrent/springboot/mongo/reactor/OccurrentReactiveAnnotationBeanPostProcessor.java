@@ -539,15 +539,29 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
             throw new IllegalArgumentException("@Projection '%s' store bean '%s' must be a MaterializedView or a ViewStateRepository, but was %s.".formatted(id, annotation.store(), bean.getClass().getName()));
         }
-        MaterializedView<?> materializedView = applicationContext.getBeanProvider(MaterializedView.class).getIfUnique();
+        Object materializedView = uniqueStoreBeanOrThrow(MaterializedView.class, id);
         if (materializedView != null) {
             return materializedView;
         }
-        ViewStateRepository<?, ?> repository = applicationContext.getBeanProvider(ViewStateRepository.class).getIfUnique();
+        Object repository = uniqueStoreBeanOrThrow(ViewStateRepository.class, id);
         if (repository != null) {
             return repository;
         }
         throw new IllegalArgumentException(("@Projection '%s' has no read-model store. On the reactive stack, declare a MaterializedView or ViewStateRepository bean and point at it with store = \"beanName\" (or make it the only bean of its type). A zero-config reactive Mongo default is a planned follow-up, the blocking stack already has the Mongo default.").formatted(id));
+    }
+
+    // Returns the single bean of the given store type, or null when there is none so the caller tries the next type.
+    // Throws when several beans of the type exist, since the application provided store beans but none is uniquely
+    // selectable, so it names the ambiguity instead of failing later with a misleading "no store" message.
+    private Object uniqueStoreBeanOrThrow(Class<?> storeType, String id) {
+        String[] names = applicationContext.getBeanNamesForType(storeType);
+        if (names.length == 0) {
+            return null;
+        }
+        if (names.length > 1) {
+            throw new IllegalStateException(("@Projection '%s' found %d %s beans (%s) and cannot pick one. Name the store bean with @Projection(store = \"beanName\").").formatted(id, names.length, storeType.getSimpleName(), String.join(", ", names)));
+        }
+        return applicationContext.getBean(names[0]);
     }
 
     @SuppressWarnings("unchecked")
