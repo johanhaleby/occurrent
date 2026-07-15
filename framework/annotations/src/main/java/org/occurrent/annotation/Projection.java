@@ -67,11 +67,16 @@ import java.lang.annotation.*;
  * An empty name resolves the store by convention (typically the default Mongo implementation) or
  * defers to the application context.
  * </p>
+ * <p>
+ * A document-backed store (the Mongo default, or a {@code CrudRepository}) persists the view state under the state's
+ * own id, following the same convention as the view DSL's {@code materialized(...)}, so the materialized state type
+ * must carry an id equal to the projection's {@code id}. A {@code ViewStateRepository} bean is the store-agnostic
+ * option when you need full control over how the id maps to the stored key.
+ * </p>
  */
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
-@Inherited
 public @interface Projection {
     /**
      * The unique identifier of the projection (required, no default).
