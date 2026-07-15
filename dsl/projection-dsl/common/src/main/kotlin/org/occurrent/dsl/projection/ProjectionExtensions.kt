@@ -1,0 +1,134 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.dsl.projection
+
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
+import org.occurrent.filter.Filter
+import java.util.function.BiFunction
+import java.util.function.Function
+
+/**
+ * Builds a capability-agnostic [Projection] with a type-safe, per-event-type handler block, for example:
+ *
+ * ```
+ * val nameProjection = projection<NameState?, DomainEvent, String>(initialState = null) {
+ *     id { event -> event.userId() }
+ *     on<NameDefined> { _, e -> NameState(e.userId(), e.name()) }
+ *     on<NameWasChanged> { state, e -> state?.copy(name = e.name()) }
+ * }
+ * ```
+ *
+ * The registered event types become the projection's [Projection.eventTypes] (its default subscription selector). Add
+ * an explicit [filter] to select on more than event type.
+ */
+fun <S, E : Any, ID : Any> projection(initialState: S, block: ProjectionBuilder<S, E, ID>.() -> Unit): Projection<S, E, ID> {
+    val builder = ProjectionBuilder<S, E, ID>(initialState)
+    builder.block()
+    return builder.build()
+}
+
+/**
+ * Builds a [DcbProjection] with the same type-safe handler block as [projection], plus a DCB read boundary. Supply the
+ * boundary with [DcbProjectionBuilder.tags] (the common case, a tag filter such as `tags("username:$username")`) or an
+ * explicit [DcbProjectionBuilder.criteria]; with neither, the boundary defaults to [DcbCriteria.all]. For example:
+ *
+ * ```
+ * fun isUsernameClaimedProjection(username: String) =
+ *     dcbProjection<Boolean, AccountEvent, String>(initialState = false) {
+ *         tags("username:$username")
+ *         id { username }
+ *         on<AccountRegistered> { _, _ -> true }
+ *         on<AccountClosed> { _, _ -> false }
+ *         on<UsernameChanged> { _, e -> e.newUsername == username }
+ *     }
+ * ```
+ */
+fun <S, E : Any, ID : Any> dcbProjection(initialState: S, block: DcbProjectionBuilder<S, E, ID>.() -> Unit): DcbProjection<S, E, ID> {
+    val builder = DcbProjectionBuilder<S, E, ID>(initialState)
+    builder.block()
+    return builder.build()
+}
+
+/**
+ * Receiver for the [projection] block. Delegates to the Java [Projection.Builder] so the Java and Kotlin surfaces
+ * produce the same descriptor from one dispatch implementation.
+ */
+class ProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal constructor(initialState: S) {
+    @PublishedApi
+    internal val delegate: Projection.Builder<S, E, ID> = Projection.builder(initialState)
+
+    /** Sets the function deriving the view-instance id from an event; return `null` to skip the event. Required. */
+    fun id(fn: (E) -> ID?) {
+        delegate.id(Function { e -> fn(e) })
+    }
+
+    /** Registers the fold for event type [T]. */
+    inline fun <reified T : E> on(noinline handler: (S, T) -> S) {
+        delegate.on(T::class.java, BiFunction { s, e -> handler(s, e) })
+    }
+
+    /** Sets an explicit selector overriding the event-type-derived one. */
+    fun filter(filter: Filter) {
+        delegate.filter(filter)
+    }
+
+    @PublishedApi
+    internal fun build(): Projection<S, E, ID> = delegate.build()
+}
+
+/**
+ * Receiver for the [dcbProjection] block: the [ProjectionBuilder] surface plus the DCB read boundary.
+ */
+class DcbProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal constructor(initialState: S) {
+    @PublishedApi
+    internal val projectionBuilder: ProjectionBuilder<S, E, ID> = ProjectionBuilder(initialState)
+
+    @PublishedApi
+    internal val tags: MutableList<Tag> = mutableListOf()
+
+    @PublishedApi
+    internal var explicitCriteria: DcbCriteria? = null
+
+    /** Sets the function deriving the view-instance id from an event; return `null` to skip the event. Required. */
+    fun id(fn: (E) -> ID?) = projectionBuilder.id(fn)
+
+    /** Registers the fold for event type [T]. */
+    inline fun <reified T : E> on(noinline handler: (S, T) -> S) = projectionBuilder.on<T>(handler)
+
+    /** Adds DCB tags to the read boundary, matched all-of. Each string is parsed with [Tag.parse]. */
+    fun tags(vararg tag: String) {
+        tag.forEach { tags.add(Tag.parse(it)) }
+    }
+
+    /** Adds DCB tags to the read boundary, matched all-of. */
+    fun tags(vararg tag: Tag) {
+        tags.addAll(tag)
+    }
+
+    /** Sets the DCB read boundary explicitly, overriding any [tags]. */
+    fun criteria(criteria: DcbCriteria) {
+        this.explicitCriteria = criteria
+    }
+
+    @PublishedApi
+    internal fun build(): DcbProjection<S, E, ID> {
+        val projection = projectionBuilder.build()
+        val criteria = explicitCriteria ?: if (tags.isNotEmpty()) DcbCriteria.tags(tags) else DcbCriteria.all()
+        return DcbProjection(projection, criteria)
+    }
+}

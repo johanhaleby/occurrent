@@ -34,6 +34,7 @@
         <module>decider</module>
         <module>decider-arrow</module>
         <module>view-dsl</module>
+        <module>projection-dsl</module>
     </modules>
 
     <dependencyManagement>
