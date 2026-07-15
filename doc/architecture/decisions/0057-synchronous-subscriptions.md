@@ -45,6 +45,13 @@ calling thread. The in-process filter matcher was extracted from `InMemorySubscr
 `SubscriptionFilterMatcher` and reused, so one agnostic synchronous model covers both stream and DCB (a stream filter
 matches only stream events, a DCB filter only DCB events).
 
+Because the model reuses `Subscribable`, its `subscribe(...)` still takes a `StartAt`. The synchronous model
+ignores it (there is no start position to honor for at-write-time dispatch), but the callers, including the
+`@SynchronousSubscription` annotation processors, pass `StartAt.subscriptionModelDefault()` rather than `null`. Reusing
+the shared interface is only sound if we do not quietly violate its contract: a `null` `StartAt` would be a latent NPE
+if the model ever grew a real implementation or if nullness checking were enabled, so the seam stays honest even where
+the value is unused.
+
 **The application service holds two optional, storage-neutral collaborators** (configured via a new `builder(...)`):
 a `SynchronousEventDispatcher` (the model) and a `TransactionExecutor`. The dispatcher seam lives in the
 application-service layer so the application service does not depend on the subscription modules above it. After a
