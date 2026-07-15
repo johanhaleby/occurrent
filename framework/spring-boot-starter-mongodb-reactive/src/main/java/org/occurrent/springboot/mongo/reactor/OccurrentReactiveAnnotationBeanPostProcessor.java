@@ -61,7 +61,6 @@ import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.stream.Stream;
 
-import static org.occurrent.filter.Filter.CompositionOperator.OR;
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
 /**
@@ -123,26 +122,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     @SuppressWarnings("unchecked")
     private <E> void processSubscribeAnnotation(Object bean, Method method, StreamSubscriptionDefinition subscription) {
         String id = subscription.id();
-        final Filter filter;
-        final List<Class<?>> parameterTypes;
-        if (method.getParameterCount() >= 1) {
-            CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
-            parameterTypes = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter);
-            Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameterTypes, SubscriptionAnnotations::isStreamMetadataParameter);
-            List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, subscription.eventTypes(), subscription.annotationName());
-
-            if (domainEventTypesToSubscribeTo.size() == 1) {
-                filter = Filter.type(cloudEventConverter.getCloudEventType(domainEventTypesToSubscribeTo.get(0)));
-            } else {
-                List<Filter> typeFilters = domainEventTypesToSubscribeTo.stream()
-                        .map(cloudEventConverter::getCloudEventType)
-                        .map(Filter::type)
-                        .toList();
-                filter = new Filter.CompositionFilter(OR, typeFilters);
-            }
-        } else {
-            throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
-        }
+        SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, subscription.eventTypes(), subscription.annotationName(), applicationContext.getBean(CloudEventConverter.class));
+        List<Class<?>> parameterTypes = resolved.parameterTypes();
+        Filter filter = resolved.filter();
 
         boolean streamHistoryReplaySupported = streamHistoryReplaySupported();
         StartAt startAt = generateStreamStartAt(subscription, streamHistoryReplaySupported);
@@ -164,26 +146,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     @SuppressWarnings("unchecked")
     private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Subscription annotation) {
         String id = annotation.id();
-        final Filter filter;
-        final List<Class<?>> parameterTypes;
-        if (method.getParameterCount() >= 1) {
-            CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
-            parameterTypes = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter);
-            Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameterTypes, SubscriptionAnnotations::isStreamMetadataParameter);
-            List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@Subscription");
-
-            if (domainEventTypesToSubscribeTo.size() == 1) {
-                filter = Filter.type(cloudEventConverter.getCloudEventType(domainEventTypesToSubscribeTo.get(0)));
-            } else {
-                List<Filter> typeFilters = domainEventTypesToSubscribeTo.stream()
-                        .map(cloudEventConverter::getCloudEventType)
-                        .map(Filter::type)
-                        .toList();
-                filter = new Filter.CompositionFilter(OR, typeFilters);
-            }
-        } else {
-            throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
-        }
+        SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@Subscription", applicationContext.getBean(CloudEventConverter.class));
+        List<Class<?>> parameterTypes = resolved.parameterTypes();
+        Filter filter = resolved.filter();
 
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
                 invokeMono(method, bean, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
@@ -212,26 +177,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     @SuppressWarnings("unchecked")
     private <E> void processSynchronousSubscribeAnnotation(String beanName, Object bean, Method method, SynchronousSubscription annotation) {
         String id = annotation.id();
-        final Filter filter;
-        final List<Class<?>> parameterTypes;
-        if (method.getParameterCount() >= 1) {
-            CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
-            parameterTypes = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter);
-            Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameterTypes, SubscriptionAnnotations::isStreamMetadataParameter);
-            List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@SynchronousSubscription");
-
-            if (domainEventTypesToSubscribeTo.size() == 1) {
-                filter = Filter.type(cloudEventConverter.getCloudEventType(domainEventTypesToSubscribeTo.get(0)));
-            } else {
-                List<Filter> typeFilters = domainEventTypesToSubscribeTo.stream()
-                        .map(cloudEventConverter::getCloudEventType)
-                        .map(Filter::type)
-                        .toList();
-                filter = new Filter.CompositionFilter(OR, typeFilters);
-            }
-        } else {
-            throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
-        }
+        SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@SynchronousSubscription", applicationContext.getBean(CloudEventConverter.class));
+        List<Class<?>> parameterTypes = resolved.parameterTypes();
+        Filter filter = resolved.filter();
 
         // Resolve the handler from the ApplicationContext lazily, at dispatch time, rather than closing over the raw
         // bean instance captured here. This BeanPostProcessor runs in postProcessBeforeInitialization, before Spring
