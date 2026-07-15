@@ -41,6 +41,7 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.nativedriver.ClientSessionHolder;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel;
@@ -54,6 +55,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -140,6 +143,42 @@ class NativeMongoTransactionExecutorTest {
 
         assertThat(eventStore.read(streamId).isEmpty()).isTrue();
         assertThat(sideEffectCollection.countDocuments(new Document("name", "stream-rollback"))).isZero();
+    }
+
+    // ------------------------------------------------------------------------------------------------------------
+    // In-handler read visibility (reads issued from a synchronous handler join the executor's transaction)
+    // ------------------------------------------------------------------------------------------------------------
+
+    @Test
+    void synchronous_handler_sees_the_just_written_event_through_count_and_exists_within_the_transaction() {
+        String streamId = UUID.randomUUID().toString();
+        String eventId = UUID.randomUUID().toString();
+        AtomicBoolean existsSeenByHandler = new AtomicBoolean(false);
+        AtomicLong idCountSeenByHandler = new AtomicLong(-1);
+        AtomicLong countAllSeenByHandler = new AtomicLong(-1);
+
+        SynchronousSubscriptionModel subscriptions = new SynchronousSubscriptionModel();
+        subscriptions.subscribe("visibility", null, StartAt.now(), cloudEvent -> {
+            // Runs on the writer thread inside the executor's transaction. The store's count/exists reads are routed
+            // through the ambient ClientSession, so they must observe the write that has not committed yet.
+            existsSeenByHandler.set(eventStore.exists(streamId));
+            idCountSeenByHandler.set(eventStore.count(Filter.id(eventId)));
+            countAllSeenByHandler.set(eventStore.count(Filter.all()));
+        });
+
+        ApplicationService<NameDefined> applicationService = GenericApplicationService.<NameDefined>builder(eventStore, converter)
+                .transactionExecutor(transactionExecutor)
+                .synchronousSubscriptions(subscriptions)
+                .build();
+
+        assertThat(eventStore.exists(streamId)).as("stream does not exist before the write").isFalse();
+        assertThat(eventStore.count(Filter.id(eventId))).as("event does not exist before the write").isZero();
+
+        applicationService.execute(streamId, __ -> List.of(new NameDefined(eventId, "visibility")));
+
+        assertThat(existsSeenByHandler.get()).as("exists(streamId) inside the handler sees the uncommitted event").isTrue();
+        assertThat(idCountSeenByHandler.get()).as("count(Filter.id) inside the handler sees the uncommitted event").isEqualTo(1);
+        assertThat(countAllSeenByHandler.get()).as("count(Filter.all()) inside the handler sees at least the uncommitted event").isGreaterThanOrEqualTo(1);
     }
 
     // ------------------------------------------------------------------------------------------------------------

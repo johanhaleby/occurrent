@@ -236,6 +236,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return ambientSession == null ? eventCollection.find(query) : eventCollection.find(ambientSession, query);
     }
 
+    // Count through the ambient ClientSession when one is bound (see findEvents), so a read issued from within a
+    // synchronous subscription handler observes the uncommitted write. With no ambient session it is a plain,
+    // non-transactional count, exactly as before.
+    private long countEvents(Bson query) {
+        ClientSession ambientSession = ClientSessionHolder.get();
+        return ambientSession == null ? eventCollection.countDocuments(query) : eventCollection.countDocuments(ambientSession, query);
+    }
+
     private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy) {
         final FindIterable<Document> documentsWithoutSkipAndLimit = findEvents(query);
 
@@ -393,7 +401,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         Bson filterBson = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
         Bson query = and(positionFilter, filterBson);
 
-        FindIterable<Document> documents = eventCollection.find(query).sort(ascending(OccurrentCloudEventExtension.POSITION));
+        FindIterable<Document> documents = findEvents(query).sort(ascending(OccurrentCloudEventExtension.POSITION));
         return StreamSupport.stream(queryOptions.apply(documents).spliterator(), false)
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
     }
@@ -416,7 +424,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireDcbCapability();
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return eventCollection.countDocuments(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options))) > 0;
+        return countEvents(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options))) > 0;
     }
 
     @Override
@@ -424,7 +432,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireDcbCapability();
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return eventCollection.countDocuments(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options)));
+        return countEvents(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options)));
     }
 
     private long lowerBound(DcbReadOptions options) {
@@ -694,7 +702,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     @Override
     public boolean exists(String streamId) {
         requireStreamCapability();
-        return eventCollection.countDocuments(eq(STREAM_ID, streamId)) > 0;
+        return countEvents(eq(STREAM_ID, streamId)) > 0;
     }
 
     @Override
@@ -766,10 +774,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireStreamCapability();
         requireNonNull(filter, "Filter cannot be null");
         if (filter instanceof Filter.All) {
-            return eventCollection.estimatedDocumentCount();
+            // estimatedDocumentCount() is fast but has no ClientSession overload and cannot join a transaction, so
+            // inside an ambient session fall back to an exact count-all so a synchronous handler sees the uncommitted
+            // write. With no session, keep the fast estimate, exactly as before.
+            ClientSession ambientSession = ClientSessionHolder.get();
+            return ambientSession == null ? eventCollection.estimatedDocumentCount() : eventCollection.countDocuments(ambientSession, new Document());
         } else {
             final Bson query = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
-            return eventCollection.countDocuments(query);
+            return countEvents(query);
         }
     }
 
