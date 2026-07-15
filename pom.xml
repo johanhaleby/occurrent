@@ -572,6 +572,7 @@
                                 <excludeArtifact>subscription-mongodb-native</excludeArtifact>
                                 <excludeArtifact>subscription-mongodb-spring</excludeArtifact>
                                 <excludeArtifact>subscription-mongodb</excludeArtifact>
+                                <excludeArtifact>subscription-synchronous</excludeArtifact>
                                 <excludeArtifact>subscription-redis-spring</excludeArtifact>
                                 <excludeArtifact>subscription-redis</excludeArtifact>
                                 <excludeArtifact>subscription-util-blocking</excludeArtifact>

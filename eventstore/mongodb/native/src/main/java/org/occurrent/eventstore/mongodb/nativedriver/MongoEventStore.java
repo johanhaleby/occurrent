@@ -190,7 +190,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, @Nullable StreamReadFilter streamReadFilter, int skip, int limit) {
-        long currentStreamVersion = currentStreamVersion(streamId, null);
+        // Join the transaction an external executor opened on this thread, if any, so a read of the just-written
+        // (still uncommitted) tail issued from inside that transaction sees the events. Without an ambient session
+        // this reads non-transactionally, exactly as before.
+        long currentStreamVersion = currentStreamVersion(streamId, ClientSessionHolder.get());
         if (currentStreamVersion == 0) {
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
@@ -226,8 +229,23 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return currentStreamVersion;
     }
 
+    // Find events, joining the transaction an external executor opened on this thread when one is bound (see
+    // ClientSessionHolder). With no ambient session this is a plain, non-transactional find, exactly as before.
+    private FindIterable<Document> findEvents(Bson query) {
+        ClientSession ambientSession = ClientSessionHolder.get();
+        return ambientSession == null ? eventCollection.find(query) : eventCollection.find(ambientSession, query);
+    }
+
+    // Count through the ambient ClientSession when one is bound (see findEvents), so a read issued from within a
+    // synchronous subscription handler observes the uncommitted write. With no ambient session it is a plain,
+    // non-transactional count, exactly as before.
+    private long countEvents(Bson query) {
+        ClientSession ambientSession = ClientSessionHolder.get();
+        return ambientSession == null ? eventCollection.countDocuments(query) : eventCollection.countDocuments(ambientSession, query);
+    }
+
     private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy) {
-        final FindIterable<Document> documentsWithoutSkipAndLimit = eventCollection.find(query);
+        final FindIterable<Document> documentsWithoutSkipAndLimit = findEvents(query);
 
         final FindIterable<Document> documentsWithSkipAndLimit;
         if (skip != 0 || limit != Integer.MAX_VALUE) {
@@ -272,34 +290,45 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             firstReservedPosition = 0;
         }
 
+        ClientSession ambientSession = ClientSessionHolder.get();
+        if (ambientSession != null) {
+            // Join the transaction an external executor opened on this thread. The executor owns the session and its
+            // commit/abort, so run the write body once directly on the ambient session, without opening a session,
+            // starting a transaction, or retrying here.
+            StreamVersionDiff streamVersionDiff = writeInSession(ambientSession, streamId, writeCondition, events, firstReservedPosition);
+            return new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion);
+        }
+
         Supplier<WriteResult> writeEvents = () -> {
             try (ClientSession clientSession = mongoClient.startSession()) {
-                StreamVersionDiff streamVersionDiff = clientSession.withTransaction(() -> {
-                    long currentStreamVersion = currentStreamVersion(streamId, clientSession);
-
-                    if (!isFulfilled(currentStreamVersion, writeCondition)) {
-                        throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
-                    }
-
-                    List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, events.stream(), currentStreamVersion, firstReservedPosition);
-
-                    if (cloudEventDocuments.isEmpty()) {
-                        return StreamVersionDiff.of(currentStreamVersion, currentStreamVersion);
-                    } else {
-                        try {
-                            eventCollection.insertMany(clientSession, cloudEventDocuments);
-                        } catch (MongoException e) {
-                            throw translateException(new WriteContext(streamId, currentStreamVersion, writeCondition), e);
-                        }
-                        final long newStreamVersion = cloudEventDocuments.getLast().getLong(STREAM_VERSION);
-                        return StreamVersionDiff.of(currentStreamVersion, newStreamVersion);
-                    }
-                }, transactionOptions);
+                StreamVersionDiff streamVersionDiff = clientSession.withTransaction(() -> writeInSession(clientSession, streamId, writeCondition, events, firstReservedPosition), transactionOptions);
                 return new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion);
             }
         };
 
         return RetryStrategy.retry().retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion()).execute(writeEvents);
+    }
+
+    private StreamVersionDiff writeInSession(ClientSession clientSession, String streamId, WriteCondition writeCondition, List<CloudEvent> events, long firstReservedPosition) {
+        long currentStreamVersion = currentStreamVersion(streamId, clientSession);
+
+        if (!isFulfilled(currentStreamVersion, writeCondition)) {
+            throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
+        }
+
+        List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, events.stream(), currentStreamVersion, firstReservedPosition);
+
+        if (cloudEventDocuments.isEmpty()) {
+            return StreamVersionDiff.of(currentStreamVersion, currentStreamVersion);
+        } else {
+            try {
+                eventCollection.insertMany(clientSession, cloudEventDocuments);
+            } catch (MongoException e) {
+                throw translateException(new WriteContext(streamId, currentStreamVersion, writeCondition), e);
+            }
+            final long newStreamVersion = cloudEventDocuments.getLast().getLong(STREAM_VERSION);
+            return StreamVersionDiff.of(currentStreamVersion, newStreamVersion);
+        }
     }
 
     private List<Document> convertCloudEventsToDocuments(String streamId, Stream<CloudEvent> cloudEvents, long currentStreamVersion, long firstReservedPosition) {
@@ -335,7 +364,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // position order (so Mongo only needs to touch the highest-position n matches) and then reversed back to
         // ascending here. Without a limit, BACKWARD degenerates to the same ascending, uncapped scan as FORWARD.
         boolean fetchDescending = options.direction() == DcbReadOptions.Direction.BACKWARD && options.limit().isPresent();
-        FindIterable<Document> documents = eventCollection.find(mongoQuery)
+        FindIterable<Document> documents = findEvents(mongoQuery)
                 .sort(fetchDescending ? descending(OccurrentCloudEventExtension.POSITION) : ascending(OccurrentCloudEventExtension.POSITION));
         if (options.limit().isPresent()) {
             documents = documents.limit(options.limit().getAsInt());
@@ -372,7 +401,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         Bson filterBson = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
         Bson query = and(positionFilter, filterBson);
 
-        FindIterable<Document> documents = eventCollection.find(query).sort(ascending(OccurrentCloudEventExtension.POSITION));
+        FindIterable<Document> documents = findEvents(query).sort(ascending(OccurrentCloudEventExtension.POSITION));
         return StreamSupport.stream(queryOptions.apply(documents).spliterator(), false)
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
     }
@@ -395,7 +424,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireDcbCapability();
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return eventCollection.countDocuments(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options))) > 0;
+        return countEvents(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options))) > 0;
     }
 
     @Override
@@ -403,7 +432,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireDcbCapability();
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return eventCollection.countDocuments(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options)));
+        return countEvents(toDcbBsonQuery(criteria, lowerBound(options), upperBound(options)));
     }
 
     private long lowerBound(DcbReadOptions options) {
@@ -431,26 +460,36 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         long firstPosition = reservePositions(eventsToAppend.size());
         long lastPosition = firstPosition + eventsToAppend.size() - 1;
 
+        ClientSession ambientSession = ClientSessionHolder.get();
+        if (ambientSession != null) {
+            // Join the transaction an external executor opened on this thread. The executor owns the session and its
+            // commit/abort, so run the append body once directly on the ambient session, without opening a session,
+            // starting a transaction, or retrying here.
+            return appendInSession(ambientSession, streamId, eventsToAppend, condition, firstPosition, lastPosition);
+        }
+
         return executeWithTransientRetry(() -> {
             try (ClientSession clientSession = mongoClient.startSession()) {
-                return clientSession.withTransaction(() -> {
-                    long currentStreamVersion = currentStreamVersion(streamId, clientSession);
-                    if (condition != null) {
-                        enforceAppendCondition(clientSession, condition, eventsToAppend, lastPosition);
-                    } else {
-                        // An unconditional append still increments its events' markers, so a concurrent conditional append
-                        // on an overlapping tag or type shares a marker, serializes against it, and its consistency-token
-                        // check observes it. Without this, nothing forces a write-write conflict and a concurrent
-                        // conditional append's snapshot could miss this append (write skew). See ADR 0021.
-                        incrementConflictMarkers(clientSession, DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
-                    }
-
-                    List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition);
-                    insertAllDcb(clientSession, streamId, currentStreamVersion, documents);
-                    return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size());
-                }, transactionOptions);
+                return clientSession.withTransaction(() -> appendInSession(clientSession, streamId, eventsToAppend, condition, firstPosition, lastPosition), transactionOptions);
             }
         });
+    }
+
+    private DcbAppendResult appendInSession(ClientSession clientSession, String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition) {
+        long currentStreamVersion = currentStreamVersion(streamId, clientSession);
+        if (condition != null) {
+            enforceAppendCondition(clientSession, condition, eventsToAppend, lastPosition);
+        } else {
+            // An unconditional append still increments its events' markers, so a concurrent conditional append
+            // on an overlapping tag or type shares a marker, serializes against it, and its consistency-token
+            // check observes it. Without this, nothing forces a write-write conflict and a concurrent
+            // conditional append's snapshot could miss this append (write skew). See ADR 0021.
+            incrementConflictMarkers(clientSession, DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
+        }
+
+        List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition);
+        insertAllDcb(clientSession, streamId, currentStreamVersion, documents);
+        return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size());
     }
 
     private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition) {
@@ -663,7 +702,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     @Override
     public boolean exists(String streamId) {
         requireStreamCapability();
-        return eventCollection.countDocuments(eq(STREAM_ID, streamId)) > 0;
+        return countEvents(eq(STREAM_ID, streamId)) > 0;
     }
 
     @Override
@@ -735,10 +774,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireStreamCapability();
         requireNonNull(filter, "Filter cannot be null");
         if (filter instanceof Filter.All) {
-            return eventCollection.estimatedDocumentCount();
+            // estimatedDocumentCount() is fast but has no ClientSession overload and cannot join a transaction, so
+            // inside an ambient session fall back to an exact count-all so a synchronous handler sees the uncommitted
+            // write. With no session, keep the fast estimate, exactly as before.
+            ClientSession ambientSession = ClientSessionHolder.get();
+            return ambientSession == null ? eventCollection.estimatedDocumentCount() : eventCollection.countDocuments(ambientSession, new Document());
         } else {
             final Bson query = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
-            return eventCollection.countDocuments(query);
+            return countEvents(query);
         }
     }
 

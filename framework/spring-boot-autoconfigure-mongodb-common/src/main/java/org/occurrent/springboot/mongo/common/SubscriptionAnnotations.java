@@ -24,10 +24,12 @@ import org.occurrent.annotation.StreamSubscription.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.annotation.StreamSubscription.StartupMode;
 import org.occurrent.annotation.Subscription;
+import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.filter.Filter;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -37,6 +39,7 @@ import java.util.List;
 import java.util.function.Predicate;
 
 import static java.util.function.Predicate.not;
+import static org.occurrent.filter.Filter.CompositionOperator.OR;
 
 /**
  * Stack-neutral helpers for processing the {@link StreamSubscription}, {@link DcbSubscription} and the
@@ -112,6 +115,51 @@ public final class SubscriptionAnnotations {
                     }
                 })
                 .toList();
+    }
+
+    /**
+     * The event parameter types of a subscription handler plus the {@link Filter} that selects the events it
+     * subscribes to, resolved together from the annotated method.
+     */
+    public record ResolvedTypeFilter(List<Class<?>> parameterTypes, Filter filter) {
+    }
+
+    /**
+     * Resolve a type-based subscription handler: validate it declares an event parameter, resolve the domain event
+     * types it subscribes to (expanding a sealed type, or using the annotation's explicit {@code eventTypes}), and build
+     * the {@link Filter} that matches those types. Shared by the stream, capability-agnostic, and synchronous
+     * annotation paths so the resolution and filter construction live in one place. The DCB path uses
+     * {@link #buildDcbCriteria(List, List)} instead.
+     *
+     * @param id                            the subscription id
+     * @param bean                          the bean declaring the handler
+     * @param method                        the handler method
+     * @param eventTypesSpecifiedInAnnotation the annotation's {@code eventTypes} (empty to derive from the parameter)
+     * @param annotationName                the annotation name, for error messages
+     * @param cloudEventConverter           resolves domain event types to cloud event types
+     * @param <E>                           the domain event type
+     * @return the handler's parameter types and the type filter
+     */
+    public static <E> ResolvedTypeFilter resolveTypeFilter(String id, Object bean, Method method, Class<?>[] eventTypesSpecifiedInAnnotation, String annotationName, CloudEventConverter<E> cloudEventConverter) {
+        if (method.getParameterCount() < 1) {
+            throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
+        }
+        List<Class<?>> parameterTypes = analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter);
+        @SuppressWarnings("unchecked")
+        Class<E> specifiedEventType = (Class<E>) eventTypeOf(parameterTypes, SubscriptionAnnotations::isStreamMetadataParameter);
+        List<Class<E>> domainEventTypes = resolveDomainEventTypes(id, bean, method, specifiedEventType, eventTypesSpecifiedInAnnotation, annotationName);
+
+        Filter filter;
+        if (domainEventTypes.size() == 1) {
+            filter = Filter.type(cloudEventConverter.getCloudEventType(domainEventTypes.get(0)));
+        } else {
+            List<Filter> typeFilters = domainEventTypes.stream()
+                    .map(cloudEventConverter::getCloudEventType)
+                    .map(Filter::type)
+                    .toList();
+            filter = new Filter.CompositionFilter(OR, typeFilters);
+        }
+        return new ResolvedTypeFilter(parameterTypes, filter);
     }
 
     public static DcbCriteria buildDcbCriteria(List<String> cloudEventTypes, List<Tag> tags) {

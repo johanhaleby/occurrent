@@ -24,6 +24,8 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.application.service.dcb.annotation.AnnotationTagGenerator;
 import org.occurrent.application.service.reactor.ApplicationService;
+import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
+import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;
 import org.occurrent.application.service.reactor.dcb.DcbApplicationService;
 import org.occurrent.application.service.reactor.dcb.GenericDcbApplicationService;
 import org.occurrent.application.service.reactor.generic.GenericApplicationService;
@@ -56,6 +58,7 @@ import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptio
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionModel;
+import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -71,6 +74,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.mongodb.ReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
@@ -152,7 +156,10 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      * stream-only catch-up, a DCB-only store gets DCB-only catch-up, and a STREAM-only store with position off gets no
      * catch-up layer. {@code destroyMethod = "shutdown"} disposes the running subscriptions on context close.
      */
+    // @Primary so that a Subscribable injection point (for example the asynchronous subscription DSLs) resolves to
+    // this asynchronous model rather than the register-only SynchronousSubscriptionModel, which is also a Subscribable.
     @Bean(destroyMethod = "shutdown")
+    @Primary
     @ConditionalOnMissingBean({SubscriptionModel.class, Subscribable.class})
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public ReactorDurableSubscriptionModel occurrentDurableSubscriptionModel(ReactiveMongoOperations mongo, CheckpointStorage storage,
@@ -196,6 +203,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      * by event type.
      */
     @Bean
+    @Primary
     @ConditionalOnMissingBean(Subscriptions.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public Subscriptions<E> occurrentSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
@@ -207,6 +215,49 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public StreamSubscriptions<E> occurrentStreamSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
         return new StreamSubscriptions<>(subscribable, cloudEventConverter);
+    }
+
+    /**
+     * The register-only reactive subscription model whose handlers the application service composes into its write
+     * chain synchronously, before {@code execute} completes (see {@link SynchronousSubscriptionModel}). It is both the
+     * registrar the synchronous subscription DSL registers on and the dispatcher the application service dispatches to,
+     * so both must resolve to this same bean.
+     */
+    @Bean
+    @ConditionalOnMissingBean(SynchronousSubscriptionModel.class)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel() {
+        return new SynchronousSubscriptionModel();
+    }
+
+    /**
+     * A {@link ReactiveTransactionExecutor} that spans the event-store write and the synchronous subscription handlers
+     * in one reactive transaction, so a handler whose {@code Mono} errors rolls the write back. Wired into the reactive
+     * application service beans below.
+     * <p>
+     * There is no free lunch: this only pays off while synchronous subscriptions are registered. It is auto-configured
+     * whenever the event store is enabled, and can be replaced by defining your own {@link ReactiveTransactionExecutor}
+     * bean, for example {@link ReactiveTransactionExecutor#noTransaction()} to make synchronous subscriptions
+     * best-effort instead of atomic.
+     */
+    @Bean
+    @ConditionalOnMissingBean(ReactiveTransactionExecutor.class)
+    @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
+    public SpringReactiveTransactionExecutor occurrentSpringReactiveTransactionExecutor(ReactiveMongoTransactionManager transactionManager) {
+        return new SpringReactiveTransactionExecutor(transactionManager);
+    }
+
+    /**
+     * The synchronous counterpart of {@link #occurrentSubscriptions(Subscribable, CloudEventConverter)}, used by the
+     * {@code @SynchronousSubscription} annotation. It is the same {@link Subscriptions} type as the asynchronous DSL,
+     * so it is given a distinct bean name (and the asynchronous one is {@link Primary}); the annotation processor
+     * resolves this one by name.
+     */
+    @Bean(OccurrentReactiveAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
+    @ConditionalOnMissingBean(name = OccurrentReactiveAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    public Subscriptions<E> occurrentSynchronousSubscriptions(SynchronousSubscriptionModel synchronousSubscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+        return new Subscriptions<>(synchronousSubscriptionModel, cloudEventConverter);
     }
 
     /**
@@ -242,9 +293,18 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @ConditionalOnMissingBean(ApplicationService.class)
     @Conditional(OnStreamEventStoreCapabilityCondition.class)
     @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
-    public ApplicationService<E> occurrentApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, OccurrentProperties occurrentProperties) {
+    public ApplicationService<E> occurrentApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, OccurrentProperties occurrentProperties,
+                                                             ObjectProvider<ReactiveSynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<ReactiveTransactionExecutor> transactionExecutor) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
-        return enableDefaultRetryStrategy ? new GenericApplicationService<>(eventStore, cloudEventConverter) : new GenericApplicationService<>(eventStore, cloudEventConverter, Retry.max(0));
+        Retry retry = enableDefaultRetryStrategy ? GenericApplicationService.defaultRetry() : Retry.max(0);
+        GenericApplicationService.Builder<E> builder = GenericApplicationService.builder(eventStore, cloudEventConverter).retry(retry);
+        // Wire the synchronous subscription dispatcher and transaction executor into the builder when present, so a
+        // @SynchronousSubscription handler is composed into the write chain, atomically with the write. Both are
+        // resolved through ObjectProvider because they only exist when the feature is applicable, and either can be
+        // absent or user-replaced.
+        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        transactionExecutor.ifAvailable(builder::transactionExecutor);
+        return builder.build();
     }
 
     /**
@@ -265,13 +325,16 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Conditional(OnDcbEventStoreCapabilityCondition.class)
     @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
     public DcbApplicationService<E> occurrentDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter,
-                                                                     ObjectProvider<TagGenerator<E>> tagGeneratorProvider, OccurrentProperties occurrentProperties) {
-        TagGenerator<E> tagGenerator = tagGeneratorProvider.getIfAvailable();
+                                                                     ObjectProvider<TagGenerator<E>> tagGeneratorProvider, OccurrentProperties occurrentProperties,
+                                                                     ObjectProvider<ReactiveSynchronousEventDispatcher> synchronousEventDispatcher, ObjectProvider<ReactiveTransactionExecutor> transactionExecutor) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         Retry retry = enableDefaultRetryStrategy ? GenericDcbApplicationService.defaultRetry() : Retry.max(0);
-        return tagGenerator == null
-                ? new GenericDcbApplicationService<>(eventStore, cloudEventConverter, retry)
-                : new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator, retry);
+        GenericDcbApplicationService.Builder<E> builder = GenericDcbApplicationService.builder(eventStore, cloudEventConverter).retry(retry);
+        tagGeneratorProvider.ifAvailable(builder::tagGenerator);
+        // Wire the synchronous subscription dispatcher and transaction executor when present (see occurrentApplicationService).
+        synchronousEventDispatcher.ifAvailable(builder::synchronousSubscriptions);
+        transactionExecutor.ifAvailable(builder::transactionExecutor);
+        return builder.build();
     }
 
     /**

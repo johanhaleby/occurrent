@@ -22,6 +22,8 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.ExecuteFilter;
+import org.occurrent.application.service.SynchronousEventDispatcher;
+import org.occurrent.application.service.TransactionExecutor;
 import org.occurrent.application.service.blocking.ExecuteOptions;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -37,6 +39,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * A generic application service that works in many scenarios. If you need more complex logic, such as transaction support, you may consider either wrapping it
@@ -50,6 +53,8 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
     private final EventStore eventStore;
     private final CloudEventConverter<E> cloudEventConverter;
     private final RetryStrategy retryStrategy;
+    private final @Nullable SynchronousEventDispatcher synchronousEventDispatcher;
+    private final TransactionExecutor transactionExecutor;
 
     /**
      * Create a GenericApplicationService with the supplied {@link EventStore} and {@link CloudEventConverter}.
@@ -59,6 +64,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
      * @param eventStore          The event store to use
      * @param cloudEventConverter The cloud event converter
      * @see #GenericApplicationService(EventStore, CloudEventConverter, RetryStrategy)
+     * @see #builder(EventStore, CloudEventConverter)
      */
     public GenericApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter) {
         this(eventStore, cloudEventConverter, defaultRetryStrategy());
@@ -66,19 +72,43 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
 
     /**
      * Create a GenericApplicationService with the supplied {@link EventStore}, {@link CloudEventConverter} and {@link RetryStrategy}.
+     * <p>
+     * To also configure synchronous subscriptions or a {@link TransactionExecutor}, use {@link #builder(EventStore, CloudEventConverter)}.
      *
      * @param eventStore          The event store to use
      * @param cloudEventConverter The cloud event converter
      */
-    @SuppressWarnings("ConstantValue")
     public GenericApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, RetryStrategy retryStrategy) {
+        this(eventStore, cloudEventConverter, retryStrategy, null, TransactionExecutor.noTransaction());
+    }
+
+    @SuppressWarnings("ConstantValue")
+    private GenericApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, RetryStrategy retryStrategy,
+                                      @Nullable SynchronousEventDispatcher synchronousEventDispatcher, TransactionExecutor transactionExecutor) {
         if (eventStore == null) throw new IllegalArgumentException(EventStore.class.getSimpleName() + " cannot be null");
         if (cloudEventConverter == null) throw new IllegalArgumentException(CloudEventConverter.class.getSimpleName() + " cannot be null");
         if (retryStrategy == null) throw new IllegalArgumentException(RetryStrategy.class.getSimpleName() + " cannot be null");
+        if (transactionExecutor == null) throw new IllegalArgumentException(TransactionExecutor.class.getSimpleName() + " cannot be null");
 
         this.eventStore = eventStore;
         this.cloudEventConverter = cloudEventConverter;
         this.retryStrategy = retryStrategy;
+        this.synchronousEventDispatcher = synchronousEventDispatcher;
+        this.transactionExecutor = transactionExecutor;
+    }
+
+    /**
+     * Start building a {@link GenericApplicationService}. Use this instead of the constructors when you want to
+     * configure synchronous subscriptions ({@link Builder#synchronousSubscriptions(SynchronousEventDispatcher)}) or a
+     * {@link TransactionExecutor} ({@link Builder#transactionExecutor(TransactionExecutor)}).
+     *
+     * @param eventStore          The event store to use
+     * @param cloudEventConverter The cloud event converter
+     * @param <E>                 The domain event type
+     * @return A new builder.
+     */
+    public static <E> Builder<E> builder(EventStore eventStore, CloudEventConverter<E> cloudEventConverter) {
+        return new Builder<>(eventStore, cloudEventConverter);
     }
 
     @Override
@@ -99,18 +129,35 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
               record Tuple<T1, T2>(T1 v1, T2 v2) {}
               // @formatter:on
 
+        boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
+
         Tuple<WriteResult, List<E>> result = retryStrategy.execute(() -> {
-            EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter);
-            List<E> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events()).toList();
+            Supplier<Tuple<WriteResult, List<E>>> readDecideWrite = () -> {
+                EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter);
+                List<E> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events()).toList();
 
-            List<E> newDomainEvents = functionThatCallsDomainModel.apply(eventsInStream);
-            if (newDomainEvents == null) {
-                newDomainEvents = List.of();
-            }
+                List<E> newDomainEvents = functionThatCallsDomainModel.apply(eventsInStream);
+                if (newDomainEvents == null) {
+                    newDomainEvents = List.of();
+                }
 
-            List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
-            WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
-            return new Tuple<>(writeResult, newDomainEvents);
+                List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(newDomainEvents);
+                WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
+
+                if (dispatchSynchronously && !newEvents.isEmpty()) {
+                    // Re-read exactly the just-written tail so synchronous handlers get events enriched by the store
+                    // (stream version and global position), then dispatch on this thread, inside the transaction.
+                    int newEventCount = newEvents.size();
+                    List<CloudEvent> writtenEnriched = eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newEventCount).events().toList();
+                    synchronousEventDispatcher.dispatch(writtenEnriched);
+                }
+
+                return new Tuple<>(writeResult, newDomainEvents);
+            };
+            // Only open the transaction executor when synchronous dispatch must commit atomically with the write.
+            // Without synchronous subscriptions there is nothing extra to make atomic, so the write keeps exactly the
+            // semantics it had before this feature and applications that do not use it pay no transaction overhead.
+            return dispatchSynchronously ? transactionExecutor.inTransaction(readDecideWrite) : readDecideWrite.get();
         });
 
         if (sideEffect != null) {
@@ -133,5 +180,57 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
      */
     public static Retry defaultRetryStrategy() {
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(5).retryIf(WriteConditionNotFulfilledException.class::isInstance);
+    }
+
+    /**
+     * Fluent builder for {@link GenericApplicationService}. Only {@code eventStore} and {@code cloudEventConverter} are
+     * required; everything else has a sensible default (default retry strategy, no synchronous subscriptions, and
+     * {@link TransactionExecutor#noTransaction()}).
+     *
+     * @param <E> The domain event type.
+     */
+    public static final class Builder<E> {
+        private final EventStore eventStore;
+        private final CloudEventConverter<E> cloudEventConverter;
+        private RetryStrategy retryStrategy = defaultRetryStrategy();
+        private @Nullable SynchronousEventDispatcher synchronousEventDispatcher;
+        private TransactionExecutor transactionExecutor = TransactionExecutor.noTransaction();
+
+        private Builder(EventStore eventStore, CloudEventConverter<E> cloudEventConverter) {
+            this.eventStore = eventStore;
+            this.cloudEventConverter = cloudEventConverter;
+        }
+
+        /**
+         * Override the {@link RetryStrategy} (defaults to {@link #defaultRetryStrategy()}).
+         */
+        public Builder<E> retryStrategy(RetryStrategy retryStrategy) {
+            this.retryStrategy = Objects.requireNonNull(retryStrategy, "retryStrategy cannot be null");
+            return this;
+        }
+
+        /**
+         * Register the synchronous subscription dispatcher. When set, after every write that produces events the
+         * application service dispatches the just-written events to it synchronously, before {@code execute} returns.
+         * Enabling this adds one extra read per event-producing write (to enrich the events with stream version and
+         * global position), paid only while at least one synchronous subscription is registered. It is not free.
+         */
+        public Builder<E> synchronousSubscriptions(SynchronousEventDispatcher synchronousEventDispatcher) {
+            this.synchronousEventDispatcher = Objects.requireNonNull(synchronousEventDispatcher, "synchronousEventDispatcher cannot be null");
+            return this;
+        }
+
+        /**
+         * Set the {@link TransactionExecutor} that spans the write and synchronous subscription handlers (defaults to
+         * {@link TransactionExecutor#noTransaction()}, i.e. best-effort with no cross-cutting transaction).
+         */
+        public Builder<E> transactionExecutor(TransactionExecutor transactionExecutor) {
+            this.transactionExecutor = Objects.requireNonNull(transactionExecutor, "transactionExecutor cannot be null");
+            return this;
+        }
+
+        public GenericApplicationService<E> build() {
+            return new GenericApplicationService<>(eventStore, cloudEventConverter, retryStrategy, synchronousEventDispatcher, transactionExecutor);
+        }
     }
 }

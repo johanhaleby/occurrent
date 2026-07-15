@@ -36,6 +36,7 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
+import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -103,8 +104,11 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
             assertThat(context).hasSingleBean(ApplicationService.class);
             assertThat(context).hasSingleBean(DomainEventQueries.class);
             assertThat(context).hasSingleBean(StreamSubscriptions.class);
-            assertThat(context).hasSingleBean(Subscribable.class);
+            // Two Subscribable beans now: the asynchronous durable model (@Primary) and the register-only
+            // SynchronousSubscriptionModel that backs the synchronous subscription DSL.
+            assertThat(context.getBeansOfType(Subscribable.class)).hasSize(2);
             assertThat(context).hasSingleBean(ReactorDurableSubscriptionModel.class);
+            assertThat(context).hasSingleBean(SynchronousSubscriptionModel.class);
             assertThat(context).doesNotHaveBean(DcbSubscriptions.class);
             assertThat(context).doesNotHaveBean(DcbDomainEventQueries.class);
         });

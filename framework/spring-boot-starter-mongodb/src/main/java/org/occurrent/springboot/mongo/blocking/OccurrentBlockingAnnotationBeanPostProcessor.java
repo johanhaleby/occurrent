@@ -26,6 +26,7 @@ import org.occurrent.annotation.StreamSubscription.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.annotation.StreamSubscription.StartupMode;
 import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
@@ -69,7 +70,6 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-import static org.occurrent.filter.Filter.CompositionOperator.OR;
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
 /**
@@ -78,6 +78,13 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
  * {@link SubscriptionAnnotations}.
  */
 class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
+
+    /**
+     * The bean name of the synchronous {@code Subscriptions} DSL declared by the auto-configuration. Resolved by name
+     * (rather than by type) so it does not collide with the asynchronous {@code Subscriptions} bean, which is of the
+     * same type.
+     */
+    static final String SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME = "occurrentSynchronousSubscriptionDsl";
 
     private ApplicationContext applicationContext;
 
@@ -93,9 +100,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
             DcbSubscription dcbSubscription = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
-            long annotationCount = Stream.of(streamSubscription, subscription, dcbSubscription).filter(Objects::nonNull).count();
+            SynchronousSubscription synchronousSubscription = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
+            long annotationCount = Stream.of(streamSubscription, subscription, dcbSubscription, synchronousSubscription).filter(Objects::nonNull).count();
             if (annotationCount > 1) {
-                throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription and @DcbSubscription, use only one.".formatted(bean.getClass().getName(), method.getName()));
+                throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription, use only one.".formatted(bean.getClass().getName(), method.getName()));
             }
             if (streamSubscription != null) {
                 processSubscribeAnnotation(bean, method, StreamSubscriptionDefinition.from(streamSubscription));
@@ -103,6 +111,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 processAgnosticSubscribeAnnotation(bean, method, subscription);
             } else if (dcbSubscription != null) {
                 processDcbSubscribeAnnotation(bean, method, dcbSubscription);
+            } else if (synchronousSubscription != null) {
+                processSynchronousSubscribeAnnotation(beanName, bean, method, synchronousSubscription);
             }
         }
         return bean;
@@ -111,26 +121,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     @SuppressWarnings("unchecked")
     private <E> void processSubscribeAnnotation(Object bean, Method method, StreamSubscriptionDefinition subscription) {
         String id = subscription.id();
-        final Filter filter;
-        final List<Class<?>> parameterTypes;
-        if (method.getParameterCount() >= 1) {
-            CloudEventConverter<E> cloudEventTypeMapper = applicationContext.getBean(CloudEventConverter.class);
-            parameterTypes = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter);
-            Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameterTypes, SubscriptionAnnotations::isStreamMetadataParameter);
-            List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, subscription.eventTypes(), subscription.annotationName());
-
-            if (domainEventTypesToSubscribeTo.size() == 1) {
-                filter = Filter.type(cloudEventTypeMapper.getCloudEventType(domainEventTypesToSubscribeTo.get(0)));
-            } else {
-                List<Filter> typeFilters = domainEventTypesToSubscribeTo.stream()
-                        .map(cloudEventTypeMapper::getCloudEventType)
-                        .map(Filter::type)
-                        .toList();
-                filter = new Filter.CompositionFilter(OR, typeFilters);
-            }
-        } else {
-            throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
-        }
+        SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, subscription.eventTypes(), subscription.annotationName(), applicationContext.getBean(CloudEventConverter.class));
+        List<Class<?>> parameterTypes = resolved.parameterTypes();
+        Filter filter = resolved.filter();
 
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
             invoke(method, bean, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
@@ -152,26 +145,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     @SuppressWarnings("unchecked")
     private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Subscription annotation) {
         String id = annotation.id();
-        final Filter filter;
-        final List<Class<?>> parameterTypes;
-        if (method.getParameterCount() >= 1) {
-            CloudEventConverter<E> cloudEventTypeMapper = applicationContext.getBean(CloudEventConverter.class);
-            parameterTypes = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter);
-            Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameterTypes, SubscriptionAnnotations::isStreamMetadataParameter);
-            List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@Subscription");
-
-            if (domainEventTypesToSubscribeTo.size() == 1) {
-                filter = Filter.type(cloudEventTypeMapper.getCloudEventType(domainEventTypesToSubscribeTo.get(0)));
-            } else {
-                List<Filter> typeFilters = domainEventTypesToSubscribeTo.stream()
-                        .map(cloudEventTypeMapper::getCloudEventType)
-                        .map(Filter::type)
-                        .toList();
-                filter = new Filter.CompositionFilter(OR, typeFilters);
-            }
-        } else {
-            throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
-        }
+        SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@Subscription", applicationContext.getBean(CloudEventConverter.class));
+        List<Class<?>> parameterTypes = resolved.parameterTypes();
+        Filter filter = resolved.filter();
 
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
             invoke(method, bean, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
@@ -190,6 +166,31 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         applyStartupWorkarounds();
 
         subscribable.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, shouldWaitUntilStarted, consumer);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E> void processSynchronousSubscribeAnnotation(String beanName, Object bean, Method method, SynchronousSubscription annotation) {
+        String id = annotation.id();
+        SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@SynchronousSubscription", applicationContext.getBean(CloudEventConverter.class));
+        List<Class<?>> parameterTypes = resolved.parameterTypes();
+        Filter filter = resolved.filter();
+
+        // Resolve the handler from the ApplicationContext lazily, at dispatch time, rather than closing over the raw
+        // bean instance captured here. This BeanPostProcessor runs in postProcessBeforeInitialization, before Spring
+        // wraps the bean in its AOP proxy, so the instance handed to us is the raw target. Invoking through it would
+        // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
+        // so a handler-side @Transactional is honored when the synchronous handler is invoked.
+        Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
+            Object target = applicationContext.getBean(beanName);
+            invoke(method, target, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
+            return Unit.INSTANCE;
+        };
+
+        Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
+        // The synchronous subscription model has no lifecycle, start position, or background thread, so there is no
+        // start position to resolve and nothing to wait for. Pass the default StartAt (the model ignores it) rather
+        // than null to honor the Subscribable contract.
+        synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), StartAt.subscriptionModelDefault(), false, consumer);
     }
 
     private static boolean shouldWaitUntilStartedAgnostic(boolean replaysHistory, Subscription.StartupMode startupMode) {

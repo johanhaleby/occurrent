@@ -20,16 +20,11 @@ import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbCriteria;
-import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.AgnosticSubscriptionFilter;
-import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionFilterMatcher;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
@@ -41,8 +36,6 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
-
-import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 
 /**
  * An in-memory subscription model
@@ -126,7 +119,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Li
             throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
         }
 
-        final Predicate<CloudEvent> matcher = matcherFor(filter);
+        final Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
 
         InMemorySubscription subscription = new InMemorySubscription(subscriptionId, queueSupplier.get(), action, matcher, retryStrategy);
         subscriptions.put(subscriptionId, subscription);
@@ -169,33 +162,6 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Li
 
         pausedSubscriptions.clear();
         ExecutorShutdown.shutdownSafely(cloudEventDispatcher, 5, TimeUnit.SECONDS);
-    }
-
-    private static Predicate<CloudEvent> matcherFor(@Nullable SubscriptionFilter filter) {
-        switch (filter) {
-            case null -> {
-                return cloudEvent -> matchesFilter(cloudEvent, Filter.all());
-            }
-            case StreamSubscriptionFilter streamSubscriptionFilter -> {
-                Filter f = streamSubscriptionFilter.filter();
-                return cloudEvent -> matchesFilter(cloudEvent, f);
-            }
-            case AgnosticSubscriptionFilter agnosticSubscriptionFilter -> {
-                // Capability-agnostic delivery: match only the plain Filter, with no capability guard, so both stream and
-                // DCB events are delivered. A plain Filter (no CapabilityFilter) matches events of every capability.
-                Filter f = agnosticSubscriptionFilter.filter();
-                return cloudEvent -> matchesFilter(cloudEvent, f);
-            }
-            case DcbSubscriptionFilter dcbSubscriptionFilter -> {
-                // Requires isDcbEvent (the DCB tags extension) rather than a positive position, since with
-                // stream position on by default, stream events also carry a global position. A "position > 0"
-                // guard would leak stream events into a DCB subscription.
-                DcbCriteria criteria = dcbSubscriptionFilter.criteria();
-                return cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria);
-            }
-            default ->
-                    throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports filters of type " + StreamSubscriptionFilter.class.getName() + " and " + DcbSubscriptionFilter.class.getName());
-        }
     }
 
     @Override
