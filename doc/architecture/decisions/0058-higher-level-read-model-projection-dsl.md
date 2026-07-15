@@ -62,11 +62,14 @@ query it is given, not baked into the `Projection`. The descriptor stays the pur
 The runners themselves, across stream, agnostic, and DCB, blocking and reactor, live in sibling modules
 (`projection-dsl/blocking`, `projection-dsl/reactor`) built on this frozen `projection-dsl/common` API.
 
-**Defer annotations and composition.** A `@Projection` annotation would be a convenience over a complete programmatic
-API and carries heavy bean-post-processor wiring, so it is a later step, not part of this decision. `Projection.adapt`
-is included because it is a cheap mirror of `Decider.adapt` and widens a feature projection to a broader event type,
-but `compose` is deferred: read models compose less naturally than deciders, since two projections can disagree on the
-id and the store.
+**Defer the annotation, but not catch-up or durable resume.** A `@Projection` annotation would be a convenience over a
+complete programmatic API and carries heavy bean-post-processor wiring, so it is a later step, not part of this
+decision (see ADR 59). That deferral is about the annotation only. The runners already catch up from history and
+resume durably whenever they are given a catch-up-capable subscription model, such as the Spring composite model or a
+hand-wired `CatchupSubscriptionModel`, on both stream and DCB, blocking and reactor. `Projection.adapt` is included
+because it is a cheap mirror of `Decider.adapt` and widens a feature projection to a broader event type, but `compose`
+is deferred, since read models compose less naturally than deciders, as two projections can disagree on the id and
+the store.
 
 ## Consequences
 
@@ -79,5 +82,6 @@ id and the store.
 - The store stays out of the descriptor, so one projection can be materialized into different stores, or folded
   on demand, without changing its definition.
 - Delivery mode is a runner concern, so async, synchronous (ADR 57), and pull all reuse one descriptor.
-- Annotations and `compose` are not available yet. The programmatic runners cover every case in the meantime, and
-  the path to both is clear.
+- `compose` is not available yet, and read models compose less naturally than deciders to begin with. The
+  `@Projection` annotation followed in ADR 59, reusing these same runners rather than a parallel mechanism, so
+  catch-up and durable resume were never blocked on the annotation existing.

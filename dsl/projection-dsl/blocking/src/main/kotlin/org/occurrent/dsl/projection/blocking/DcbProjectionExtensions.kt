@@ -29,19 +29,22 @@ import org.occurrent.subscription.api.blocking.Subscription
  * the events matching the projection's [DcbProjection.criteria] and updates [materializedView] from each. The returned
  * [Subscription] has been waited on until started.
  *
- * This is a live-only read model. It is built on the ephemeral [DcbSubscriptions] live subscription, which post-filters
- * live events and provides no DCB catch-up read or durable checkpoint, so it does not replay history and does not resume
- * durably across restarts. For a strongly consistent, complete DCB read model, fold on demand with the pull [project]
- * ([DcbDomainEventQueries.project]). For a persistent DCB read model that catches up from history on startup, use the
- * `@DcbSubscription` annotation today (a future `@Projection` annotation is planned to integrate that with this DSL).
+ * Whether this is live-only or catches up and resumes durably depends on the `SubscriptionModel` behind this
+ * [DcbSubscriptions] instance. Given a plain live model with no catch-up support, this is live-only. It does not
+ * replay history and does not resume durably across restarts. Given a catch-up-capable model (the Spring composite
+ * subscription model, or a hand-wired `CatchupSubscriptionModel`), it catches up from history and resumes durably
+ * across restarts, the same as [ProjectionRunner]. For a strongly consistent, complete DCB read model, fold on demand
+ * with the pull [project] ([DcbDomainEventQueries.project]). For a persistent, declarative DCB read model use the
+ * `@Projection` annotation. To wire the same catch-up-then-resume behavior by hand without the Spring starter, use
+ * `ResumeStartPositions.replayThenResumeDcb(...)`.
  */
 fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, materializedView: MaterializedView<E>, startAt: DcbStartAt? = null): Subscription =
     subscribe(subscriptionId, dcbProjection.criteria(), startAt) { e -> materializedView.update(e) }.also { it.waitUntilStarted() }
 
 /**
  * Runs [dcbProjection] as an asynchronous, subscription-fed DCB read model materialized into [repository], skipping
- * events whose id resolves to `null`. Live-only, see the [MaterializedView] overload for the catch-up and durability
- * caveat.
+ * events whose id resolves to `null`. See the [MaterializedView] overload above for the live-only versus catch-up
+ * and durability details, which depend on the subscription model the same way.
  */
 fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: DcbStartAt? = null): Subscription =
     project(subscriptionId, dcbProjection, Projections.materializedView(dcbProjection.projection(), repository), startAt)
