@@ -43,8 +43,10 @@ fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Proje
 
 /**
  * Runs [projection] as a capability-agnostic, subscription-fed read model materialized into [repository]. Events whose
- * id resolves to `null` are skipped. No optimistic-locking retry is applied; supply a [MaterializedView] (for example
- * the view DSL's `materialized(...)`) when the store needs one.
+ * id resolves to `null` are skipped. A failed update is retried by the subscription model's retry strategy, which
+ * redelivers the event. This adds no fine-grained optimistic-locking retry of its own, so for concurrent writers to the
+ * same instance supply a [MaterializedView] that re-reads and reapplies on conflict, for example the view DSL's
+ * `materialized(...)`.
  */
 fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: org.occurrent.dsl.view.ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription =
     project(subscriptionId, projection, Projections.materializedView(projection, repository), startAt)

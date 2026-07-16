@@ -83,8 +83,10 @@ public final class ProjectionRunner<E> {
 
     /**
      * Subscribes with the given id and materializes {@code projection} into {@code repository}, skipping events whose id
-     * resolves to {@code null}. No optimistic-locking retry is applied; use {@link #project(String, Projection, MaterializedView)}
-     * with a retrying {@link MaterializedView} (such as the view DSL's {@code materialized(...)}) when the store needs one.
+     * resolves to {@code null}. A failed update is retried by the subscription model's retry strategy, which redelivers
+     * the event. This overload adds no fine-grained optimistic-locking retry of its own, so for concurrent writers to the
+     * same instance use {@link #project(String, Projection, MaterializedView)} with a store that re-reads and reapplies
+     * on conflict, such as the view DSL's {@code materialized(...)}.
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, projection, repository, null);

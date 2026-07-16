@@ -51,8 +51,10 @@ public final class Projections {
     /**
      * A reactive {@code (E) -> Mono<Void>} update that loads, evolves, and saves the projection's view state through the
      * blocking {@code repository}, keyed by the projection's {@link Projection#id() id}, with the blocking work scheduled
-     * on {@link Schedulers#boundedElastic()}. An event whose id resolves to {@code null} is skipped. No retry is applied;
-     * a store needing one (for example optimistic-locking retries) should supply its own {@link MaterializedView} through
+     * on {@link Schedulers#boundedElastic()}. An event whose id resolves to {@code null} is skipped. This does a plain
+     * read, fold, and save with no optimistic-locking retry of its own. A failed update is still retried by the
+     * subscription model's retry strategy, which redelivers the event, but for concurrent writers to the same instance
+     * supply a {@link MaterializedView} that re-reads and reapplies on conflict through
      * {@link #reactiveUpdate(MaterializedView)}.
      */
     public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> reactiveUpdate(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {

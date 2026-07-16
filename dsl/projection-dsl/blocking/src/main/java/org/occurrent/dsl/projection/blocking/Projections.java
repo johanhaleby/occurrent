@@ -42,9 +42,11 @@ public final class Projections {
     /**
      * A {@link MaterializedView} that loads, evolves, and saves a projection's view state through {@code repository},
      * keyed by the projection's {@link Projection#id() id}. An event whose id resolves to {@code null} is skipped (no
-     * load or save), so a projection can safely see events that map to no keyed instance. No retry is applied here; a
-     * store that needs one (for example optimistic-locking retries against MongoDB) should supply its own
-     * {@link MaterializedView}, such as the one the view DSL's {@code materialized(...)} builds.
+     * load or save), so a projection can safely see events that map to no keyed instance. This does a plain read, fold,
+     * and save with no optimistic-locking retry of its own. A failed update is still retried by the subscription model's
+     * retry strategy, which redelivers the event, but for concurrent writers to the same instance supply a
+     * {@link MaterializedView} that re-reads and reapplies on conflict, such as the one the view DSL's
+     * {@code materialized(...)} builds.
      */
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         requireNonNull(projection, "projection cannot be null");
