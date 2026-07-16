@@ -45,7 +45,7 @@ import static java.util.Objects.requireNonNull;
  * (scheduled on {@code boundedElastic}; see {@link Projections}).
  * <p>
  * <strong>Whether this is live-only or catches up and resumes durably depends on the {@code SubscriptionModel} given
- * to this runner's constructor</strong>, since it subscribes through {@link DcbSubscriptions}, which is only as
+ * to this runner's {@code create} factory</strong>, since it subscribes through {@link DcbSubscriptions}, which is only as
  * capable as that model. Given a plain live model with no catch-up support, this runner is live-only. It does not
  * replay history and does not resume durably across restarts. Given a catch-up-capable model (the Spring composite
  * subscription model, or a hand-wired {@code CatchupSubscriptionModel}), this runner catches up from history and
@@ -62,7 +62,15 @@ public final class ReactiveDcbProjectionRunner<E> {
 
     private final DcbSubscriptions<E> dcbSubscriptions;
 
-    public ReactiveDcbProjectionRunner(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+    /**
+     * Creates a runner that subscribes through the given {@code subscriptionModel}, matching the factory style of
+     * {@link ReactiveProjectionRunner}.
+     */
+    public static <E> ReactiveDcbProjectionRunner<E> create(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+        return new ReactiveDcbProjectionRunner<>(subscriptionModel, cloudEventConverter);
+    }
+
+    private ReactiveDcbProjectionRunner(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         this.dcbSubscriptions = new DcbSubscriptions<>(
                 requireNonNull(subscriptionModel, "subscriptionModel cannot be null"),
                 requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null"));
