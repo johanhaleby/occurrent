@@ -36,7 +36,7 @@ import org.springframework.context.annotation.Configuration
  * Registers the `course-dashboard` [Projection] that feeds [CourseDashboard], which also serves as its
  * [org.occurrent.dsl.view.ViewStateRepository] (bean name `courseDashboard`, matched by [Projection.store]).
  *
- * The read model is in-memory only, so it must be rebuilt from the whole DCB history on every boot. That is why this
+ * The read model is in-memory only, so it must be rebuilt from the whole event history on every boot. That is why this
  * combines [StartPosition.BEGINNING] with [ResumeBehavior.SAME_AS_START_AT]: BEGINNING alone would replay only the
  * first time and then resume from the stored position on later restarts, which would leave the in-memory model missing
  * all history before that position. SAME_AS_START_AT replays from the beginning on every boot (and keeps no checkpoint).
