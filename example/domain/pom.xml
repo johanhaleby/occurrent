@@ -33,7 +33,6 @@
         <module>hotel-booking</module>
         <module>appointment-scheduling</module>
         <module>dcb-patterns</module>
-        <module>projection-dsl</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 
