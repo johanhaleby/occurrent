@@ -20,8 +20,8 @@ import org.occurrent.annotation.Projection
 import org.occurrent.annotation.Projection.Mode
 import org.occurrent.annotation.ResumeBehavior
 import org.occurrent.annotation.Projection.StartPosition
-import org.occurrent.dsl.projection.DcbProjection
-import org.occurrent.dsl.projection.dcbProjection
+import org.occurrent.dsl.projection.Projection as ProjectionModel
+import org.occurrent.dsl.projection.projection
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
@@ -40,9 +40,12 @@ import org.springframework.context.annotation.Configuration
  * combines [StartPosition.BEGINNING] with [ResumeBehavior.SAME_AS_START_AT]: BEGINNING alone would replay only the
  * first time and then resume from the stored position on later restarts, which would leave the in-memory model missing
  * all history before that position. SAME_AS_START_AT replays from the beginning on every boot (and keeps no checkpoint).
- * There is a single dashboard instance for the whole module, so [dcbProjection]'s `id` block returns the constant
- * [COURSE_DASHBOARD_ID] regardless of which event is being folded. The projection subscribes to all six event types it
- * folds and applies no further tag boundary, mirroring the event-type-only DCB subscription it replaces.
+ * There is a single dashboard instance for the whole module, so the [projection] `id` block returns the constant
+ * [COURSE_DASHBOARD_ID] regardless of which event is being folded. The dashboard folds a global mix of events across
+ * features with no tag boundary, so it is a capability-agnostic [projection], not a [org.occurrent.dsl.projection.dcbProjection].
+ * A DCB projection earns its place only when the read model needs a DCB tag boundary, as the per-course live subscription
+ * in the enrollment controller does. The capability-agnostic subscription receives every matching event regardless of
+ * whether it was written through the stream or the DCB API.
  */
 @Configuration(proxyBeanMethods = false)
 class CourseDashboardProjectionConfiguration {
@@ -55,8 +58,8 @@ class CourseDashboardProjectionConfiguration {
         mode = Mode.ASYNC,
         store = "courseDashboard"
     )
-    fun courseDashboardProjection(): DcbProjection<DashboardState, DomainEvent, String> =
-        dcbProjection(initialState = DashboardState.EMPTY) {
+    fun courseDashboardProjection(): ProjectionModel<DashboardState, DomainEvent, String> =
+        projection(initialState = DashboardState.EMPTY) {
             id { COURSE_DASHBOARD_ID }
 
             on<CourseDefined> { state, event ->
