@@ -72,7 +72,7 @@ class CouponRedemptionProjectionTest {
         ConcurrentHashMap<String, Boolean> store = new ConcurrentHashMap<>();
         ViewStateRepository<Boolean, String> repository = ViewStateRepository.create(store::get, store::put);
 
-        new DcbProjectionRunner<>(subscriptionModel, converter)
+        DcbProjectionRunner.create(subscriptionModel, converter)
                 .project("coupon-redeemed", isCouponRedeemedProjection("SAVE10"), repository);
 
         append("coupon:SAVE10", new CouponIssued("SAVE10"));

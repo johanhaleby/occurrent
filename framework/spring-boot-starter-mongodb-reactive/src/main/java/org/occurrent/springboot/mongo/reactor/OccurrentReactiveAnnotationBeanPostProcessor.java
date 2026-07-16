@@ -472,7 +472,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (synchronous) {
                 throw new IllegalArgumentException("@Projection '%s' returns a DcbProjection with mode = SYNCHRONOUS, which the reactive stack does not support in this version. Use mode = ASYNC for a DCB read model, or an agnostic Projection for synchronous read-your-writes.".formatted(id));
             }
-            ReactiveDcbProjectionRunner<E> runner = new ReactiveDcbProjectionRunner<>(applicationContext.getBean(SubscriptionModel.class), converter);
+            ReactiveDcbProjectionRunner<E> runner = ReactiveDcbProjectionRunner.create(applicationContext.getBean(SubscriptionModel.class), converter);
             boolean replaysHistory = annotation.startAtPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.Projection.StartPosition.BEGINNING;
             DcbStartAt startAt = generateDcbStartAt(id, toDcbStartPosition(annotation.startAt()), annotation.startAtPosition(), annotation.resumeBehavior());
             applyStartupWorkarounds();
