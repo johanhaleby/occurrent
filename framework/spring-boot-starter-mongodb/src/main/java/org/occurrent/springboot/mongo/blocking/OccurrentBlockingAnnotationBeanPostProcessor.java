@@ -31,7 +31,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.projection.DcbProjection;
-import org.occurrent.dsl.projection.ProjectionFilters;
+import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.projection.blocking.Projections;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
