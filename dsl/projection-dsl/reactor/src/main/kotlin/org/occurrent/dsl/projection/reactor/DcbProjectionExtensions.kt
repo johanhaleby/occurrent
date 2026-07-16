@@ -48,7 +48,7 @@ fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection:
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
 fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: DcbStartAt? = null): Subscription {
-    val update = Projections.reactiveUpdate(dcbProjection.projection(), repository)
+    val update = Projections.reactiveUpdate(dcbProjection.projection(), repository, subscriptionId)
     return project(subscriptionId, dcbProjection, { e -> update.apply(e) }, startAt)
 }
 

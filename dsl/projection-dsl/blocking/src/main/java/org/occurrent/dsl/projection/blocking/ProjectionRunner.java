@@ -98,7 +98,7 @@ public final class ProjectionRunner<E> {
      * {@code StartAt.subscriptionModelDefault()} or a specific position to control catch-up.
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
-        return project(subscriptionId, projection, Projections.materializedView(projection, repository), startAt);
+        return project(subscriptionId, projection, Projections.materializedView(projection, repository, subscriptionId), startAt);
     }
 
     /**

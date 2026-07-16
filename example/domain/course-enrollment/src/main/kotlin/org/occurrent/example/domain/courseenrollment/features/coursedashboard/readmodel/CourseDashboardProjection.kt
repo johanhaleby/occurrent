@@ -21,7 +21,7 @@ import org.occurrent.annotation.Projection.Mode
 import org.occurrent.annotation.ResumeBehavior
 import org.occurrent.annotation.Projection.StartPosition
 import org.occurrent.dsl.projection.Projection as ProjectionModel
-import org.occurrent.dsl.projection.projection
+import org.occurrent.dsl.projection.singletonProjection
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
@@ -39,9 +39,9 @@ import org.springframework.stereotype.Component
  * combines [StartPosition.BEGINNING] with [ResumeBehavior.SAME_AS_START_AT]: BEGINNING alone would replay only the
  * first time and then resume from the stored position on later restarts, which would leave the in-memory model missing
  * all history before that position. SAME_AS_START_AT replays from the beginning on every boot (and keeps no checkpoint).
- * There is a single dashboard instance for the whole module, so the [projection] `id` block returns the constant
- * [COURSE_DASHBOARD_ID] regardless of which event is being folded. The dashboard folds a global mix of events across
- * features with no tag boundary, so it is a capability-agnostic [projection], not a [org.occurrent.dsl.projection.dcbProjection].
+ * There is a single dashboard instance for the whole module, so it is a [singletonProjection] with no per-event id
+ * function. The runtime keys the single slot by the projection id [COURSE_DASHBOARD_ID]. The dashboard folds a global
+ * mix of events across features with no tag boundary, so it is capability-agnostic, not a [org.occurrent.dsl.projection.dcbProjection].
  * A DCB projection earns its place only when the read model needs a DCB tag boundary, as the per-course live subscription
  * in the enrollment controller does. The capability-agnostic subscription receives every matching event regardless of
  * whether it was written through the stream or the DCB API.
@@ -57,9 +57,7 @@ class CourseDashboardProjection {
         store = CourseDashboard::class
     )
     fun courseDashboardProjection(): ProjectionModel<DashboardState, DomainEvent, String> =
-        projection(initialState = DashboardState.EMPTY) {
-            id { COURSE_DASHBOARD_ID }
-
+        singletonProjection(initialState = DashboardState.EMPTY) {
             on<CourseDefined> { state, event ->
                 val existing = state.courses[event.courseId]
                 val row = CourseRow(event.courseId, event.title, event.capacity, existing?.enrolled ?: emptySet())

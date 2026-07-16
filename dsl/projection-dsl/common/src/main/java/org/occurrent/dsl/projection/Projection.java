@@ -52,8 +52,9 @@ import static java.util.Objects.requireNonNull;
  * broader stream than it handles.
  *
  * @param view       the pure fold: initial state and how an event evolves it
- * @param id         which view instance an event updates, or {@code null} to skip the event (for example an event this
- *                   projection sees but that maps to no keyed instance)
+ * @param id         the function deriving which view instance an event updates, or {@code null} for a single-instance
+ *                   projection (the framework supplies the single key). When present, the function may return
+ *                   {@code null} to skip an event that maps to no keyed instance
  * @param eventTypes the event types the fold handles; the default subscription selector. Empty means "all types" (no
  *                   type narrowing)
  * @param filter     an optional explicit selector that overrides the type-derived one, so a projection can select on
@@ -65,14 +66,13 @@ import static java.util.Objects.requireNonNull;
  */
 public record Projection<S extends @Nullable Object, E, ID>(
         View<S, E> view,
-        Function<E, @Nullable ID> id,
+        @Nullable Function<E, @Nullable ID> id,
         Set<Class<? extends E>> eventTypes,
         @Nullable Filter filter
 ) {
 
     public Projection {
         requireNonNull(view, "view cannot be null");
-        requireNonNull(id, "id cannot be null");
         requireNonNull(eventTypes, "eventTypes cannot be null");
         eventTypes = Set.copyOf(eventTypes);
     }
@@ -102,7 +102,8 @@ public record Projection<S extends @Nullable Object, E, ID>(
         View<S, E> widenedView = View.create(subView.initialState(), (state, event) ->
                 eventType.isInstance(event) ? subView.evolve(state, eventType.cast(event)) : state);
         Function<SubE, @Nullable ID> subId = projection.id();
-        Function<E, @Nullable ID> widenedId = event -> eventType.isInstance(event) ? subId.apply(eventType.cast(event)) : null;
+        Function<E, @Nullable ID> widenedId = subId == null ? null
+                : event -> eventType.isInstance(event) ? subId.apply(eventType.cast(event)) : null;
         Set<Class<? extends E>> widenedTypes = new LinkedHashSet<>(projection.eventTypes());
         return new Projection<>(widenedView, widenedId, widenedTypes, projection.filter());
     }
@@ -116,6 +117,7 @@ public record Projection<S extends @Nullable Object, E, ID>(
         private final Map<Class<?>, BiFunction<S, E, S>> handlers = new LinkedHashMap<>();
         private final Set<Class<? extends E>> eventTypes = new LinkedHashSet<>();
         private @Nullable Function<E, @Nullable ID> id;
+        private boolean singleton;
         private @Nullable Filter filter;
 
         private Builder(S initialState) {
@@ -124,13 +126,33 @@ public record Projection<S extends @Nullable Object, E, ID>(
 
         /**
          * Sets the function deriving the view-instance id from an event. Return {@code null} for an event that maps to no
-         * instance and should be skipped. Required, and can be set only once.
+         * instance and should be skipped. Mutually exclusive with {@link #singleton()}. Exactly one of the two is
+         * required, and it can be set only once.
          */
         public Builder<S, E, ID> id(Function<E, @Nullable ID> id) {
             if (this.id != null) {
                 throw new IllegalStateException("id(...) has already been set and can only be set once");
             }
+            if (this.singleton) {
+                throw new IllegalStateException("id(...) cannot be combined with singleton()");
+            }
             this.id = requireNonNull(id, "id cannot be null");
+            return this;
+        }
+
+        /**
+         * Marks the projection single-instance: it holds one view state rather than one per key, so no {@code id}
+         * function is needed. The framework keys the single slot by the projection's own identity (the subscription id
+         * when run through a runner, or the {@code @Projection} id). Mutually exclusive with {@link #id(Function)}.
+         */
+        public Builder<S, E, ID> singleton() {
+            if (this.singleton) {
+                throw new IllegalStateException("singleton() has already been set and can only be set once");
+            }
+            if (this.id != null) {
+                throw new IllegalStateException("singleton() cannot be combined with id(...)");
+            }
+            this.singleton = true;
             return this;
         }
 
@@ -175,11 +197,11 @@ public record Projection<S extends @Nullable Object, E, ID>(
         }
 
         /**
-         * Builds the {@code Projection}. Requires an {@link #id(Function) id} function.
+         * Builds the {@code Projection}. Requires exactly one of {@link #id(Function) id} or {@link #singleton()}.
          */
         public Projection<S, E, ID> build() {
-            if (id == null) {
-                throw new IllegalStateException("id function is required, call id(...) before build()");
+            if (id == null && !singleton) {
+                throw new IllegalStateException("a projection needs exactly one of id(...) or singleton(), call one before build()");
             }
             View<S, E> view = View.create(initialState, new HandlerDispatch<>(handlers));
             return new Projection<>(view, id, new LinkedHashSet<>(eventTypes), filter);

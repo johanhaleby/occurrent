@@ -47,7 +47,7 @@ fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection:
  * and durability details, which depend on the subscription model the same way.
  */
 fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: DcbStartAt? = null): Subscription =
-    project(subscriptionId, dcbProjection, Projections.materializedView(dcbProjection.projection(), repository), startAt)
+    project(subscriptionId, dcbProjection, Projections.materializedView(dcbProjection.projection(), repository, subscriptionId), startAt)
 
 /**
  * Folds the events matching [dcbProjection]'s DCB criteria, read on demand, into its view state and returns it: the

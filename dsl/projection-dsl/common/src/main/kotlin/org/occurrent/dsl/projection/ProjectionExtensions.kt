@@ -65,6 +65,38 @@ fun <S, E : Any, ID : Any> dcbProjection(initialState: S, block: DcbProjectionBu
 }
 
 /**
+ * Builds a single-instance capability-agnostic [Projection]: it holds one view state rather than one per key, so no
+ * `id { }` is needed. The runtime keys the single slot by the projection's own identity (the subscription id when run
+ * through a runner, or the `@Projection` id). Use [projection] with an `id { }` block for a keyed, multi-instance read
+ * model. For example:
+ *
+ * ```
+ * val claimed = singletonProjection<Boolean, AccountEvent, ...>(initialState = false) {
+ *     on<AccountRegistered> { _, _ -> true }
+ *     on<AccountClosed> { _, _ -> false }
+ * }
+ * ```
+ */
+fun <S, E : Any> singletonProjection(initialState: S, block: ProjectionBuilder<S, E, String>.() -> Unit): Projection<S, E, String> {
+    val builder = ProjectionBuilder<S, E, String>(initialState)
+    builder.singleton()
+    builder.block()
+    return builder.build()
+}
+
+/**
+ * Builds a single-instance [DcbProjection] (see [singletonProjection]) with a DCB read boundary. Supply the boundary
+ * with [DcbProjectionBuilder.tags] or an explicit [DcbProjectionBuilder.criteria]; with neither it defaults to
+ * [DcbCriteria.all].
+ */
+fun <S, E : Any> dcbSingletonProjection(initialState: S, block: DcbProjectionBuilder<S, E, String>.() -> Unit): DcbProjection<S, E, String> {
+    val builder = DcbProjectionBuilder<S, E, String>(initialState)
+    builder.singleton()
+    builder.block()
+    return builder.build()
+}
+
+/**
  * Receiver for the [projection] block. Delegates to the Java [Projection.Builder] so the Java and Kotlin surfaces
  * produce the same descriptor from one dispatch implementation.
  */
@@ -72,9 +104,14 @@ class ProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal constructor
     @PublishedApi
     internal val delegate: Projection.Builder<S, E, ID> = Projection.builder(initialState)
 
-    /** Sets the function deriving the view-instance id from an event; return `null` to skip the event. Required. */
+    /** Sets the function deriving the view-instance id from an event; return `null` to skip the event. Required unless [singleton]. */
     fun id(fn: (E) -> ID?) {
         delegate.id(Function { e -> fn(e) })
+    }
+
+    /** Marks the projection single-instance (no per-event id). The runtime keys the single slot by the projection identity. */
+    fun singleton() {
+        delegate.singleton()
     }
 
     /** Registers the fold for event type [T]. */
@@ -104,8 +141,11 @@ class DcbProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal construc
     @PublishedApi
     internal var explicitCriteria: DcbCriteria? = null
 
-    /** Sets the function deriving the view-instance id from an event; return `null` to skip the event. Required. */
+    /** Sets the function deriving the view-instance id from an event; return `null` to skip the event. Required unless [singleton]. */
     fun id(fn: (E) -> ID?) = projectionBuilder.id(fn)
+
+    /** Marks the projection single-instance (no per-event id). The runtime keys the single slot by the projection identity. */
+    fun singleton() = projectionBuilder.singleton()
 
     /** Registers the fold for event type [T]. */
     inline fun <reified T : E> on(noinline handler: (S, T) -> S) = projectionBuilder.on<T>(handler)

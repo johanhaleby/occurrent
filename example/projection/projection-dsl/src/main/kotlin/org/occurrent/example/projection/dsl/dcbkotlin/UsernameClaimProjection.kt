@@ -17,7 +17,7 @@
 package org.occurrent.example.projection.dsl.dcbkotlin
 
 import org.occurrent.dsl.projection.DcbProjection
-import org.occurrent.dsl.projection.dcbProjection
+import org.occurrent.dsl.projection.dcbSingletonProjection
 
 /** Account events. Top-level data classes so the reflection CloudEvent type mapper resolves each from its simple name. */
 sealed interface AccountEvent
@@ -33,9 +33,8 @@ data class UsernameChanged(val newUsername: String) : AccountEvent
  * (query-folded on demand).
  */
 fun isUsernameClaimedProjection(username: String): DcbProjection<Boolean, AccountEvent, String> =
-    dcbProjection(initialState = false) {
+    dcbSingletonProjection(initialState = false) {
         tags("username:$username")
-        id { username }
         on<AccountRegistered> { _, _ -> true }
         on<AccountClosed> { _, _ -> false }
         on<UsernameChanged> { _, event -> event.newUsername == username }

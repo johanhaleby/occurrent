@@ -49,7 +49,7 @@ fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Proje
  * `materialized(...)`.
  */
 fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: org.occurrent.dsl.view.ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription =
-    project(subscriptionId, projection, Projections.materializedView(projection, repository), startAt)
+    project(subscriptionId, projection, Projections.materializedView(projection, repository, subscriptionId), startAt)
 
 /**
  * Runs [projection] as a stream-scoped, subscription-fed read model, excluding DCB-appended events. See the
@@ -69,7 +69,7 @@ fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection:
  * whose id resolves to `null`.
  */
 fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: org.occurrent.dsl.view.ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription =
-    project(subscriptionId, projection, Projections.materializedView(projection, repository), startAt)
+    project(subscriptionId, projection, Projections.materializedView(projection, repository, subscriptionId), startAt)
 
 /**
  * Folds the events [projection] selects, read on demand, into its view state and returns it: the strongly-consistent,

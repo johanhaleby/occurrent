@@ -33,7 +33,7 @@ public final class CouponRedemption {
 
     public static DcbProjection<Boolean, CouponEvent, String> isCouponRedeemedProjection(String code) {
         Projection<Boolean, CouponEvent, String> projection = Projection.<Boolean, CouponEvent, String>builder(false)
-                .id(event -> code)
+                .singleton()
                 .on(CouponRedeemed.class, (redeemed, event) -> true)
                 .build();
         return new DcbProjection<>(projection, DcbCriteria.tags(Tag.of("coupon", code)));

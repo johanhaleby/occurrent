@@ -60,8 +60,9 @@ public final class Projections {
     public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> reactiveUpdate(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
-        View<S, E> view = projection.view();
         Function<E, @Nullable ID> id = projection.id();
+        requireNonNull(id, "projection is single-instance; use reactiveUpdate(projection, repository, singletonKey)");
+        View<S, E> view = projection.view();
         return event -> Mono.<Void>fromRunnable(() -> {
             @Nullable ID instanceId = id.apply(event);
             if (instanceId == null) {
@@ -69,6 +70,26 @@ public final class Projections {
             }
             S currentState = repository.findById(instanceId).orElse(view.initialState());
             repository.save(instanceId, view.evolve(currentState, event));
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    /**
+     * A reactive update for a keyed or single-instance projection. A single-instance projection (no id function) updates
+     * one slot keyed by {@code singletonKey}, the projection's runtime identity (the subscription id).
+     */
+    @SuppressWarnings("unchecked")
+    public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> reactiveUpdate(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
+        requireNonNull(projection, "projection cannot be null");
+        requireNonNull(repository, "repository cannot be null");
+        if (projection.id() != null) {
+            return reactiveUpdate(projection, repository);
+        }
+        requireNonNull(singletonKey, "singletonKey cannot be null");
+        View<S, E> view = projection.view();
+        ID key = (ID) singletonKey; // a single-instance projection is Projection<S, E, String>
+        return event -> Mono.<Void>fromRunnable(() -> {
+            S currentState = repository.findById(key).orElse(view.initialState());
+            repository.save(key, view.evolve(currentState, event));
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
