@@ -38,6 +38,10 @@ import java.lang.annotation.*;
  * The annotated method takes no arguments. The Kotlin DSL equivalent is
  * {@code projection(OrderStatus.EMPTY) { id { it.orderId }; on<OrderPlaced> { s, e -> s.placed(e) } }},
  * and a DCB read model returns a {@code DcbProjection} built with {@code dcbProjection { .. }}.
+ * <p>
+ * The method may live on any Spring bean: a {@code @Bean} factory method in a {@code @Configuration} class, or a
+ * method on a {@code @Component}. The {@code @Component} form is the cleaner choice for a single dedicated projection,
+ * while {@code @Bean} methods group several projections in one configuration class.
  *
  * <h4>Projection Descriptor Type</h4>
  * <p>

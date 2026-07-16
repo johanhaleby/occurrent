@@ -29,8 +29,7 @@ import org.occurrent.example.domain.courseenrollment.features.enrollment.model.S
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentUnenrolledFromCourse
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
+import org.springframework.stereotype.Component
 
 /**
  * Registers the `course-dashboard` [Projection] that feeds [CourseDashboard], which also serves as its
@@ -47,10 +46,9 @@ import org.springframework.context.annotation.Configuration
  * in the enrollment controller does. The capability-agnostic subscription receives every matching event regardless of
  * whether it was written through the stream or the DCB API.
  */
-@Configuration(proxyBeanMethods = false)
-class CourseDashboardProjectionConfiguration {
+@Component
+class CourseDashboardProjection {
 
-    @Bean
     @Projection(
         id = COURSE_DASHBOARD_ID,
         startAt = StartPosition.BEGINNING,

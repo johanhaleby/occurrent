@@ -42,7 +42,7 @@ const val COURSE_DASHBOARD_ID = "course-dashboard"
 
 /**
  * An in-memory read model of all courses and students, kept current by the `course-dashboard` [org.occurrent.annotation.Projection]
- * (see [CourseDashboardProjectionConfiguration]). It doubles as that projection's [ViewStateRepository]: `findById`/`save`
+ * (see [CourseDashboardProjection]). It doubles as that projection's [ViewStateRepository]: `findById`/`save`
  * read and write the same single-slot [AtomicReference] the query accessors below read from, so there is no separate store
  * to keep in sync. It is eventually consistent with the event store. For a strongly consistent read see the course-detail
  * read model in the enrollment feature.
