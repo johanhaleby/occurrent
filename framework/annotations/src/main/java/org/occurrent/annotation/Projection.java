@@ -62,10 +62,11 @@ import java.lang.annotation.*;
  *
  * <h4>State Store</h4>
  * <p>
- * The {@link #store()} attribute names a Spring bean that implements the read-model store interface
- * (for example {@code ViewStateRepository}, {@code MaterializedView}, or a {@code CrudRepository}).
- * An empty name resolves the store by convention (typically the default Mongo implementation) or
- * defers to the application context.
+ * The {@link #store()} attribute selects the read-model store by the store bean's type (for example
+ * {@code ViewStateRepository.class}, {@code MaterializedView.class}, or a {@code CrudRepository}
+ * subinterface). Use {@link #storeName()} to select by bean name instead, or alongside {@link #store()}
+ * to disambiguate when several beans of that type exist. With both unset, the store resolves by
+ * convention (the unique store bean, otherwise the default Mongo implementation on the blocking stack).
  * </p>
  * <p>
  * A document-backed store (the Mongo default, or a {@code CrudRepository}) persists the view state under the state's
@@ -132,11 +133,22 @@ public @interface Projection {
     Mode mode() default Mode.ASYNC;
 
     /**
-     * Optional Spring bean name of the read-model store (ViewStateRepository, MaterializedView,
-     * CrudRepository, etc.). An empty string (the default) resolves the store by convention,
-     * typically defaulting to the configured Mongo implementation or the application context.
+     * The read-model store to materialize into, given as the store bean's type (for example
+     * {@code MaterializedView.class}, {@code ViewStateRepository.class}, or a concrete
+     * {@code CrudRepository} subinterface). {@link Void} (the default) leaves the type unset, in which
+     * case {@link #storeName()} or the convention-based resolution applies. When several beans of the
+     * given type exist, disambiguate with {@link #storeName()}.
      */
-    String store() default "";
+    Class<?> store() default Void.class;
+
+    /**
+     * Optional Spring bean name of the read-model store. Used on its own to resolve the store by name,
+     * or together with {@link #store()} to pick one bean when several of that type exist. An empty
+     * string (the default) means unset. With both {@link #store()} and {@link #storeName()} unset, the
+     * store resolves by convention (the unique {@code MaterializedView}, {@code ViewStateRepository},
+     * or {@code CrudRepository} bean, otherwise the default Mongo implementation on the blocking stack).
+     */
+    String storeName() default "";
 
     /**
      * A set of predefined start positions for a projection.

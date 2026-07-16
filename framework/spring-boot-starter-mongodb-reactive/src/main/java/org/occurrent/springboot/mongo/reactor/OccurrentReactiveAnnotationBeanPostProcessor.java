@@ -515,12 +515,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // MaterializedView or a ViewStateRepository (any backend, driven reactively by the runner). Named by store() when
     // set, otherwise the unique bean of either type.
     private Object resolveStore(org.occurrent.annotation.Projection annotation, String id) {
-        if (!annotation.store().isBlank()) {
-            Object bean = applicationContext.getBean(annotation.store());
-            if (bean instanceof MaterializedView || bean instanceof ViewStateRepository) {
-                return bean;
-            }
-            throw new IllegalArgumentException("@Projection '%s' store bean '%s' must be a MaterializedView or a ViewStateRepository, but was %s.".formatted(id, annotation.store(), bean.getClass().getName()));
+        Object referencedStore = resolveStoreBeanByReference(annotation, id);
+        if (referencedStore != null) {
+            return requireReactiveStoreShape(referencedStore, id);
         }
         Object materializedView = uniqueStoreBeanOrThrow(MaterializedView.class, id);
         if (materializedView != null) {
@@ -530,7 +527,47 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (repository != null) {
             return repository;
         }
-        throw new IllegalArgumentException(("@Projection '%s' has no read-model store. On the reactive stack, declare a MaterializedView or ViewStateRepository bean and point at it with store = \"beanName\" (or make it the only bean of its type). A zero-config reactive Mongo default is a planned follow-up, the blocking stack already has the Mongo default.").formatted(id));
+        throw new IllegalArgumentException(("@Projection '%s' has no read-model store. On the reactive stack, declare a MaterializedView or ViewStateRepository bean and point at it with store = SomeStore.class or storeName = \"beanName\" (or make it the only bean of its type). A zero-config reactive Mongo default is a planned follow-up, the blocking stack already has the Mongo default.").formatted(id));
+    }
+
+    // Validate a referenced store bean is a shape the reactive stack supports. Unlike the blocking stack there is no
+    // CrudRepository adapter or Mongo default here, so only a MaterializedView or ViewStateRepository is accepted.
+    private Object requireReactiveStoreShape(Object bean, String id) {
+        if (bean instanceof MaterializedView || bean instanceof ViewStateRepository) {
+            return bean;
+        }
+        throw new IllegalArgumentException("@Projection '%s' store bean must be a MaterializedView or a ViewStateRepository, but was %s.".formatted(id, bean.getClass().getName()));
+    }
+
+    // Resolve the store bean referenced by store() (bean type) or storeName() (bean name), or null when neither is set
+    // so the caller applies convention-based resolution. store() and storeName() together pick one bean of the type
+    // when several exist.
+    private Object resolveStoreBeanByReference(org.occurrent.annotation.Projection annotation, String id) {
+        Class<?> storeType = annotation.store();
+        String storeName = annotation.storeName();
+        boolean byType = storeType != Void.class;
+        boolean byName = !storeName.isBlank();
+        if (byType) {
+            if (byName) {
+                try {
+                    return applicationContext.getBean(storeName, storeType);
+                } catch (BeansException e) {
+                    throw new IllegalArgumentException("@Projection '%s' could not resolve a store bean named '%s' of type %s: %s".formatted(id, storeName, storeType.getName(), e.getMessage()), e);
+                }
+            }
+            String[] names = applicationContext.getBeanNamesForType(storeType);
+            if (names.length == 0) {
+                throw new IllegalStateException("@Projection '%s' found no bean of type %s. Declare one, or leave store unset to resolve by convention.".formatted(id, storeType.getName()));
+            }
+            if (names.length > 1) {
+                throw new IllegalStateException("@Projection '%s' found %d beans of type %s (%s) and cannot pick one. Disambiguate with storeName = \"beanName\".".formatted(id, names.length, storeType.getName(), String.join(", ", names)));
+            }
+            return applicationContext.getBean(names[0]);
+        }
+        if (byName) {
+            return applicationContext.getBean(storeName);
+        }
+        return null;
     }
 
     // Returns the single bean of the given store type, or null when there is none so the caller tries the next type.
@@ -542,7 +579,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             return null;
         }
         if (names.length > 1) {
-            throw new IllegalStateException(("@Projection '%s' found %d %s beans (%s) and cannot pick one. Name the store bean with @Projection(store = \"beanName\").").formatted(id, names.length, storeType.getSimpleName(), String.join(", ", names)));
+            throw new IllegalStateException(("@Projection '%s' found %d %s beans (%s) and cannot pick one. Name the store bean with storeName = \"beanName\".").formatted(id, names.length, storeType.getSimpleName(), String.join(", ", names)));
         }
         return applicationContext.getBean(names[0]);
     }
