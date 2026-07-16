@@ -291,7 +291,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             return applicationContext.getBean(names[0]);
         }
         if (byName) {
-            return applicationContext.getBean(storeName);
+            try {
+                return applicationContext.getBean(storeName);
+            } catch (BeansException e) {
+                throw new IllegalArgumentException("@Projection '%s' could not resolve a store bean named '%s': %s".formatted(id, storeName, e.getMessage()), e);
+            }
         }
         return null;
     }
