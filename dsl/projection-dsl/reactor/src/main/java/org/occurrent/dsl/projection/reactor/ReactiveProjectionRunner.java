@@ -21,7 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
-import org.occurrent.dsl.projection.ProjectionFilters;
+import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.filter.Filter;

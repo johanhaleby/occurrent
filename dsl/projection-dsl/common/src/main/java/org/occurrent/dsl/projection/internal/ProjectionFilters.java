@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.projection;
+package org.occurrent.dsl.projection.internal;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.condition.Condition;
+import org.occurrent.dsl.projection.Projection;
 import org.occurrent.filter.Filter;
 
 import java.util.List;

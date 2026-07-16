@@ -33,7 +33,7 @@ import static java.util.Objects.requireNonNull;
  * Internal helpers shared by the reactor projection runners (the Kotlin {@code project} extensions and the Java
  * {@code Reactive*ProjectionRunner} facades): adapting a blocking view store into the reactive {@code (E) -> Mono<Void>}
  * update the runners consume. The plain-{@code Filter} derivation lives in
- * {@code org.occurrent.dsl.projection.ProjectionFilters}, shared with the blocking stack.
+ * {@code org.occurrent.dsl.projection.internal.ProjectionFilters}, shared with the blocking stack.
  * <p>
  * There is no reactive {@link MaterializedView}/{@link ViewStateRepository} in the view DSL, so a genuinely reactive
  * store should be driven through a caller-supplied {@code (E) -> Mono<Void>} update (the runners' primitive overload).
