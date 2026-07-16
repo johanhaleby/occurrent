@@ -124,9 +124,12 @@ public record Projection<S extends @Nullable Object, E, ID>(
 
         /**
          * Sets the function deriving the view-instance id from an event. Return {@code null} for an event that maps to no
-         * instance and should be skipped. Required.
+         * instance and should be skipped. Required, and can be set only once.
          */
         public Builder<S, E, ID> id(Function<E, @Nullable ID> id) {
+            if (this.id != null) {
+                throw new IllegalStateException("id(...) has already been set and can only be set once");
+            }
             this.id = requireNonNull(id, "id cannot be null");
             return this;
         }
@@ -160,9 +163,13 @@ public record Projection<S extends @Nullable Object, E, ID>(
         /**
          * Sets an explicit selector that overrides the event-type-derived one. Use it to select on more than event type
          * (subject, source, data, time). A filter broader than the registered handlers is safe (the fold no-ops on
-         * events it does not handle); a filter narrower than the handlers deliberately starves those handlers.
+         * events it does not handle); a filter narrower than the handlers deliberately starves those handlers. Can be
+         * set only once.
          */
         public Builder<S, E, ID> filter(Filter filter) {
+            if (this.filter != null) {
+                throw new IllegalStateException("filter(...) has already been set and can only be set once");
+            }
             this.filter = requireNonNull(filter, "filter cannot be null");
             return this;
         }
