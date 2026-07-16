@@ -71,7 +71,7 @@ fun <S, E : Any, ID : Any> dcbProjection(initialState: S, block: DcbProjectionBu
  * model. For example:
  *
  * ```
- * val claimed = singletonProjection<Boolean, AccountEvent, ...>(initialState = false) {
+ * val claimed = singletonProjection<Boolean, AccountEvent>(initialState = false) {
  *     on<AccountRegistered> { _, _ -> true }
  *     on<AccountClosed> { _, _ -> false }
  * }

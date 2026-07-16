@@ -143,7 +143,10 @@ public record Projection<S extends @Nullable Object, E, ID>(
         /**
          * Marks the projection single-instance: it holds one view state rather than one per key, so no {@code id}
          * function is needed. The framework keys the single slot by the projection's own identity (the subscription id
-         * when run through a runner, or the {@code @Projection} id). Mutually exclusive with {@link #id(Function)}.
+         * when run through a runner, or the {@code @Projection} id), which is a {@code String}. Build a single-instance
+         * projection as {@code Projection<S, E, String>} so the store keys it correctly (the Kotlin
+         * {@code singletonProjection}/{@code dcbSingletonProjection} builders do this). Mutually exclusive with
+         * {@link #id(Function)}.
          */
         public Builder<S, E, ID> singleton() {
             if (this.singleton) {
