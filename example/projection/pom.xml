@@ -32,6 +32,7 @@
         <module>spring-adhoc-eventstore-mongodb-queries</module>
         <module>spring-reactor-transactional-projection-mongodb</module>
         <module>global-position-catchup</module>
+        <module>projection-dsl</module>
     </modules>
 
 </project>
