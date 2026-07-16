@@ -17,6 +17,7 @@
 package org.occurrent.dsl.projection
 
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.occurrent.eventstore.api.dcb.DcbCriteria
@@ -132,6 +133,20 @@ class ProjectionKotlinTest {
             }
 
             assertThat(projection.criteria()).isEqualTo(explicit)
+        }
+
+        @Test
+        fun `criteria cannot be set twice`() {
+            assertThatThrownBy {
+                dcbProjection<Int, AccountEvent, String>(initialState = 0) {
+                    criteria(DcbCriteria.all())
+                    criteria(DcbCriteria.type("SomethingHappened"))
+                    id { it.accountId }
+                    on<AccountRegistered> { state, _ -> state + 1 }
+                }
+            }
+                .isInstanceOf(IllegalStateException::class.java)
+                .hasMessageContaining("criteria")
         }
     }
 }

@@ -189,6 +189,27 @@ class ProjectionTest {
             assertThatThrownBy(() -> projection.eventTypes().clear())
                     .isInstanceOf(UnsupportedOperationException.class);
         }
+
+        @Test
+        void id_cannot_be_set_twice() {
+            Projection.Builder<Boolean, AccountEvent, String> builder = Projection.<Boolean, AccountEvent, String>builder(false)
+                    .id(AccountEvent::accountId);
+
+            assertThatThrownBy(() -> builder.id(event -> "other"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("id");
+        }
+
+        @Test
+        void filter_cannot_be_set_twice() {
+            Projection.Builder<Boolean, AccountEvent, String> builder = Projection.<Boolean, AccountEvent, String>builder(false)
+                    .id(AccountEvent::accountId)
+                    .filter(Filter.all());
+
+            assertThatThrownBy(() -> builder.filter(Filter.all()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("filter");
+        }
     }
 
     @Nested

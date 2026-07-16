@@ -120,8 +120,9 @@ class DcbProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal construc
         tags.addAll(tag)
     }
 
-    /** Sets the DCB read boundary explicitly, overriding any [tags]. */
+    /** Sets the DCB read boundary explicitly, overriding any [tags]. Can be set only once. */
     fun criteria(criteria: DcbCriteria) {
+        check(explicitCriteria == null) { "criteria(...) has already been set and can only be set once" }
         this.explicitCriteria = criteria
     }
 
