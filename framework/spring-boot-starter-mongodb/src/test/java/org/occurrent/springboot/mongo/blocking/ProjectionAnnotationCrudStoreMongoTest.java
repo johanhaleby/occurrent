@@ -63,6 +63,7 @@ import static org.awaitility.Awaitility.await;
 /**
  * Verifies that a {@link Projection @Projection} can materialize into a Spring Data {@link CrudRepository}-backed store,
  * proving the CrudRepository branch of the store resolution (wrapped into a ViewStateRepository over findById/save).
+ * The store is selected by type ({@code store = OrderCountCrudRepository.class}), also covering store-by-type resolution.
  */
 @DisplayName("Projection annotation (Spring Data CrudRepository store)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -145,7 +146,7 @@ class ProjectionAnnotationCrudStoreMongoTest {
     }
 
     static class OrderCountProjection {
-        @Projection(id = "order-count-crud", startAt = Projection.StartPosition.BEGINNING, store = "orderCountRepository")
+        @Projection(id = "order-count-crud", startAt = Projection.StartPosition.BEGINNING, store = OrderCountCrudRepository.class)
         DcbProjection<OrderCount, TestEvent, String> orderCount() {
             var projection = org.occurrent.dsl.projection.Projection.<OrderCount, TestEvent, String>builder(new OrderCount("orders", 0))
                     .id(event -> "orders")
