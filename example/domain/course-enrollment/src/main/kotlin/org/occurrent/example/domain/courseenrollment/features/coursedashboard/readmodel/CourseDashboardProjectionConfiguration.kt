@@ -34,7 +34,7 @@ import org.springframework.context.annotation.Configuration
 
 /**
  * Registers the `course-dashboard` [Projection] that feeds [CourseDashboard], which also serves as its
- * [org.occurrent.dsl.view.ViewStateRepository] (bean name `courseDashboard`, matched by [Projection.store]).
+ * [org.occurrent.dsl.view.ViewStateRepository], selected by type with [Projection.store].
  *
  * The read model is in-memory only, so it must be rebuilt from the whole event history on every boot. That is why this
  * combines [StartPosition.BEGINNING] with [ResumeBehavior.SAME_AS_START_AT]: BEGINNING alone would replay only the
@@ -56,7 +56,7 @@ class CourseDashboardProjectionConfiguration {
         startAt = StartPosition.BEGINNING,
         resumeBehavior = ResumeBehavior.SAME_AS_START_AT,
         mode = Mode.ASYNC,
-        store = "courseDashboard"
+        store = CourseDashboard::class
     )
     fun courseDashboardProjection(): ProjectionModel<DashboardState, DomainEvent, String> =
         projection(initialState = DashboardState.EMPTY) {

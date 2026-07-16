@@ -135,7 +135,7 @@ class ProjectionAnnotationSynchronousMongoTest {
     }
 
     static class CounterProjection {
-        @Projection(id = "sync-counter", mode = Projection.Mode.SYNCHRONOUS, store = "counterStore")
+        @Projection(id = "sync-counter", mode = Projection.Mode.SYNCHRONOUS, storeName = "counterStore")
         org.occurrent.dsl.projection.Projection<Counter, TestEvent, String> counter() {
             return org.occurrent.dsl.projection.Projection.<Counter, TestEvent, String>builder(new Counter(0))
                     .id(event -> "counter")

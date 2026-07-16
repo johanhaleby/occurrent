@@ -92,6 +92,12 @@ class ReactiveProjectionRejectionsMongoTest {
                 .hasStackTraceContaining("has no read-model store");
     }
 
+    @Test
+    void several_beans_of_the_store_type_without_a_storeName_fails_fast() {
+        assertThatThrownBy(() -> SpringApplication.run(AmbiguousStoreApplication.class, bootArgs("reactive-projection-ambiguous")))
+                .hasStackTraceContaining("Disambiguate with storeName");
+    }
+
     private static CloudEventConverter<TestEvent> newConverter(CloudEventTypeMapper<TestEvent> typeMapper, String source) {
         return new JacksonCloudEventConverter.Builder<TestEvent>(new ObjectMapper(), URI.create(source))
                 .typeMapper(typeMapper)
@@ -208,6 +214,43 @@ class ReactiveProjectionRejectionsMongoTest {
                     .id(event -> "k")
                     .on(Registered.class, (state, event) -> state + 1)
                     .build();
+        }
+    }
+
+    @SpringBootApplication
+    @EnableOccurrentReactive
+    static class AmbiguousStoreApplication {
+        @Bean
+        CloudEventTypeMapper<TestEvent> typeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> converter(CloudEventTypeMapper<TestEvent> typeMapper) {
+            return newConverter(typeMapper, "urn:occurrent:reactive-projection-ambiguous");
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> storeA() {
+            return inMemoryStore();
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> storeB() {
+            return inMemoryStore();
+        }
+
+        @Bean
+        AmbiguousStoreProvider ambiguousStoreProvider() {
+            return new AmbiguousStoreProvider();
+        }
+    }
+
+    @Component
+    static class AmbiguousStoreProvider {
+        @org.occurrent.annotation.Projection(id = "ambiguous", store = ViewStateRepository.class)
+        DcbProjection<Integer, TestEvent, String> projection() {
+            return dcbProjection();
         }
     }
 

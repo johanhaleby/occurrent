@@ -240,13 +240,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
-    // Resolve the read-model store into a MaterializedView. Named by store() when set, otherwise the unique bean of type
-    // MaterializedView, then ViewStateRepository, then Spring Data CrudRepository (any backend), and finally a zero-config
-    // MongoDB default keyed by the projection's id function. All non-default options are first-class.
+    // Resolve the read-model store into a MaterializedView. Selected by store() type or storeName() when set, otherwise
+    // the unique bean of type MaterializedView, then ViewStateRepository, then Spring Data CrudRepository (any backend),
+    // and finally a zero-config MongoDB default keyed by the projection's id function. All non-default options are first-class.
     @SuppressWarnings("unchecked")
     private <E, S, ID> MaterializedView<E> resolveStore(org.occurrent.annotation.Projection annotation, Method factoryMethod, org.occurrent.dsl.projection.Projection<S, E, ID> projection, String id) {
-        if (!annotation.store().isBlank()) {
-            return toMaterializedView(applicationContext.getBean(annotation.store()), projection, id);
+        Object referencedStore = resolveStoreBeanByReference(annotation, id);
+        if (referencedStore != null) {
+            return toMaterializedView(referencedStore, projection, id);
         }
         Object materializedView = uniqueStoreBeanOrThrow(MaterializedView.class, id);
         if (materializedView != null) {
@@ -264,6 +265,41 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         return Projections.materializedView(projection, mongoBackedRepository((Class<S>) reflectStateType(factoryMethod, id)));
     }
 
+    // Resolve the store bean referenced by store() (bean type) or storeName() (bean name), or null when neither is set
+    // so the caller applies convention-based resolution. store() and storeName() together pick one bean of the type
+    // when several exist.
+    private Object resolveStoreBeanByReference(org.occurrent.annotation.Projection annotation, String id) {
+        Class<?> storeType = annotation.store();
+        String storeName = annotation.storeName();
+        boolean byType = storeType != Void.class;
+        boolean byName = !storeName.isBlank();
+        if (byType) {
+            if (byName) {
+                try {
+                    return applicationContext.getBean(storeName, storeType);
+                } catch (BeansException e) {
+                    throw new IllegalArgumentException("@Projection '%s' could not resolve a store bean named '%s' of type %s: %s".formatted(id, storeName, storeType.getName(), e.getMessage()), e);
+                }
+            }
+            String[] names = applicationContext.getBeanNamesForType(storeType);
+            if (names.length == 0) {
+                throw new IllegalStateException("@Projection '%s' found no bean of type %s. Declare one, or leave store unset to resolve by convention.".formatted(id, storeType.getName()));
+            }
+            if (names.length > 1) {
+                throw new IllegalStateException("@Projection '%s' found %d beans of type %s (%s) and cannot pick one. Disambiguate with storeName = \"beanName\".".formatted(id, names.length, storeType.getName(), String.join(", ", names)));
+            }
+            return applicationContext.getBean(names[0]);
+        }
+        if (byName) {
+            try {
+                return applicationContext.getBean(storeName);
+            } catch (BeansException e) {
+                throw new IllegalArgumentException("@Projection '%s' could not resolve a store bean named '%s': %s".formatted(id, storeName, e.getMessage()), e);
+            }
+        }
+        return null;
+    }
+
     // Returns the single bean of the given store type, or null when there is none so the caller tries the next type
     // (and finally the MongoDB default). Throws when several beans of the type exist, since the application provided
     // store beans but none is uniquely selectable, and silently materializing into MongoDB would hide that.
@@ -273,7 +309,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             return null;
         }
         if (names.length > 1) {
-            throw new IllegalStateException(("@Projection '%s' found %d %s beans (%s) and cannot pick one. Name the store bean with @Projection(store = \"beanName\").").formatted(id, names.length, storeType.getSimpleName(), String.join(", ", names)));
+            throw new IllegalStateException(("@Projection '%s' found %d %s beans (%s) and cannot pick one. Name the store bean with storeName = \"beanName\".").formatted(id, names.length, storeType.getSimpleName(), String.join(", ", names)));
         }
         return applicationContext.getBean(names[0]);
     }
