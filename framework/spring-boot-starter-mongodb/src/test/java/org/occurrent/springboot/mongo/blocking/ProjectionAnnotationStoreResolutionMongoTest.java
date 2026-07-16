@@ -31,16 +31,16 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.stereotype.Component;
-import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -59,46 +59,52 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Timeout(120)
 class ProjectionAnnotationStoreResolutionMongoTest {
 
-    @Container
-    static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
-        mongoDBContainer.withReuse(true);
-        mongoDBContainer.setPortBindings(List.of("27017:27017"));
+    // Each launched context gets its own dynamic-port MongoDB container through a @ServiceConnection bean, so no fixed
+    // host port is bound. @ServiceConnection resolves the mapped port and replica set for the context, which a hand-built
+    // getReplicaSetUrl() cannot do because it reports the replica set member's own localhost:27017 address.
+    private static ConfigurableApplicationContext run(Class<?> application, String databaseName) {
+        return SpringApplication.run(new Class<?>[]{application, MongoContainerConfiguration.class}, bootArgs(databaseName));
     }
 
     private static String[] bootArgs(String databaseName) {
         return new String[]{
-                "--spring.data.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=dcb",
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName
         };
     }
 
+    @Configuration(proxyBeanMethods = false)
+    static class MongoContainerConfiguration {
+        @Bean
+        @ServiceConnection
+        MongoDBContainer mongoDbContainer() {
+            return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+        }
+    }
+
     @Test
     void a_store_type_with_no_matching_bean_fails_fast() {
-        assertThatThrownBy(() -> SpringApplication.run(NoBeanOfTypeApplication.class, bootArgs("blocking-store-nobean")))
+        assertThatThrownBy(() -> run(NoBeanOfTypeApplication.class, "blocking-store-nobean"))
                 .hasStackTraceContaining("found no bean of type");
     }
 
     @Test
     void several_beans_of_the_store_type_without_a_storeName_fails_fast() {
-        assertThatThrownBy(() -> SpringApplication.run(AmbiguousStoreApplication.class, bootArgs("blocking-store-ambiguous")))
+        assertThatThrownBy(() -> run(AmbiguousStoreApplication.class, "blocking-store-ambiguous"))
                 .hasStackTraceContaining("Disambiguate with storeName");
     }
 
     @Test
     void several_beans_of_the_store_type_are_disambiguated_by_a_storeName() {
-        try (ConfigurableApplicationContext ctx = SpringApplication.run(DisambiguatedStoreApplication.class, bootArgs("blocking-store-disambig"))) {
+        try (ConfigurableApplicationContext ctx = run(DisambiguatedStoreApplication.class, "blocking-store-disambig")) {
             assertThat(ctx.isRunning()).isTrue();
         }
     }
 
     @Test
     void a_named_store_bean_of_the_wrong_shape_fails_fast() {
-        assertThatThrownBy(() -> SpringApplication.run(WrongShapeStoreApplication.class, bootArgs("blocking-store-wrongshape")))
+        assertThatThrownBy(() -> run(WrongShapeStoreApplication.class, "blocking-store-wrongshape"))
                 .hasStackTraceContaining("must be a MaterializedView, a ViewStateRepository, or a Spring Data CrudRepository");
     }
 
