@@ -28,7 +28,7 @@ import static java.util.Objects.requireNonNull;
  * Options that scope a DCB read: the shared {@link PositionRange} window, plus an optional {@code limit} on how many
  * matching events are returned and a {@code direction} choosing which end of the match the limit keeps.
  * <p>
- * Neither {@code direction} nor {@code limit} changes the returned order, a {@link DcbEventStream} always lists events
+ * Neither {@code direction} nor {@code limit} changes the returned order. A {@link DcbEventStream} always lists events
  * ascending by DCB position. {@link Direction#FORWARD} keeps the lowest-position (oldest) matches,
  * {@link Direction#BACKWARD} the highest-position (newest). So {@code fromBeginning().backwards().limit(1)} reads the
  * single newest matching event in one round trip, how a gapless sequence finds its last entry without folding the whole
