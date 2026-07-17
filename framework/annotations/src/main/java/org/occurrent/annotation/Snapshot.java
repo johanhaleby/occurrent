@@ -52,7 +52,7 @@ import java.lang.annotation.*;
  * <p>
  * {@link #mode()} chooses asynchronous maintenance (the default, the snapshot is updated from a catch-up subscription)
  * or synchronous (the snapshot is updated on the write path, so it is current for read-your-writes). Synchronous mode is
- * mutually exclusive with {@link #startAt()}, {@link #startAtPosition()}, and {@link #resumeBehavior()}.
+ * mutually exclusive with {@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, and {@link #startupMode()}.
  * </p>
  * <p>
  * {@link #startAt()} defaults to {@link StartPosition#BEGINNING} because a maintained snapshot must fold every event of
@@ -84,7 +84,7 @@ public @interface Snapshot {
 
     /**
      * The start position for the maintenance subscription. Defaults to {@link StartPosition#BEGINNING} so the snapshot
-     * folds the full history the first time. Mutually exclusive with {@link #startAtPosition()} and with
+     * folds the full history the first time. Mutually exclusive with {@link #startAtGlobalPosition()} and with
      * {@link Mode#SYNCHRONOUS}.
      */
     StartPosition startAt() default StartPosition.BEGINNING;
@@ -93,7 +93,7 @@ public @interface Snapshot {
      * Start after a specific global position instead of a predefined {@link #startAt()}. The default of -1 means unset.
      * Mutually exclusive with a non-{@link StartPosition#BEGINNING} {@link #startAt()} and with {@link Mode#SYNCHRONOUS}.
      */
-    long startAtPosition() default -1;
+    long startAtGlobalPosition() default -1;
 
     /**
      * How the maintenance subscription resumes on restart. By default it resumes from its last stored checkpoint after
@@ -128,7 +128,7 @@ public @interface Snapshot {
     /**
      * The maintenance mode. {@link Mode#ASYNC} (the default) updates the snapshot from a catch-up subscription.
      * {@link Mode#SYNCHRONOUS} updates it on the write path, so it is current for read-your-writes. Synchronous mode is
-     * mutually exclusive with {@link #startAt()}, {@link #startAtPosition()}, and {@link #resumeBehavior()}.
+     * mutually exclusive with {@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, and {@link #startupMode()}.
      */
     Mode mode() default Mode.ASYNC;
 
@@ -144,53 +144,4 @@ public @interface Snapshot {
      * {@link #store()} to pick one bean when several of that type exist. An empty string (the default) means unset.
      */
     String storeName() default "";
-
-    /**
-     * A set of predefined start positions for the maintenance subscription.
-     */
-    enum StartPosition {
-        /**
-         * Replay the whole event sequence from the beginning before switching to live delivery, so the snapshot folds
-         * the full history.
-         */
-        BEGINNING,
-        /**
-         * Start from now, folding only events written after the snapshot starts. Use only when the streams are known to
-         * begin after this point, otherwise the snapshot would miss earlier events.
-         */
-        NOW,
-        /**
-         * Use the default behavior, typically resuming from the last stored position if the snapshot has run before,
-         * otherwise behaving like NOW.
-         */
-        DEFAULT
-    }
-
-    /**
-     * Specifies the capability scope for a snapshot.
-     */
-    enum Capability {
-        /**
-         * The snapshot folds events from all capabilities (both stream and DCB) on a store that supports both.
-         */
-        AGNOSTIC,
-        /**
-         * The snapshot folds only stream-written events.
-         */
-        STREAM
-    }
-
-    /**
-     * Specifies the maintenance mode for a snapshot.
-     */
-    enum Mode {
-        /**
-         * The snapshot is maintained asynchronously and is eventually consistent with the stream.
-         */
-        ASYNC,
-        /**
-         * The snapshot is maintained synchronously on the write path, providing read-your-writes semantics.
-         */
-        SYNCHRONOUS
-    }
 }

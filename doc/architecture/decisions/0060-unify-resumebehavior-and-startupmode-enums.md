@@ -52,13 +52,51 @@ those nested types, including a fully-qualified reference, a static import, or a
 `org.occurrent.MigrateOccurrentRenames_0_31`) rewrites the nested references to the top-level types automatically.
 See the [upgrade guide](../../migration/upgrading-to-0.31.0.md).
 
-**`StartPosition` and `DcbStartPosition` are left nested and are not part of this unification.** Unlike
-`ResumeBehavior`/`StartupMode`, the two start-position enums are not duplicates: `Subscription.StartPosition` uses
-`BEGINNING` while `StreamSubscription.StartPosition` uses `BEGINNING_OF_TIME`, and `DcbSubscription.DcbStartPosition`
-carries its own DCB-specific constants. Unifying types whose constants genuinely differ per annotation would mean
-either losing that distinction or building a supertype wide enough to cover all of them, which is not a
-deduplication, it is a design change nobody asked for here. `StartPosition`/`DcbStartPosition` keep their existing
-per-annotation shape.
+**`StartPosition` and `DcbStartPosition` were left nested at the time of this decision and were not part of the
+original unification.** Unlike `ResumeBehavior`/`StartupMode`, they looked like non-duplicates: `Subscription.StartPosition`
+uses `BEGINNING` while `StreamSubscription.StartPosition` uses `BEGINNING_OF_TIME`. See the amendment below: that
+comparison was the wrong one, and `StartPosition` unifies too, just not with `StreamSubscription`.
+
+## Amendment: StartPosition, Capability, and Mode also unify
+
+The reasoning above for `ResumeBehavior`/`StartupMode` turned out to apply further than this ADR first assumed.
+`@Projection` and `@Snapshot` each declared their own nested `Capability` (`AGNOSTIC`, `STREAM`) and `Mode`
+(`ASYNC`, `SYNCHRONOUS`), identical in name, constants, and meaning between the two annotations, for the same
+reason `ResumeBehavior`/`StartupMode` were identical across four annotations: nothing about a projection versus a
+snapshot changes what capability scope or processing mode means. Both now move to shared top-level
+`org.occurrent.annotation.Capability` and `org.occurrent.annotation.Mode`. Neither annotation shipped in a release
+yet, so this is a plain pre-release cleanup with no migration to stage.
+
+`StartPosition` gets the same treatment, and this time the earlier reasoning in this ADR was wrong. The original
+decision treated `Subscription.StartPosition` and `DcbSubscription.DcbStartPosition` as non-duplicates, pointing at
+`StreamSubscription.StartPosition`'s different constant (`BEGINNING_OF_TIME` instead of `BEGINNING`) as proof they
+were not interchangeable. But `StreamSubscription` was never the comparison that mattered.
+`Subscription.StartPosition`, `DcbSubscription.DcbStartPosition`, `Projection.StartPosition`, and
+`Snapshot.StartPosition` all carry the exact same three constants, `BEGINNING`, `NOW`, `DEFAULT`, over their own
+kind of unified position (the global position for `Subscription` and `Projection`, the DCB sequence position for
+`DcbSubscription` and a DCB-scoped `Snapshot`). That is the same duplication this ADR already unified for
+`ResumeBehavior`/`StartupMode`, just missed the first time. All four now share one top-level
+`org.occurrent.annotation.StartPosition`. `StreamSubscription.StartPosition` stays nested exactly as this ADR
+originally decided: `BEGINNING_OF_TIME` is a start position over wall-clock time, not over either unified position,
+so it is a genuinely different type and unifying it would either drop that distinction or force a supertype nobody
+asked for.
+
+`Subscription` and `DcbSubscription` shipped in 0.30.0, so moving their `StartPosition` is a source- and
+binary-breaking change for existing callers, same as the `ResumeBehavior`/`StartupMode` move. The
+`org.occurrent.MigrateOccurrentRenames_0_31` recipe gained two more `ChangeType` entries covering
+`Subscription.StartPosition` and `DcbSubscription.DcbStartPosition`, so the same `UpgradeToOccurrent_0_31` recipe run
+described above covers this too. `Projection.StartPosition` and `Snapshot.StartPosition` need no recipe entry: like
+`Capability` and `Mode`, neither annotation has shipped yet.
+
+The bean post-processors gain the same payoff described above for `ResumeBehavior`/`StartupMode`: with one
+`StartPosition` shared across `Subscription`, `DcbSubscription`, `Projection`, and `Snapshot`, the
+`toAgnosticStartPosition`/`toDcbStartPosition` converter pairs that bridged `Projection`'s and `Snapshot`'s own
+`StartPosition` onto `Subscription`'s and `DcbSubscription`'s have nothing left to convert between, so they are
+removed, and the call sites pass the annotation's `startAt()` straight through.
+
+Separately, and unrelated to this unification, `@Projection.startAtPosition()` and `@Snapshot.startAtPosition()`
+are renamed to `startAtGlobalPosition()` to match the released `@Subscription.startAtGlobalPosition()`. Neither
+annotation has shipped, so this is a pre-release rename with no recipe or migration note of its own.
 
 ## Consequences
 

@@ -192,26 +192,26 @@ public final class SubscriptionAnnotations {
     /**
      * Validate the mode and catch-up start knobs of a moded read-model annotation ({@link org.occurrent.annotation.Projection}
      * or {@link org.occurrent.annotation.Snapshot}). The synchronous mode is read-your-writes on the write path and has
-     * no catch-up phase, so it cannot carry any catch-up start knob, and startAt and startAtPosition are two ways to
+     * no catch-up phase, so it cannot carry any catch-up start knob, and startAt and startAtGlobalPosition are two ways to
      * express the same start point so at most one may be set. Shared by the blocking and reactive processors for both
      * annotations so this rule and its message live in one tested place and cannot drift.
      *
-     * @param annotationName     the annotation name for error messages, for example {@code "@Projection"}
-     * @param id                 the annotation id for error messages
-     * @param synchronous        whether the annotation declares the synchronous mode
-     * @param startAtSet         whether startAt is set to something other than its default
-     * @param startAtPositionSet whether startAtPosition is set
-     * @param resumeBehaviorSet  whether resumeBehavior is set to something other than its default
-     * @param startupModeSet     whether startupMode is set to something other than its default
+     * @param annotationName           the annotation name for error messages, for example {@code "@Projection"}
+     * @param id                       the annotation id for error messages
+     * @param synchronous              whether the annotation declares the synchronous mode
+     * @param startAtSet               whether startAt is set to something other than its default
+     * @param startAtGlobalPositionSet whether startAtGlobalPosition is set
+     * @param resumeBehaviorSet        whether resumeBehavior is set to something other than its default
+     * @param startupModeSet           whether startupMode is set to something other than its default
      */
     public static void validateModeStartKnobs(String annotationName, String id, boolean synchronous,
-                                              boolean startAtSet, boolean startAtPositionSet, boolean resumeBehaviorSet, boolean startupModeSet) {
-        if (synchronous && (startAtSet || startAtPositionSet || resumeBehaviorSet || startupModeSet)) {
+                                              boolean startAtSet, boolean startAtGlobalPositionSet, boolean resumeBehaviorSet, boolean startupModeSet) {
+        if (synchronous && (startAtSet || startAtGlobalPositionSet || resumeBehaviorSet || startupModeSet)) {
             String noun = annotationName.replace("@", "").toLowerCase(Locale.ROOT);
-            throw new IllegalArgumentException("%s '%s' uses mode = SYNCHRONOUS, which cannot be combined with startAt, startAtPosition, resumeBehavior, or startupMode (those configure catch-up for an async %s).".formatted(annotationName, id, noun));
+            throw new IllegalArgumentException("%s '%s' uses mode = SYNCHRONOUS, which cannot be combined with startAt, startAtGlobalPosition, resumeBehavior, or startupMode (those configure catch-up for an async %s).".formatted(annotationName, id, noun));
         }
-        if (startAtSet && startAtPositionSet) {
-            throw new IllegalArgumentException("%s '%s' sets both startAt and startAtPosition, which are two ways to express the same start point, so set only one.".formatted(annotationName, id));
+        if (startAtSet && startAtGlobalPositionSet) {
+            throw new IllegalArgumentException("%s '%s' sets both startAt and startAtGlobalPosition, which are two ways to express the same start point, so set only one.".formatted(annotationName, id));
         }
     }
 

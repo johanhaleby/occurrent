@@ -23,7 +23,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.DcbSubscription;
-import org.occurrent.annotation.DcbSubscription.DcbStartPosition;
+import org.occurrent.annotation.StartPosition;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
@@ -139,7 +139,7 @@ class ReactiveDcbSubscriptionWaitUntilStartedAnnotationMongoTest {
     static class WaitUntilStartedSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        @DcbSubscription(id = "reactive-dcb-wait-until-started", startAt = DcbStartPosition.BEGINNING, startupMode = StartupMode.WAIT_UNTIL_STARTED)
+        @DcbSubscription(id = "reactive-dcb-wait-until-started", startAt = StartPosition.BEGINNING, startupMode = StartupMode.WAIT_UNTIL_STARTED)
         Mono<Void> onEvent(TestEvent event) {
             received.add(event);
             return Mono.empty();

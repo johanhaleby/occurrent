@@ -24,7 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.DcbSubscription;
-import org.occurrent.annotation.DcbSubscription.DcbStartPosition;
+import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
@@ -229,7 +229,7 @@ class DcbSubscriptionMetadataBindingMongoTest {
         @DcbSubscription(
                 id = "meta-binding-event-first-dcb",
                 eventTypes = MyEvent.class,
-                startAt = DcbStartPosition.BEGINNING
+                startAt = StartPosition.BEGINNING
         )
         void on(MyEvent event, DcbEventMetadata meta) {
             if ("meta-event-1".equals(event.name())) {
@@ -250,7 +250,7 @@ class DcbSubscriptionMetadataBindingMongoTest {
         @DcbSubscription(
                 id = "meta-binding-metadata-first",
                 eventTypes = MyEvent.class,
-                startAt = DcbStartPosition.BEGINNING
+                startAt = StartPosition.BEGINNING
         )
         void on(DcbEventMetadata meta, MyEvent event) {
             if ("meta-event-2".equals(event.name())) {
@@ -270,7 +270,7 @@ class DcbSubscriptionMetadataBindingMongoTest {
         @DcbSubscription(
                 id = "meta-binding-event-first-generic",
                 eventTypes = MyEvent.class,
-                startAt = DcbStartPosition.BEGINNING
+                startAt = StartPosition.BEGINNING
         )
         void on(MyEvent event, EventMetadata meta) {
             if ("meta-event-3".equals(event.name())) {

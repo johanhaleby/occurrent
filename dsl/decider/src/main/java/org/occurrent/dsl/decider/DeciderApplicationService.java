@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.WriteResult;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * A thin facade over a blocking {@link ApplicationService} that runs a {@link Decider}, the Java counterpart to the
@@ -69,5 +70,95 @@ public final class DeciderApplicationService<E> {
      */
     public <C, S extends @Nullable Object> WriteResult execute(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
         return execute(streamId.toString(), commands, decider);
+    }
+
+    /**
+     * Execute a single command against {@code streamId} and return the folded state plus the new events.
+     */
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(String streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, List.of(command), decider);
+    }
+
+    /**
+     * Execute a single command against {@code streamId} and return the folded state plus the new events.
+     */
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(UUID streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId.toString(), command, decider);
+    }
+
+    /**
+     * Execute {@code commands} in order against {@code streamId} and return the folded state plus the new events.
+     */
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        AtomicReference<Decider.Decision<S, E>> decision = new AtomicReference<>();
+        applicationService.execute(streamId, events -> {
+            Decider.Decision<S, E> result = decider.decideOnEvents(events, commands);
+            decision.set(result);
+            return result.events();
+        });
+        return Objects.requireNonNull(decision.get(), "The decider produced no decision");
+    }
+
+    /**
+     * Execute {@code commands} in order against {@code streamId} and return the folded state plus the new events.
+     */
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId.toString(), commands, decider);
+    }
+
+    /**
+     * Execute a single command against {@code streamId} and return the folded state after the decision.
+     */
+    public <C, S extends @Nullable Object> S executeAndReturnState(String streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).state();
+    }
+
+    /**
+     * Execute a single command against {@code streamId} and return the folded state after the decision.
+     */
+    public <C, S extends @Nullable Object> S executeAndReturnState(UUID streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).state();
+    }
+
+    /**
+     * Execute {@code commands} in order against {@code streamId} and return the folded state after the decision.
+     */
+    public <C, S extends @Nullable Object> S executeAndReturnState(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).state();
+    }
+
+    /**
+     * Execute {@code commands} in order against {@code streamId} and return the folded state after the decision.
+     */
+    public <C, S extends @Nullable Object> S executeAndReturnState(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).state();
+    }
+
+    /**
+     * Execute a single command against {@code streamId} and return the new events that were decided.
+     */
+    public <C, S extends @Nullable Object> List<E> executeAndReturnEvents(String streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).events();
+    }
+
+    /**
+     * Execute a single command against {@code streamId} and return the new events that were decided.
+     */
+    public <C, S extends @Nullable Object> List<E> executeAndReturnEvents(UUID streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).events();
+    }
+
+    /**
+     * Execute {@code commands} in order against {@code streamId} and return the new events that were decided.
+     */
+    public <C, S extends @Nullable Object> List<E> executeAndReturnEvents(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).events();
+    }
+
+    /**
+     * Execute {@code commands} in order against {@code streamId} and return the new events that were decided.
+     */
+    public <C, S extends @Nullable Object> List<E> executeAndReturnEvents(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).events();
     }
 }

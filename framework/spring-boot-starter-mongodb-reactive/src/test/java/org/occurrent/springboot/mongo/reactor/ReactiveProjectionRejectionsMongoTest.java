@@ -181,7 +181,7 @@ class ReactiveProjectionRejectionsMongoTest {
 
     @Component
     static class DcbSynchronousProvider {
-        @org.occurrent.annotation.Projection(id = "dcb-sync", mode = org.occurrent.annotation.Projection.Mode.SYNCHRONOUS)
+        @org.occurrent.annotation.Projection(id = "dcb-sync", mode = org.occurrent.annotation.Mode.SYNCHRONOUS)
         DcbProjection<Integer, TestEvent, String> projection() {
             return dcbProjection();
         }

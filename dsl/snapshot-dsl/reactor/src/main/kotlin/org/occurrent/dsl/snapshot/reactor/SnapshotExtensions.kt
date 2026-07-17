@@ -36,26 +36,26 @@ import reactor.core.publisher.Mono
  * [ReactiveSnapshotDeciderApplicationService].
  */
 fun <C : Any, S, E : Any> ApplicationService<E>.execute(streamId: String, command: C, decider: Decider<C, S, E>, store: ReactiveSnapshotStore<S>, options: SnapshotOptions<S, E>): Mono<WriteResult> =
-    ReactiveSnapshotDeciderApplicationService(this).execute(streamId, command, decider, store, options)
+    ReactiveSnapshotDeciderApplicationService<S, E>(this, store, options).execute(streamId, command, decider)
 
 /**
  * Run [decider] with [commands] against [streamId], resuming from the snapshot in [store].
  */
 fun <C : Any, S, E : Any> ApplicationService<E>.execute(streamId: String, commands: List<C>, decider: Decider<C, S, E>, store: ReactiveSnapshotStore<S>, options: SnapshotOptions<S, E>): Mono<WriteResult> =
-    ReactiveSnapshotDeciderApplicationService(this).execute(streamId, commands, decider, store, options)
+    ReactiveSnapshotDeciderApplicationService<S, E>(this, store, options).execute(streamId, commands, decider)
 
 /**
  * Run [dcbDecider] against its DCB boundary but resume from the snapshot in [store]. See
  * [ReactiveSnapshotDcbDeciderApplicationService].
  */
 fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(command: C, dcbDecider: DcbDecider<C, S, E>, store: ReactiveSnapshotStore<S>, options: SnapshotOptions<S, E>): Mono<DcbAppendResult> =
-    ReactiveSnapshotDcbDeciderApplicationService(this).execute(command, dcbDecider, store, options)
+    ReactiveSnapshotDcbDeciderApplicationService<S, E>(this, store, options).execute(command, dcbDecider)
 
 /**
  * Run [dcbDecider] with [commands], resuming from the snapshot in [store], keyed by the resolved criteria.
  */
 fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(commands: List<C>, dcbDecider: DcbDecider<C, S, E>, store: ReactiveSnapshotStore<S>, options: SnapshotOptions<S, E>, keyFunction: (DcbCriteria) -> String = DcbSnapshotKeys::canonicalKey): Mono<DcbAppendResult> =
-    ReactiveSnapshotDcbDeciderApplicationService(this).execute(commands, dcbDecider, store, options, keyFunction)
+    ReactiveSnapshotDcbDeciderApplicationService<S, E>(this, store, options, keyFunction).execute(commands, dcbDecider)
 
 /**
  * Read the current state of [snapshotView] for [streamId] on demand, folding only the events after the stored snapshot.

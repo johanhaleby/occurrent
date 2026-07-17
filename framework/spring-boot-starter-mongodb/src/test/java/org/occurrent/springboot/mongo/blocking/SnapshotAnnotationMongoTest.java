@@ -120,9 +120,9 @@ class SnapshotAnnotationMongoTest {
     }
 
     @Test
-    void rejects_startAt_combined_with_startAtPosition() {
+    void rejects_startAt_combined_with_startAtGlobalPosition() {
         assertThatThrownBy(() -> run(StartAtAndStartAtPositionApplication.class, "snapshot-startat-and-position"))
-                .hasMessageContaining("both startAt and startAtPosition");
+                .hasMessageContaining("both startAt and startAtGlobalPosition");
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -214,7 +214,7 @@ class SnapshotAnnotationMongoTest {
 
         @Component
         static class BadSnapshot {
-            @Snapshot(id = "counter", mode = Snapshot.Mode.SYNCHRONOUS, startAt = Snapshot.StartPosition.NOW)
+            @Snapshot(id = "counter", mode = org.occurrent.annotation.Mode.SYNCHRONOUS, startAt = org.occurrent.annotation.StartPosition.NOW)
             SnapshotView<Counter, CounterEvent> counterSnapshot() {
                 return SnapshotView.<Counter, CounterEvent>builder(new Counter(0))
                         .on(Incremented.class, (state, event) -> new Counter(state.total() + event.amount()))
@@ -242,7 +242,7 @@ class SnapshotAnnotationMongoTest {
 
         @Component
         static class BadSnapshot {
-            @Snapshot(id = "counter", startAt = Snapshot.StartPosition.NOW, startAtPosition = 5)
+            @Snapshot(id = "counter", startAt = org.occurrent.annotation.StartPosition.NOW, startAtGlobalPosition = 5)
             SnapshotView<Counter, CounterEvent> counterSnapshot() {
                 return SnapshotView.<Counter, CounterEvent>builder(new Counter(0))
                         .on(Incremented.class, (state, event) -> new Counter(state.total() + event.amount()))

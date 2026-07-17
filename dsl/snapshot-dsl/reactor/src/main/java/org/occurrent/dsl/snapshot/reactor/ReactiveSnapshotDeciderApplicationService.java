@@ -36,6 +36,8 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * A reactive {@link ApplicationService} facade that runs a {@link Decider} but resumes from a snapshot instead of
  * replaying the whole stream, the reactive counterpart to {@link org.occurrent.dsl.snapshot.blocking.SnapshotDeciderApplicationService}.
+ * Construct it once around an application service together with the {@link ReactiveSnapshotStore} and {@link SnapshotOptions}
+ * for the state it snapshots, then call it with a stream id, command(s), and a decider.
  * <p>
  * On each execute it loads the latest {@link Snapshot} for the stream, reads only the events written after it (via
  * {@link ExecuteOptions#fromStreamVersion(long)}), folds those onto the snapshot state with {@link Decider#evolve(Object, List)},
@@ -47,65 +49,145 @@ import java.util.concurrent.atomic.AtomicReference;
  * Snapshots are a discardable optimization: a loaded snapshot whose schema version does not match the one in
  * {@link SnapshotOptions} is ignored and the state is rebuilt from scratch. The snapshot write is best-effort (this facade
  * writes it after the command's own write, and a save failure is logged rather than failing the committed command).
+ *
+ * @param <S> the snapshot state type
+ * @param <E> the event type
  */
 @NullMarked
-public final class ReactiveSnapshotDeciderApplicationService<E> {
+public final class ReactiveSnapshotDeciderApplicationService<S extends @Nullable Object, E> {
 
     private final ApplicationService<E> applicationService;
+    private final ReactiveSnapshotStore<S> store;
+    private final SnapshotOptions<S, E> options;
 
-    public ReactiveSnapshotDeciderApplicationService(ApplicationService<E> applicationService) {
+    public ReactiveSnapshotDeciderApplicationService(ApplicationService<E> applicationService, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         this.applicationService = Objects.requireNonNull(applicationService, "applicationService cannot be null");
+        this.store = Objects.requireNonNull(store, "store cannot be null");
+        this.options = Objects.requireNonNull(options, "options cannot be null");
     }
 
     /**
-     * Execute a single command against {@code streamId}, resuming from the snapshot in {@code store}.
+     * Execute a single command against {@code streamId}, resuming from the snapshot.
      */
-    public <C, S extends @Nullable Object> Mono<WriteResult> execute(String streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return execute(streamId, List.of(command), decider, store, options);
+    public <C> Mono<WriteResult> execute(String streamId, C command, Decider<C, S, E> decider) {
+        return execute(streamId, List.of(command), decider);
     }
 
     /**
-     * Execute a single command against {@code streamId}, resuming from the snapshot in {@code store}.
+     * Execute a single command against {@code streamId}, resuming from the snapshot.
      */
-    public <C, S extends @Nullable Object> Mono<WriteResult> execute(UUID streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return execute(streamId.toString(), command, decider, store, options);
+    public <C> Mono<WriteResult> execute(UUID streamId, C command, Decider<C, S, E> decider) {
+        return execute(streamId.toString(), command, decider);
     }
 
     /**
-     * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot in {@code store}.
+     * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot.
      */
-    public <C, S extends @Nullable Object> Mono<WriteResult> execute(String streamId, List<C> commands, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return doExecute(streamId, commands, decider, store, options).map(Executed::writeResult);
+    public <C> Mono<WriteResult> execute(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return doExecute(streamId, commands, decider).map(Executed::writeResult);
     }
 
     /**
-     * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot in {@code store}.
+     * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot.
      */
-    public <C, S extends @Nullable Object> Mono<WriteResult> execute(UUID streamId, List<C> commands, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return execute(streamId.toString(), commands, decider, store, options);
+    public <C> Mono<WriteResult> execute(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return execute(streamId.toString(), commands, decider);
     }
 
     /**
-     * Execute {@code command} and return the folded state plus the events that were decided.
+     * Execute a single command and emit the folded state plus the events that were decided.
      */
-    public <C, S extends @Nullable Object> Mono<Decider.Decision<S, E>> executeAndReturnDecision(String streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return doExecute(streamId, List.of(command), decider, store, options).map(Executed::decision);
+    public <C> Mono<Decider.Decision<S, E>> executeAndReturnDecision(String streamId, C command, Decider<C, S, E> decider) {
+        return doExecute(streamId, List.of(command), decider).map(Executed::decision);
     }
 
     /**
-     * Execute {@code command} and return the folded state after the decision. The state is bound to a non-null type
-     * because a {@link Mono} cannot carry a null value, use {@link #executeAndReturnDecision} for a nullable state.
+     * Execute a single command and emit the folded state plus the events that were decided.
      */
-    public <C, S> Mono<S> executeAndReturnState(String streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return executeAndReturnDecision(streamId, command, decider, store, options).map(Decider.Decision::state);
+    public <C> Mono<Decider.Decision<S, E>> executeAndReturnDecision(UUID streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId.toString(), command, decider);
     }
 
-    private <C, S extends @Nullable Object> Mono<Executed<S, E>> doExecute(String streamId, List<C> commands, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    /**
+     * Execute {@code commands} and emit the folded state plus the events that were decided.
+     */
+    public <C> Mono<Decider.Decision<S, E>> executeAndReturnDecision(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return doExecute(streamId, commands, decider).map(Executed::decision);
+    }
+
+    /**
+     * Execute {@code commands} and emit the folded state plus the events that were decided.
+     */
+    public <C> Mono<Decider.Decision<S, E>> executeAndReturnDecision(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId.toString(), commands, decider);
+    }
+
+    /**
+     * Execute a single command and emit the folded state after the decision. A {@link Mono} cannot carry a null value, so
+     * the snapshot state {@code S} must be non-null here, use {@link #executeAndReturnDecision} for a nullable state.
+     */
+    public <C> Mono<S> executeAndReturnState(String streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).map(ReactiveSnapshotDeciderApplicationService::requireNonNullState);
+    }
+
+    /**
+     * Execute a single command and emit the folded state after the decision.
+     */
+    public <C> Mono<S> executeAndReturnState(UUID streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).map(ReactiveSnapshotDeciderApplicationService::requireNonNullState);
+    }
+
+    /**
+     * Execute {@code commands} and emit the folded state after the decision.
+     */
+    public <C> Mono<S> executeAndReturnState(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).map(ReactiveSnapshotDeciderApplicationService::requireNonNullState);
+    }
+
+    /**
+     * Execute {@code commands} and emit the folded state after the decision.
+     */
+    public <C> Mono<S> executeAndReturnState(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).map(ReactiveSnapshotDeciderApplicationService::requireNonNullState);
+    }
+
+    // A Mono cannot carry null, so a null folded state fails fast with guidance instead of a bare NPE from Reactor.
+    private static <S, E> S requireNonNullState(Decider.Decision<S, E> decision) {
+        return Objects.requireNonNull(decision.state(), "The decider produced a null state, but a Mono cannot carry null. Use executeAndReturnDecision for a nullable state.");
+    }
+
+    /**
+     * Execute a single command and emit the new events that were decided.
+     */
+    public <C> Mono<List<E>> executeAndReturnEvents(String streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).map(Decider.Decision::events);
+    }
+
+    /**
+     * Execute a single command and emit the new events that were decided.
+     */
+    public <C> Mono<List<E>> executeAndReturnEvents(UUID streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).map(Decider.Decision::events);
+    }
+
+    /**
+     * Execute {@code commands} and emit the new events that were decided.
+     */
+    public <C> Mono<List<E>> executeAndReturnEvents(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).map(Decider.Decision::events);
+    }
+
+    /**
+     * Execute {@code commands} and emit the new events that were decided.
+     */
+    public <C> Mono<List<E>> executeAndReturnEvents(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).map(Decider.Decision::events);
+    }
+
+    private <C> Mono<Executed<S, E>> doExecute(String streamId, List<C> commands, Decider<C, S, E> decider) {
         Objects.requireNonNull(streamId, "streamId cannot be null");
         Objects.requireNonNull(commands, "commands cannot be null");
         Objects.requireNonNull(decider, "decider cannot be null");
-        Objects.requireNonNull(store, "store cannot be null");
-        Objects.requireNonNull(options, "options cannot be null");
 
         // Defer so the snapshot load and everything after it are cold: nothing runs until subscribed, and each subscription
         // loads a fresh base. The base does not change between the app service's optimistic-retry attempts.

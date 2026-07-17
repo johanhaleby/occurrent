@@ -25,7 +25,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.DcbSubscription;
-import org.occurrent.annotation.DcbSubscription.DcbStartPosition;
+import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
@@ -181,7 +181,7 @@ class DcbSubscriptionAnnotationMongoTest {
     static class RecordingDashboard {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        @DcbSubscription(id = "dcb-annotation-dashboard", eventTypes = Included.class, startAt = DcbStartPosition.BEGINNING)
+        @DcbSubscription(id = "dcb-annotation-dashboard", eventTypes = Included.class, startAt = StartPosition.BEGINNING)
         void onEvent(TestEvent event) {
             received.add(event);
         }

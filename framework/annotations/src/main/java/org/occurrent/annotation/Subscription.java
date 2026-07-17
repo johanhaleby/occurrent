@@ -141,24 +141,4 @@ public @interface Subscription {
     ResumeBehavior resumeBehavior() default ResumeBehavior.DEFAULT;
 
     StartupMode startupMode() default StartupMode.DEFAULT;
-
-    /**
-     * A set of predefined, capability-neutral start positions over the unified global {@code position}.
-     */
-    enum StartPosition {
-        /**
-         * Replay the whole global position sequence from the beginning (global position 0) before switching to live
-         * delivery, so a read model can be rebuilt from history.
-         */
-        BEGINNING,
-        /**
-         * Start from "now", delivering only events written after the subscription starts.
-         */
-        NOW,
-        /**
-         * Use the default behavior of the subscription model. Typically this resumes from the last stored position if
-         * the subscription has run before, otherwise it behaves like {@link #NOW}.
-         */
-        DEFAULT
-    }
 }

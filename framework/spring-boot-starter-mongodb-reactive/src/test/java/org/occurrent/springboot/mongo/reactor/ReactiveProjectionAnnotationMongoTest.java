@@ -189,7 +189,7 @@ class ReactiveProjectionAnnotationMongoTest {
     @Component
     static class DashboardProjection {
 
-        @org.occurrent.annotation.Projection(id = "reactive-projection-dashboard", startAt = org.occurrent.annotation.Projection.StartPosition.BEGINNING)
+        @org.occurrent.annotation.Projection(id = "reactive-projection-dashboard", startAt = org.occurrent.annotation.StartPosition.BEGINNING)
         DcbProjection<CountState, TestEvent, String> countIncludedEvents() {
             Projection<CountState, TestEvent, String> projection = Projection.<CountState, TestEvent, String>builder(new CountState(0))
                     .id(event -> VIEW_ID)

@@ -71,6 +71,100 @@ class AnnotationEnumRenameTest extends AnnotationEnumRenamesRecipeTest {
     }
 
     @Test
+    void subscriptionStartPositionReferenceIsRewrittenFromNestedToTopLevel() {
+        rewriteRun(
+                java(
+                        """
+                        package org.occurrent.annotation;
+
+                        public @interface Subscription {
+                            StartPosition startAt() default StartPosition.DEFAULT;
+
+                            enum StartPosition {
+                                BEGINNING, NOW, DEFAULT
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.annotation.Subscription;
+
+                        @Subscription(startAt = Subscription.StartPosition.BEGINNING)
+                        class Foo {
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.annotation.StartPosition;
+                        import org.occurrent.annotation.Subscription;
+
+                        @Subscription(startAt = StartPosition.BEGINNING)
+                        class Foo {
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void dcbSubscriptionDcbStartPositionReferenceIsRewrittenToTopLevelStartPosition() {
+        rewriteRun(
+                java(
+                        """
+                        package org.occurrent.annotation;
+
+                        public @interface DcbSubscription {
+                            DcbStartPosition startAt() default DcbStartPosition.DEFAULT;
+
+                            enum DcbStartPosition {
+                                BEGINNING, NOW, DEFAULT
+                            }
+                        }
+                        """,
+                        // The nested enum was renamed to a different simple name, so the recipe also rewrites the
+                        // annotation's own return-type reference; the declaration itself is left for the real source move.
+                        """
+                        package org.occurrent.annotation;
+
+                        public @interface DcbSubscription {
+                            StartPosition startAt() default StartPosition.DEFAULT;
+
+                            enum DcbStartPosition {
+                                BEGINNING, NOW, DEFAULT
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.annotation.DcbSubscription;
+                        import org.occurrent.annotation.DcbSubscription.DcbStartPosition;
+
+                        @DcbSubscription(startAt = DcbStartPosition.BEGINNING)
+                        class Baz {
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.annotation.DcbSubscription;
+                        import org.occurrent.annotation.StartPosition;
+
+                        @DcbSubscription(startAt = StartPosition.BEGINNING)
+                        class Baz {
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void streamSubscriptionStartupModeReferenceIsRewrittenFromNestedToTopLevel() {
         rewriteRun(
                 java(

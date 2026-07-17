@@ -242,7 +242,7 @@ class ReactiveProjectionResumeAcrossRestartMongoTest {
 
     @Component
     static class DashboardProjection {
-        @org.occurrent.annotation.Projection(id = "reactive-projection-resume-dashboard", startAt = org.occurrent.annotation.Projection.StartPosition.BEGINNING, resumeBehavior = org.occurrent.annotation.ResumeBehavior.DEFAULT)
+        @org.occurrent.annotation.Projection(id = "reactive-projection-resume-dashboard", startAt = org.occurrent.annotation.StartPosition.BEGINNING, resumeBehavior = org.occurrent.annotation.ResumeBehavior.DEFAULT)
         DcbProjection<CountState, TestEvent, String> dashboard() {
             return countingProjection();
         }

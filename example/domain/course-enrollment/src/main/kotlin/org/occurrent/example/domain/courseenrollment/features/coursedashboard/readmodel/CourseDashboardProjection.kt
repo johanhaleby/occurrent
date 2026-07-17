@@ -16,10 +16,10 @@
 
 package org.occurrent.example.domain.courseenrollment.features.coursedashboard.readmodel
 
+import org.occurrent.annotation.Mode
 import org.occurrent.annotation.Projection
-import org.occurrent.annotation.Projection.Mode
 import org.occurrent.annotation.ResumeBehavior
-import org.occurrent.annotation.Projection.StartPosition
+import org.occurrent.annotation.StartPosition
 import org.occurrent.dsl.projection.Projection as ProjectionModel
 import org.occurrent.dsl.projection.singletonProjection
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent

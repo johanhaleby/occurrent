@@ -154,7 +154,7 @@ class ReactiveAgnosticProjectionAnnotationMongoTest {
 
     @Component
     static class NamesProjection {
-        @org.occurrent.annotation.Projection(id = "reactive-agnostic-names", startAt = org.occurrent.annotation.Projection.StartPosition.BEGINNING, capability = org.occurrent.annotation.Projection.Capability.AGNOSTIC)
+        @org.occurrent.annotation.Projection(id = "reactive-agnostic-names", startAt = org.occurrent.annotation.StartPosition.BEGINNING, capability = org.occurrent.annotation.Capability.AGNOSTIC)
         Projection<CountState, TestEvent, String> countRegistered() {
             return Projection.<CountState, TestEvent, String>builder(new CountState(0))
                     .id(event -> VIEW_ID)

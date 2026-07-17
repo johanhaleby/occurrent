@@ -20,6 +20,8 @@ displayName: Upgrade to Occurrent 0.31.0
 description: >-
   Migrates an application from Occurrent 0.30.0 to 0.31.0. Applies the mechanical type renames for the
   ResumeBehavior and StartupMode enums, which moved from being nested inside the Subscription, StreamSubscription,
-  DcbSubscription, and Projection annotations to top-level types in org.occurrent.annotation.
+  DcbSubscription, and Projection annotations to top-level types in org.occurrent.annotation. Also applies the
+  Subscription.StartPosition and DcbSubscription.DcbStartPosition move to the shared top-level
+  org.occurrent.annotation.StartPosition.
 recipeList:
   - org.occurrent.MigrateOccurrentRenames_0_31

@@ -34,7 +34,7 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void synchronous_with_startAtPosition_is_rejected() {
+    void synchronous_with_startAtGlobalPosition_is_rejected() {
         assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", "ledger", true, false, true, false, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("@Snapshot")
@@ -60,12 +60,12 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void startAt_together_with_startAtPosition_is_rejected() {
+    void startAt_together_with_startAtGlobalPosition_is_rejected() {
         assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", "ledger", false, true, true, false, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("@Snapshot")
                 .hasMessageContaining("ledger")
-                .hasMessageContaining("both startAt and startAtPosition");
+                .hasMessageContaining("both startAt and startAtGlobalPosition");
     }
 
     @Test
@@ -81,7 +81,7 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void asynchronous_with_only_startAtPosition_is_allowed() {
+    void asynchronous_with_only_startAtGlobalPosition_is_allowed() {
         assertThatCode(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", false, false, true, true, true))
                 .doesNotThrowAnyException();
     }
