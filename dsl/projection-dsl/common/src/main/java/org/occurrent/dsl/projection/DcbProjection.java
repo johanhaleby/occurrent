@@ -22,18 +22,12 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A self-describing DCB (Dynamic Consistency Boundary) read model.
+ * A {@link Projection} paired with the {@link DcbCriteria} that selects which events feed it, usually a tag filter such
+ * as {@code tags("username:bob")}. The read-side mirror of {@code org.occurrent.dsl.dcb.DcbDecider}. The handlers drive
+ * the fold, the criteria drives the read.
  * <p>
- * A {@link Projection} describes a read model in capability-agnostic terms (its fold, its id, its event types). To feed
- * it from a DCB event store, a caller must also know the {@link DcbCriteria} read boundary that selects the events for
- * the model, typically a tag filter such as {@code tags("username:bob")}. {@code DcbProjection} couples the projection
- * with that boundary, mirroring how {@code org.occurrent.dsl.dcb.DcbDecider} adds a {@code DcbCriteria} to a plain
- * {@code Decider} on the write side.
- * <p>
- * The projection's event-type handlers still drive the fold (they no-op on unrecognized events); the {@code criteria}
- * drives which events are read. A single-instance projection parameterized by a key (for example
- * {@code isUsernameClaimedProjection("bob")}) is expressed by closing over the key in the factory that builds the
- * projection and its {@code criteria}, so no per-command boundary function is needed here.
+ * A single-instance projection parameterized by a key (for example {@code isUsernameClaimedProjection("bob")}) closes
+ * over the key in the factory that builds both the projection and its {@code criteria}.
  *
  * @param projection the capability-agnostic read model
  * @param criteria   the DCB read boundary selecting the events that feed the projection

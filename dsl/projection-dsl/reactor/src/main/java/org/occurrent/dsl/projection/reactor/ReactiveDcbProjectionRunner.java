@@ -34,26 +34,20 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Runs a {@link DcbProjection} as an asynchronous, subscription-fed read model over a DCB consistency boundary on the
- * reactor stack: it subscribes to the events matching the projection's {@link DcbProjection#criteria() DCB criteria} and
- * updates the read model from each one, in a single call. The reactor counterpart to the blocking
- * {@code DcbProjectionRunner}.
+ * reactor stack: it subscribes to the events matching the projection's {@link DcbProjection#criteria() criteria} and
+ * updates the read model from each. The reactor counterpart to the blocking {@code DcbProjectionRunner}.
  * <p>
- * The read boundary is the descriptor's criteria verbatim; handler-derived event types are not additionally intersected
- * into it (the fold already ignores unhandled types, so a broader criteria is safe, and over-reading only costs a few
- * no-op folds). The read model is updated through a reactive {@code (E) -> Mono<Void>} update; the
- * {@link ViewStateRepository}/{@link MaterializedView} overloads drive a blocking view store from the reactive pipeline
- * (scheduled on {@code boundedElastic}; see {@link Projections}).
+ * The criteria is used verbatim, not intersected with the handler event types (the fold ignores types it does not
+ * handle, so a broader criteria is safe). The read model is updated through a reactive {@code (E) -> Mono<Void>}. The
+ * {@link ViewStateRepository}/{@link MaterializedView} overloads drive a blocking view store from the reactive pipeline,
+ * scheduled on {@code boundedElastic} (see {@link Projections}).
  * <p>
- * <strong>Whether this is live-only or catches up and resumes durably depends on the {@code SubscriptionModel} given
- * to this runner's {@code create} factory</strong>, since it subscribes through {@link DcbSubscriptions}, which is only as
- * capable as that model. Given a plain live model with no catch-up support, this runner is live-only. It does not
- * replay history and does not resume durably across restarts. Given a catch-up-capable model (the Spring composite
- * subscription model, or a hand-wired {@code CatchupSubscriptionModel}), this runner catches up from history and
- * resumes durably across restarts, the same as {@link ReactiveProjectionRunner}. For a strongly consistent, complete
- * DCB read model, fold on demand instead with the pull {@code project(...)} (the Kotlin
- * {@code DcbDomainEventQueries.project} extension). For a persistent, declarative DCB read model use the
- * {@code @Projection} annotation. To wire the same catch-up-then-resume behavior by hand without the Spring starter,
- * use {@code ResumeStartPositions.replayThenResumeDcb(...)}.
+ * <strong>Whether this catches up and resumes durably, or is live-only, depends on the {@code SubscriptionModel} passed
+ * to {@link #create}</strong>, since it subscribes through {@link DcbSubscriptions}, which is only as capable as that
+ * model. A catch-up-capable model (the Spring composite, or a hand-wired {@code CatchupSubscriptionModel}) replays
+ * history and resumes across restarts, a plain live model does neither. For a strongly consistent read, fold on demand
+ * with the pull {@code DcbDomainEventQueries.project(...)}. For a declarative read model use the {@code @Projection}
+ * annotation.
  *
  * @param <E> the domain event type
  */

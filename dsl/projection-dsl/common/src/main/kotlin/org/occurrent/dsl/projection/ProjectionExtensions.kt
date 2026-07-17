@@ -45,7 +45,7 @@ fun <S, E : Any, ID : Any> projection(initialState: S, block: ProjectionBuilder<
 /**
  * Builds a [DcbProjection] with the same type-safe handler block as [projection], plus a DCB read boundary. Supply the
  * boundary with [DcbProjectionBuilder.tags] (the common case, a tag filter such as `tags("username:$username")`) or an
- * explicit [DcbProjectionBuilder.criteria]; with neither, the boundary defaults to [DcbCriteria.all]. For example:
+ * explicit [DcbProjectionBuilder.criteria]. With neither, the boundary defaults to [DcbCriteria.all]. For example:
  *
  * ```
  * fun isUsernameClaimedProjection(username: String) =
@@ -86,7 +86,7 @@ fun <S, E : Any> singletonProjection(initialState: S, block: ProjectionBuilder<S
 
 /**
  * Builds a single-instance [DcbProjection] (see [singletonProjection]) with a DCB read boundary. Supply the boundary
- * with [DcbProjectionBuilder.tags] or an explicit [DcbProjectionBuilder.criteria]; with neither it defaults to
+ * with [DcbProjectionBuilder.tags] or an explicit [DcbProjectionBuilder.criteria]. With neither it defaults to
  * [DcbCriteria.all].
  */
 fun <S, E : Any> dcbSingletonProjection(initialState: S, block: DcbProjectionBuilder<S, E, String>.() -> Unit): DcbProjection<S, E, String> {

@@ -35,20 +35,13 @@ import static java.util.Collections.addAll;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A self-describing, capability-agnostic read model.
+ * A self-describing, capability-agnostic read model: a {@link View} fold plus which view instance an event updates (the
+ * {@code id}) and which events feed it (the handled {@code eventTypes}, or an explicit {@code filter}). It lets a feature
+ * describe its read model next to its fold, and is the read-side mirror of {@code org.occurrent.dsl.dcb.DcbDecider}.
  * <p>
- * A plain {@link View} only knows how to fold events into state. To keep that state up to date from an event stream, a
- * caller must also know which view instance an event updates (the {@code id}) and which events feed the view (the
- * {@code eventTypes} to subscribe to, or an explicit {@code filter}). {@code Projection} couples those pieces together so
- * a feature can describe its read model right next to its fold, instead of that knowledge living separately in whatever
- * subscription or query wires the view to the store. It is the read-side mirror of
- * {@code org.occurrent.dsl.dcb.DcbDecider} on the write side.
- * <p>
- * Build one with the type-safe {@link #builder(Object) handler builder}: register a fold per event type with
- * {@link Builder#on(Class, BiFunction)} and the builder both assembles the {@link View} and records the handled event
- * types, so the subscription filter is derived from exactly the events the fold recognizes. The fold no-ops (returns the
- * state unchanged) for an event type with no registered handler, so it is always safe to feed a {@code Projection} a
- * broader stream than it handles.
+ * Build one with the type-safe {@link #builder(Object) handler builder}, registering a fold per event type with
+ * {@link Builder#on(Class, BiFunction)}. The handled types become the subscription filter, and the fold leaves the state
+ * unchanged for any event type it does not handle, so feeding it a broader stream is safe.
  *
  * @param <S> the state type
  * @param <E> the event type
@@ -76,9 +69,11 @@ public final class Projection<S extends @Nullable Object, E, ID> {
     }
 
     /**
-     * The function deriving which view instance an event updates, or {@code null} for a single-instance projection (the
-     * framework supplies the single key). When present, the function may return {@code null} to skip an event that maps
-     * to no keyed instance.
+     * The function deriving which view instance an event updates, or {@code null} for a single-instance projection. A
+     * single-instance projection folds every event into one view regardless of subject, like a leaderboard built from
+     * all players' events, so it has no per-event key and the framework supplies the single key. A keyed projection has
+     * one instance per key, like a player profile keyed by player id, and its function may return {@code null} to skip
+     * an event that maps to no instance.
      */
     public @Nullable Function<E, @Nullable ID> id() {
         return id;
@@ -107,12 +102,11 @@ public final class Projection<S extends @Nullable Object, E, ID> {
     }
 
     /**
-     * Starts building a single-instance {@code Projection}: one that folds into a single view state rather than one per
-     * key, so it needs no {@code id} function. The single slot is keyed at run time by the projection's own identity
-     * (the subscription id, or the {@code @Projection} id), which is a {@code String}, so a single-instance projection
-     * is always a {@code Projection<S, E, String>}. Register handlers with {@link Builder#on(Class, BiFunction)} and call
-     * {@link Builder#build()}. Use {@link #builder(Object)} with {@link Builder#id(Function)} for a keyed, multi-instance
-     * projection instead. The Kotlin equivalents are {@code singletonProjection}/{@code dcbSingletonProjection}.
+     * Starts building a single-instance {@code Projection}: one view folded from every event, like a leaderboard, rather
+     * than one instance per key, so it needs no {@code id}. The single slot is keyed at run time by the projection's own
+     * identity (the subscription id, or the {@code @Projection} id), a {@code String}, so a single-instance projection is
+     * always a {@code Projection<S, E, String>}. Use {@link #builder(Object)} with {@link Builder#id(Function)} for a
+     * keyed, multi-instance projection. Kotlin: {@code singletonProjection}/{@code dcbSingletonProjection}.
      */
     public static <S extends @Nullable Object, E> Builder<S, E, String> singletonBuilder(S initialState) {
         Builder<S, E, String> builder = new Builder<>(initialState);
@@ -121,10 +115,9 @@ public final class Projection<S extends @Nullable Object, E, ID> {
     }
 
     /**
-     * Widen a {@code Projection} so it can run against a broader event type, mirroring
-     * {@code org.occurrent.dsl.decider.Decider#adapt}. The wrapped fold and id function are widened to ignore events that
-     * are not {@code eventType} (the fold returns the state unchanged, the id returns {@code null} to skip), so the
-     * widened projection can consume a stream carrying other events without touching its state for them.
+     * Widens a {@code Projection} to a broader event type, mirroring {@code Decider#adapt}. The fold and id ignore events
+     * that are not {@code eventType} (the fold leaves the state unchanged, the id returns {@code null}), so the widened
+     * projection can consume a stream carrying other events.
      *
      * @param projection the feature projection to widen
      * @param eventType  the event type the projection understands
@@ -193,17 +186,14 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         }
 
         /**
-         * Registers the fold for a single event type. The handler runs when the evolved event is an instance of
-         * {@code type}; a concrete event with no exact handler falls back to a handler registered for a superclass or
-         * implemented interface (nearest superclass first, then interfaces). Registering the same {@code type} twice
-         * replaces the earlier handler.
+         * Registers the fold for one event type. A concrete event with no exact handler falls back to a handler on a
+         * superclass or interface (nearest superclass first). Registering the same {@code type} twice replaces the
+         * earlier handler.
          * <p>
-         * The registered types also become the projection's {@link Projection#eventTypes()}, which is what a runner
-         * derives the subscription or query filter from when no explicit {@link #filter(Filter) filter} is set. Events
-         * are stored under their concrete runtime type, so register the concrete event types here. A handler keyed on an
-         * abstract supertype or an interface still folds every matching event through the runtime-type dispatch above,
-         * but a type filter derived from that supertype key matches no stored event, so set an explicit
-         * {@link #filter(Filter) filter} whenever you fold by a supertype.
+         * The registered types also become {@link Projection#eventTypes()}, the selector a runner uses when no explicit
+         * {@link #filter(Filter) filter} is set. Register concrete event types: a handler keyed on a supertype still
+         * folds every matching event, but a type filter derived from that supertype key matches no stored event, so set
+         * an explicit {@link #filter(Filter) filter} when you fold by a supertype.
          *
          * @param type    the event type this handler folds
          * @param handler the fold: current state and the event, returning the new state

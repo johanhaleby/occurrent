@@ -31,25 +31,18 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Runs a {@link DcbProjection} as an asynchronous, subscription-fed read model over a DCB consistency boundary: it
- * subscribes to the events matching the projection's {@link DcbProjection#criteria() DCB criteria} and updates the
- * materialized view from each one, in a single call. The DCB counterpart to {@link ProjectionRunner}.
+ * subscribes to the events matching the projection's {@link DcbProjection#criteria() criteria} and updates the
+ * materialized view from each. The DCB counterpart to {@link ProjectionRunner}.
  * <p>
- * The read boundary is the descriptor's criteria verbatim (for example the tag filter from {@code dcbProjection { tags(...) }}).
- * Handler-derived event types are not additionally intersected into it: the projection's fold already ignores event
- * types it does not handle, so a criteria broader than the handlers is safe, and narrowing an arbitrary criteria by type
- * cannot be expressed cleanly without risking a change in its OR-of-alternatives semantics. Over-reading only costs a
- * few extra no-op folds, and a tag-scoped boundary reads little to begin with.
+ * The criteria is used verbatim, not intersected with the handler event types: the fold already ignores types it does
+ * not handle, so a broader criteria is safe and over-reading only costs a few no-op folds.
  * <p>
- * <strong>Whether this is live-only or catches up and resumes durably depends on the {@code SubscriptionModel} given
- * to this runner's {@code create} factory</strong>, since it subscribes through {@link DcbSubscriptions}, which is only as
- * capable as that model. Given a plain live model with no catch-up support, this runner is live-only. It does not
- * replay history and does not resume durably across restarts. Given a catch-up-capable model (the Spring composite
- * subscription model, or a hand-wired {@code CatchupSubscriptionModel}), this runner catches up from history and
- * resumes durably across restarts, the same as {@link ProjectionRunner}. For a strongly consistent, complete DCB read
- * model, fold on demand instead with the pull {@code project(...)} (the Kotlin {@code DcbDomainEventQueries.project}
- * extension). For a persistent, declarative DCB read model use the {@code @Projection} annotation. To wire the same
- * catch-up-then-resume behavior by hand without the Spring starter, use
- * {@code ResumeStartPositions.replayThenResumeDcb(...)}.
+ * <strong>Whether this catches up and resumes durably, or is live-only, depends on the {@code SubscriptionModel} passed
+ * to {@link #create}</strong>, since it subscribes through {@link DcbSubscriptions}, which is only as capable as that
+ * model. A catch-up-capable model (the Spring composite, or a hand-wired {@code CatchupSubscriptionModel}) replays
+ * history and resumes across restarts, a plain live model does neither. For a strongly consistent read, fold on demand
+ * with the pull {@code DcbDomainEventQueries.project(...)}. For a declarative read model use the {@code @Projection}
+ * annotation.
  *
  * @param <E> the domain event type
  */
