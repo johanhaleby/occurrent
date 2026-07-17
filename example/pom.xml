@@ -24,6 +24,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>projection</module>
+        <module>snapshot</module>
         <module>forwarder</module>
         <module>domain</module>
     </modules>

@@ -136,13 +136,14 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         @Nullable Function<List<E>, Mono<Void>> sideEffect = options.sideEffect();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
+        @Nullable Long fromPosition = options.fromPosition();
 
         // The read, decide, append, and synchronous dispatch run as one unit inside the transaction executor and retry
         // from a fresh read on a DCB conflict, so the decision always runs against the current events. The side-effect
         // is composed after the retry so it runs once on success, not per attempt.
         // An empty Mono here means the domain function produced no new events (a no-op), so nothing is appended and no
         // side-effect runs. The append-produced path carries a Result so the side-effect can fire once after the retry.
-        Supplier<Mono<Result<E>>> readDecideAppendUnit = () -> eventStore.read(criteria).flatMap(eventStream -> {
+        Supplier<Mono<Result<E>>> readDecideAppendUnit = () -> (fromPosition == null ? eventStore.read(criteria) : eventStore.read(criteria, DcbReadOptions.afterPosition(fromPosition))).flatMap(eventStream -> {
             List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
             List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
             if (newDomainEvents == null || newDomainEvents.isEmpty()) {

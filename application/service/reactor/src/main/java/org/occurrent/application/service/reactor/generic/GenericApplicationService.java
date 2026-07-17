@@ -114,13 +114,15 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         }
         @Nullable Function<List<E>, Mono<Void>> sideEffect = executeOptions.sideEffect();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
+        @Nullable Long fromStreamVersion = executeOptions.fromStreamVersion();
+        int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
 
         // The read, decide, write, and synchronous dispatch run as one unit and retry from a fresh read on an
         // optimistic-concurrency conflict, so the decision always runs against the current events. The transaction
         // executor is entered only when synchronous dispatch must commit atomically with the write; otherwise the
         // write keeps exactly its prior semantics and applications without synchronous subscriptions pay no transaction
         // overhead. The side-effect is composed after the retry so it runs once on success, not per attempt.
-        Supplier<Mono<Result<E>>> readDecideWriteUnit = () -> read(streamId, filter).flatMap(eventStream ->
+        Supplier<Mono<Result<E>>> readDecideWriteUnit = () -> read(streamId, filter, skip).flatMap(eventStream ->
                 eventStream.events().collectList().flatMap(currentCloudEvents -> {
                     List<E> domainEvents = cloudEventConverter.toDomainEvents(currentCloudEvents.stream()).toList();
                     List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
@@ -152,11 +154,11 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         });
     }
 
-    private Mono<EventStream<CloudEvent>> read(String streamId, @Nullable StreamReadFilter filter) {
+    private Mono<EventStream<CloudEvent>> read(String streamId, @Nullable StreamReadFilter filter, int skip) {
         if (filter == null) {
-            return eventStore.read(streamId);
+            return eventStore.read(streamId, skip, Integer.MAX_VALUE);
         }
-        return ((ReadEventStreamWithFilter) eventStore).read(streamId, filter);
+        return ((ReadEventStreamWithFilter) eventStore).read(streamId, filter, skip, Integer.MAX_VALUE);
     }
 
     private @Nullable StreamReadFilter resolveFilter(ExecuteOptions<E> executeOptions) {

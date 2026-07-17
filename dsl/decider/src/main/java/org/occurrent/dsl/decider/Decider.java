@@ -58,6 +58,19 @@ public interface Decider<C, S extends @Nullable Object, E> {
     S evolve(S state, @NonNull E event);
 
     /**
+     * Fold {@code events} onto {@code state} and return the resulting state, stopping early at the first terminal state.
+     * Use this to resume from a known state such as a snapshot, applying only the events written after it instead of
+     * replaying the whole history.
+     *
+     * @param state  The state to start folding from.
+     * @param events The events to apply, in order.
+     * @return The state after applying the events (or the first terminal state reached).
+     */
+    default S evolve(S state, List<E> events) {
+        return fold(state, Objects.requireNonNull(events, "events cannot be null"));
+    }
+
+    /**
      * Whether {@code state} is terminal, meaning no further events should be folded into it. This is expected to be
      * absorbing: once it is {@code true} for a state it stays {@code true} for every state reachable from it by
      * {@link #evolve}. Both {@link #fold} and {@link #compose} rely on that, {@code fold} by breaking at the first

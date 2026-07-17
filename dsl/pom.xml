@@ -35,6 +35,7 @@
         <module>decider-arrow</module>
         <module>view-dsl</module>
         <module>projection-dsl</module>
+        <module>snapshot-dsl</module>
     </modules>
 
     <dependencyManagement>

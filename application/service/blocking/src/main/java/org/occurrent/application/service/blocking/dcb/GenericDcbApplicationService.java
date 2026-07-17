@@ -135,6 +135,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         @Nullable Consumer<List<E>> sideEffect = options.sideEffect();
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
+        @Nullable Long fromPosition = options.fromPosition();
 
         // @formatter:off
         record Tuple<T1, T2>(T1 v1, T2 v2) {}
@@ -142,7 +143,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
 
         Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
             Supplier<Tuple<Optional<DcbAppendResult>, List<E>>> readDecideAppend = () -> {
-                DcbEventStream eventStream = eventStore.read(criteria);
+                DcbEventStream eventStream = fromPosition == null ? eventStore.read(criteria) : eventStore.read(criteria, DcbReadOptions.afterPosition(fromPosition));
                 List<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream()).toList();
                 List<E> newDomainEvents = functionThatCallsDomainModel.apply(domainEvents);
                 if (newDomainEvents == null || newDomainEvents.isEmpty()) {

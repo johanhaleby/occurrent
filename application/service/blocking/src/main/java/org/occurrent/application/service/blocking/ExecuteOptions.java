@@ -46,11 +46,13 @@ public final class ExecuteOptions<E> {
     private final @Nullable StreamReadFilter filter;
     private final @Nullable ExecuteFilter<? extends E> executeFilter;
     private final @Nullable Consumer<List<E>> sideEffect;
+    private final @Nullable Long fromStreamVersion;
 
-    private ExecuteOptions(@Nullable StreamReadFilter filter, @Nullable ExecuteFilter<? extends E> executeFilter, @Nullable Consumer<List<E>> sideEffect) {
+    private ExecuteOptions(@Nullable StreamReadFilter filter, @Nullable ExecuteFilter<? extends E> executeFilter, @Nullable Consumer<List<E>> sideEffect, @Nullable Long fromStreamVersion) {
         this.filter = filter;
         this.executeFilter = executeFilter;
         this.sideEffect = sideEffect;
+        this.fromStreamVersion = fromStreamVersion;
     }
 
     /**
@@ -60,7 +62,7 @@ public final class ExecuteOptions<E> {
      * @return Empty execute options.
      */
     public static <E> ExecuteOptions<E> empty() {
-        return new ExecuteOptions<>(null, null, null);
+        return new ExecuteOptions<>(null, null, null, null);
     }
 
     /**
@@ -81,7 +83,7 @@ public final class ExecuteOptions<E> {
      * @return Execute options configured with the supplied execute filter.
      */
     public static <E> ExecuteOptions<E> withExecuteFilter(ExecuteFilter<? extends E> executeFilter) {
-        return new ExecuteOptions<>(null, Objects.requireNonNull(executeFilter, "executeFilter cannot be null"), null);
+        return new ExecuteOptions<>(null, Objects.requireNonNull(executeFilter, "executeFilter cannot be null"), null, null);
     }
 
     /**
@@ -94,7 +96,7 @@ public final class ExecuteOptions<E> {
      * @return New options with filter applied.
      */
     public ExecuteOptions<E> filter(StreamReadFilter filter) {
-        return new ExecuteOptions<>(Objects.requireNonNull(filter, "filter cannot be null"), null, null);
+        return new ExecuteOptions<>(Objects.requireNonNull(filter, "filter cannot be null"), null, null, fromStreamVersion);
     }
 
     /**
@@ -123,7 +125,29 @@ public final class ExecuteOptions<E> {
      */
     @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> ExecuteOptions<E_SPECIFIC> sideEffect(Consumer<List<E_SPECIFIC>> sideEffect) {
-        return new ExecuteOptions<>(filter, (ExecuteFilter<? extends E_SPECIFIC>) executeFilter, Objects.requireNonNull(sideEffect, "sideEffect cannot be null"));
+        return new ExecuteOptions<>(filter, (ExecuteFilter<? extends E_SPECIFIC>) executeFilter, Objects.requireNonNull(sideEffect, "sideEffect cannot be null"), fromStreamVersion);
+    }
+
+    /**
+     * Start reading the stream <em>after</em> the given stream version instead of from the beginning, so that only the
+     * events written after that version are handed to the domain function.
+     * <p>
+     * This is an advanced option intended for snapshot-based execution: the caller has already folded the stream up to
+     * {@code fromStreamVersion} into a known state (a snapshot) and only needs the events after it. The domain function
+     * must therefore fold the events it receives onto that snapshot state rather than onto the initial state. The
+     * optimistic write still happens at the stream's true current version, so concurrency control is unaffected.
+     *
+     * @param fromStreamVersion The exclusive stream version to start reading after (0 reads the whole stream).
+     * @return New options that read the stream from the given version.
+     */
+    public ExecuteOptions<E> fromStreamVersion(long fromStreamVersion) {
+        if (fromStreamVersion < 0) {
+            throw new IllegalArgumentException("fromStreamVersion cannot be negative");
+        }
+        if (fromStreamVersion > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("fromStreamVersion cannot exceed Integer.MAX_VALUE (" + Integer.MAX_VALUE + "), because the stream tail is read with EventStore.read(streamId, skip, limit) where skip is an int, so a snapshot base version beyond that is not supported");
+        }
+        return new ExecuteOptions<>(filter, executeFilter, sideEffect, fromStreamVersion);
     }
 
     /**
@@ -147,6 +171,13 @@ public final class ExecuteOptions<E> {
         return sideEffect;
     }
 
+    /**
+     * Return the configured stream version to start reading after, or {@code null} if the whole stream should be read.
+     */
+    public @Nullable Long fromStreamVersion() {
+        return fromStreamVersion;
+    }
+
     @SuppressWarnings("rawtypes")
     @Override
     public boolean equals(@Nullable Object obj) {
@@ -155,12 +186,13 @@ public final class ExecuteOptions<E> {
         var that = (ExecuteOptions) obj;
         return Objects.equals(this.filter, that.filter) &&
                 Objects.equals(this.executeFilter, that.executeFilter) &&
-                Objects.equals(this.sideEffect, that.sideEffect);
+                Objects.equals(this.sideEffect, that.sideEffect) &&
+                Objects.equals(this.fromStreamVersion, that.fromStreamVersion);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(filter, executeFilter, sideEffect);
+        return Objects.hash(filter, executeFilter, sideEffect, fromStreamVersion);
     }
 
     @Override
@@ -168,7 +200,8 @@ public final class ExecuteOptions<E> {
         return "ExecuteOptions[" +
                 "filter=" + filter + ", " +
                 "executeFilter=" + executeFilter + ", " +
-                "sideEffect=" + sideEffect + ']';
+                "sideEffect=" + sideEffect + ", " +
+                "fromStreamVersion=" + fromStreamVersion + ']';
     }
 
 }
