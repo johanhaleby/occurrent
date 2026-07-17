@@ -32,7 +32,7 @@ import reactor.core.publisher.Mono
 /**
  * Runs [projection] as a capability-agnostic, subscription-fed read model on the reactor stack: creates the subscription
  * (its selector derived from the projection) and applies [update] for every matching event. [update] owns the reactive
- * load-evolve-save against a reactive store; it is also the overload to use for synchronous, in-transaction
+ * load-evolve-save against a reactive store, and is also the overload for synchronous, in-transaction
  * (read-your-writes) dispatch. On a store with both the `STREAM` and `DCB` capabilities this delivers both
  * stream-written and DCB-appended events.
  */

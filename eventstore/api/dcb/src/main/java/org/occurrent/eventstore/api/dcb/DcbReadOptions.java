@@ -25,21 +25,18 @@ import java.util.OptionalLong;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Options that scope a DCB read. Uses the shared {@link PositionRange} window, the same window used by stream
- * position reads and the query DSL, and optionally caps the number of matching events returned and selects which end
- * of the matching range the cap keeps.
+ * Options that scope a DCB read: the shared {@link PositionRange} window, plus an optional {@code limit} on how many
+ * matching events are returned and a {@code direction} choosing which end of the match the limit keeps.
  * <p>
- * {@code direction} and {@code limit} do not change the order in which events are returned: a {@link DcbEventStream}
- * always lists its events in ascending DCB sequence-position order. They only select <em>which</em> matching events are
- * returned. {@code direction} chooses the end the {@code limit} keeps &mdash; {@link Direction#FORWARD} keeps the
- * lowest-position matches (the oldest), {@link Direction#BACKWARD} keeps the highest-position matches (the newest)
- * &mdash; and {@code limit} caps the count. So {@code fromBeginning().backwards().limit(1)} returns the single
- * highest-position event that matches the criteria, which is how a gapless sequence reads its last entry in one round
- * trip instead of folding the whole stream (see ADR 0056).
+ * Neither {@code direction} nor {@code limit} changes the returned order. A {@link DcbEventStream} always lists events
+ * ascending by DCB position. {@link Direction#FORWARD} keeps the lowest-position (oldest) matches,
+ * {@link Direction#BACKWARD} the highest-position (newest). So {@code fromBeginning().backwards().limit(1)} reads the
+ * single newest matching event in one round trip, how a gapless sequence finds its last entry without folding the whole
+ * stream (ADR 0056).
  * <p>
- * {@code direction} and {@code limit} never affect the {@link DcbEventStream#consistencyToken() consistency token}: the
- * token reflects the whole matching set observed at read time, not the returned page, so a limited read still guards an
- * append against <em>any</em> later matching event.
+ * Neither ever affects the {@link DcbEventStream#consistencyToken() consistency token}, which reflects the whole
+ * matching set observed at read time, not the returned page, so a limited read still guards an append against any later
+ * matching event.
  *
  * @param positionRange the position window to read
  * @param direction     which end of the matching range the {@code limit} keeps; never changes the returned order

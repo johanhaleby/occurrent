@@ -107,8 +107,8 @@ private fun decide(command: ProductPriceCommand, state: ProductPriceState): List
 
 /**
  * The current price at [at] is always valid. The immediately preceding price is also valid if the change to the
- * current price happened within [ProductPricePolicy.GRACE_PERIOD] before [at] - the grace period a shopper who saw
- * the old price gets to complete their order.
+ * current price happened within [ProductPricePolicy.GRACE_PERIOD] before [at]. That grace period is the window a
+ * shopper who saw the old price gets to complete their order.
  */
 private fun validPricesAt(priceHistory: List<PricePoint>, at: Instant): Set<BigDecimal> {
     val effective = priceHistory.filter { !it.effectiveFrom.isAfter(at) }.sortedBy { it.effectiveFrom }

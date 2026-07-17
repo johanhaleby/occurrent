@@ -20,10 +20,8 @@ package org.occurrent.annotation;
 import java.lang.annotation.*;
 
 /**
- * Marks a factory method that returns a Projection or DcbProjection descriptor, registering it as a
- * persistent read model managed by the framework. The annotation selects between agnostic and
- * stream-based subscriptions and configures how the projection handles event delivery and state
- * management. For example:
+ * Marks a no-arg factory method returning a {@code Projection} or {@code DcbProjection}, registering it as a
+ * persistent, framework-managed read model. For example:
  *
  * <pre lang="java">
  * &#64;Projection(id = "orderStatus")
@@ -35,13 +33,12 @@ import java.lang.annotation.*;
  *         .build();
  * }
  * </pre>
- * The annotated method takes no arguments. The Kotlin DSL equivalent is
- * {@code projection(OrderStatus.EMPTY) { id { it.orderId }; on<OrderPlaced> { s, e -> s.placed(e) } }},
- * and a DCB read model returns a {@code DcbProjection} built with {@code dcbProjection { .. }}.
+ * The Kotlin equivalent is {@code projection(OrderStatus.EMPTY) { id { it.orderId }; on<OrderPlaced> { s, e -> s.placed(e) } }},
+ * and a DCB read model returns a {@code DcbProjection} from {@code dcbProjection { .. }}.
  * <p>
- * The method may live on any Spring bean: a {@code @Bean} factory method in a {@code @Configuration} class, or a
- * method on a {@code @Component}. The {@code @Component} form is the cleaner choice for a single dedicated projection,
- * while {@code @Bean} methods group several projections in one configuration class.
+ * The method may live on any Spring bean: a {@code @Bean} in a {@code @Configuration}, or a method on a
+ * {@code @Component}. Prefer {@code @Component} for a single dedicated projection, {@code @Bean} to group several in
+ * one class.
  *
  * <h4>Projection Descriptor Type</h4>
  * <p>
@@ -52,16 +49,13 @@ import java.lang.annotation.*;
  *
  * <h4>Mode and Startup Behavior</h4>
  * <p>
- * {@link #mode()} controls whether the projection processes events asynchronously (the default, an
- * eventually-consistent subscription that catches up from history) or synchronously (read-your-writes,
- * updated on the write path inside the write transaction). Synchronous mode is mutually exclusive with
- * {@link #startAt()}, {@link #startAtPosition()}, and {@link #resumeBehavior()}, and the framework
- * enforces this constraint during bean post-processing.
+ * {@link #mode()} chooses asynchronous delivery (the default, eventually consistent, catching up from history) or
+ * synchronous (read-your-writes, updated on the write path in the write transaction). Synchronous mode is mutually
+ * exclusive with {@link #startAt()}, {@link #startAtPosition()}, and {@link #resumeBehavior()}.
  * </p>
  * <p>
- * {@link #startupMode()} specifies how the projection behaves at application startup: in the default
- * or background mode it may replay history before becoming live, while {@link StartupMode#WAIT_UNTIL_STARTED}
- * blocks until the projection is fully initialized.
+ * {@link #startupMode()} chooses how startup behaves: the default or background mode may replay history before going
+ * live, while {@link StartupMode#WAIT_UNTIL_STARTED} blocks until the projection is fully started.
  * </p>
  *
  * <h4>State Store</h4>

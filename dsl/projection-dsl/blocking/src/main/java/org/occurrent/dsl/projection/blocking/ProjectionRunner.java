@@ -42,14 +42,12 @@ import static java.util.Objects.requireNonNull;
  * materialized view from every matching event, in one call. The Java counterpart to the Kotlin {@code project(...)}
  * extensions on the subscription DSL, and the read-side mirror of {@code DeciderApplicationService} on the write side.
  * <p>
- * Choose the capability with the factory: {@link #agnostic(Subscribable, CloudEventConverter) agnostic} delivers both
- * stream-written and DCB-appended events (filtered only by the projection's selector), while
- * {@link #stream(Subscribable, CloudEventConverter) stream} scopes delivery to stream-written events. For a DCB
- * consistency-boundary read model use {@link DcbProjectionRunner} instead.
+ * Pick the capability with the factory: {@link #agnostic(Subscribable, CloudEventConverter) agnostic} delivers both
+ * stream-written and DCB-appended events, {@link #stream(Subscribable, CloudEventConverter) stream} only stream-written
+ * ones. For a DCB consistency-boundary read model use {@link DcbProjectionRunner}.
  * <p>
- * The subscription filter is derived from the projection: its explicit {@link Projection#filter() filter} if set, else a
- * type filter over its handled event types (see {@link ProjectionFilters#filterFor}). The returned {@link Subscription} has
- * already been waited on until started.
+ * The subscription filter comes from the projection (its explicit {@link Projection#filter() filter}, else a type filter
+ * over its handled types). The returned {@link Subscription} is already started.
  *
  * @param <E> the domain event type
  */

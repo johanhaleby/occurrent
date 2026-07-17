@@ -38,14 +38,11 @@ public final class ProjectionFilters {
 
     /**
      * The plain {@link Filter} a projection selects on: its explicit {@link Projection#filter() filter} if set,
-     * otherwise a type filter over its {@link Projection#eventTypes() handled event types}, resolved to CloudEvent type
-     * strings through {@code cloudEventConverter}. An empty handled-type set means "all events". It also honours the
-     * descriptor's explicit filter, which the subscription DSL's {@code filterFromEventTypes} does not.
+     * otherwise a type filter over its {@link Projection#eventTypes() handled event types} (resolved to CloudEvent type
+     * strings through {@code cloudEventConverter}, empty means all events).
      * <p>
-     * The type-to-filter mapping is a small, deliberate re-implementation of that {@code filterFromEventTypes}. Reusing
-     * it would make {@code projection-dsl-common} depend on {@code subscription-dsl-common} for a handful of lines and
-     * mean adapting a {@code Set<Class<?>>} to its Kotlin {@code Array<KClass>} parameter, so the copy is the cheaper
-     * side of the tradeoff. Keep this module independent of the subscription stack rather than collapsing the two.
+     * The type-to-filter mapping deliberately re-implements the subscription DSL's {@code filterFromEventTypes} rather
+     * than depend on {@code subscription-dsl-common}, keeping this module independent of the subscription stack.
      */
     public static <E> Filter filterFor(CloudEventConverter<E> cloudEventConverter, Projection<?, E, ?> projection) {
         requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null");

@@ -31,14 +31,10 @@ import reactor.core.publisher.Mono
  * stack: subscribes to the events matching the projection's [DcbProjection.criteria] and applies [update] for each.
  * [update] owns the reactive load-evolve-save, and is also the overload for synchronous read-your-writes dispatch.
  *
- * Whether this is live-only or catches up and resumes durably depends on the `SubscriptionModel` behind this
- * [DcbSubscriptions] instance. Given a plain live model with no catch-up support, this is live-only. It does not
- * replay history and does not resume durably across restarts. Given a catch-up-capable model (the Spring composite
- * subscription model, or a hand-wired `CatchupSubscriptionModel`), it catches up from history and resumes durably
- * across restarts, the same as [ReactiveProjectionRunner]. For a strongly consistent, complete DCB read model, fold
- * on demand with the pull [project] ([DcbDomainEventQueries.project]). For a persistent, declarative DCB read model
- * use the `@Projection` annotation. To wire the same catch-up-then-resume behavior by hand without the Spring
- * starter, use `ResumeStartPositions.replayThenResumeDcb(...)`.
+ * Whether this catches up and resumes durably, or is live-only, depends on the `SubscriptionModel` behind this
+ * [DcbSubscriptions]. A catch-up-capable model (the Spring composite, or a hand-wired `CatchupSubscriptionModel`)
+ * replays history and resumes across restarts, a plain live model does neither. For a strongly consistent read, fold on
+ * demand with the pull [DcbDomainEventQueries.project]. For a declarative read model use the `@Projection` annotation.
  */
 fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, update: (E) -> Mono<Void>, startAt: DcbStartAt? = null): Subscription =
     subscribeDcb(subscriptionId, dcbProjection.criteria(), startAt) { e -> update(e) }
