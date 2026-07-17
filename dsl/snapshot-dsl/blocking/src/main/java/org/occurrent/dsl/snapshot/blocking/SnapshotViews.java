@@ -28,6 +28,7 @@ import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -60,8 +61,11 @@ public final class SnapshotViews {
 
         SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(store.findLatest(streamId), snapshotView.schemaVersion(), snapshotView.view()::initialState);
         EventStream<CloudEvent> eventStream = eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE);
-        List<E> tail = converter.toDomainEvents(eventStream.events()).toList();
-        S current = snapshotView.view().evolve(base.state(), tail);
+        // The tail is folded incrementally straight off the stream (evolve(S, Stream) does not buffer it), and the
+        // events are captured into a list as a side effect of that same pass since the policy below needs them (for
+        // example onEvent inspects the tail's event types), so the events are never held in memory twice.
+        List<E> tail = new ArrayList<>();
+        S current = snapshotView.view().evolve(base.state(), converter.toDomainEvents(eventStream.events()).peek(tail::add));
 
         long version = eventStream.version();
         // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...) stay meaningful

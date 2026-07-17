@@ -26,6 +26,7 @@ import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import reactor.core.publisher.Mono;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -58,16 +59,24 @@ public final class ReactiveSnapshotViews {
         Objects.requireNonNull(policy, "policy cannot be null");
 
         return Mono.defer(() -> ReactiveSnapshotSupport.resolveBase(store, streamId, snapshotView.schemaVersion(), snapshotView.view()::initialState).flatMap(base ->
-                eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE).flatMap(eventStream ->
-                        eventStream.events().collectList().flatMap(cloudEvents -> {
-                            List<E> tail = converter.toDomainEvents(cloudEvents.stream()).toList();
-                            S current = snapshotView.view().evolve(base.state(), tail);
-                            long version = eventStream.version();
-                            // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...)
-                            // stay meaningful and everyNEvents rides the version delta.
-                            return ReactiveSnapshotSupport.maybeSaveBestEffort(store, streamId, snapshotView.schemaVersion(), policy,
-                                            new SnapshotDecision<>(current, tail, version, SnapshotSupport.requireInt(version - base.version(), "the number of events since the snapshot")))
-                                    .thenReturn(current);
-                        }))));
+                eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE).flatMap(eventStream -> {
+                    // The tail is folded incrementally straight off the event flux with reduce, instead of collecting it
+                    // to a list first. The events are captured into a list as a side effect of that same pass since the
+                    // policy below needs them (for example onEvent inspects the tail's event types), so the events are
+                    // never held in memory twice.
+                    List<E> tail = new ArrayList<>();
+                    return eventStream.events()
+                            .map(converter::toDomainEvent)
+                            .doOnNext(tail::add)
+                            .reduce(base.state(), (state, event) -> snapshotView.view().evolve(state, event))
+                            .flatMap(current -> {
+                                long version = eventStream.version();
+                                // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...)
+                                // stay meaningful and everyNEvents rides the version delta.
+                                return ReactiveSnapshotSupport.maybeSaveBestEffort(store, streamId, snapshotView.schemaVersion(), policy,
+                                                new SnapshotDecision<>(current, tail, version, SnapshotSupport.requireInt(version - base.version(), "the number of events since the snapshot")))
+                                        .thenReturn(current);
+                            });
+                })));
     }
 }
