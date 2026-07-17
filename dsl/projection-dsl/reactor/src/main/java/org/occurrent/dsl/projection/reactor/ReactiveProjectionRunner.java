@@ -119,7 +119,7 @@ public final class ReactiveProjectionRunner<E> {
      * skipping events whose id resolves to {@code null}.
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
-        return project(subscriptionId, projection, Projections.reactiveUpdate(projection, repository), startAt);
+        return project(subscriptionId, projection, Projections.reactiveUpdate(projection, repository, subscriptionId), startAt);
     }
 
     /**

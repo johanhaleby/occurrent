@@ -110,7 +110,7 @@ public final class ReactiveDcbProjectionRunner<E> {
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository, @Nullable DcbStartAt startAt) {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
-        return project(subscriptionId, dcbProjection, Projections.reactiveUpdate(dcbProjection.projection(), repository), startAt);
+        return project(subscriptionId, dcbProjection, Projections.reactiveUpdate(dcbProjection.projection(), repository, subscriptionId), startAt);
     }
 
     /**

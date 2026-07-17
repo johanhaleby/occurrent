@@ -210,6 +210,34 @@ class ProjectionTest {
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("filter");
         }
+
+        @Test
+        void singleton_builds_without_an_id() {
+            Projection<Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent>singletonBuilder(false)
+                    .on(AccountRegistered.class, (state, event) -> true)
+                    .build();
+
+            assertThat(projection.id()).isNull();
+        }
+
+        @Test
+        void id_then_singleton_throws() {
+            Projection.Builder<Boolean, AccountEvent, String> builder = Projection.<Boolean, AccountEvent, String>builder(false)
+                    .id(AccountEvent::accountId);
+
+            assertThatThrownBy(builder::singleton)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("singleton");
+        }
+
+        @Test
+        void singleton_then_id_throws() {
+            Projection.Builder<Boolean, AccountEvent, String> builder = Projection.<Boolean, AccountEvent>singletonBuilder(false);
+
+            assertThatThrownBy(() -> builder.id(AccountEvent::accountId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("singleton");
+        }
     }
 
     @Nested

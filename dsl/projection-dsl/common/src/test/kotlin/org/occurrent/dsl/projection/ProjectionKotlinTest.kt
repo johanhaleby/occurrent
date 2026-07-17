@@ -49,7 +49,7 @@ class ProjectionKotlinTest {
                 .containsExactlyInAnyOrder(AccountRegistered::class.java, UsernameChanged::class.java)
             assertThat(projection.view().evolve(false, AccountRegistered("1", "bob"))).isTrue()
             assertThat(projection.view().evolve(false, AccountRegistered("1", "alice"))).isFalse()
-            assertThat(projection.id().apply(AccountRegistered("acc-1", "bob"))).isEqualTo("acc-1")
+            assertThat(projection.id()!!.apply(AccountRegistered("acc-1", "bob"))).isEqualTo("acc-1")
         }
 
         @Test
@@ -103,7 +103,7 @@ class ProjectionKotlinTest {
                 .containsExactlyInAnyOrder(
                     AccountRegistered::class.java, AccountClosed::class.java, UsernameChanged::class.java
                 )
-            assertThat(projection.projection().id().apply(AccountRegistered("acc-1", "bob"))).isEqualTo("bob")
+            assertThat(projection.projection().id()!!.apply(AccountRegistered("acc-1", "bob"))).isEqualTo("bob")
             // The fold realizes issue #194's IsUsernameClaimedProjection.
             val view = projection.projection().view()
             var state = view.evolve(false, AccountRegistered("acc-1", "bob"))
@@ -147,6 +147,17 @@ class ProjectionKotlinTest {
             }
                 .isInstanceOf(IllegalStateException::class.java)
                 .hasMessageContaining("criteria")
+        }
+
+        @Test
+        fun `dcbSingletonProjection builds a single-instance descriptor with no id function`() {
+            val projection = dcbSingletonProjection<Boolean, AccountEvent>(initialState = false) {
+                tags("username:bob")
+                on<AccountRegistered> { _, _ -> true }
+            }
+
+            assertThat(projection.projection().id()).isNull()
+            assertThat(projection.projection().view().evolve(false, AccountRegistered("1", "bob"))).isTrue()
         }
     }
 }

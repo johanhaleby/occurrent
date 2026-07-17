@@ -255,14 +255,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         Object repository = uniqueStoreBeanOrThrow(ViewStateRepository.class, id);
         if (repository != null) {
-            return Projections.materializedView(projection, (ViewStateRepository<S, ID>) repository);
+            return Projections.materializedView(projection, (ViewStateRepository<S, ID>) repository, id);
         }
         Object crudRepository = uniqueStoreBeanOrThrow(CrudRepository.class, id);
         if (crudRepository != null) {
-            return Projections.materializedView(projection, crudBackedRepository((CrudRepository<S, ID>) crudRepository));
+            return Projections.materializedView(projection, crudBackedRepository((CrudRepository<S, ID>) crudRepository), id);
         }
         // No candidate store bean of any type exists, so fall back to the zero-config MongoDB default.
-        return Projections.materializedView(projection, mongoBackedRepository((Class<S>) reflectStateType(factoryMethod, id)));
+        return Projections.materializedView(projection, mongoBackedRepository((Class<S>) reflectStateType(factoryMethod, id)), id);
     }
 
     // Resolve the store bean referenced by store() (bean type) or storeName() (bean name), or null when neither is set
@@ -320,10 +320,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             return (MaterializedView<E>) materializedView;
         }
         if (storeBean instanceof ViewStateRepository<?, ?> repository) {
-            return Projections.materializedView(projection, (ViewStateRepository<S, ID>) repository);
+            return Projections.materializedView(projection, (ViewStateRepository<S, ID>) repository, id);
         }
         if (storeBean instanceof CrudRepository<?, ?> crudRepository) {
-            return Projections.materializedView(projection, crudBackedRepository((CrudRepository<S, ID>) crudRepository));
+            return Projections.materializedView(projection, crudBackedRepository((CrudRepository<S, ID>) crudRepository), id);
         }
         throw new IllegalArgumentException("@Projection '%s' store bean must be a MaterializedView, a ViewStateRepository, or a Spring Data CrudRepository, but was %s.".formatted(id, storeBean.getClass().getName()));
     }

@@ -50,7 +50,7 @@ fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Proje
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
 fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription {
-    val update = Projections.reactiveUpdate(projection, repository)
+    val update = Projections.reactiveUpdate(projection, repository, subscriptionId)
     return project(subscriptionId, projection, { e -> update.apply(e) }, startAt)
 }
 
@@ -80,7 +80,7 @@ fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection:
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
 fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription {
-    val update = Projections.reactiveUpdate(projection, repository)
+    val update = Projections.reactiveUpdate(projection, repository, subscriptionId)
     return project(subscriptionId, projection, { e -> update.apply(e) }, startAt)
 }
 

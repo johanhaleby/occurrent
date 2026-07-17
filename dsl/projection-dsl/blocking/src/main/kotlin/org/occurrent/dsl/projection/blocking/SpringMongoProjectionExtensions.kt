@@ -31,12 +31,15 @@ import org.springframework.data.mongodb.core.MongoOperations
 /**
  * Convenience over [Subscriptions.project] that materializes [projection] into MongoDB via [mongoOperations], using the
  * view DSL's `materialized(...)` (with its default duplicate-key/optimistic-locking retry policy). The projection's id
- * becomes the MongoDB document id and so must not resolve to `null`.
+ * becomes the MongoDB document id and so must not resolve to `null`. A single-instance projection has no id function, so
+ * it uses the `subscriptionId` as the document id instead.
  */
 inline fun <reified S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, mongoOperations: MongoOperations, startAt: StartAt? = null): Subscription {
     val id = projection.id()
+    @Suppress("UNCHECKED_CAST")
     val materializedView: MaterializedView<E> = projection.view().materialized(mongoOperations) { event ->
-        requireNotNull(id.apply(event)) { "Projection id resolved to null for a MongoDB-materialized view; a document id cannot be null" }
+        if (id == null) subscriptionId as ID
+        else requireNotNull(id.apply(event)) { "Projection id resolved to null for a MongoDB-materialized view; a document id cannot be null" }
     }
     return project(subscriptionId, projection, materializedView, startAt)
 }
@@ -46,8 +49,10 @@ inline fun <reified S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionI
  */
 inline fun <reified S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, mongoOperations: MongoOperations, startAt: StartAt? = null): Subscription {
     val id = projection.id()
+    @Suppress("UNCHECKED_CAST")
     val materializedView: MaterializedView<E> = projection.view().materialized(mongoOperations) { event ->
-        requireNotNull(id.apply(event)) { "Projection id resolved to null for a MongoDB-materialized view; a document id cannot be null" }
+        if (id == null) subscriptionId as ID
+        else requireNotNull(id.apply(event)) { "Projection id resolved to null for a MongoDB-materialized view; a document id cannot be null" }
     }
     return project(subscriptionId, projection, materializedView, startAt)
 }
@@ -58,8 +63,10 @@ inline fun <reified S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscri
 inline fun <reified S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, mongoOperations: MongoOperations, startAt: DcbStartAt? = null): Subscription {
     val projection = dcbProjection.projection()
     val id = projection.id()
+    @Suppress("UNCHECKED_CAST")
     val materializedView: MaterializedView<E> = projection.view().materialized(mongoOperations) { event ->
-        requireNotNull(id.apply(event)) { "Projection id resolved to null for a MongoDB-materialized view; a document id cannot be null" }
+        if (id == null) subscriptionId as ID
+        else requireNotNull(id.apply(event)) { "Projection id resolved to null for a MongoDB-materialized view; a document id cannot be null" }
     }
     return project(subscriptionId, dcbProjection, materializedView, startAt)
 }
