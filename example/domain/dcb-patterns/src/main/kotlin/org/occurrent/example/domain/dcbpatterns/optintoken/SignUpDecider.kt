@@ -27,7 +27,7 @@ import java.util.UUID
 /**
  * Pattern: double opt-in with a consume-once, expiring token. [SignUpInitiated] carries the one-time password and
  * when it was issued; [ConfirmSignUp] must arrive with the matching OTP before [SignUpTokenPolicy.TTL] elapses, and
- * only once - a second confirmation with the same OTP is rejected because the boundary already shows the token
+ * only once. A second confirmation with the same OTP is rejected because the boundary already shows the token
  * consumed.
  * <p>
  * The boundary is the pair of tags (email, otp) together (see [criteria]): both tags on [SignUpInitiated]/

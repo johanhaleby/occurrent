@@ -32,18 +32,13 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
- * A self-describing, composable DCB (Dynamic Consistency Boundary) decision model.
+ * A {@link Decider} paired with the two things DCB execution needs from it: the {@link DcbCriteria} read boundary for a
+ * command, and a {@link TagGenerator} for the events it writes. This keeps a feature's read boundary and write tags
+ * next to its decision logic rather than in whatever application service wires it to the store.
  * <p>
- * A plain {@link Decider} only knows how to decide and evolve. To run it against a DCB event store, a caller must also
- * know which events to read before deciding (the {@link DcbCriteria} read boundary for the incoming command) and which
- * tags to stamp on the events it writes (via a {@link TagGenerator}). {@code DcbDecider} couples those three pieces
- * together so a feature can describe its own read boundary and write tags right next to its decision logic, instead of
- * that knowledge living separately in whatever application service wires the decider to the store.
- * <p>
- * Like {@link Decider}, a {@code DcbDecider} can be widened with {@link #adapt} to a broader command/event type and
- * combined with {@link #compose} into a single decider over several features. Composing preserves the DCB contract:
- * the composed criteria is the union ({@link DcbCriteria#anyOf}) of the boundaries of the children that recognize the
- * command, and the composed tags is the union of tags contributed by whichever child recognizes the event.
+ * Like {@link Decider}, it widens with {@link #adapt} and combines with {@link #compose}. Composing unions the
+ * children's criteria ({@link DcbCriteria#anyOf}) over the commands they recognize, and unions the tags from whichever
+ * child recognizes each event.
  *
  * @param decider  the decision logic: what to do for a command given the current state, and how to fold events into state
  * @param criteria returns the DCB read boundary for a command, or {@code null} if this decider does not apply to that

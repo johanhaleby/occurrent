@@ -34,7 +34,7 @@ data class InvoiceCreated(val eventId: UUID, val occurredAt: Instant, val number
  * Pattern: a gapless, monotonically increasing sequence (invoice numbers, in most jurisdictions, must never skip or
  * repeat). This is the one vignette here that deliberately does NOT go through a [org.occurrent.dsl.dcb.DcbDecider]:
  * a decider folds the entire matching event history on every decision, which is O(n) in the number of invoices ever
- * created - fine for a boundary that is always small (one product, one sign-up), wrong for a boundary that grows
+ * created. That is fine for a boundary that is always small (one product, one sign-up) but wrong for one that grows
  * forever.
  * <p>
  * Instead this talks to the [DcbEventStore] directly:
@@ -42,8 +42,8 @@ data class InvoiceCreated(val eventId: UUID, val occurredAt: Instant, val number
  *    trip, instead of folding every invoice ever created, to learn the last number issued.
  * 2. The append condition is still [DcbCriteria.type] scoped to `InvoiceCreated`, guarded by the read's
  *    [org.occurrent.eventstore.api.dcb.DcbEventStream.consistencyToken]. The token reflects the whole matching set
- *    observed at read time, not just the one returned event, so the append still fails if ANY `InvoiceCreated` -
- *    not just the last one this call happened to see - was committed after the read (see ADR 0056).
+ *    observed at read time, not just the one returned event, so the append still fails if any `InvoiceCreated` (not
+ *    just the last one this call saw) was committed after the read (see ADR 0056).
  * <p>
  * A conflict throws [org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException]; the caller decides
  * whether to retry (a retry re-reads the now-current last number, so retrying still produces a gapless sequence, see
