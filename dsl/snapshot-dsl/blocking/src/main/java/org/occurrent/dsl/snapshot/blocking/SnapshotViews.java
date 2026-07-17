@@ -59,7 +59,7 @@ public final class SnapshotViews {
         Objects.requireNonNull(policy, "policy cannot be null");
 
         SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(store.findLatest(streamId), snapshotView.schemaVersion(), snapshotView.view()::initialState);
-        EventStream<CloudEvent> eventStream = eventStore.read(streamId, Math.toIntExact(base.version()), Integer.MAX_VALUE);
+        EventStream<CloudEvent> eventStream = eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE);
         List<E> tail = converter.toDomainEvents(eventStream.events()).toList();
         S current = snapshotView.view().evolve(base.state(), tail);
 
@@ -67,7 +67,7 @@ public final class SnapshotViews {
         // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...) stay meaningful
         // (snapshot when the tail was non-empty, or contained a boundary event), and everyNEvents rides the version delta.
         SnapshotSupport.maybeSaveBestEffort(store, streamId, snapshotView.schemaVersion(), policy,
-                new SnapshotDecision<>(current, tail, version, Math.toIntExact(version - base.version())));
+                new SnapshotDecision<>(current, tail, version, SnapshotSupport.requireInt(version - base.version(), "the number of events since the snapshot")));
         return current;
     }
 }

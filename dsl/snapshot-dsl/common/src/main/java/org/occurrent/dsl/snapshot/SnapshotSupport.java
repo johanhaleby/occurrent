@@ -112,4 +112,25 @@ public final class SnapshotSupport {
             return false;
         }
     }
+
+    /**
+     * Narrow a non-negative {@code long} version or count to an {@code int}, failing with a clear message instead of the
+     * generic {@link ArithmeticException} that {@link Math#toIntExact(long)} throws. The snapshot machinery reads the
+     * stream tail with {@code EventStore.read(streamId, skip, limit)} where {@code skip} is an {@code int}, and
+     * {@link SnapshotDecision#eventsSinceSnapshot()} is an {@code int}, so a value beyond {@link Integer#MAX_VALUE}
+     * cannot be represented.
+     *
+     * @param value       the non-negative value to narrow.
+     * @param description what the value represents, used in the error message.
+     * @return the value as an {@code int}.
+     */
+    public static int requireInt(long value, String description) {
+        if (value < 0) {
+            throw new IllegalArgumentException(description + " cannot be negative (was " + value + ")");
+        }
+        if (value > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(description + " (" + value + ") exceeds Integer.MAX_VALUE, which the EventStore read skip and the eventsSinceSnapshot field cannot represent");
+        }
+        return (int) value;
+    }
 }

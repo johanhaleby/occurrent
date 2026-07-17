@@ -21,6 +21,7 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.DcbDecider
+import org.occurrent.dsl.snapshot.DcbSnapshotKeys
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.snapshot.SnapshotOptions
 import org.occurrent.dsl.snapshot.SnapshotPolicy
@@ -55,7 +56,7 @@ fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(command: C, dcbDecide
 /**
  * Run [dcbDecider] with [commands], resuming from the snapshot in [store], keyed by the resolved criteria.
  */
-fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(commands: List<C>, dcbDecider: DcbDecider<C, S, E>, store: SnapshotStore<S>, options: SnapshotOptions<S, E>, keyFunction: (DcbCriteria) -> String = DcbCriteria::toString): Optional<DcbAppendResult> =
+fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(commands: List<C>, dcbDecider: DcbDecider<C, S, E>, store: SnapshotStore<S>, options: SnapshotOptions<S, E>, keyFunction: (DcbCriteria) -> String = DcbSnapshotKeys::canonicalKey): Optional<DcbAppendResult> =
     SnapshotDcbDeciderApplicationService(this).execute(commands, dcbDecider, store, options, keyFunction)
 
 /**

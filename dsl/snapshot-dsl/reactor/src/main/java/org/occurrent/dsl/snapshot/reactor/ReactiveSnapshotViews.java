@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
+import org.occurrent.dsl.snapshot.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import reactor.core.publisher.Mono;
@@ -56,7 +57,7 @@ public final class ReactiveSnapshotViews {
         Objects.requireNonNull(policy, "policy cannot be null");
 
         return Mono.defer(() -> ReactiveSnapshotSupport.resolveBase(store, streamId, snapshotView.schemaVersion(), snapshotView.view()::initialState).flatMap(base ->
-                eventStore.read(streamId, Math.toIntExact(base.version()), Integer.MAX_VALUE).flatMap(eventStream ->
+                eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE).flatMap(eventStream ->
                         eventStream.events().collectList().flatMap(cloudEvents -> {
                             List<E> tail = converter.toDomainEvents(cloudEvents.stream()).toList();
                             S current = snapshotView.view().evolve(base.state(), tail);
@@ -64,7 +65,7 @@ public final class ReactiveSnapshotViews {
                             // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...)
                             // stay meaningful and everyNEvents rides the version delta.
                             return ReactiveSnapshotSupport.maybeSaveBestEffort(store, streamId, snapshotView.schemaVersion(), policy,
-                                            new SnapshotDecision<>(current, tail, version, Math.toIntExact(version - base.version())))
+                                            new SnapshotDecision<>(current, tail, version, SnapshotSupport.requireInt(version - base.version(), "the number of events since the snapshot")))
                                     .thenReturn(current);
                         }))));
     }
