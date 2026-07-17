@@ -201,9 +201,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             throw new IllegalArgumentException("@Projection factory method %s#%s must take no parameters and return a Projection or DcbProjection.".formatted(bean.getClass().getName(), method.getName()));
         }
         boolean synchronous = annotation.mode() == org.occurrent.annotation.Projection.Mode.SYNCHRONOUS;
-        if (synchronous && (annotation.startAt() != org.occurrent.annotation.Projection.StartPosition.DEFAULT || annotation.startAtPosition() >= 0 || annotation.resumeBehavior() != ResumeBehavior.DEFAULT)) {
-            throw new IllegalArgumentException("@Projection '%s' uses mode = SYNCHRONOUS, which cannot be combined with startAt, startAtPosition, or resumeBehavior (those configure catch-up for an async projection).".formatted(id));
-        }
+        SubscriptionAnnotations.validateModeStartKnobs("@Projection", id, synchronous,
+                annotation.startAt() != org.occurrent.annotation.Projection.StartPosition.DEFAULT,
+                annotation.startAtPosition() >= 0,
+                annotation.resumeBehavior() != ResumeBehavior.DEFAULT);
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = invokeFactory(method, bean);
@@ -392,13 +393,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             throw new IllegalArgumentException("@Snapshot factory method %s#%s must take no parameters and return a SnapshotView.".formatted(bean.getClass().getName(), method.getName()));
         }
         boolean synchronous = annotation.mode() == org.occurrent.annotation.Snapshot.Mode.SYNCHRONOUS;
-        boolean startAtSet = annotation.startAt() != org.occurrent.annotation.Snapshot.StartPosition.BEGINNING;
-        if (synchronous && (startAtSet || annotation.startAtPosition() >= 0 || annotation.resumeBehavior() != ResumeBehavior.DEFAULT)) {
-            throw new IllegalArgumentException("@Snapshot '%s' uses mode = SYNCHRONOUS, which cannot be combined with startAt, startAtPosition, or resumeBehavior (those configure catch-up for an async snapshot).".formatted(id));
-        }
-        if (startAtSet && annotation.startAtPosition() >= 0) {
-            throw new IllegalArgumentException("@Snapshot '%s' sets both startAt and startAtPosition, which are two ways to express the same start point, so set only one.".formatted(id));
-        }
+        SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", id, synchronous,
+                annotation.startAt() != org.occurrent.annotation.Snapshot.StartPosition.BEGINNING,
+                annotation.startAtPosition() >= 0,
+                annotation.resumeBehavior() != ResumeBehavior.DEFAULT);
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = invokeSnapshotFactory(method, bean);

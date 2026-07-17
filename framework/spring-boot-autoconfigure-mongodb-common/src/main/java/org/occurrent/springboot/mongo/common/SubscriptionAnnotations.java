@@ -36,6 +36,7 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Predicate;
 
 import static java.util.function.Predicate.not;
@@ -186,6 +187,31 @@ public final class SubscriptionAnnotations {
         Object first = isMetadataParameter.test(parameterTypes.get(0)) ? metadata : event;
         Object second = first == metadata ? event : metadata;
         return new Object[]{first, second};
+    }
+
+    /**
+     * Validate the mode and catch-up start knobs of a moded read-model annotation ({@link org.occurrent.annotation.Projection}
+     * or {@link org.occurrent.annotation.Snapshot}). The synchronous mode is read-your-writes on the write path and has
+     * no catch-up phase, so it cannot carry any catch-up start knob, and startAt and startAtPosition are two ways to
+     * express the same start point so at most one may be set. Shared by the blocking and reactive processors for both
+     * annotations so this rule and its message live in one tested place and cannot drift.
+     *
+     * @param annotationName     the annotation name for error messages, for example {@code "@Projection"}
+     * @param id                 the annotation id for error messages
+     * @param synchronous        whether the annotation declares the synchronous mode
+     * @param startAtSet         whether startAt is set to something other than its default
+     * @param startAtPositionSet whether startAtPosition is set
+     * @param resumeBehaviorSet  whether resumeBehavior is set to something other than its default
+     */
+    public static void validateModeStartKnobs(String annotationName, String id, boolean synchronous,
+                                              boolean startAtSet, boolean startAtPositionSet, boolean resumeBehaviorSet) {
+        if (synchronous && (startAtSet || startAtPositionSet || resumeBehaviorSet)) {
+            String noun = annotationName.replace("@", "").toLowerCase(Locale.ROOT);
+            throw new IllegalArgumentException("%s '%s' uses mode = SYNCHRONOUS, which cannot be combined with startAt, startAtPosition, or resumeBehavior (those configure catch-up for an async %s).".formatted(annotationName, id, noun));
+        }
+        if (startAtSet && startAtPositionSet) {
+            throw new IllegalArgumentException("%s '%s' sets both startAt and startAtPosition, which are two ways to express the same start point, so set only one.".formatted(annotationName, id));
+        }
     }
 
     private static <E> @NonNull List<Class<E>> getConcreteEventTypes(String subscriptionId, Class<E> specifiedEventType) {
