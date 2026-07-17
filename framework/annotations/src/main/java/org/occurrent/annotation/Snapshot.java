@@ -67,8 +67,9 @@ import java.lang.annotation.*;
  * state type (for example {@code SnapshotView<Account, AccountEvent>}) so the state can be read back from MongoDB.
  * </p>
  * <p>
- * Declarative snapshots cover the stream and capability-agnostic paths. DCB snapshots are supported programmatically
- * through the snapshot DSL.
+ * A factory method may return a {@code SnapshotView} to maintain a stream or capability-agnostic snapshot, or a
+ * {@code DcbSnapshotView} to maintain a DCB snapshot, one per boundary. DCB snapshots do not support the synchronous
+ * {@link #mode()}.
  * </p>
  */
 @Target({ElementType.METHOD})

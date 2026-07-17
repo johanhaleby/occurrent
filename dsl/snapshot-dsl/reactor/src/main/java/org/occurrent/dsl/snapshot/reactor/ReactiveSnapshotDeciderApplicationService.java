@@ -24,6 +24,7 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
+import org.occurrent.dsl.snapshot.SnapshotSupport;
 import org.occurrent.eventstore.api.WriteResult;
 import reactor.core.publisher.Mono;
 
@@ -117,7 +118,7 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
             }).flatMap(writeResult -> {
                 Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
                 long newVersion = writeResult.newStreamVersion();
-                int eventsSinceSnapshot = Math.toIntExact(newVersion - base.version());
+                int eventsSinceSnapshot = SnapshotSupport.requireInt(newVersion - base.version(), "the number of events since the snapshot");
                 return ReactiveSnapshotSupport.maybeSaveBestEffort(store, streamId, options.schemaVersion(), options.policy(),
                                 new SnapshotDecision<>(decision.state(), decision.events(), newVersion, eventsSinceSnapshot))
                         .thenReturn(new Executed<>(writeResult, decision));

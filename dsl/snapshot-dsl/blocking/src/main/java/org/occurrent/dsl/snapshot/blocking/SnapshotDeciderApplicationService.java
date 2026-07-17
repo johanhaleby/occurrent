@@ -124,7 +124,7 @@ public final class SnapshotDeciderApplicationService<E> {
 
         Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
         long newVersion = writeResult.newStreamVersion();
-        int eventsSinceSnapshot = Math.toIntExact(newVersion - base.version());
+        int eventsSinceSnapshot = SnapshotSupport.requireInt(newVersion - base.version(), "the number of events since the snapshot");
         SnapshotSupport.maybeSaveBestEffort(store, streamId, options.schemaVersion(), options.policy(),
                 new SnapshotDecision<>(decision.state(), decision.events(), newVersion, eventsSinceSnapshot));
         return new Executed<>(writeResult, decision);
