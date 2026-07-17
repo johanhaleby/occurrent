@@ -69,6 +69,7 @@ Subscription flow: `Subscribable.subscribe(subscriptionId, filter, startAt, acti
 
 ## Conventions And Patterns
 
+- **Occurrent is a public open-source library, so its callers are unknown and unobservable.** Never conclude "every real usage does X" or "all callers use type Y" from the repo's own examples and tests. They are not the user population, they are just the cases this repo happens to ship. Design and justify public APIs for arbitrary external callers: prevent a footgun at the type level (or fail loud) rather than assuming disciplined use or relying on documentation. This drove #338, where a single-instance projection was made impossible to construct with a non-String id (a private `Projection` constructor reachable only through String-typed builders) instead of documenting the constraint, precisely because the shipped examples being String-keyed says nothing about what a downstream user will write. When weighing an API-safety tradeoff, treat the unobservable caller as real.
 - Java 21 baseline; Kotlin JVM target follows Java 21. Java and Kotlin coexist in most modules (root build-helper adds `src/main/kotlin` + `src/test/kotlin`).
 - Public APIs are small capability interfaces, not monoliths; validate nulls/invalid args eagerly (`Objects.requireNonNull` / `IllegalArgumentException`); prefer static factories/builders for fluent APIs; Apache 2 headers on source.
 - Nullness uses JSpecify (`@NullMarked`, `@Nullable`) in newer APIs, not uniformly across old code.
