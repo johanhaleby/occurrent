@@ -56,6 +56,16 @@ returns for read-your-writes. A synchronous projection has no history to catch u
 from, so `startAt`, `startAtPosition`, and `resumeBehavior` have no meaning there, and the annotation processor
 rejects setting any of them together with `mode = SYNCHRONOUS`.
 
+**This `mode` attribute is not the per-`execute` flag ADR 57 argued against, and `@Snapshot` follows the same choice for
+the same reason.** ADR 57 rejected a `mode` attribute on `@Subscription` because "subscription" already names Occurrent's
+asynchronous delivery mechanism specifically, so async-only knobs such as `startAt` and `resumeBehavior` would be
+meaningless noise on a synchronous variant, and it introduced `@SynchronousSubscription` as the separate, narrower
+annotation instead. A projection is a different shape of problem: it is one concept, a read model kept current from a
+stream of events, with two delivery timings, not two different mechanisms. `@Projection` and `@Snapshot` therefore give
+the read model one annotation with a `mode` attribute, and the processor still makes the illegal combination
+unrepresentable by rejecting `startAt`, `startAtPosition`, and `resumeBehavior` together with `mode = SYNCHRONOUS`, which
+is the same safety ADR 57 gets from a separate annotation, reached by validation instead of by type.
+
 **The same catch-up and durable resume are reachable programmatically, without the Spring starter.** A caller who
 wires their own catch-up-capable subscription model, for example a hand-wired `CatchupSubscriptionModel` over a
 native driver, gets the replay-first-boot-then-resume-from-checkpoint behavior through the new

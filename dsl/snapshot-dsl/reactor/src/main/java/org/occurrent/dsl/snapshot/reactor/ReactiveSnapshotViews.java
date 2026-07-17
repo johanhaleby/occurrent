@@ -21,7 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
-import org.occurrent.dsl.snapshot.SnapshotSupport;
+import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import reactor.core.publisher.Mono;
@@ -44,9 +44,10 @@ public final class ReactiveSnapshotViews {
     /**
      * Read the current state for {@code streamId} by resuming {@code snapshotView} from the snapshot in {@code store} and
      * folding the events written after it. Writes a refreshed snapshot when {@code policy} fires. A loaded snapshot whose
-     * schema version does not match the view is ignored and the state is rebuilt from the whole stream.
+     * schema version does not match the view is ignored and the state is rebuilt from the whole stream. The state is
+     * bound to a non-null type because a {@link Mono} cannot carry a null value.
      */
-    public static <S extends @Nullable Object, E> Mono<S> readState(EventStore eventStore, CloudEventConverter<E> converter, String streamId,
+    public static <S, E> Mono<S> readState(EventStore eventStore, CloudEventConverter<E> converter, String streamId,
                                                                     SnapshotView<S, E> snapshotView, ReactiveSnapshotStore<S> store,
                                                                     SnapshotPolicy<S, E> policy) {
         Objects.requireNonNull(eventStore, "eventStore cannot be null");

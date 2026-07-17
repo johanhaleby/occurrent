@@ -96,7 +96,7 @@ public final class ExecuteOptions<E> {
      * @return New options with filter applied.
      */
     public ExecuteOptions<E> filter(StreamReadFilter filter) {
-        return new ExecuteOptions<>(Objects.requireNonNull(filter, "filter cannot be null"), null, null, fromStreamVersion);
+        return new ExecuteOptions<>(Objects.requireNonNull(filter, "filter cannot be null"), null, sideEffect, fromStreamVersion);
     }
 
     /**
@@ -110,7 +110,7 @@ public final class ExecuteOptions<E> {
      * @return New options with execute filter applied.
      */
     public ExecuteOptions<E> filter(ExecuteFilter<? extends E> executeFilter) {
-        return withExecuteFilter(executeFilter);
+        return new ExecuteOptions<>(null, Objects.requireNonNull(executeFilter, "executeFilter cannot be null"), sideEffect, fromStreamVersion);
     }
 
     /**
@@ -178,22 +178,9 @@ public final class ExecuteOptions<E> {
         return fromStreamVersion;
     }
 
-    @SuppressWarnings("rawtypes")
-    @Override
-    public boolean equals(@Nullable Object obj) {
-        if (obj == this) return true;
-        if (obj == null || obj.getClass() != this.getClass()) return false;
-        var that = (ExecuteOptions) obj;
-        return Objects.equals(this.filter, that.filter) &&
-                Objects.equals(this.executeFilter, that.executeFilter) &&
-                Objects.equals(this.sideEffect, that.sideEffect) &&
-                Objects.equals(this.fromStreamVersion, that.fromStreamVersion);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(filter, executeFilter, sideEffect, fromStreamVersion);
-    }
+    // Intentionally no equals()/hashCode(): executeFilter and sideEffect are lambda-typed fields, which are compared
+    // by identity, so a structural equals() would almost never consider two functionally-equivalent instances equal.
+    // Falling back to identity equality (the Object default) is less misleading than a partially-structural equals().
 
     @Override
     public String toString() {

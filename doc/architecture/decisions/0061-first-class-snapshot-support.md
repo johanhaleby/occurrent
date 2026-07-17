@@ -32,7 +32,8 @@ that is absent, is treated as no snapshot at all, and execution falls back to a 
 a stale snapshot must never be deserialized into the new shape. Persistence through the DSL executors is best-effort. The
 snapshot is written after the command's events commit, a save failure is logged and never fails the command, and losing a
 snapshot only costs a fuller replay next time. A snapshot that must stay consistent on the write path is maintained instead
-by `@Snapshot(mode = SYNCHRONOUS)` or from a synchronous subscription, which folds it inside the write transaction (ADR 57).
+by a stream `@Snapshot(mode = SYNCHRONOUS)` or from a synchronous subscription, which folds it inside the write transaction
+(ADR 57). A DCB snapshot has no synchronous mode, so DCB write-path consistency comes only from a synchronous subscription.
 
 **Snapshotting lives in the DSL layer where state and folds already live, not in the core application service.** The only
 change to the core is a state-agnostic read offset, `ExecuteOptions.fromStreamVersion(long)` and
@@ -62,8 +63,9 @@ defaults to failing loud rather than doing nothing, so a store that cannot delet
 gone.
 
 **Storage is a small, storage-neutral `SnapshotStore<S>` capability** with `findLatest`, `save`, and `delete`, keyed by a
-`String`. On the stream path the key is the stream id. On the DCB path the key defaults to a deterministic string derived from
-the command's `DcbCriteria` (its record `toString`), with an override hook for callers who want a shorter or custom key. An
+`String`. On the stream path the key is the stream id. On the DCB path the key defaults to a canonical string form of the
+command's `DcbCriteria`, so tag and type order does not change the key, with an override hook for callers who want a shorter
+or custom key. An
 in-memory implementation ships in the common module, and a Spring Data Mongo implementation ships in the starters. The Mongo
 document is a new envelope carrying `state`, `version`, and `schemaVersion`, because the existing `ViewStateRepository` stores
 only the state value with no version marker. The deciders-free path uses a `SnapshotView<S,E>` descriptor and works with no
@@ -85,7 +87,8 @@ maintains one snapshot per stream. A DCB `@Snapshot` (a factory returning a `Dcb
 boundary, keyed by the canonical form of its `DcbCriteria` so tag order does not change the key. The reactor registrar uses
 a `ReactiveSnapshotStore` (a `ReactiveMongoOperations`-backed `ReactiveSpringMongoSnapshotStore` for the zero-config path),
 because a reactive application has no blocking `MongoOperations`. The DSL executors remain the programmatic path for ad-hoc,
-non-annotated use.
+non-annotated use. A DCB `@Snapshot` does not support `mode = SYNCHRONOUS` (that mode is stream only), so a DCB snapshot
+that must be current for read-your-writes is maintained through the DSL executor from a synchronous subscription instead.
 
 ## Consequences
 
@@ -99,8 +102,12 @@ non-annotated use.
   stacks.
 - Snapshot persistence through the DSL executors is best-effort: the snapshot is saved after the write commits, a save
   failure is logged rather than propagated so it never fails an already-committed command, and a lost snapshot only costs a
-  fuller replay. Write-path consistency comes from maintaining the snapshot with `@Snapshot(mode = SYNCHRONOUS)` or a
-  synchronous subscription, which folds inside the write transaction (ADR 57), not from the DSL executors.
+  fuller replay. Write-path consistency comes from maintaining the snapshot with a stream `@Snapshot(mode = SYNCHRONOUS)`
+  or a synchronous subscription, which folds inside the write transaction (ADR 57), not from the DSL executors.
+- A DCB `@Snapshot` does not support `mode = SYNCHRONOUS`. Registering a `DcbSnapshotView` with a synchronous mode is
+  rejected, so a DCB snapshot is always maintained asynchronously through the declarative path. A DCB snapshot that must
+  stay current for read-your-writes is maintained instead through the DSL executor from a synchronous subscription, or
+  by folding it directly inside a synchronous subscription handler.
 - The read-side reader passes the folded tail as the decision's events, so `always()` and `onEvent(...)` behave sensibly on a
   read and `everyNEvents` rides the version delta.
 - One method was added to the public `Decider` API (`evolve(S, List<E>)`) and one option each to `ExecuteOptions` and

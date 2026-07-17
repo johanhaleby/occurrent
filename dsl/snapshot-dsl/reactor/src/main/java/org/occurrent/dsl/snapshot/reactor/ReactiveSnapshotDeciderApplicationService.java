@@ -24,7 +24,7 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
-import org.occurrent.dsl.snapshot.SnapshotSupport;
+import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.eventstore.api.WriteResult;
 import reactor.core.publisher.Mono;
 
@@ -93,9 +93,10 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
     }
 
     /**
-     * Execute {@code command} and return the folded state after the decision.
+     * Execute {@code command} and return the folded state after the decision. The state is bound to a non-null type
+     * because a {@link Mono} cannot carry a null value, use {@link #executeAndReturnDecision} for a nullable state.
      */
-    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(String streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    public <C, S> Mono<S> executeAndReturnState(String streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         return executeAndReturnDecision(streamId, command, decider, store, options).map(Decider.Decision::state);
     }
 

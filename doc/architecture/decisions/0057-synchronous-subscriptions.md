@@ -36,7 +36,10 @@ today) or synchronous, via a separate `@SynchronousSubscription` annotation. The
 id, event types, and a filter, none of the async-only knobs (`startAt`, `resumeBehavior`, `startupMode`) that have no
 meaning for synchronous, at-write-time dispatch. The existing `@Subscription`/`@StreamSubscription`/`@DcbSubscription`
 are unchanged and stay asynchronous, following "mark the exception, not the default": in Occurrent "subscription"
-already denotes the asynchronous mechanism, so only the new special case gets an adjective.
+already denotes the asynchronous mechanism, so only the new special case gets an adjective. ADR 59 later gives
+`@Projection` (and `@Snapshot`) a `mode` attribute instead of a separate annotation. That divergence is intentional,
+not an oversight: a projection is one concept with two delivery timings, while a subscription is Occurrent's name for
+the asynchronous mechanism specifically. See ADR 59 for the reconciling argument.
 
 **A register-only `SynchronousSubscriptionModel` implements the existing `Subscribable`,** so the `Subscriptions`
 DSL and the annotation front-ends target it unchanged. It has no lifecycle, start position, checkpoint, catch-up, or

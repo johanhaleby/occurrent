@@ -92,6 +92,56 @@ class ExecuteOptionsTest {
     }
 
     @Nested
+    @DisplayName("when withers are composed in any order")
+    class When_withers_are_composed_in_any_order {
+
+        @Test
+        void filter_preserves_a_previously_set_side_effect_and_from_stream_version() {
+            // Given
+            var filter = StreamReadFilter.type(NameDefined.class.getName());
+            var observedNames = new ArrayList<String>();
+
+            // When
+            var executeOptions = ExecuteOptions.<DomainEvent>options()
+                    .fromStreamVersion(5L)
+                    .sideEffect(events -> events.stream().map(DomainEvent::name).forEach(observedNames::add))
+                    .filter(filter);
+
+            executeOptions.sideEffect().accept(List.of(nameDefined("Ada")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(executeOptions.filter()).isEqualTo(filter),
+                    () -> assertThat(executeOptions.fromStreamVersion()).isEqualTo(5L),
+                    () -> assertThat(observedNames).containsExactly("Ada")
+            );
+        }
+
+        @Test
+        void execute_filter_preserves_a_previously_set_side_effect_and_from_stream_version() {
+            // Given
+            var executeFilter = ExecuteFilter.<DomainEvent>type(NameDefined.class);
+            var observedNames = new ArrayList<String>();
+
+            // When
+            var executeOptions = ExecuteOptions.<DomainEvent>options()
+                    .fromStreamVersion(5L)
+                    .sideEffect(events -> events.stream().map(DomainEvent::name).forEach(observedNames::add))
+                    .filter(executeFilter);
+
+            executeOptions.sideEffect().accept(List.of(nameDefined("Ada")));
+
+            // Then
+            assertAll(
+                    () -> assertThat(executeOptions.executeFilter()).isEqualTo(executeFilter),
+                    () -> assertThat(executeOptions.filter()).isNull(),
+                    () -> assertThat(executeOptions.fromStreamVersion()).isEqualTo(5L),
+                    () -> assertThat(observedNames).containsExactly("Ada")
+            );
+        }
+    }
+
+    @Nested
     @DisplayName("when setting fromStreamVersion")
     class When_setting_from_stream_version {
 

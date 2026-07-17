@@ -19,6 +19,7 @@ package org.occurrent.dsl.snapshot;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.snapshot.LedgerFixture.Deposited;
 import org.occurrent.dsl.snapshot.LedgerFixture.LedgerEvent;
+import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 
 import java.util.List;
 import java.util.Optional;

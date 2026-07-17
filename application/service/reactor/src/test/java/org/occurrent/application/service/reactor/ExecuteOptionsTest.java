@@ -21,14 +21,73 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.service.ExecuteFilter;
 import org.occurrent.domain.DomainEvent;
+import org.occurrent.domain.NameDefined;
+import org.occurrent.eventstore.api.StreamReadFilter;
+import reactor.core.publisher.Mono;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayName("ExecuteOptions")
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
 class ExecuteOptionsTest {
+
+    @Nested
+    @DisplayName("when withers are composed in any order")
+    class When_withers_are_composed_in_any_order {
+
+        @Test
+        void filter_preserves_a_previously_set_side_effect_and_from_stream_version() {
+            // Given
+            var filter = StreamReadFilter.type(NameDefined.class.getName());
+            var sideEffectInvocations = new AtomicInteger();
+
+            // When
+            var executeOptions = ExecuteOptions.<DomainEvent>options()
+                    .fromStreamVersion(5L)
+                    .sideEffect(events -> Mono.fromRunnable(sideEffectInvocations::incrementAndGet))
+                    .filter(filter);
+
+            executeOptions.sideEffect().apply(List.of(nameDefined("Ada"))).block();
+
+            // Then
+            assertAll(
+                    () -> assertThat(executeOptions.filter()).isEqualTo(filter),
+                    () -> assertThat(executeOptions.fromStreamVersion()).isEqualTo(5L),
+                    () -> assertThat(sideEffectInvocations).hasValue(1)
+            );
+        }
+
+        @Test
+        void execute_filter_preserves_a_previously_set_side_effect_and_from_stream_version() {
+            // Given
+            var executeFilter = ExecuteFilter.<DomainEvent>type(NameDefined.class);
+            var sideEffectInvocations = new AtomicInteger();
+
+            // When
+            var executeOptions = ExecuteOptions.<DomainEvent>options()
+                    .fromStreamVersion(5L)
+                    .sideEffect(events -> Mono.fromRunnable(sideEffectInvocations::incrementAndGet))
+                    .filter(executeFilter);
+
+            executeOptions.sideEffect().apply(List.of(nameDefined("Ada"))).block();
+
+            // Then
+            assertAll(
+                    () -> assertThat(executeOptions.executeFilter()).isEqualTo(executeFilter),
+                    () -> assertThat(executeOptions.filter()).isNull(),
+                    () -> assertThat(executeOptions.fromStreamVersion()).isEqualTo(5L),
+                    () -> assertThat(sideEffectInvocations).hasValue(1)
+            );
+        }
+    }
 
     @Nested
     @DisplayName("when setting fromStreamVersion")
@@ -55,5 +114,9 @@ class ExecuteOptionsTest {
                     .hasMessageContaining("Integer.MAX_VALUE")
                     .hasMessageContaining("skip");
         }
+    }
+
+    private static NameDefined nameDefined(String name) {
+        return new NameDefined("event-" + name, LocalDateTime.of(2024, 1, 2, 3, 4), "user", name);
     }
 }

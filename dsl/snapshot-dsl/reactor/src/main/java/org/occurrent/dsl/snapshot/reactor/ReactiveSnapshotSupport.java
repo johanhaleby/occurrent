@@ -20,7 +20,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
-import org.occurrent.dsl.snapshot.SnapshotSupport;
+import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
@@ -30,7 +30,7 @@ import java.util.function.Supplier;
 
 /**
  * The reactive load/resume/persist steps shared by the reactor snapshot executors, mirroring
- * {@code org.occurrent.dsl.snapshot.SnapshotSupport} but composing into a {@link Mono} chain instead of blocking.
+ * {@link SnapshotSupport} but composing into a {@link Mono} chain instead of blocking.
  */
 final class ReactiveSnapshotSupport {
 

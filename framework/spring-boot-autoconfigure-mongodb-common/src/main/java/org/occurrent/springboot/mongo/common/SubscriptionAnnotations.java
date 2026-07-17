@@ -202,12 +202,13 @@ public final class SubscriptionAnnotations {
      * @param startAtSet         whether startAt is set to something other than its default
      * @param startAtPositionSet whether startAtPosition is set
      * @param resumeBehaviorSet  whether resumeBehavior is set to something other than its default
+     * @param startupModeSet     whether startupMode is set to something other than its default
      */
     public static void validateModeStartKnobs(String annotationName, String id, boolean synchronous,
-                                              boolean startAtSet, boolean startAtPositionSet, boolean resumeBehaviorSet) {
-        if (synchronous && (startAtSet || startAtPositionSet || resumeBehaviorSet)) {
+                                              boolean startAtSet, boolean startAtPositionSet, boolean resumeBehaviorSet, boolean startupModeSet) {
+        if (synchronous && (startAtSet || startAtPositionSet || resumeBehaviorSet || startupModeSet)) {
             String noun = annotationName.replace("@", "").toLowerCase(Locale.ROOT);
-            throw new IllegalArgumentException("%s '%s' uses mode = SYNCHRONOUS, which cannot be combined with startAt, startAtPosition, or resumeBehavior (those configure catch-up for an async %s).".formatted(annotationName, id, noun));
+            throw new IllegalArgumentException("%s '%s' uses mode = SYNCHRONOUS, which cannot be combined with startAt, startAtPosition, resumeBehavior, or startupMode (those configure catch-up for an async %s).".formatted(annotationName, id, noun));
         }
         if (startAtSet && startAtPositionSet) {
             throw new IllegalArgumentException("%s '%s' sets both startAt and startAtPosition, which are two ways to express the same start point, so set only one.".formatted(annotationName, id));
