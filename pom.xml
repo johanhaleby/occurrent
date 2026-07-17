@@ -566,6 +566,7 @@
                                 <excludeArtifact>occurrent</excludeArtifact>
                                 <excludeArtifact>projection-dsl</excludeArtifact>
                                 <excludeArtifact>query-dsl</excludeArtifact>
+                                <excludeArtifact>snapshot-dsl</excludeArtifact>
                                 <excludeArtifact>subscription-api</excludeArtifact>
                                 <excludeArtifact>subscription-dsl</excludeArtifact>
                                 <excludeArtifact>subscription-mongodb-common-blocking</excludeArtifact>
@@ -592,6 +593,8 @@
                                 </excludeArtifact>
                                 <excludeArtifact>example-projection-spring-transactional-projection-mongodb
                                 </excludeArtifact>
+                                <excludeArtifact>example-snapshot</excludeArtifact>
+                                <excludeArtifact>example-snapshot-closing-the-books</excludeArtifact>
                                 <excludeArtifact>example-forwarder</excludeArtifact>
                                 <excludeArtifact>example-forwarder-mongodb-subscription-to-spring-event
                                 </excludeArtifact>

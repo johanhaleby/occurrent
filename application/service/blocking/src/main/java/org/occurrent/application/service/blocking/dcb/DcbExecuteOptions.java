@@ -45,10 +45,12 @@ import java.util.function.Consumer;
 public final class DcbExecuteOptions<E> {
     private final @Nullable Consumer<List<E>> sideEffect;
     private final @Nullable TagGenerator<E> tagGenerator;
+    private final @Nullable Long fromPosition;
 
-    private DcbExecuteOptions(@Nullable Consumer<List<E>> sideEffect, @Nullable TagGenerator<E> tagGenerator) {
+    private DcbExecuteOptions(@Nullable Consumer<List<E>> sideEffect, @Nullable TagGenerator<E> tagGenerator, @Nullable Long fromPosition) {
         this.sideEffect = sideEffect;
         this.tagGenerator = tagGenerator;
+        this.fromPosition = fromPosition;
     }
 
     /**
@@ -58,7 +60,7 @@ public final class DcbExecuteOptions<E> {
      * @return Empty execute options.
      */
     public static <E> DcbExecuteOptions<E> empty() {
-        return new DcbExecuteOptions<>(null, null);
+        return new DcbExecuteOptions<>(null, null, null);
     }
 
     /**
@@ -87,7 +89,7 @@ public final class DcbExecuteOptions<E> {
      */
     @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> sideEffect(Consumer<List<E_SPECIFIC>> sideEffect) {
-        return new DcbExecuteOptions<>(Objects.requireNonNull(sideEffect, "sideEffect cannot be null"), (TagGenerator<E_SPECIFIC>) this.tagGenerator);
+        return new DcbExecuteOptions<>(Objects.requireNonNull(sideEffect, "sideEffect cannot be null"), (TagGenerator<E_SPECIFIC>) this.tagGenerator, this.fromPosition);
     }
 
     /**
@@ -104,7 +106,26 @@ public final class DcbExecuteOptions<E> {
      */
     @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> tagGenerator(TagGenerator<E_SPECIFIC> tagGenerator) {
-        return new DcbExecuteOptions<>((Consumer<List<E_SPECIFIC>>) (Consumer<?>) this.sideEffect, Objects.requireNonNull(tagGenerator, "tagGenerator cannot be null"));
+        return new DcbExecuteOptions<>((Consumer<List<E_SPECIFIC>>) (Consumer<?>) this.sideEffect, Objects.requireNonNull(tagGenerator, "tagGenerator cannot be null"), this.fromPosition);
+    }
+
+    /**
+     * Start reading the DCB boundary <em>after</em> the given global position instead of from the beginning, so that
+     * only the events appended after that position are handed to the domain function.
+     * <p>
+     * This is an advanced option intended for snapshot-based execution: the caller has already folded the boundary up to
+     * {@code fromPosition} into a known state (a snapshot) and only needs the events after it. The domain function must
+     * therefore fold the events it receives onto that snapshot state rather than onto the initial state. The read still
+     * captures the whole boundary's consistency token, so the append condition is unaffected.
+     *
+     * @param fromPosition The exclusive global DCB position to start reading after (0 reads the whole boundary).
+     * @return New options that read the boundary from the given position.
+     */
+    public DcbExecuteOptions<E> fromPosition(long fromPosition) {
+        if (fromPosition < 0) {
+            throw new IllegalArgumentException("fromPosition cannot be negative");
+        }
+        return new DcbExecuteOptions<>(this.sideEffect, this.tagGenerator, fromPosition);
     }
 
     /**
@@ -121,21 +142,28 @@ public final class DcbExecuteOptions<E> {
         return tagGenerator;
     }
 
+    /**
+     * Return the configured global position to start reading after, or {@code null} if the whole boundary should be read.
+     */
+    public @Nullable Long fromPosition() {
+        return fromPosition;
+    }
+
     @Override
     public boolean equals(@Nullable Object obj) {
         if (obj == this) return true;
         if (obj == null || obj.getClass() != this.getClass()) return false;
         DcbExecuteOptions<?> that = (DcbExecuteOptions<?>) obj;
-        return Objects.equals(this.sideEffect, that.sideEffect) && Objects.equals(this.tagGenerator, that.tagGenerator);
+        return Objects.equals(this.sideEffect, that.sideEffect) && Objects.equals(this.tagGenerator, that.tagGenerator) && Objects.equals(this.fromPosition, that.fromPosition);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(sideEffect, tagGenerator);
+        return Objects.hash(sideEffect, tagGenerator, fromPosition);
     }
 
     @Override
     public String toString() {
-        return "DcbExecuteOptions[sideEffect=" + sideEffect + ", tagGenerator=" + tagGenerator + ']';
+        return "DcbExecuteOptions[sideEffect=" + sideEffect + ", tagGenerator=" + tagGenerator + ", fromPosition=" + fromPosition + ']';
     }
 }

@@ -432,6 +432,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 if (projection != null) {
                     projectionMethods.add(new Object[]{beanName, method, projection});
                 }
+                org.occurrent.annotation.Snapshot snapshot = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Snapshot.class);
+                if (snapshot != null) {
+                    throw new UnsupportedOperationException("@Snapshot ('%s' on %s#%s) is not yet supported on the reactive stack. Maintain a reactive snapshot programmatically through the reactive snapshot DSL (ReactiveSnapshotDeciderApplicationService) instead.".formatted(snapshot.id(), ClassUtils.getUserClass(type).getName(), method.getName()));
+                }
             }
         }
         for (Object[] pm : projectionMethods) {

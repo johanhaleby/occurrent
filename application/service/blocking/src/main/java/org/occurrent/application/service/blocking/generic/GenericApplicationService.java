@@ -132,8 +132,10 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         boolean dispatchSynchronously = synchronousEventDispatcher != null && synchronousEventDispatcher.hasSubscriptions();
 
         Tuple<WriteResult, List<E>> result = retryStrategy.execute(() -> {
+            Long fromStreamVersion = executeOptions.fromStreamVersion();
+            int skip = fromStreamVersion == null ? 0 : Math.toIntExact(fromStreamVersion);
             Supplier<Tuple<WriteResult, List<E>>> readDecideWrite = () -> {
-                EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter);
+                EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId, skip, Integer.MAX_VALUE) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter, skip, Integer.MAX_VALUE);
                 List<E> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events()).toList();
 
                 List<E> newDomainEvents = functionThatCallsDomainModel.apply(eventsInStream);
