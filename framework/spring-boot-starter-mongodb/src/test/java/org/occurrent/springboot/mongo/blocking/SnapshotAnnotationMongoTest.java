@@ -112,6 +112,19 @@ class SnapshotAnnotationMongoTest {
                 .hasMessageContaining("counter");
     }
 
+    @Test
+    void rejects_synchronous_mode_combined_with_a_start_position() {
+        assertThatThrownBy(() -> run(SynchronousWithStartAtApplication.class, "snapshot-sync-startat"))
+                .hasMessageContaining("SYNCHRONOUS")
+                .hasMessageContaining("startAt");
+    }
+
+    @Test
+    void rejects_startAt_combined_with_startAtPosition() {
+        assertThatThrownBy(() -> run(StartAtAndStartAtPositionApplication.class, "snapshot-startat-and-position"))
+                .hasMessageContaining("both startAt and startAtPosition");
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class MongoContainerConfiguration {
         @Bean
@@ -174,6 +187,62 @@ class SnapshotAnnotationMongoTest {
             }
 
             @Snapshot(id = "counter")
+            SnapshotView<Counter, CounterEvent> counterSnapshot() {
+                return SnapshotView.<Counter, CounterEvent>builder(new Counter(0))
+                        .on(Incremented.class, (state, event) -> new Counter(state.total() + event.amount()))
+                        .build();
+            }
+        }
+    }
+
+    @SpringBootApplication
+    @EnableOccurrent
+    static class SynchronousWithStartAtApplication {
+        @Bean
+        CloudEventTypeMapper<CounterEvent> typeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<CounterEvent> converter(CloudEventTypeMapper<CounterEvent> typeMapper) {
+            return new JacksonCloudEventConverter.Builder<CounterEvent>(new ObjectMapper(), SOURCE)
+                    .typeMapper(typeMapper)
+                    .idMapper(CounterEvent::eventId)
+                    .timeMapper(event -> event.timestamp().toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
+                    .build();
+        }
+
+        @Component
+        static class BadSnapshot {
+            @Snapshot(id = "counter", mode = Snapshot.Mode.SYNCHRONOUS, startAt = Snapshot.StartPosition.NOW)
+            SnapshotView<Counter, CounterEvent> counterSnapshot() {
+                return SnapshotView.<Counter, CounterEvent>builder(new Counter(0))
+                        .on(Incremented.class, (state, event) -> new Counter(state.total() + event.amount()))
+                        .build();
+            }
+        }
+    }
+
+    @SpringBootApplication
+    @EnableOccurrent
+    static class StartAtAndStartAtPositionApplication {
+        @Bean
+        CloudEventTypeMapper<CounterEvent> typeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<CounterEvent> converter(CloudEventTypeMapper<CounterEvent> typeMapper) {
+            return new JacksonCloudEventConverter.Builder<CounterEvent>(new ObjectMapper(), SOURCE)
+                    .typeMapper(typeMapper)
+                    .idMapper(CounterEvent::eventId)
+                    .timeMapper(event -> event.timestamp().toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
+                    .build();
+        }
+
+        @Component
+        static class BadSnapshot {
+            @Snapshot(id = "counter", startAt = Snapshot.StartPosition.NOW, startAtPosition = 5)
             SnapshotView<Counter, CounterEvent> counterSnapshot() {
                 return SnapshotView.<Counter, CounterEvent>builder(new Counter(0))
                         .on(Incremented.class, (state, event) -> new Counter(state.total() + event.amount()))

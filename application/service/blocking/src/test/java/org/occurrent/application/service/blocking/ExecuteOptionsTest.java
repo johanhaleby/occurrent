@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayName("ExecuteOptions")
@@ -87,6 +88,33 @@ class ExecuteOptionsTest {
                     () -> assertThat(executeOptions.filter()).isEqualTo(filter),
                     () -> assertThat(observedNames).containsExactly("Ada", "Lovelace")
             );
+        }
+    }
+
+    @Nested
+    @DisplayName("when setting fromStreamVersion")
+    class When_setting_from_stream_version {
+
+        @Test
+        void retains_the_value() {
+            var executeOptions = ExecuteOptions.<DomainEvent>options().fromStreamVersion(42L);
+
+            assertThat(executeOptions.fromStreamVersion()).isEqualTo(42L);
+        }
+
+        @Test
+        void rejects_a_negative_value() {
+            assertThatThrownBy(() -> ExecuteOptions.<DomainEvent>options().fromStreamVersion(-1L))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot be negative");
+        }
+
+        @Test
+        void rejects_a_value_above_int_max() {
+            assertThatThrownBy(() -> ExecuteOptions.<DomainEvent>options().fromStreamVersion((long) Integer.MAX_VALUE + 1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Integer.MAX_VALUE")
+                    .hasMessageContaining("skip");
         }
     }
 

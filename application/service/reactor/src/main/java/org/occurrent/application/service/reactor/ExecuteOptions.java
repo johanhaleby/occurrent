@@ -111,6 +111,9 @@ public final class ExecuteOptions<E> {
         if (fromStreamVersion < 0) {
             throw new IllegalArgumentException("fromStreamVersion cannot be negative");
         }
+        if (fromStreamVersion > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("fromStreamVersion cannot exceed Integer.MAX_VALUE (" + Integer.MAX_VALUE + "), because the stream tail is read with EventStore.read(streamId, skip, limit) where skip is an int, so a snapshot base version beyond that is not supported");
+        }
         return new ExecuteOptions<>(filter, executeFilter, sideEffect, fromStreamVersion);
     }
 
