@@ -26,8 +26,8 @@ import static java.util.Objects.requireNonNull;
  * as {@code tags("username:bob")}. The read-side mirror of {@code org.occurrent.dsl.dcb.DcbDecider}. The handlers drive
  * the fold, the criteria drives the read.
  * <p>
- * A single-instance projection parameterized by a key (for example {@code isUsernameClaimedProjection("bob")}) closes
- * over the key in the factory that builds both the projection and its {@code criteria}.
+ * A single-instance projection parameterized by a key (for example {@code isUsernameClaimedProjection("bob")}) is built
+ * with {@code dcbSingletonProjection} and closes over the key for its {@code criteria}.
  *
  * @param projection the capability-agnostic read model
  * @param criteria   the DCB read boundary selecting the events that feed the projection
