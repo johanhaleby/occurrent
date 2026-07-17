@@ -128,6 +128,26 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     }
 
     @Test
+    void a_failing_snapshot_save_does_not_error_the_mono_and_the_write_is_committed() {
+        String streamId = UUID.randomUUID().toString();
+        SnapshotStore<String> failingStore = new SnapshotStore<>() {
+            @Override
+            public Optional<Snapshot<String>> findLatest(String key) {
+                return Optional.empty();
+            }
+
+            @Override
+            public void save(String key, Snapshot<String> snapshot) {
+                throw new RuntimeException("snapshot store is down");
+            }
+        };
+
+        StepVerifier.create(snapshotService.execute(streamId, new Define("Jane"), decider, failingStore, SnapshotOptions.of(1, SnapshotPolicy.always())))
+                .assertNext(writeResult -> assertThat(writeResult.newStreamVersion()).isEqualTo(1L))
+                .verifyComplete();
+    }
+
+    @Test
     void second_execute_resumes_from_the_snapshot_and_folds_only_the_tail() {
         String streamId = UUID.randomUUID().toString();
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());

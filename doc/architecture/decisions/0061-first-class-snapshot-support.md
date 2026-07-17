@@ -29,8 +29,10 @@ version onto it. That makes a snapshot a pure, discardable optimization, which d
 `Snapshot<S>(S state, long version, int schemaVersion)`, where `version` is the stream version on the stream path and the
 global DCB position on the DCB path. A snapshot whose `schemaVersion` does not match the descriptor's declared version, or one
 that is absent, is treated as no snapshot at all, and execution falls back to a full replay. State shapes change over time, so
-a stale snapshot must never be deserialized into the new shape. Persistence is best-effort by default, because losing a
-snapshot only costs a fuller replay next time.
+a stale snapshot must never be deserialized into the new shape. Persistence through the DSL executors is best-effort. The
+snapshot is written after the command's events commit, a save failure is logged and never fails the command, and losing a
+snapshot only costs a fuller replay next time. A snapshot that must stay consistent on the write path is maintained instead
+by `@Snapshot(mode = SYNCHRONOUS)` or from a synchronous subscription, which folds it inside the write transaction (ADR 57).
 
 **Snapshotting lives in the DSL layer where state and folds already live, not in the core application service.** The only
 change to the core is a state-agnostic read offset, `ExecuteOptions.fromStreamVersion(long)` and
@@ -94,8 +96,10 @@ programmatically through the DSL executors, so the deferral is an annotation-sur
   snapshot only makes the next replay longer.
 - The feature works with a `Decider` and with a plain `View`, and it covers stream and DCB on both the blocking and reactor
   stacks.
-- Persistence is best-effort by default and can be made atomic with the write by supplying a `TransactionExecutor`, reusing
-  the synchronous-subscriptions seam (ADR 57).
+- Snapshot persistence through the DSL executors is best-effort: the snapshot is saved after the write commits, a save
+  failure is logged rather than propagated so it never fails an already-committed command, and a lost snapshot only costs a
+  fuller replay. Write-path consistency comes from maintaining the snapshot with `@Snapshot(mode = SYNCHRONOUS)` or a
+  synchronous subscription, which folds inside the write transaction (ADR 57), not from the DSL executors.
 - The read-side reader passes the folded tail as the decision's events, so `always()` and `onEvent(...)` behave sensibly on a
   read and `everyNEvents` rides the version delta.
 - One method was added to the public `Decider` API (`evolve(S, List<E>)`) and one option each to `ExecuteOptions` and

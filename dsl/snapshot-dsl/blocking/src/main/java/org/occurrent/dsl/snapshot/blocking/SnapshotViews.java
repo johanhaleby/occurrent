@@ -65,7 +65,7 @@ public final class SnapshotViews {
         long version = eventStream.version();
         // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...) stay meaningful
         // (snapshot when the tail was non-empty, or contained a boundary event), and everyNEvents rides the version delta.
-        SnapshotSupport.maybeSave(store, streamId, snapshotView.schemaVersion(), policy,
+        SnapshotSupport.maybeSaveBestEffort(store, streamId, snapshotView.schemaVersion(), policy,
                 new SnapshotDecision<>(current, tail, version, base.version(), Math.toIntExact(version - base.version())));
         return current;
     }

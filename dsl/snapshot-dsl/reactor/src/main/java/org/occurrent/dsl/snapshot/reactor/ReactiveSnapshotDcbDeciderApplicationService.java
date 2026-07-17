@@ -101,7 +101,7 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
                     }).map(result -> {
                 Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
                 int eventsSinceSnapshot = tailSize.get() + decision.events().size();
-                SnapshotSupport.maybeSave(store, key, options.schemaVersion(), options.policy(),
+                SnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(),
                         new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), base.version(), eventsSinceSnapshot));
                 return result;
             });

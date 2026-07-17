@@ -35,6 +35,7 @@ import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
 import org.occurrent.dsl.snapshot.SnapshotStore;
+import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.net.URI;
@@ -83,6 +84,30 @@ class SnapshotDeciderApplicationServiceTest {
                 () -> assertThat(snapshot.orElseThrow().state()).isEqualTo("Jane"),
                 () -> assertThat(snapshot.orElseThrow().version()).isEqualTo(1L),
                 () -> assertThat(snapshot.orElseThrow().schemaVersion()).isEqualTo(1)
+        );
+    }
+
+    @Test
+    void a_failing_snapshot_save_does_not_fail_execute_and_the_write_is_committed() {
+        String streamId = UUID.randomUUID().toString();
+        SnapshotStore<String> failingStore = new SnapshotStore<>() {
+            @Override
+            public Optional<Snapshot<String>> findLatest(String key) {
+                return Optional.empty();
+            }
+
+            @Override
+            public void save(String key, Snapshot<String> snapshot) {
+                throw new RuntimeException("snapshot store is down");
+            }
+        };
+
+        WriteResult result = snapshotService.execute(streamId, new Define("Jane"), decider, failingStore, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        assertAll(
+                () -> assertThat(result).isNotNull(),
+                () -> assertThat(result.newStreamVersion()).isEqualTo(1L),
+                () -> assertThat(eventStore.read(streamId).version()).isEqualTo(1L)
         );
     }
 

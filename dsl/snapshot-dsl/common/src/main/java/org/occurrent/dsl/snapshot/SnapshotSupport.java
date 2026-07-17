@@ -17,6 +17,8 @@
 package org.occurrent.dsl.snapshot;
 
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 import java.util.function.Supplier;
@@ -28,6 +30,8 @@ import static java.util.Objects.requireNonNull;
  * policy-driven save logic exists once rather than per stack and per stream/DCB path.
  */
 public final class SnapshotSupport {
+
+    private static final Logger log = LoggerFactory.getLogger(SnapshotSupport.class);
 
     private SnapshotSupport() {
     }
@@ -76,5 +80,24 @@ public final class SnapshotSupport {
         }
         store.save(key, new Snapshot<>(decision.newState(), decision.newVersion(), schemaVersion));
         return true;
+    }
+
+    /**
+     * Best-effort variant of {@link #maybeSave} for the DSL executors, which save the snapshot after the command's
+     * events have already committed. A snapshot is a discardable optimization, so a save failure is logged and swallowed
+     * rather than propagated: failing here would surface as a command failure even though the write succeeded, and a lost
+     * snapshot only means the next replay folds a longer tail. The maintained {@code @Snapshot} path keeps using the
+     * throwing {@link #maybeSave} so a durable subscription can retry.
+     *
+     * @return {@code true} if a snapshot was written, {@code false} if the policy declined it or the save failed
+     */
+    public static <S extends @Nullable Object, E> boolean maybeSaveBestEffort(SnapshotStore<S> store, String key, int schemaVersion,
+                                                                              SnapshotPolicy<S, E> policy, SnapshotDecision<S, E> decision) {
+        try {
+            return maybeSave(store, key, schemaVersion, policy, decision);
+        } catch (RuntimeException e) {
+            log.warn("Best-effort snapshot save failed for key '{}'. The write is committed, the snapshot will be rebuilt from events on the next replay.", key, e);
+            return false;
+        }
     }
 }
