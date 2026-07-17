@@ -213,8 +213,7 @@ class ProjectionTest {
 
         @Test
         void singleton_builds_without_an_id() {
-            Projection<Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent, String>builder(false)
-                    .singleton()
+            Projection<Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent>singletonBuilder(false)
                     .on(AccountRegistered.class, (state, event) -> true)
                     .build();
 
@@ -233,8 +232,7 @@ class ProjectionTest {
 
         @Test
         void singleton_then_id_throws() {
-            Projection.Builder<Boolean, AccountEvent, String> builder = Projection.<Boolean, AccountEvent, String>builder(false)
-                    .singleton();
+            Projection.Builder<Boolean, AccountEvent, String> builder = Projection.<Boolean, AccountEvent>singletonBuilder(false);
 
             assertThatThrownBy(() -> builder.id(AccountEvent::accountId))
                     .isInstanceOf(IllegalStateException.class)

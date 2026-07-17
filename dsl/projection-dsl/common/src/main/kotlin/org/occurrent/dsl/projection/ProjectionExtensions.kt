@@ -109,8 +109,8 @@ class ProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal constructor
         delegate.id(Function { e -> fn(e) })
     }
 
-    /** Marks the projection single-instance (no per-event id). The runtime keys the single slot by the projection identity. */
-    fun singleton() {
+    /** Internal: use the top-level [singletonProjection] builder, which fixes the id type to `String`. */
+    internal fun singleton() {
         delegate.singleton()
     }
 
@@ -144,8 +144,8 @@ class DcbProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal construc
     /** Sets the function deriving the view-instance id from an event; return `null` to skip the event. Required unless [singleton]. */
     fun id(fn: (E) -> ID?) = projectionBuilder.id(fn)
 
-    /** Marks the projection single-instance (no per-event id). The runtime keys the single slot by the projection identity. */
-    fun singleton() = projectionBuilder.singleton()
+    /** Internal: use the top-level [dcbSingletonProjection] builder, which fixes the id type to `String`. */
+    internal fun singleton() = projectionBuilder.singleton()
 
     /** Registers the fold for event type [T]. */
     inline fun <reified T : E> on(noinline handler: (S, T) -> S) = projectionBuilder.on<T>(handler)

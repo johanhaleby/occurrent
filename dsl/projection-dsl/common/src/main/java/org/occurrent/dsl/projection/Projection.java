@@ -87,6 +87,20 @@ public record Projection<S extends @Nullable Object, E, ID>(
     }
 
     /**
+     * Starts building a single-instance {@code Projection}: one that folds into a single view state rather than one per
+     * key, so it needs no {@code id} function. The single slot is keyed at run time by the projection's own identity
+     * (the subscription id, or the {@code @Projection} id), which is a {@code String}, so a single-instance projection
+     * is always a {@code Projection<S, E, String>}. Register handlers with {@link Builder#on(Class, BiFunction)} and call
+     * {@link Builder#build()}. Use {@link #builder(Object)} with {@link Builder#id(Function)} for a keyed, multi-instance
+     * projection instead. The Kotlin equivalents are {@code singletonProjection}/{@code dcbSingletonProjection}.
+     */
+    public static <S extends @Nullable Object, E> Builder<S, E, String> singletonBuilder(S initialState) {
+        Builder<S, E, String> builder = new Builder<>(initialState);
+        builder.singleton();
+        return builder;
+    }
+
+    /**
      * Widen a {@code Projection} so it can run against a broader event type, mirroring
      * {@code org.occurrent.dsl.decider.Decider#adapt}. The wrapped fold and id function are widened to ignore events that
      * are not {@code eventType} (the fold returns the state unchanged, the id returns {@code null} to skip), so the
@@ -141,14 +155,13 @@ public record Projection<S extends @Nullable Object, E, ID>(
         }
 
         /**
-         * Marks the projection single-instance: it holds one view state rather than one per key, so no {@code id}
-         * function is needed. The framework keys the single slot by the projection's own identity (the subscription id
-         * when run through a runner, or the {@code @Projection} id), which is a {@code String}. Build a single-instance
-         * projection as {@code Projection<S, E, String>} so the store keys it correctly (the Kotlin
-         * {@code singletonProjection}/{@code dcbSingletonProjection} builders do this). Mutually exclusive with
+         * Marks the builder single-instance: it holds one view state rather than one per key, so no {@code id} function
+         * is needed. Package-private on purpose. The public entry points fix the id type to {@code String}, so a
+         * single-instance projection cannot be built with a non-{@code String} id type: {@link #singletonBuilder(Object)}
+         * in Java, and {@code singletonProjection}/{@code dcbSingletonProjection} in Kotlin. Mutually exclusive with
          * {@link #id(Function)}.
          */
-        public Builder<S, E, ID> singleton() {
+        Builder<S, E, ID> singleton() {
             if (this.singleton) {
                 throw new IllegalStateException("singleton() has already been set and can only be set once");
             }
