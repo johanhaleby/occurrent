@@ -135,7 +135,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         View<S, SubE> subView = projection.view();
         View<S, E> widenedView = View.create(subView.initialState(), (state, event) ->
                 eventType.isInstance(event) ? subView.evolve(state, eventType.cast(event)) : state);
-        Function<SubE, @Nullable ID> subId = projection.id();
+        @Nullable Function<SubE, @Nullable ID> subId = projection.id();
         Function<E, @Nullable ID> widenedId = subId == null ? null
                 : event -> eventType.isInstance(event) ? subId.apply(eventType.cast(event)) : null;
         Set<Class<? extends E>> widenedTypes = new LinkedHashSet<>(projection.eventTypes());
@@ -177,7 +177,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         /**
          * Marks the builder single-instance: it holds one view state rather than one per key, so no {@code id} function
          * is needed. Package-private on purpose. The public entry points fix the id type to {@code String}, so a
-         * single-instance projection cannot be built with a non-{@code String} id type: {@link #singletonBuilder(Object)}
+         * single-instance projection cannot be built with a non-{@code String} id type: {@link Projection#singletonBuilder(Object)}
          * in Java, and {@code singletonProjection}/{@code dcbSingletonProjection} in Kotlin. Mutually exclusive with
          * {@link #id(Function)}.
          */
