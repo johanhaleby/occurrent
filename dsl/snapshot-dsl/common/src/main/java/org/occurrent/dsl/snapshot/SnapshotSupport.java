@@ -64,6 +64,18 @@ public final class SnapshotSupport {
     }
 
     /**
+     * Whether a maintained-snapshot delivery is a redelivery that should be skipped to keep folding idempotent. True when
+     * {@code loaded} is present, its {@link Snapshot#schemaVersion()} matches, and its version is at or beyond
+     * {@code deliveredVersion}. A schema mismatch is not a redelivery, so the caller rebuilds from the initial state.
+     *
+     * @param deliveredVersion the version (stream version, or DCB position) of the event being delivered
+     */
+    public static <S extends @Nullable Object> boolean isRedelivery(Optional<Snapshot<S>> loaded, int schemaVersion, long deliveredVersion) {
+        requireNonNull(loaded, "loaded cannot be null");
+        return loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion && deliveredVersion <= loaded.get().version();
+    }
+
+    /**
      * Writes a snapshot when {@code policy} fires for {@code decision}, tagging it with {@code schemaVersion}. The caller
      * decides whether the save is best-effort (wrap the call) or transactional (run it inside the write transaction).
      *

@@ -22,6 +22,7 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.DcbExecuteOptions;
 import org.occurrent.dsl.dcb.DcbDecider;
 import org.occurrent.dsl.decider.Decider;
+import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotStore;
@@ -41,11 +42,12 @@ import java.util.function.Function;
  * instead of folding the whole DCB boundary. It wraps the lower-level {@link DcbApplicationService} so it can pass
  * {@link DcbExecuteOptions#fromPosition(long)} and the decider's tags.
  * <p>
- * Because DCB has no stream id, the snapshot is keyed by the decider's read boundary. By default the key is the
- * {@link DcbCriteria#toString()} that {@link DcbDecider#criteriaFor(List)} resolves for the commands; pass a key function
- * to override this when a criteria's string form is not stable across processes. The snapshot's version is the global DCB
- * position the append landed at ({@link DcbAppendResult#lastSequencePosition()}), and the resume read still captures the
- * whole boundary's consistency token, so the append condition is unaffected and a stale snapshot only lengthens the tail.
+ * Because DCB has no stream id, the snapshot is keyed by the decider's read boundary. By default the key is a canonical,
+ * order-insensitive rendering of the {@link DcbCriteria} that {@link DcbDecider#criteriaFor(List)} resolves for the
+ * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}); pass a key function to override it. The snapshot's version
+ * is the global DCB position the append landed at ({@link DcbAppendResult#lastSequencePosition()}), and the resume read
+ * still captures the whole boundary's consistency token, so the append condition is unaffected and a stale snapshot only
+ * lengthens the tail. It loads one snapshot per execute, and costs nothing when no snapshot is used.
  */
 @NullMarked
 public final class SnapshotDcbDeciderApplicationService<E> {
@@ -67,13 +69,45 @@ public final class SnapshotDcbDeciderApplicationService<E> {
      * Execute {@code commands} in order, resuming from the snapshot in {@code store} keyed by the decider's criteria.
      */
     public <C, S extends @Nullable Object> Optional<DcbAppendResult> execute(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return execute(commands, dcbDecider, store, options, DcbCriteria::toString);
+        return execute(commands, dcbDecider, store, options, DcbSnapshotKeys::canonicalKey);
     }
 
     /**
      * Execute {@code commands}, deriving the snapshot key from the resolved {@link DcbCriteria} with {@code keyFunction}.
      */
     public <C, S extends @Nullable Object> Optional<DcbAppendResult> execute(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options, Function<DcbCriteria, String> keyFunction) {
+        return doExecute(commands, dcbDecider, store, options, keyFunction).appendResult();
+    }
+
+    /**
+     * Execute {@code command} and return the folded state plus the events that were decided (even when nothing was appended).
+     */
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(C command, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+        return executeAndReturnDecision(List.of(command), dcbDecider, store, options);
+    }
+
+    /**
+     * Execute {@code commands} and return the folded state plus the events that were decided (even when nothing was appended).
+     */
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+        return doExecute(commands, dcbDecider, store, options, DcbSnapshotKeys::canonicalKey).decision();
+    }
+
+    /**
+     * Execute {@code command} and return the folded state after the decision (even when nothing was appended).
+     */
+    public <C, S extends @Nullable Object> S executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+        return executeAndReturnDecision(command, dcbDecider, store, options).state();
+    }
+
+    /**
+     * Execute {@code commands} and return the folded state after the decision (even when nothing was appended).
+     */
+    public <C, S extends @Nullable Object> S executeAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+        return executeAndReturnDecision(commands, dcbDecider, store, options).state();
+    }
+
+    private <C, S extends @Nullable Object> Executed<S, E> doExecute(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options, Function<DcbCriteria, String> keyFunction) {
         Objects.requireNonNull(commands, "commands cannot be null");
         Objects.requireNonNull(dcbDecider, "dcbDecider cannot be null");
         Objects.requireNonNull(store, "store cannot be null");
@@ -98,12 +132,15 @@ public final class SnapshotDcbDeciderApplicationService<E> {
                     return decision.events();
                 });
 
+        Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
         appendResult.ifPresent(result -> {
-            Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
             int eventsSinceSnapshot = tailSize.get() + decision.events().size();
             SnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(),
-                    new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), base.version(), eventsSinceSnapshot));
+                    new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), eventsSinceSnapshot));
         });
-        return appendResult;
+        return new Executed<>(appendResult, decision);
+    }
+
+    private record Executed<S extends @Nullable Object, E>(Optional<DcbAppendResult> appendResult, Decider.Decision<S, E> decision) {
     }
 }

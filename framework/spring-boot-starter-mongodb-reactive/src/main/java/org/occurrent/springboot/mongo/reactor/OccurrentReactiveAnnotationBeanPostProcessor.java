@@ -37,10 +37,23 @@ import org.occurrent.dsl.projection.reactor.ReactiveProjectionRunner;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
+import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
+import org.occurrent.dsl.snapshot.DcbSnapshotView;
+import org.occurrent.dsl.snapshot.Snapshot;
+import org.occurrent.dsl.snapshot.SnapshotSupport;
+import org.occurrent.dsl.snapshot.SnapshotView;
+import org.occurrent.dsl.snapshot.reactor.ReactiveSnapshotStore;
 import org.occurrent.dsl.view.MaterializedView;
+import org.occurrent.dsl.view.View;
+import org.occurrent.condition.Condition;
+
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.util.Optional;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
@@ -416,6 +429,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             return;
         }
         List<Object[]> projectionMethods = new ArrayList<>();
+        List<Object[]> snapshotMethods = new ArrayList<>();
         for (String beanName : applicationContext.getBeanDefinitionNames()) {
             Class<?> type;
             try {
@@ -434,12 +448,15 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
                 org.occurrent.annotation.Snapshot snapshot = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Snapshot.class);
                 if (snapshot != null) {
-                    throw new UnsupportedOperationException("@Snapshot ('%s' on %s#%s) is not yet supported on the reactive stack. Maintain a reactive snapshot programmatically through the reactive snapshot DSL (ReactiveSnapshotDeciderApplicationService) instead.".formatted(snapshot.id(), ClassUtils.getUserClass(type).getName(), method.getName()));
+                    snapshotMethods.add(new Object[]{beanName, method, snapshot});
                 }
             }
         }
         for (Object[] pm : projectionMethods) {
             processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
+        }
+        for (Object[] sm : snapshotMethods) {
+            processSnapshotAnnotation(applicationContext.getBean((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
         }
     }
 
@@ -512,6 +529,221 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         } else {
             throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor == null ? "null" : descriptor.getClass().getName()));
         }
+    }
+
+    // A @Snapshot maintains a per-stream, resume-ready snapshot: for each handled event it folds the event onto the
+    // stored snapshot for that stream and saves the new state at the event's stream version, all composed reactively. A
+    // schema-version change or a gap rebuilds by folding the range up to this event from the store. The store save is
+    // best-effort at the reactive DSL level, but here a maintained failure surfaces to the durable subscription for retry.
+    @SuppressWarnings("unchecked")
+    private <E, S> void processSnapshotAnnotation(Object bean, Method method, org.occurrent.annotation.Snapshot annotation) {
+        String id = annotation.id();
+        if (!registeredIds.add(id)) {
+            throw new IllegalArgumentException("Duplicate subscription/projection/snapshot id '%s' (used by @Snapshot on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(id, bean.getClass().getName(), method.getName()));
+        }
+        if (method.getParameterCount() != 0) {
+            throw new IllegalArgumentException("@Snapshot factory method %s#%s must take no parameters and return a SnapshotView.".formatted(bean.getClass().getName(), method.getName()));
+        }
+        boolean synchronous = annotation.mode() == org.occurrent.annotation.Snapshot.Mode.SYNCHRONOUS;
+        if (synchronous && (annotation.startAtPosition() >= 0 || annotation.resumeBehavior() != ResumeBehavior.DEFAULT)) {
+            throw new IllegalArgumentException("@Snapshot '%s' uses mode = SYNCHRONOUS, which cannot be combined with startAtPosition or resumeBehavior (those configure catch-up for an async snapshot).".formatted(id));
+        }
+
+        CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
+        Object descriptor = invokeSnapshotFactory(method, bean);
+        int everyNEvents = annotation.everyNEvents();
+        if (everyNEvents < 1) {
+            throw new IllegalArgumentException("@Snapshot '%s' everyNEvents must be at least 1, but was %d.".formatted(id, everyNEvents));
+        }
+        if (descriptor instanceof DcbSnapshotView<?, ?> rawDcb) {
+            processDcbSnapshot(id, annotation, synchronous, converter, (DcbSnapshotView<S, E>) rawDcb, this.<S>resolveReactiveSnapshotStore(annotation, method, id), everyNEvents);
+            return;
+        }
+        if (!(descriptor instanceof SnapshotView<?, ?>)) {
+            throw new IllegalArgumentException("@Snapshot '%s' method %s#%s must return a SnapshotView, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor == null ? "null" : descriptor.getClass().getName()));
+        }
+        SnapshotView<S, E> snapshotView = (SnapshotView<S, E>) descriptor;
+        ReactiveSnapshotStore<S> store = resolveReactiveSnapshotStore(annotation, method, id);
+        int schemaVersion = snapshotView.schemaVersion();
+        View<S, E> view = snapshotView.view();
+        Filter eventFilter = snapshotFilterFor(converter, snapshotView);
+        org.occurrent.eventstore.api.reactor.EventStore eventStore = applicationContext.getBean(org.occurrent.eventstore.api.reactor.EventStore.class);
+
+        Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) -> {
+            String key = metadata.getStreamId();
+            long eventVersion = metadata.getStreamVersion();
+            return store.findLatest(key).map(Optional::of).defaultIfEmpty(Optional.empty()).flatMap(loaded -> {
+                if (SnapshotSupport.isRedelivery(loaded, schemaVersion, eventVersion)) {
+                    return Mono.<Void>empty(); // already folded (a redelivery), keep folding idempotent
+                }
+                SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, view::initialState);
+                if (eventVersion - base.version() < everyNEvents) {
+                    return Mono.<Void>empty(); // throttle: too few new events since the last saved snapshot
+                }
+                Mono<S> newState;
+                if (eventVersion == base.version() + 1) {
+                    newState = Mono.just(view.evolve(base.state(), event));
+                } else {
+                    newState = eventStore.read(key, (int) base.version(), (int) (eventVersion - base.version()))
+                            .flatMap(es -> es.events().collectList())
+                            .map(cloudEvents -> view.evolve(base.state(), converter.toDomainEvents(cloudEvents.stream()).toList()));
+                }
+                return newState.flatMap(state -> store.save(key, new Snapshot<>(state, eventVersion, schemaVersion)));
+            });
+        };
+
+        boolean stream = annotation.capability() == org.occurrent.annotation.Snapshot.Capability.STREAM;
+        if (synchronous) {
+            Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
+            synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), StartAt.subscriptionModelDefault(), consumer);
+            return;
+        }
+        boolean replaysHistory = annotation.startAtPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.Snapshot.StartPosition.BEGINNING;
+        if (replaysHistory && stream && !streamHistoryReplaySupported()) {
+            throw new IllegalArgumentException("@Snapshot '%s' (capability = STREAM) asks to replay history, but this store does not support reactive stream history replay. Use capability = AGNOSTIC, or startAt = NOW/DEFAULT.".formatted(id));
+        }
+        if (replaysHistory && !stream && !positionReplaySupported()) {
+            throw new IllegalArgumentException("@Snapshot '%s' asks to replay history, but this store does not write a global position, so the reactive position-based catch-up cannot replay. Use startAt = NOW or DEFAULT.".formatted(id));
+        }
+        StartAt startAt = generateAgnosticStartAt(id, toAgnosticStartPosition(annotation.startAt()), annotation.startAtPosition(), annotation.resumeBehavior());
+        boolean waitUntilStarted = shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        applyStartupWorkarounds();
+        if (stream) {
+            StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
+            var result = streamSubscriptions.subscribe(id, filter(eventFilter), startAt, consumer);
+            if (waitUntilStarted) {
+                result.waitUntilStarted().block();
+            }
+        } else {
+            Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
+            var result = subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, consumer);
+            if (waitUntilStarted) {
+                result.waitUntilStarted().block();
+            }
+        }
+    }
+
+    // A DCB @Snapshot maintains one snapshot per boundary, keyed by the canonical criteria key and versioned by the
+    // global DCB position, all composed reactively. On each matching event it folds the events after the stored
+    // snapshot's position onto the stored state and saves at the current position, so a rebuild after a schema change or
+    // a gap re-reads the boundary. everyNEvents throttles by the number of matching events folded since the last save.
+    @SuppressWarnings("unchecked")
+    private <E, S> void processDcbSnapshot(String id, org.occurrent.annotation.Snapshot annotation, boolean synchronous,
+                                           CloudEventConverter<E> converter, DcbSnapshotView<S, E> dcbSnapshotView,
+                                           ReactiveSnapshotStore<S> store, int everyNEvents) {
+        if (synchronous) {
+            throw new IllegalArgumentException("@Snapshot '%s' returns a DcbSnapshotView with mode = SYNCHRONOUS, which is not supported. Use the default asynchronous mode for a DCB snapshot, or maintain a synchronous DCB snapshot through the DSL.".formatted(id));
+        }
+        DcbCriteria criteria = dcbSnapshotView.criteria();
+        String key = DcbSnapshotKeys.canonicalKey(criteria);
+        View<S, E> view = dcbSnapshotView.snapshotView().view();
+        int schemaVersion = dcbSnapshotView.schemaVersion();
+        org.occurrent.eventstore.api.dcb.reactor.DcbEventStore dcbEventStore = applicationContext.getBean(org.occurrent.eventstore.api.dcb.reactor.DcbEventStore.class);
+
+        DcbStartAt startAt = generateDcbStartAt(id, toDcbStartPosition(annotation.startAt()), annotation.startAtPosition(), annotation.resumeBehavior());
+        applyStartupWorkarounds();
+        DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
+        var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, (dcbMetadata, event) -> {
+            long position = dcbMetadata.eventMetadata().getPosition();
+            return store.findLatest(key).map(Optional::of).defaultIfEmpty(Optional.empty()).flatMap(loaded -> {
+                if (SnapshotSupport.isRedelivery(loaded, schemaVersion, position)) {
+                    return Mono.<Void>empty(); // already folded (a redelivery), keep folding idempotent
+                }
+                SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, view::initialState);
+                return dcbEventStore.read(criteria, DcbReadOptions.between(base.version(), position)).flatMap(eventStream -> {
+                    List<E> range = converter.toDomainEvents(eventStream.events().stream()).toList();
+                    if (range.size() < everyNEvents) {
+                        return Mono.<Void>empty(); // throttle: too few matching events since the last saved snapshot
+                    }
+                    S newState = view.evolve(base.state(), range);
+                    return store.save(key, new Snapshot<>(newState, position, schemaVersion));
+                });
+            });
+        });
+        boolean replaysHistory = annotation.startAtPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.Snapshot.StartPosition.BEGINNING;
+        if (shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
+            subscription.waitUntilStarted().block();
+        }
+    }
+
+    private static DcbSubscription.DcbStartPosition toDcbStartPosition(org.occurrent.annotation.Snapshot.StartPosition p) {
+        return switch (p) {
+            case BEGINNING -> DcbSubscription.DcbStartPosition.BEGINNING;
+            case NOW -> DcbSubscription.DcbStartPosition.NOW;
+            case DEFAULT -> DcbSubscription.DcbStartPosition.DEFAULT;
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private <S> ReactiveSnapshotStore<S> resolveReactiveSnapshotStore(org.occurrent.annotation.Snapshot annotation, Method factoryMethod, String id) {
+        Class<?> storeType = annotation.store();
+        String storeName = annotation.storeName();
+        boolean typeSet = storeType != Void.class;
+        boolean nameSet = !storeName.isBlank();
+        if (typeSet || nameSet) {
+            Object bean = typeSet && nameSet ? applicationContext.getBean(storeName, storeType)
+                    : typeSet ? applicationContext.getBean(storeType) : applicationContext.getBean(storeName);
+            if (!(bean instanceof ReactiveSnapshotStore<?>)) {
+                throw new IllegalArgumentException("@Snapshot '%s' store bean must be a ReactiveSnapshotStore, but was %s.".formatted(id, bean.getClass().getName()));
+            }
+            return (ReactiveSnapshotStore<S>) bean;
+        }
+        String[] names = applicationContext.getBeanNamesForType(ReactiveSnapshotStore.class);
+        if (names.length == 1) {
+            return (ReactiveSnapshotStore<S>) applicationContext.getBean(names[0]);
+        }
+        if (names.length > 1) {
+            throw new IllegalStateException("@Snapshot '%s' found %d ReactiveSnapshotStore beans (%s) and cannot pick one. Name one with storeName = \"beanName\".".formatted(id, names.length, String.join(", ", names)));
+        }
+        ReactiveMongoOperations mongoOperations = applicationContext.getBean(ReactiveMongoOperations.class);
+        Class<S> stateType = (Class<S>) reflectSnapshotStateType(factoryMethod, id);
+        return new ReactiveSpringMongoSnapshotStore<>(mongoOperations, stateType, "occurrent-snapshot-" + id);
+    }
+
+    private static <E> Filter snapshotFilterFor(CloudEventConverter<E> converter, SnapshotView<?, E> snapshotView) {
+        Filter explicit = snapshotView.filter();
+        if (explicit != null) {
+            return explicit;
+        }
+        List<Condition<String>> typeConditions = snapshotView.eventTypes().stream()
+                .map(type -> Condition.eq(converter.getCloudEventType(type)))
+                .toList();
+        return switch (typeConditions.size()) {
+            case 0 -> Filter.all();
+            case 1 -> Filter.type(typeConditions.getFirst());
+            default -> Filter.type(Condition.or(typeConditions));
+        };
+    }
+
+    private static Object invokeSnapshotFactory(Method method, Object bean) {
+        try {
+            method.setAccessible(true);
+            Object result = method.invoke(bean);
+            if (result == null) {
+                throw new IllegalStateException("@Snapshot factory method %s#%s returned null.".formatted(bean.getClass().getName(), method.getName()));
+            }
+            return result;
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to invoke @Snapshot factory method %s#%s".formatted(bean.getClass().getName(), method.getName()), e);
+        }
+    }
+
+    private static Class<?> reflectSnapshotStateType(Method factoryMethod, String id) {
+        Type returnType = factoryMethod.getGenericReturnType();
+        if (returnType instanceof ParameterizedType parameterizedType) {
+            Type[] arguments = parameterizedType.getActualTypeArguments();
+            if (arguments.length >= 1) {
+                Type stateArgument = arguments[0];
+                if (stateArgument instanceof Class<?> stateClass) {
+                    return stateClass;
+                }
+                if (stateArgument instanceof ParameterizedType stateParameterized && stateParameterized.getRawType() instanceof Class<?> rawState) {
+                    return rawState;
+                }
+            }
+        }
+        throw new IllegalArgumentException(("@Snapshot '%s' needs a snapshot store: either name one with store or storeName (a ReactiveSnapshotStore bean), " +
+                "or declare the factory return type with a concrete state type (for example SnapshotView<MyState, MyEvent>) so the snapshot can default to MongoDB.").formatted(id));
     }
 
     // Resolve the read-model store. On the reactive stack there is no zero-config Mongo default (the view DSL's
@@ -618,6 +850,14 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     private static Subscription.StartPosition toAgnosticStartPosition(org.occurrent.annotation.Projection.StartPosition p) {
+        return switch (p) {
+            case BEGINNING -> Subscription.StartPosition.BEGINNING;
+            case NOW -> Subscription.StartPosition.NOW;
+            case DEFAULT -> Subscription.StartPosition.DEFAULT;
+        };
+    }
+
+    private static Subscription.StartPosition toAgnosticStartPosition(org.occurrent.annotation.Snapshot.StartPosition p) {
         return switch (p) {
             case BEGINNING -> Subscription.StartPosition.BEGINNING;
             case NOW -> Subscription.StartPosition.NOW;

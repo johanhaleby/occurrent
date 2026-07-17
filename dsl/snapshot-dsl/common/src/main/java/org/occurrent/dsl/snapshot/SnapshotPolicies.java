@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.snapshot.blocking;
+package org.occurrent.dsl.snapshot;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.decider.Decider;
-import org.occurrent.dsl.snapshot.SnapshotPolicy;
 
 import java.util.Objects;
 

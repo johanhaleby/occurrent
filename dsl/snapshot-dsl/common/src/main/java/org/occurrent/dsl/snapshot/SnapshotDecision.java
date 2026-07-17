@@ -28,18 +28,13 @@ import static java.util.Objects.requireNonNull;
  * @param newState                the state after folding this execute's produced events onto the resumed state
  * @param newEvents               the events this execute produced (empty when the execute wrote nothing)
  * @param newVersion              the version the state is now folded up to (the stream version, or the DCB position)
- * @param previousSnapshotVersion the version of the snapshot this execute resumed from, or {@link #NO_PREVIOUS_SNAPSHOT}
- *                                when it started from the initial state
  * @param eventsSinceSnapshot     how many events have been folded since the last snapshot: the resumed tail length plus
  *                                the number of newly produced events. This is what {@link SnapshotPolicy#everyNEvents(int)} counts.
  * @param <S>                     the state type
  * @param <E>                     the event type
  */
 public record SnapshotDecision<S extends @Nullable Object, E>(S newState, List<E> newEvents, long newVersion,
-                                                              long previousSnapshotVersion, int eventsSinceSnapshot) {
-
-    /** The value of {@link #previousSnapshotVersion()} when the execute did not resume from a snapshot. */
-    public static final long NO_PREVIOUS_SNAPSHOT = -1L;
+                                                              int eventsSinceSnapshot) {
 
     public SnapshotDecision {
         requireNonNull(newEvents, "newEvents cannot be null");

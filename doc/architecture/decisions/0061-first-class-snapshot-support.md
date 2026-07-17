@@ -80,11 +80,12 @@ snapshot while the DSL uses it. Because a `SnapshotStore<S>` is typed on the sta
 The registrar builds a per-`@Snapshot` `SpringMongoSnapshotStore` in a namespaced collection, and DSL callers construct
 their own store (in-memory or `SpringMongoSnapshotStore`).
 
-In v1 the declarative `@Snapshot` ships on the blocking stack only. The reactive annotation post-processor rejects
-`@Snapshot` with a message pointing at the reactive DSL rather than silently ignoring it, so reactive users reach for
-`ReactiveSnapshotDeciderApplicationService` explicitly. Declarative `@Snapshot` for DCB is likewise deferred, since a
-maintained snapshot has no single stream id to key on. Both reactive and DCB snapshots are fully supported
-programmatically through the DSL executors, so the deferral is an annotation-surface gap, not a capability gap.
+The declarative `@Snapshot` works on both the blocking and reactor stacks, for stream and DCB. A stream `@Snapshot`
+maintains one snapshot per stream. A DCB `@Snapshot` (a factory returning a `DcbSnapshotView`) maintains one snapshot per
+boundary, keyed by the canonical form of its `DcbCriteria` so tag order does not change the key. The reactor registrar uses
+a `ReactiveSnapshotStore` (a `ReactiveMongoOperations`-backed `ReactiveSpringMongoSnapshotStore` for the zero-config path),
+because a reactive application has no blocking `MongoOperations`. The DSL executors remain the programmatic path for ad-hoc,
+non-annotated use.
 
 ## Consequences
 
@@ -104,6 +105,6 @@ programmatically through the DSL executors, so the deferral is an annotation-sur
   read and `everyNEvents` rides the version delta.
 - One method was added to the public `Decider` API (`evolve(S, List<E>)`) and one option each to `ExecuteOptions` and
   `DcbExecuteOptions`. All three are additive and backward compatible.
-- The declarative `@Snapshot` annotation ships blocking-only in v1. Reactive and DCB declarative snapshots are deferred and
-  fail loud on the reactive stack, while both remain available through the DSL executors. Reactive declarative `@Snapshot`
-  is the natural next follow-up.
+- The declarative `@Snapshot` annotation works on both the blocking and reactor stacks, for stream and DCB. The Mongo
+  `SnapshotStore` reads never throw on a stale or unreadable snapshot (they degrade to a full replay), and both scalar and
+  POJO state round-trip.

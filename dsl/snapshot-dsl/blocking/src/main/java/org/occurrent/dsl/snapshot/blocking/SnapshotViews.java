@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
+import org.occurrent.dsl.snapshot.SnapshotPolicy;
 import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.dsl.snapshot.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
@@ -49,7 +50,7 @@ public final class SnapshotViews {
      */
     public static <S extends @Nullable Object, E> S readState(EventStore eventStore, CloudEventConverter<E> converter, String streamId,
                                                               SnapshotView<S, E> snapshotView, SnapshotStore<S> store,
-                                                              org.occurrent.dsl.snapshot.SnapshotPolicy<S, E> policy) {
+                                                              SnapshotPolicy<S, E> policy) {
         Objects.requireNonNull(eventStore, "eventStore cannot be null");
         Objects.requireNonNull(converter, "converter cannot be null");
         Objects.requireNonNull(streamId, "streamId cannot be null");
@@ -66,7 +67,7 @@ public final class SnapshotViews {
         // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...) stay meaningful
         // (snapshot when the tail was non-empty, or contained a boundary event), and everyNEvents rides the version delta.
         SnapshotSupport.maybeSaveBestEffort(store, streamId, snapshotView.schemaVersion(), policy,
-                new SnapshotDecision<>(current, tail, version, base.version(), Math.toIntExact(version - base.version())));
+                new SnapshotDecision<>(current, tail, version, Math.toIntExact(version - base.version())));
         return current;
     }
 }

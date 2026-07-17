@@ -16,14 +16,11 @@
 
 package org.occurrent.dsl.snapshot.reactor;
 
-import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
-import org.occurrent.dsl.snapshot.SnapshotStore;
-import org.occurrent.dsl.snapshot.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import reactor.core.publisher.Mono;
@@ -49,7 +46,7 @@ public final class ReactiveSnapshotViews {
      * schema version does not match the view is ignored and the state is rebuilt from the whole stream.
      */
     public static <S extends @Nullable Object, E> Mono<S> readState(EventStore eventStore, CloudEventConverter<E> converter, String streamId,
-                                                                    SnapshotView<S, E> snapshotView, SnapshotStore<S> store,
+                                                                    SnapshotView<S, E> snapshotView, ReactiveSnapshotStore<S> store,
                                                                     SnapshotPolicy<S, E> policy) {
         Objects.requireNonNull(eventStore, "eventStore cannot be null");
         Objects.requireNonNull(converter, "converter cannot be null");
@@ -58,19 +55,17 @@ public final class ReactiveSnapshotViews {
         Objects.requireNonNull(store, "store cannot be null");
         Objects.requireNonNull(policy, "policy cannot be null");
 
-        return Mono.defer(() -> {
-            SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(store.findLatest(streamId), snapshotView.schemaVersion(), snapshotView.view()::initialState);
-            return eventStore.read(streamId, Math.toIntExact(base.version()), Integer.MAX_VALUE).flatMap(eventStream ->
-                    eventStream.events().collectList().map(cloudEvents -> {
-                        List<E> tail = converter.toDomainEvents(cloudEvents.stream()).toList();
-                        S current = snapshotView.view().evolve(base.state(), tail);
-                        long version = eventStream.version();
-                        // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...)
-                        // stay meaningful and everyNEvents rides the version delta.
-                        SnapshotSupport.maybeSaveBestEffort(store, streamId, snapshotView.schemaVersion(), policy,
-                                new SnapshotDecision<>(current, tail, version, base.version(), Math.toIntExact(version - base.version())));
-                        return current;
-                    }));
-        });
+        return Mono.defer(() -> ReactiveSnapshotSupport.resolveBase(store, streamId, snapshotView.schemaVersion(), snapshotView.view()::initialState).flatMap(base ->
+                eventStore.read(streamId, Math.toIntExact(base.version()), Integer.MAX_VALUE).flatMap(eventStream ->
+                        eventStream.events().collectList().flatMap(cloudEvents -> {
+                            List<E> tail = converter.toDomainEvents(cloudEvents.stream()).toList();
+                            S current = snapshotView.view().evolve(base.state(), tail);
+                            long version = eventStream.version();
+                            // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...)
+                            // stay meaningful and everyNEvents rides the version delta.
+                            return ReactiveSnapshotSupport.maybeSaveBestEffort(store, streamId, snapshotView.schemaVersion(), policy,
+                                            new SnapshotDecision<>(current, tail, version, Math.toIntExact(version - base.version())))
+                                    .thenReturn(current);
+                        }))));
     }
 }

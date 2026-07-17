@@ -33,6 +33,7 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
+import org.occurrent.dsl.snapshot.SnapshotPolicies;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
 import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.eventstore.api.WriteResult;

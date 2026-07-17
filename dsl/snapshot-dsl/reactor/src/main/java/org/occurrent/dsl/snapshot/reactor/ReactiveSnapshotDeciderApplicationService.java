@@ -24,8 +24,6 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
-import org.occurrent.dsl.snapshot.SnapshotStore;
-import org.occurrent.dsl.snapshot.SnapshotSupport;
 import org.occurrent.eventstore.api.WriteResult;
 import reactor.core.publisher.Mono;
 
@@ -42,15 +40,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link ExecuteOptions#fromStreamVersion(long)}), folds those onto the snapshot state with {@link Decider#evolve(Object, List)},
  * decides, writes, and then writes a fresh snapshot when the {@link org.occurrent.dsl.snapshot.SnapshotPolicy} in the
  * {@link SnapshotOptions} fires. The optimistic write still happens at the stream's true current version, so concurrency
- * control is unchanged and a stale snapshot only means a longer tail to fold, never a wrong result.
+ * control is unchanged and a stale snapshot only means a longer tail to fold, never a wrong result. It loads one snapshot
+ * and reads only the events after it per execute, and a plain application service without a snapshot store pays nothing.
  * <p>
  * Snapshots are a discardable optimization: a loaded snapshot whose schema version does not match the one in
  * {@link SnapshotOptions} is ignored and the state is rebuilt from scratch. The snapshot write is best-effort (this facade
- * writes it after the command's own write).
- * <p>
- * {@link SnapshotStore} is a blocking interface, so its {@code findLatest}/{@code save} run inline on the subscribing
- * thread, the same way the reactive projection DSL bridges its blocking view store. Keep the store fast or supply one that
- * does its own scheduling.
+ * writes it after the command's own write, and a save failure is logged rather than failing the committed command).
  */
 @NullMarked
 public final class ReactiveSnapshotDeciderApplicationService<E> {
@@ -64,46 +59,46 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
     /**
      * Execute a single command against {@code streamId}, resuming from the snapshot in {@code store}.
      */
-    public <C, S extends @Nullable Object> Mono<WriteResult> execute(String streamId, C command, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    public <C, S extends @Nullable Object> Mono<WriteResult> execute(String streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         return execute(streamId, List.of(command), decider, store, options);
     }
 
     /**
      * Execute a single command against {@code streamId}, resuming from the snapshot in {@code store}.
      */
-    public <C, S extends @Nullable Object> Mono<WriteResult> execute(UUID streamId, C command, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    public <C, S extends @Nullable Object> Mono<WriteResult> execute(UUID streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         return execute(streamId.toString(), command, decider, store, options);
     }
 
     /**
      * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot in {@code store}.
      */
-    public <C, S extends @Nullable Object> Mono<WriteResult> execute(String streamId, List<C> commands, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    public <C, S extends @Nullable Object> Mono<WriteResult> execute(String streamId, List<C> commands, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         return doExecute(streamId, commands, decider, store, options).map(Executed::writeResult);
     }
 
     /**
      * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot in {@code store}.
      */
-    public <C, S extends @Nullable Object> Mono<WriteResult> execute(UUID streamId, List<C> commands, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    public <C, S extends @Nullable Object> Mono<WriteResult> execute(UUID streamId, List<C> commands, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         return execute(streamId.toString(), commands, decider, store, options);
     }
 
     /**
      * Execute {@code command} and return the folded state plus the events that were decided.
      */
-    public <C, S extends @Nullable Object> Mono<Decider.Decision<S, E>> executeAndReturnDecision(String streamId, C command, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    public <C, S extends @Nullable Object> Mono<Decider.Decision<S, E>> executeAndReturnDecision(String streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         return doExecute(streamId, List.of(command), decider, store, options).map(Executed::decision);
     }
 
     /**
      * Execute {@code command} and return the folded state after the decision.
      */
-    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(String streamId, C command, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(String streamId, C command, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         return executeAndReturnDecision(streamId, command, decider, store, options).map(Decider.Decision::state);
     }
 
-    private <C, S extends @Nullable Object> Mono<Executed<S, E>> doExecute(String streamId, List<C> commands, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    private <C, S extends @Nullable Object> Mono<Executed<S, E>> doExecute(String streamId, List<C> commands, Decider<C, S, E> decider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         Objects.requireNonNull(streamId, "streamId cannot be null");
         Objects.requireNonNull(commands, "commands cannot be null");
         Objects.requireNonNull(decider, "decider cannot be null");
@@ -112,23 +107,22 @@ public final class ReactiveSnapshotDeciderApplicationService<E> {
 
         // Defer so the snapshot load and everything after it are cold: nothing runs until subscribed, and each subscription
         // loads a fresh base. The base does not change between the app service's optimistic-retry attempts.
-        return Mono.defer(() -> {
-            SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(store.findLatest(streamId), options.schemaVersion(), decider::initialState);
+        return Mono.defer(() -> ReactiveSnapshotSupport.resolveBase(store, streamId, options.schemaVersion(), decider::initialState).flatMap(base -> {
             AtomicReference<Decider.Decision<S, E>> decisionRef = new AtomicReference<>();
             return applicationService.execute(streamId, ExecuteOptions.<E>empty().fromStreamVersion(base.version()), tail -> {
                 S current = decider.evolve(base.state(), tail);
                 Decider.Decision<S, E> decision = decider.decideOnState(current, commands);
                 decisionRef.set(decision);
                 return decision.events();
-            }).map(writeResult -> {
+            }).flatMap(writeResult -> {
                 Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
                 long newVersion = writeResult.newStreamVersion();
                 int eventsSinceSnapshot = Math.toIntExact(newVersion - base.version());
-                SnapshotSupport.maybeSaveBestEffort(store, streamId, options.schemaVersion(), options.policy(),
-                        new SnapshotDecision<>(decision.state(), decision.events(), newVersion, base.version(), eventsSinceSnapshot));
-                return new Executed<>(writeResult, decision);
+                return ReactiveSnapshotSupport.maybeSaveBestEffort(store, streamId, options.schemaVersion(), options.policy(),
+                                new SnapshotDecision<>(decision.state(), decision.events(), newVersion, eventsSinceSnapshot))
+                        .thenReturn(new Executed<>(writeResult, decision));
             });
-        });
+        }));
     }
 
     private record Executed<S extends @Nullable Object, E>(WriteResult writeResult, Decider.Decision<S, E> decision) {

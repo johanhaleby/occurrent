@@ -34,7 +34,6 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
@@ -79,7 +78,7 @@ class ReactiveSnapshotViewsTest {
     private ReactorMongoEventStore eventStore;
     private CloudEventConverter<DomainEvent> converter;
     private ApplicationService<DomainEvent> applicationService;
-    private SnapshotStore<String> store;
+    private ReactiveSnapshotStore<String> store;
     private SnapshotView<String, DomainEvent> snapshotView;
     private LocalDateTime time;
 
@@ -98,7 +97,7 @@ class ReactiveSnapshotViewsTest {
         eventStore = new ReactorMongoEventStore(mongoTemplate, config);
         converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         applicationService = new GenericApplicationService<>(eventStore, converter);
-        store = SnapshotStore.inMemory();
+        store = ReactiveSnapshotStore.inMemory();
         time = LocalDateTime.now();
         snapshotView = SnapshotView.<String, DomainEvent>builder("")
                 .on(NameDefined.class, (state, event) -> event.name())
@@ -117,9 +116,9 @@ class ReactiveSnapshotViewsTest {
 
         assertAll(
                 () -> assertThat(state).isEqualTo("Janet"),
-                () -> assertThat(store.findLatest(streamId)).isPresent(),
-                () -> assertThat(store.findLatest(streamId).orElseThrow().state()).isEqualTo("Janet"),
-                () -> assertThat(store.findLatest(streamId).orElseThrow().version()).isEqualTo(2L)
+                () -> assertThat(store.findLatest(streamId).blockOptional()).isPresent(),
+                () -> assertThat(store.findLatest(streamId).blockOptional().orElseThrow().state()).isEqualTo("Janet"),
+                () -> assertThat(store.findLatest(streamId).blockOptional().orElseThrow().version()).isEqualTo(2L)
         );
     }
 

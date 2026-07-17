@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.snapshot
 
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.filter.Filter
 import java.util.function.BiFunction
 
@@ -64,4 +66,67 @@ class SnapshotViewBuilder<S, E : Any> @PublishedApi internal constructor(initial
 
     @PublishedApi
     internal fun build(): SnapshotView<S, E> = delegate.build()
+}
+
+/**
+ * Builds a [DcbSnapshotView] with a type-safe handler block plus a DCB read boundary, for example:
+ *
+ * ```
+ * val balance = dcbSnapshotView<Balance, LedgerEvent>(initialState = Balance.ZERO) {
+ *     schemaVersion(1)
+ *     tags("account:1")
+ *     on<MoneyDeposited> { state, e -> state.plus(e.amount) }
+ * }
+ * ```
+ *
+ * Set the boundary with [DcbSnapshotViewBuilder.tags] (a tag filter) or an explicit [DcbSnapshotViewBuilder.criteria].
+ * With neither, the boundary defaults to [DcbCriteria.all].
+ */
+fun <S, E : Any> dcbSnapshotView(initialState: S, block: DcbSnapshotViewBuilder<S, E>.() -> Unit): DcbSnapshotView<S, E> {
+    val builder = DcbSnapshotViewBuilder<S, E>(initialState)
+    builder.block()
+    return builder.build()
+}
+
+/**
+ * Receiver for the [dcbSnapshotView] block: the [SnapshotViewBuilder] surface plus the DCB read boundary.
+ */
+class DcbSnapshotViewBuilder<S, E : Any> @PublishedApi internal constructor(initialState: S) {
+    @PublishedApi
+    internal val viewBuilder: SnapshotViewBuilder<S, E> = SnapshotViewBuilder(initialState)
+
+    @PublishedApi
+    internal val tags: MutableList<Tag> = mutableListOf()
+
+    @PublishedApi
+    internal var explicitCriteria: DcbCriteria? = null
+
+    /** Registers the fold for event type [T]. */
+    inline fun <reified T : E> on(noinline handler: (S, T) -> S) = viewBuilder.on<T>(handler)
+
+    /** Sets the schema version tagging the state this fold produces; bump it when the state shape changes. */
+    fun schemaVersion(schemaVersion: Int) = viewBuilder.schemaVersion(schemaVersion)
+
+    /** Adds DCB tags to the read boundary, matched all-of. Each string is parsed with [Tag.parse]. */
+    fun tags(vararg tag: String) {
+        tag.forEach { tags.add(Tag.parse(it)) }
+    }
+
+    /** Adds DCB tags to the read boundary, matched all-of. */
+    fun tags(vararg tag: Tag) {
+        tags.addAll(tag)
+    }
+
+    /** Sets the DCB read boundary explicitly, overriding any [tags]. Can be set only once. */
+    fun criteria(criteria: DcbCriteria) {
+        check(explicitCriteria == null) { "criteria(...) has already been set and can only be set once" }
+        this.explicitCriteria = criteria
+    }
+
+    @PublishedApi
+    internal fun build(): DcbSnapshotView<S, E> {
+        val snapshotView = viewBuilder.build()
+        val criteria = explicitCriteria ?: if (tags.isNotEmpty()) DcbCriteria.tags(tags) else DcbCriteria.all()
+        return DcbSnapshotView(snapshotView, criteria)
+    }
 }

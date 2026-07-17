@@ -36,9 +36,9 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.dcb.DcbDecider;
 import org.occurrent.dsl.decider.Decider;
+import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -90,7 +90,7 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
     private ReactorMongoEventStore eventStore;
     private CloudEventConverter<DomainEvent> converter;
     private ReactiveSnapshotDcbDeciderApplicationService<DomainEvent> snapshotService;
-    private SnapshotStore<String> store;
+    private ReactiveSnapshotStore<String> store;
     private AtomicInteger evolveCount;
     private DcbDecider<Cmd, String, DomainEvent> dcbDecider;
     private String key;
@@ -112,11 +112,11 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         DcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetry());
         snapshotService = new ReactiveSnapshotDcbDeciderApplicationService<>(applicationService);
-        store = SnapshotStore.inMemory();
+        store = ReactiveSnapshotStore.inMemory();
         evolveCount = new AtomicInteger();
         Decider<Cmd, String, DomainEvent> decider = countingDecider(evolveCount, time = LocalDateTime.now());
         dcbDecider = DcbDecider.from(decider, command -> criteria(), event -> Set.of(tag()));
-        key = criteria().toString();
+        key = DcbSnapshotKeys.canonicalKey(criteria());
     }
 
     @Test
@@ -124,8 +124,8 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         snapshotService.execute(new Define("A"), dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always())).block();
 
         assertAll(
-                () -> assertThat(store.findLatest(key)).isPresent(),
-                () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("A")
+                () -> assertThat(store.findLatest(key).blockOptional()).isPresent(),
+                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("A")
         );
     }
 
@@ -140,7 +140,7 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         assertAll(
                 // Empty tail after the snapshot, so only the produced event is folded (1), not a full replay.
                 () -> assertThat(evolveCount.get()).isEqualTo(1),
-                () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("B")
+                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("B")
         );
     }
 
@@ -158,7 +158,7 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         assertAll(
                 // The out-of-band X and the produced B are both folded (2), proving the tail after the snapshot was read.
                 () -> assertThat(evolveCount.get()).isEqualTo(2),
-                () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("B")
+                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("B")
         );
     }
 
@@ -172,8 +172,8 @@ class ReactiveSnapshotDcbDeciderApplicationServiceTest {
         assertAll(
                 // Old schema-1 snapshot ignored, whole boundary replayed: A (1) plus produced B (1) = 2.
                 () -> assertThat(evolveCount.get()).isEqualTo(2),
-                () -> assertThat(store.findLatest(key).orElseThrow().schemaVersion()).isEqualTo(2),
-                () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("B")
+                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().schemaVersion()).isEqualTo(2),
+                () -> assertThat(store.findLatest(key).blockOptional().orElseThrow().state()).isEqualTo("B")
         );
     }
 

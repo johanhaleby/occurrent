@@ -37,8 +37,8 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
+import org.occurrent.dsl.snapshot.SnapshotPolicies;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -49,6 +49,7 @@ import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
@@ -84,7 +85,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
 
     private ApplicationService<DomainEvent> applicationService;
     private ReactiveSnapshotDeciderApplicationService<DomainEvent> snapshotService;
-    private SnapshotStore<String> store;
+    private ReactiveSnapshotStore<String> store;
     private AtomicInteger evolveCount;
     private Decider<Cmd, String, DomainEvent> decider;
     private LocalDateTime time;
@@ -105,7 +106,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
         CloudEventConverter<DomainEvent> converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         applicationService = new GenericApplicationService<>(eventStore, converter);
         snapshotService = new ReactiveSnapshotDeciderApplicationService<>(applicationService);
-        store = SnapshotStore.inMemory();
+        store = ReactiveSnapshotStore.inMemory();
         evolveCount = new AtomicInteger();
         decider = countingDecider(evolveCount, time = LocalDateTime.now());
     }
@@ -118,7 +119,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
                 .assertNext(writeResult -> assertThat(writeResult.newStreamVersion()).isEqualTo(1L))
                 .verifyComplete();
 
-        Optional<Snapshot<String>> snapshot = store.findLatest(streamId);
+        Optional<Snapshot<String>> snapshot = store.findLatest(streamId).blockOptional();
         assertAll(
                 () -> assertThat(snapshot).isPresent(),
                 () -> assertThat(snapshot.orElseThrow().state()).isEqualTo("Jane"),
@@ -130,15 +131,15 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     @Test
     void a_failing_snapshot_save_does_not_error_the_mono_and_the_write_is_committed() {
         String streamId = UUID.randomUUID().toString();
-        SnapshotStore<String> failingStore = new SnapshotStore<>() {
+        ReactiveSnapshotStore<String> failingStore = new ReactiveSnapshotStore<>() {
             @Override
-            public Optional<Snapshot<String>> findLatest(String key) {
-                return Optional.empty();
+            public Mono<Snapshot<String>> findLatest(String key) {
+                return Mono.empty();
             }
 
             @Override
-            public void save(String key, Snapshot<String> snapshot) {
-                throw new RuntimeException("snapshot store is down");
+            public Mono<Void> save(String key, Snapshot<String> snapshot) {
+                return Mono.error(new RuntimeException("snapshot store is down"));
             }
         };
 
@@ -161,8 +162,8 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
                 // Only the produced event is folded (1). A full replay of the two history events plus the produced one would be 3.
                 () -> assertThat(evolveCount.get()).isEqualTo(1),
                 () -> assertThat(state).isEqualTo("C"),
-                () -> assertThat(store.findLatest(streamId).orElseThrow().version()).isEqualTo(3L),
-                () -> assertThat(store.findLatest(streamId).orElseThrow().state()).isEqualTo("C")
+                () -> assertThat(store.findLatest(streamId).blockOptional().orElseThrow().version()).isEqualTo(3L),
+                () -> assertThat(store.findLatest(streamId).blockOptional().orElseThrow().state()).isEqualTo("C")
         );
     }
 
@@ -172,10 +173,10 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.everyNEvents(1, 2);
 
         snapshotService.execute(streamId, new Define("A"), decider, store, options).block();
-        assertThat(store.findLatest(streamId)).as("delta 1 < 2, no snapshot").isEmpty();
+        assertThat(store.findLatest(streamId).blockOptional()).as("delta 1 < 2, no snapshot").isEmpty();
 
         snapshotService.execute(streamId, new Change("B"), decider, store, options).block();
-        assertThat(store.findLatest(streamId)).as("delta 2 >= 2, snapshot").hasValueSatisfying(s -> {
+        assertThat(store.findLatest(streamId).blockOptional()).as("delta 2 >= 2, snapshot").hasValueSatisfying(s -> {
             assertThat(s.version()).isEqualTo(2L);
             assertThat(s.state()).isEqualTo("B");
         });
@@ -185,7 +186,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     void never_policy_never_saves() {
         String streamId = UUID.randomUUID().toString();
         snapshotService.execute(streamId, new Define("A"), decider, store, SnapshotOptions.of(1, SnapshotPolicy.never())).block();
-        assertThat(store.findLatest(streamId)).isEmpty();
+        assertThat(store.findLatest(streamId).blockOptional()).isEmpty();
     }
 
     @Test
@@ -194,10 +195,10 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicies.whenTerminal(decider));
 
         snapshotService.execute(streamId, new Define("A"), decider, store, options).block();
-        assertThat(store.findLatest(streamId)).as("not terminal, no snapshot").isEmpty();
+        assertThat(store.findLatest(streamId).blockOptional()).as("not terminal, no snapshot").isEmpty();
 
         snapshotService.execute(streamId, new Close(), decider, store, options).block();
-        assertThat(store.findLatest(streamId)).as("terminal, snapshot").hasValueSatisfying(s -> assertThat(s.state()).isEqualTo("CLOSED"));
+        assertThat(store.findLatest(streamId).blockOptional()).as("terminal, snapshot").hasValueSatisfying(s -> assertThat(s.state()).isEqualTo("CLOSED"));
     }
 
     @Test
@@ -213,7 +214,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
                 () -> assertThat(state).isEqualTo("B"),
                 // Full replay: the history event A (1) plus the produced event B (1) = 2. A resume would have been 1.
                 () -> assertThat(evolveCount.get()).isEqualTo(2),
-                () -> assertThat(store.findLatest(streamId).orElseThrow().schemaVersion()).isEqualTo(2)
+                () -> assertThat(store.findLatest(streamId).blockOptional().orElseThrow().schemaVersion()).isEqualTo(2)
         );
     }
 

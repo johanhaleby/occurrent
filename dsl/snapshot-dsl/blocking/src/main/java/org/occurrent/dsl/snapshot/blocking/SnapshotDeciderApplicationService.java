@@ -30,7 +30,6 @@ import org.occurrent.eventstore.api.WriteResult;
 
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -42,12 +41,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link ExecuteOptions#fromStreamVersion(long)}), folds those onto the snapshot state with {@link Decider#evolve(Object, List)},
  * decides, writes, and then writes a fresh snapshot when the {@link org.occurrent.dsl.snapshot.SnapshotPolicy} in the
  * {@link SnapshotOptions} fires. The optimistic write still happens at the stream's true current version, so concurrency
- * control is unchanged and a stale snapshot only means a longer tail to fold, never a wrong result.
+ * control is unchanged and a stale snapshot only means a longer tail to fold, never a wrong result. It loads one snapshot
+ * and reads only the events after it per execute, and a plain application service without a snapshot store pays nothing.
  * <p>
  * Snapshots are a discardable optimization: a loaded snapshot whose schema version does not match the one in
- * {@link SnapshotOptions} is ignored and the state is rebuilt from scratch. The snapshot write is best-effort by default
- * (this facade writes it after the command's own write). Use a transaction-aware application service if the snapshot must
- * commit atomically with the events.
+ * {@link SnapshotOptions} is ignored and the state is rebuilt from scratch. The snapshot write is best-effort: it happens
+ * after the command's events commit and a save failure is logged rather than failing the committed command. For a snapshot
+ * kept consistent on the write path, maintain it with {@code @Snapshot(mode = SYNCHRONOUS)} or a synchronous subscription.
  * <p>
  * The decider's event type must equal the application service's event type {@code E}. Widen a narrower decider with
  * {@link Decider#adapt(Decider, Class, Class)} first.
@@ -126,7 +126,7 @@ public final class SnapshotDeciderApplicationService<E> {
         long newVersion = writeResult.newStreamVersion();
         int eventsSinceSnapshot = Math.toIntExact(newVersion - base.version());
         SnapshotSupport.maybeSaveBestEffort(store, streamId, options.schemaVersion(), options.policy(),
-                new SnapshotDecision<>(decision.state(), decision.events(), newVersion, base.version(), eventsSinceSnapshot));
+                new SnapshotDecision<>(decision.state(), decision.events(), newVersion, eventsSinceSnapshot));
         return new Executed<>(writeResult, decision);
     }
 

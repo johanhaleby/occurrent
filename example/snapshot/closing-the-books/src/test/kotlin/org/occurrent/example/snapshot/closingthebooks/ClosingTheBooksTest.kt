@@ -29,7 +29,7 @@ import org.occurrent.dsl.snapshot.SnapshotOptions
 import org.occurrent.dsl.snapshot.SnapshotPolicy
 import org.occurrent.dsl.snapshot.SnapshotStore
 import org.occurrent.dsl.snapshot.blocking.SnapshotDeciderApplicationService
-import org.occurrent.dsl.snapshot.blocking.SnapshotPolicies
+import org.occurrent.dsl.snapshot.SnapshotPolicies
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.net.URI
 

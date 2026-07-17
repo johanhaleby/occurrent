@@ -26,12 +26,11 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.occurrent.dsl.snapshot.SnapshotDecision.NO_PREVIOUS_SNAPSHOT;
 
 class SnapshotPolicyTest {
 
     private static SnapshotDecision<Integer, LedgerEvent> decision(int eventsSinceSnapshot, List<LedgerEvent> newEvents) {
-        return new SnapshotDecision<>(0, newEvents, 10, NO_PREVIOUS_SNAPSHOT, eventsSinceSnapshot);
+        return new SnapshotDecision<>(0, newEvents, 10, eventsSinceSnapshot);
     }
 
     @Test
@@ -74,8 +73,8 @@ class SnapshotPolicyTest {
     void when_state_fires_on_the_state_predicate() {
         SnapshotPolicy<Integer, LedgerEvent> policy = SnapshotPolicy.whenState(balance -> balance >= 100);
 
-        assertThat(policy.shouldSnapshot(new SnapshotDecision<>(150, List.of(), 1, NO_PREVIOUS_SNAPSHOT, 1))).isTrue();
-        assertThat(policy.shouldSnapshot(new SnapshotDecision<>(50, List.of(), 1, NO_PREVIOUS_SNAPSHOT, 1))).isFalse();
+        assertThat(policy.shouldSnapshot(new SnapshotDecision<>(150, List.of(), 1, 1))).isTrue();
+        assertThat(policy.shouldSnapshot(new SnapshotDecision<>(50, List.of(), 1, 1))).isFalse();
     }
 
     @Test

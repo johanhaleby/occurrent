@@ -32,6 +32,7 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.dcb.DcbDecider;
 import org.occurrent.dsl.decider.Decider;
+import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
 import org.occurrent.dsl.snapshot.SnapshotStore;
@@ -77,7 +78,27 @@ class SnapshotDcbDeciderApplicationServiceTest {
         evolveCount = new AtomicInteger();
         Decider<Cmd, String, DomainEvent> decider = countingDecider(evolveCount, time);
         dcbDecider = DcbDecider.from(decider, command -> criteria(), event -> Set.of(tag()));
-        key = criteria().toString();
+        key = DcbSnapshotKeys.canonicalKey(criteria());
+    }
+
+    @Test
+    void executeAndReturnState_returns_the_folded_state() {
+        SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        snapshotService.execute(new Define("A"), dcbDecider, store, options);
+
+        String state = snapshotService.executeAndReturnState(new Change("B"), dcbDecider, store, options);
+
+        assertThat(state).isEqualTo("B");
+    }
+
+    @Test
+    void executeAndReturnDecision_returns_state_and_events() {
+        Decider.Decision<String, DomainEvent> decision = snapshotService.executeAndReturnDecision(new Define("A"), dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        assertAll(
+                () -> assertThat(decision.state()).isEqualTo("A"),
+                () -> assertThat(decision.events()).hasSize(1)
+        );
     }
 
     @Test

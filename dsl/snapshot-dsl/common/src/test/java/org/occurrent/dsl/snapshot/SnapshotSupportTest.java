@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.occurrent.dsl.snapshot.SnapshotDecision.NO_PREVIOUS_SNAPSHOT;
 
 class SnapshotSupportTest {
 
@@ -59,7 +58,7 @@ class SnapshotSupportTest {
     @Test
     void maybe_save_writes_a_tagged_snapshot_when_the_policy_fires() {
         SnapshotStore<Integer> store = SnapshotStore.inMemory();
-        SnapshotDecision<Integer, LedgerEvent> decision = new SnapshotDecision<>(42, List.of(new Deposited(1)), 7, NO_PREVIOUS_SNAPSHOT, 1);
+        SnapshotDecision<Integer, LedgerEvent> decision = new SnapshotDecision<>(42, List.of(new Deposited(1)), 7, 1);
 
         boolean saved = SnapshotSupport.maybeSave(store, "acc:1", 3, SnapshotPolicy.always(), decision);
 
@@ -70,11 +69,22 @@ class SnapshotSupportTest {
     @Test
     void maybe_save_writes_nothing_when_the_policy_does_not_fire() {
         SnapshotStore<Integer> store = SnapshotStore.inMemory();
-        SnapshotDecision<Integer, LedgerEvent> decision = new SnapshotDecision<>(42, List.of(new Deposited(1)), 7, NO_PREVIOUS_SNAPSHOT, 1);
+        SnapshotDecision<Integer, LedgerEvent> decision = new SnapshotDecision<>(42, List.of(new Deposited(1)), 7, 1);
 
         boolean saved = SnapshotSupport.maybeSave(store, "acc:1", 3, SnapshotPolicy.never(), decision);
 
         assertThat(saved).isFalse();
         assertThat(store.findLatest("acc:1")).isEmpty();
+    }
+
+    @Test
+    void is_redelivery_is_true_only_when_the_snapshot_already_covers_the_delivered_version_at_a_matching_schema() {
+        Optional<Snapshot<Integer>> loaded = Optional.of(new Snapshot<>(42, 7, 1));
+
+        assertThat(SnapshotSupport.isRedelivery(loaded, 1, 7)).isTrue();  // already folded up to 7
+        assertThat(SnapshotSupport.isRedelivery(loaded, 1, 6)).isTrue();  // an older redelivery
+        assertThat(SnapshotSupport.isRedelivery(loaded, 1, 8)).isFalse(); // a new event to fold
+        assertThat(SnapshotSupport.isRedelivery(loaded, 2, 7)).isFalse(); // schema mismatch, rebuild instead of skip
+        assertThat(SnapshotSupport.isRedelivery(Optional.empty(), 1, 7)).isFalse();
     }
 }
