@@ -5,7 +5,7 @@ Date: 2026-07-18
 ## Status
 
 Accepted. The push subscription model and the v1 replay-then-push bootstrap catch-up (broker owns live-resume) are
-implemented. The broker-independent resume in "Future direction" (v2) is proposed, not implemented.
+implemented. Broker-independent resume (v2) is a deliberate non-goal, see the section below.
 
 ## Context
 
@@ -102,15 +102,22 @@ consumer (a durable queue with a preserved offset). If the consumer is offline l
 offset or bootstrap marker is lost, the projection must be rebuilt. For RabbitMQ specifically a durable queue already
 retains messages for an offline consumer, so this v1 covers the common production case.
 
-## Future direction: broker-independent resume (v2, proposed)
+## Non-goal: broker-independent resume (v2)
 
-To make resume independent of broker retention, the model would replay from a store-side checkpoint on every restart
-rather than trusting the broker to redeliver the gap. The checkpoint cannot be a feed-derived frontier (see above); it
-would instead lag real time by MongoDB's `transactionLifetimeLimitSeconds`, since a reservation not committed within that
-window is guaranteed aborted by the database, so a checkpoint that lags by it cannot skip a still-pending low position.
-That is a hard database guarantee, not the arbitrary timeout rejected above, but it is intricate and MongoDB-coupled
-(reserved-head sampling, transaction-lifetime configuration), so it is deferred until a deployment needs resume that does
-not depend on broker durability.
+Making live-resume independent of broker retention is a deliberate non-goal, and may never be built. The decision is a
+boundary of responsibility: delivery guarantees for the live feed, ordering and no-loss redelivery, belong to the
+transport that already provides them (RabbitMQ, Kafka), not to Occurrent reconstructing them. The push source is meant to
+be driven by a transport that guarantees ordering. Occurrent's job is the one-time bootstrap from the event store, not to
+compensate for a transport that drops or reorders messages.
+
+Should broker-independent resume ever be needed, it belongs with the push transport integration (the push module or a
+transport-specific adapter), resting on that transport's own ordering and durability guarantee, rather than inside the
+core as a store-side checkpoint. A within-Occurrent version was considered (replay from a checkpoint that lags real time
+by MongoDB's `transactionLifetimeLimitSeconds`, since a reservation not committed within that window is guaranteed
+aborted, so such a checkpoint cannot skip a still-pending low position). It is sound, but it is intricate and
+MongoDB-coupled (reserved-head sampling, transaction-lifetime configuration) and would put the core in the business of
+reconstructing guarantees the transport should own, so it is explicitly out of scope. A deployment that needs resume the
+broker cannot provide should rebuild the projection offline from the event store instead.
 
 ## `@Projection` push-source routing
 
