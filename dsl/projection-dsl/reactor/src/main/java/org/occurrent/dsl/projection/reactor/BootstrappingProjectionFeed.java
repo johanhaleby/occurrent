@@ -182,7 +182,9 @@ public final class BootstrappingProjectionFeed<E> {
                 item.live().success();
                 return Mono.empty();
             }
-            return fold.apply(event)
+            // Mono.defer so a synchronous throw from the fold becomes an onError signal onErrorResume can catch, rather
+            // than aborting the whole pipeline.
+            return Mono.defer(() -> fold.apply(event))
                     .doOnSuccess(v -> {
                         deliveredIds.add(key);
                         item.live().success();
@@ -192,7 +194,7 @@ public final class BootstrappingProjectionFeed<E> {
                         return Mono.empty();
                     });
         }
-        return fold.apply(event).doOnSuccess(v -> deliveredIds.add(key));
+        return Mono.defer(() -> fold.apply(event)).doOnSuccess(v -> deliveredIds.add(key));
     }
 
     private Mono<Boolean> alreadyBootstrapped() {

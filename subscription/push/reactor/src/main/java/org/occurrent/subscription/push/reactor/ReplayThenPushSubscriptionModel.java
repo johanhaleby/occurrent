@@ -145,7 +145,9 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
                 item.live().success();
                 return Mono.empty();
             }
-            return action.apply(cloudEvent)
+            // Mono.defer so a synchronous throw from action.apply becomes an onError signal onErrorResume can catch,
+            // rather than aborting the whole pipeline.
+            return Mono.defer(() -> action.apply(cloudEvent))
                     .doOnSuccess(v -> {
                         deliveredIds.add(id);
                         item.live().success();
@@ -156,7 +158,7 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
                     });
         }
         // Replay event: an error here propagates and fails the bootstrap.
-        return action.apply(cloudEvent).doOnSuccess(v -> deliveredIds.add(id));
+        return Mono.defer(() -> action.apply(cloudEvent)).doOnSuccess(v -> deliveredIds.add(id));
     }
 
     private Mono<Boolean> alreadyBootstrapped(String subscriptionId) {
