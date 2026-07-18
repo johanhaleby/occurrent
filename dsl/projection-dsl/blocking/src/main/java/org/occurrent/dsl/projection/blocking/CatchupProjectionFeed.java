@@ -86,6 +86,9 @@ public final class CatchupProjectionFeed<E> {
         this.view = view;
         this.replayFilter = replayFilter;
         this.reader = reader;
+        if (!reader.writesPosition()) {
+            throw new IllegalArgumentException("The reader does not write positions (writesPosition() returns false), so the catch-up cannot replay history in position order. Supply a reader from a positioned event store.");
+        }
         this.converter = converter;
         this.eventId = eventId;
         this.catchupMarker = catchupMarker;

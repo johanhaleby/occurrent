@@ -24,7 +24,10 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
@@ -35,6 +38,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -153,6 +157,19 @@ class CatchupProjectionFeedTest {
         assertThat(repo.get("counter")).isEqualTo(2);
     }
 
+    @Test
+    void a_reader_that_does_not_write_positions_fails_fast_at_construction() {
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        CloudEventConverter<Counted> converter = countedConverter();
+        PositionOrderedReader reader = positionlessReader();
+
+        Throwable thrown = catchThrowable(() ->
+                CatchupProjectionFeed.create("counter", projection(), repository, reader, converter, Counted::eventId, null));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("writesPosition");
+    }
+
     // --- helpers ---
 
     private static CatchupProjectionFeed<Counted> feed(String id, InMemoryEventStore store, CloudEventConverter<Counted> converter,
@@ -193,6 +210,25 @@ class CatchupProjectionFeedTest {
             @Override
             public String getCloudEventType(Class<? extends Counted> type) {
                 return "Counted";
+            }
+        };
+    }
+
+    private static PositionOrderedReader positionlessReader() {
+        return new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Stream.empty();
+            }
+
+            @Override
+            public long currentPosition() {
+                return 0;
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return false;
             }
         };
     }

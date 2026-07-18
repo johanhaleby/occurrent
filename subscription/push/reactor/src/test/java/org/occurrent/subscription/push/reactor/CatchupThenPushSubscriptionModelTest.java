@@ -161,6 +161,16 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Cannot catch-up-replay");
     }
 
+    @Test
+    void a_reader_that_does_not_write_positions_fails_fast_at_construction() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = positionlessReader();
+
+        Throwable thrown = catchThrowable(() -> new CatchupThenPushSubscriptionModel(reader, feed, null));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("writesPosition");
+    }
+
     // --- helpers ---
 
     private static Function<CloudEvent, Mono<Void>> recordInto(List<String> delivered) {
@@ -182,6 +192,25 @@ class CatchupThenPushSubscriptionModelTest {
             @Override
             public boolean writesPosition() {
                 return true;
+            }
+        };
+    }
+
+    private static PositionOrderedReader positionlessReader() {
+        return new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just(0L);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return false;
             }
         };
     }

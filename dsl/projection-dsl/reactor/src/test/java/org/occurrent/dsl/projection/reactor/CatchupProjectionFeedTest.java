@@ -41,6 +41,7 @@ import java.util.function.Function;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -165,6 +166,18 @@ class CatchupProjectionFeedTest {
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
     }
 
+    @Test
+    void a_reader_that_does_not_write_positions_fails_fast_at_construction() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+
+        assertThatThrownBy(() ->
+                CatchupProjectionFeed.create("counter", projection(), repository, positionlessReader(), converter, Counted::eventId, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("writesPosition");
+    }
+
     // --- helpers ---
 
     private static CatchupProjectionFeed<Counted> feed(String id, PositionOrderedReader reader, CloudEventConverter<Counted> converter,
@@ -196,6 +209,26 @@ class CatchupProjectionFeedTest {
             @Override
             public boolean writesPosition() {
                 return true;
+            }
+        };
+    }
+
+    // A reader whose writesPosition() returns false, so the fail-fast guard rejects it before any replay.
+    private PositionOrderedReader positionlessReader() {
+        return new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just(0L);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return false;
             }
         };
     }

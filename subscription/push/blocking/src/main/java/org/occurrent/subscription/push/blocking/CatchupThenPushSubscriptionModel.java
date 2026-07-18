@@ -104,6 +104,9 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
 
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
+        if (!reader.writesPosition()) {
+            throw new IllegalArgumentException("The reader does not write positions (writesPosition() returns false), so the catch-up cannot replay history in position order. Supply a reader from a positioned event store.");
+        }
         this.liveFeed = Objects.requireNonNull(liveFeed, "liveFeed cannot be null");
         this.catchupMarker = catchupMarker;
         if (dedupCacheSize <= 0) {
