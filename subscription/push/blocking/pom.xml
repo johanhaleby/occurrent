@@ -39,6 +39,17 @@
             <artifactId>occurrent-subscription-core</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Position-ordered event-store read for the one-time bootstrap replay in ReplayThenPushSubscriptionModel -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-api-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-filter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
@@ -49,6 +60,12 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-api-dcb</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
