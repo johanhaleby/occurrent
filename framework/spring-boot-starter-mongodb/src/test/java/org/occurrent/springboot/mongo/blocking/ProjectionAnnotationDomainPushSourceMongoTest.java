@@ -46,6 +46,9 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -119,7 +122,7 @@ class ProjectionAnnotationDomainPushSourceMongoTest {
             return new JacksonCloudEventConverter.Builder<TestEvent>(new ObjectMapper(), SOURCE)
                     .typeMapper(typeMapper)
                     .idMapper(TestEvent::eventId)
-                    .timeMapper(event -> java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).truncatedTo(java.time.temporal.ChronoUnit.MILLIS))
+                    .timeMapper(event -> OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
                     .build();
         }
 

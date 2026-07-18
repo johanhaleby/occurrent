@@ -42,6 +42,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.stereotype.Component;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Flux;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
@@ -171,7 +172,7 @@ class ReactiveProjectionAnnotationPushSourceMongoTest {
 
         @PostConstruct
         void appendHistory() {
-            eventStore.write("orders", reactor.core.publisher.Flux.fromIterable(
+            eventStore.write("orders", Flux.fromIterable(
                     cloudEventConverter.toCloudEvents(List.of(new OrderPlaced("historic-1"), new OrderPlaced("historic-2"))))).block();
         }
     }

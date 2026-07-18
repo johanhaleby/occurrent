@@ -31,6 +31,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.projection.DcbProjection;
+import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.projection.blocking.Projections;
@@ -81,7 +82,9 @@ import org.springframework.util.ClassUtils;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Set;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -117,7 +120,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private ApplicationContext applicationContext;
     private final Set<String> registeredIds = new HashSet<>();
     // Domain-push feeds collected during projection registration, bootstrapped once after all are registered.
-    private final Set<DomainEventFeed<?>> domainFeedsToBootstrap = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    private final Set<DomainEventFeed<?>> domainFeedsToBootstrap = Collections.newSetFromMap(new IdentityHashMap<>());
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
@@ -256,10 +259,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                 subscription.waitUntilStarted();
             }
-        } else if (descriptor instanceof org.occurrent.dsl.projection.Projection<?, ?, ?> raw) {
-            org.occurrent.dsl.projection.Projection<S, E, ID> projection = (org.occurrent.dsl.projection.Projection<S, E, ID>) raw;
+        } else if (descriptor instanceof Projection<?, ?, ?> raw) {
+            Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
             MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
-            Filter eventFilter = ProjectionFilters.filterFor(converter, (org.occurrent.dsl.projection.Projection<?, E, ?>) projection);
+            Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
             Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
                 materializedView.update(event);
                 return Unit.INSTANCE;
@@ -290,7 +293,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // replay-then-push bootstrap catch-up so a new or rebuilt projection is backfilled from the event store first.
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, PushSubscriptionModel pushModel) {
-        org.occurrent.dsl.projection.Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
+        Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
         PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
         CheckpointStorage bootstrapMarker = applicationContext.getBean(CheckpointStorage.class);
@@ -303,7 +306,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
 
     // Common validation for a source=PUSH projection: no synchronous mode, no catch-up start knobs, must be a Projection.
     @SuppressWarnings("unchecked")
-    private <S, E, ID> org.occurrent.dsl.projection.Projection<S, E, ID> validatePushDescriptor(org.occurrent.annotation.Projection annotation, String id, Object descriptor, boolean synchronous) {
+    private <S, E, ID> Projection<S, E, ID> validatePushDescriptor(org.occurrent.annotation.Projection annotation, String id, Object descriptor, boolean synchronous) {
         if (synchronous) {
             throw new IllegalArgumentException("@Projection '%s' cannot combine source=PUSH with mode=SYNCHRONOUS: a push feed is asynchronous.".formatted(id));
         }
@@ -311,10 +314,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 || annotation.resumeBehavior() != ResumeBehavior.DEFAULT || annotation.startupMode() != StartupMode.DEFAULT) {
             throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the bootstrap always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
         }
-        if (!(descriptor instanceof org.occurrent.dsl.projection.Projection<?, ?, ?> raw)) {
+        if (!(descriptor instanceof Projection<?, ?, ?> raw)) {
             throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be bootstrap-replayed in position order.".formatted(id));
         }
-        return (org.occurrent.dsl.projection.Projection<S, E, ID>) raw;
+        return (Projection<S, E, ID>) raw;
     }
 
     // Resolve the push feed bean referenced by subscriptionModel (type) or subscriptionModelName (name), or the unique
@@ -358,10 +361,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // (no CloudEvent conversion on the live path), with a bootstrap catch-up from the event store.
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerDomainPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, DomainEventFeed<?> feedBean) {
-        org.occurrent.dsl.projection.Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
+        Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
-        Filter eventFilter = ProjectionFilters.filterFor(converter, (org.occurrent.dsl.projection.Projection<?, E, ?>) projection);
+        Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
         feed.register(id, materializedView, eventFilter);
         domainFeedsToBootstrap.add(feed);
     }
@@ -370,7 +373,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // the unique bean of type MaterializedView, then ViewStateRepository, then Spring Data CrudRepository (any backend),
     // and finally a zero-config MongoDB default keyed by the projection's id function. All non-default options are first-class.
     @SuppressWarnings("unchecked")
-    private <E, S, ID> MaterializedView<E> resolveStore(org.occurrent.annotation.Projection annotation, Method factoryMethod, org.occurrent.dsl.projection.Projection<S, E, ID> projection, String id) {
+    private <E, S, ID> MaterializedView<E> resolveStore(org.occurrent.annotation.Projection annotation, Method factoryMethod, Projection<S, E, ID> projection, String id) {
         Object referencedStore = resolveStoreBeanByReference(annotation, id);
         if (referencedStore != null) {
             return toMaterializedView(referencedStore, projection, id);
@@ -441,7 +444,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     @SuppressWarnings("unchecked")
-    private <E, S, ID> MaterializedView<E> toMaterializedView(Object storeBean, org.occurrent.dsl.projection.Projection<S, E, ID> projection, String id) {
+    private <E, S, ID> MaterializedView<E> toMaterializedView(Object storeBean, Projection<S, E, ID> projection, String id) {
         if (storeBean instanceof MaterializedView<?> materializedView) {
             return (MaterializedView<E>) materializedView;
         }

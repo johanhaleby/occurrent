@@ -37,6 +37,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -161,11 +163,11 @@ class ReplayThenPushSubscriptionModelTest {
 
     // --- helpers ---
 
-    private static java.util.function.Function<CloudEvent, Mono<Void>> recordInto(List<String> delivered) {
+    private static Function<CloudEvent, Mono<Void>> recordInto(List<String> delivered) {
         return ce -> Mono.fromRunnable(() -> delivered.add(ce.getId()));
     }
 
-    private static PositionOrderedReader reader(java.util.function.Supplier<Flux<CloudEvent>> flux, long head) {
+    private static PositionOrderedReader reader(Supplier<Flux<CloudEvent>> flux, long head) {
         return new PositionOrderedReader() {
             @Override
             public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {

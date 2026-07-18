@@ -29,6 +29,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -36,6 +37,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -197,7 +199,7 @@ class ReplayThenPushSubscriptionModelTest {
         }, history.size());
     }
 
-    private static PositionOrderedReader reader(java.util.function.Supplier<Stream<CloudEvent>> stream, long head) {
+    private static PositionOrderedReader reader(Supplier<Stream<CloudEvent>> stream, long head) {
         return new PositionOrderedReader() {
             @Override
             public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
@@ -224,7 +226,7 @@ class ReplayThenPushSubscriptionModelTest {
                 .build();
     }
 
-    private static final class InMemoryCheckpointStorage implements org.occurrent.subscription.api.blocking.CheckpointStorage {
+    private static final class InMemoryCheckpointStorage implements CheckpointStorage {
         private final Map<String, Checkpoint> checkpoints = new HashMap<>();
 
         @Override

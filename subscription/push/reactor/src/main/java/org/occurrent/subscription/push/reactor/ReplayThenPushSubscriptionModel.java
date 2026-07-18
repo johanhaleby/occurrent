@@ -32,6 +32,7 @@ import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.Sinks;
 
 import java.util.ArrayDeque;
@@ -106,7 +107,7 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
         Sinks.One<Void> bootstrapDone = Sinks.one();
         // Track the acks of live events buffered but not yet delivered, so a bootstrap failure fails them rather than
         // leaving the listener's accept Monos hanging forever.
-        Set<reactor.core.publisher.MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
+        Set<MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
         AtomicReference<Throwable> terminalError = new AtomicReference<>();
 
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not lost.
@@ -211,7 +212,7 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
         };
     }
 
-    private record LiveEvent(CloudEvent event, reactor.core.publisher.MonoSink<Void> ack) {
+    private record LiveEvent(CloudEvent event, MonoSink<Void> ack) {
         void success() {
             ack.success();
         }

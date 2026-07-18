@@ -86,7 +86,9 @@ import reactor.core.publisher.Mono;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -125,7 +127,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // added as their annotations are processed (before singletons finish), projection ids when they register below.
     private final Set<String> registeredIds = new HashSet<>();
     // Domain-push feeds collected during projection registration, bootstrapped once after all are registered.
-    private final Set<DomainEventFeed<?>> domainFeedsToBootstrap = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    private final Set<DomainEventFeed<?>> domainFeedsToBootstrap = Collections.newSetFromMap(new IdentityHashMap<>());
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {

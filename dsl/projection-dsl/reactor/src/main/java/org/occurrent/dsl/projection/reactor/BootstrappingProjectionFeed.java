@@ -29,6 +29,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.Sinks;
 
 import java.util.ArrayDeque;
@@ -37,6 +38,7 @@ import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
@@ -73,8 +75,8 @@ public final class BootstrappingProjectionFeed<E> {
     private final Sinks.Many<LiveEvent> liveSink;
     // Acks of live events buffered but not yet folded, so a bootstrap failure fails them rather than leaving the
     // listener's accept Monos hanging forever.
-    private final Set<reactor.core.publisher.MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
-    private final java.util.concurrent.atomic.AtomicReference<Throwable> terminalError = new java.util.concurrent.atomic.AtomicReference<>();
+    private final Set<MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
+    private final AtomicReference<Throwable> terminalError = new AtomicReference<>();
 
     private BootstrappingProjectionFeed(String id, Function<E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -244,9 +246,9 @@ public final class BootstrappingProjectionFeed<E> {
 
     private final class LiveEvent {
         private final E event;
-        private final reactor.core.publisher.MonoSink<Void> ack;
+        private final MonoSink<Void> ack;
 
-        private LiveEvent(E event, reactor.core.publisher.MonoSink<Void> ack) {
+        private LiveEvent(E event, MonoSink<Void> ack) {
             this.event = event;
             this.ack = ack;
         }

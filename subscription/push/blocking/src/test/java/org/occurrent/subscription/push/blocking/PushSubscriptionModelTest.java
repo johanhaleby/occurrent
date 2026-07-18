@@ -28,6 +28,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -133,7 +134,7 @@ class PushSubscriptionModelTest {
         model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
 
         // A listener may hold the model as a Consumer<CloudEvent> and feed events through it.
-        java.util.function.Consumer<CloudEvent> listener = model;
+        Consumer<CloudEvent> listener = model;
         listener.accept(cloudEvent("1", "NameDefined"));
 
         assertThat(received).containsExactly("1");

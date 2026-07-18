@@ -29,6 +29,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
 
 /**
  * The domain-event twin of {@code PushSubscriptionModel}: a register-only sink the application owns and feeds with
@@ -48,7 +49,7 @@ public final class DomainEventFeed<E> {
 
     private final PositionOrderedReader reader;
     private final CloudEventConverter<E> converter;
-    private final java.util.function.Function<E, String> eventId;
+    private final Function<E, String> eventId;
     private final @Nullable CheckpointStorage bootstrapMarker;
     private final CopyOnWriteArrayList<BootstrappingProjectionFeed<E>> feeds = new CopyOnWriteArrayList<>();
 
@@ -61,14 +62,14 @@ public final class DomainEventFeed<E> {
      *                        to always bootstrap.
      */
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
-                           java.util.function.Function<E, String> eventId, @Nullable CheckpointStorage bootstrapMarker) {
+                           Function<E, String> eventId, @Nullable CheckpointStorage bootstrapMarker) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
         this.converter = Objects.requireNonNull(converter, "converter cannot be null");
         this.eventId = Objects.requireNonNull(eventId, "eventId cannot be null");
         this.bootstrapMarker = bootstrapMarker;
     }
 
-    public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter, java.util.function.Function<E, String> eventId) {
+    public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId) {
         this(reader, converter, eventId, null);
     }
 
