@@ -71,7 +71,16 @@ public final class ReactiveSpringMongoSnapshotStore<S extends @Nullable Object> 
     public Mono<Snapshot<S>> findLatest(String key) {
         Objects.requireNonNull(key, "key cannot be null");
         return mongoOperations.findById(key, Document.class, collectionName)
-                .map(document -> {
+                .flatMap(document -> decodeSnapshot(key, document));
+    }
+
+    /**
+     * Decode a stored document into a {@link Snapshot}, degrading to an empty result if the document can no
+     * longer be read. This is scoped to the decode step only, so a connectivity or timeout error from the
+     * preceding {@code findById} call is left to propagate rather than being mistaken for an unreadable snapshot.
+     */
+    private Mono<Snapshot<S>> decodeSnapshot(String key, Document document) {
+        return Mono.fromSupplier(() -> {
                     long version = document.getLong(VERSION);
                     int schemaVersion = document.getInteger(SCHEMA_VERSION);
                     S state = readState(mongoOperations.getConverter(), document.get(STATE));

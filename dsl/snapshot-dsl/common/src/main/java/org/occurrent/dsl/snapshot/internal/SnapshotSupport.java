@@ -14,9 +14,13 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.snapshot;
+package org.occurrent.dsl.snapshot.internal;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.snapshot.Snapshot;
+import org.occurrent.dsl.snapshot.SnapshotDecision;
+import org.occurrent.dsl.snapshot.SnapshotPolicy;
+import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -34,11 +34,16 @@ per enum family) just to re-derive the same boolean from values that were never 
 their own. This is a plain deduplication: the constants, their names, and their meaning are unchanged, only the
 enclosing type moves.
 
-**The bean post-processors' per-annotation converter methods and `shouldWaitUntilStarted` overloads collapse.**
-With one `ResumeBehavior` and one `StartupMode` shared across every annotation, `toAgnosticResumeBehavior`,
-`toAgnosticStartupMode`, `toDcbResumeBehavior`, and `toDcbStartupMode` have nothing left to convert between, and
-the three `shouldWaitUntilStarted` overloads collapse to one. The bean post-processors keep everything else about
-how `@Projection` picks a stream-style or DCB-style subscription path, only the enum-bridging plumbing goes away.
+**The bean post-processors' per-annotation converter methods go away, and their `shouldWaitUntilStarted` overloads
+now share one `StartupMode` parameter instead of one per enum family.** With one `ResumeBehavior` and one
+`StartupMode` shared across every annotation, `toAgnosticResumeBehavior`, `toAgnosticStartupMode`,
+`toDcbResumeBehavior`, and `toDcbStartupMode` have nothing left to convert between, so they are removed. The reactor
+bean post-processor now needs only one `shouldWaitUntilStarted` method. The blocking bean post-processor still
+overloads on its first parameter's shape, a `StartPositionToUse` for the catch-up path and a plain `boolean` for the
+agnostic path, but both overloads now take the same shared `StartupMode` as their second parameter, so the
+redundant per-enum copies are what collapses, not the overload count itself. The bean post-processors keep
+everything else about how `@Projection` picks a stream-style or DCB-style subscription path, only the
+enum-bridging plumbing goes away.
 
 **This is a source- and binary-breaking change for 0.30.0 callers.** The four enums shipped nested (for example
 `Subscription.ResumeBehavior`, `DcbSubscription.StartupMode`) in the released 0.30.0, so any reference to one of

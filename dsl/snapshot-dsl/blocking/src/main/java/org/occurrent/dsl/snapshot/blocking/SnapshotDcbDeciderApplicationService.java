@@ -26,7 +26,7 @@ import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotStore;
-import org.occurrent.dsl.snapshot.SnapshotSupport;
+import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 

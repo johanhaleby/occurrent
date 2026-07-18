@@ -90,9 +90,11 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
     }
 
     /**
-     * Execute {@code command} and return the folded state after the decision (even when nothing was appended).
+     * Execute {@code command} and return the folded state after the decision (even when nothing was appended). The
+     * state is bound to a non-null type because a {@link Mono} cannot carry a null value, use
+     * {@link #executeAndReturnDecision} for a nullable state.
      */
-    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    public <C, S> Mono<S> executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
         return executeAndReturnDecision(command, dcbDecider, store, options).map(Decider.Decision::state);
     }
 

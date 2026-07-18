@@ -28,8 +28,8 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Internal helper shared by the blocking projection runners (the Kotlin {@code project} extensions and the Java
- * {@code *ProjectionRunner} facades): turning a {@link Projection} plus a {@link ViewStateRepository} into a
+ * The public factory for assembling blocking projection runners (the Kotlin {@code project} extensions and the Java
+ * {@code *ProjectionRunner} facades): turns a {@link Projection} plus a {@link ViewStateRepository} into a
  * {@link MaterializedView} that skips events whose id resolves to {@code null}. The plain-{@code Filter} derivation
  * lives in {@code org.occurrent.dsl.projection.internal.ProjectionFilters}, shared with the reactor stack.
  */

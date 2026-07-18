@@ -111,6 +111,11 @@ public @interface Snapshot {
      * 1 saves after every handled event. A larger value trades snapshot freshness for fewer writes: the snapshot then
      * lags by up to {@code n} events, which a snapshot-accelerated read simply folds on top. When a save does happen
      * after skipped events, the intervening events are folded from the store so the saved state stays correct.
+     * <p>
+     * This is the deliberate annotation-level trigger ceiling. The schema version and richer trigger policies (an
+     * event type, a state predicate, or a decider's terminal state, for example the "closing the books" case) live on
+     * the {@code SnapshotView} returned by the factory method, via its builder. Drop to the DSL {@code SnapshotPolicy}
+     * directly for those triggers.
      */
     int everyNEvents() default 1;
 

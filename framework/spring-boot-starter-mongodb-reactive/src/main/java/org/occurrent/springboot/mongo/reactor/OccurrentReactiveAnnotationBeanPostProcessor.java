@@ -40,7 +40,7 @@ import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
 import org.occurrent.dsl.snapshot.Snapshot;
-import org.occurrent.dsl.snapshot.SnapshotSupport;
+import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.dsl.snapshot.reactor.ReactiveSnapshotStore;
 import org.occurrent.dsl.view.MaterializedView;
@@ -484,7 +484,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         SubscriptionAnnotations.validateModeStartKnobs("@Projection", id, synchronous,
                 annotation.startAt() != org.occurrent.annotation.Projection.StartPosition.DEFAULT,
                 annotation.startAtPosition() >= 0,
-                annotation.resumeBehavior() != ResumeBehavior.DEFAULT);
+                annotation.resumeBehavior() != ResumeBehavior.DEFAULT,
+                annotation.startupMode() != StartupMode.DEFAULT);
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = invokeFactory(method, bean);
@@ -549,7 +550,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", id, synchronous,
                 annotation.startAt() != org.occurrent.annotation.Snapshot.StartPosition.BEGINNING,
                 annotation.startAtPosition() >= 0,
-                annotation.resumeBehavior() != ResumeBehavior.DEFAULT);
+                annotation.resumeBehavior() != ResumeBehavior.DEFAULT,
+                annotation.startupMode() != StartupMode.DEFAULT);
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = invokeSnapshotFactory(method, bean);

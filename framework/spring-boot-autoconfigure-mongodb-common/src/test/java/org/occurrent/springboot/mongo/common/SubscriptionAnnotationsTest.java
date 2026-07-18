@@ -26,7 +26,7 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void synchronous_with_startAt_is_rejected() {
-        assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", true, true, false, false))
+        assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", true, true, false, false, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("@Projection")
                 .hasMessageContaining("orders")
@@ -35,7 +35,7 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void synchronous_with_startAtPosition_is_rejected() {
-        assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", "ledger", true, false, true, false))
+        assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", "ledger", true, false, true, false, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("@Snapshot")
                 .hasMessageContaining("ledger")
@@ -44,14 +44,24 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void synchronous_with_resumeBehavior_is_rejected() {
-        assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", true, false, false, true))
+        assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", true, false, false, true, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("mode = SYNCHRONOUS");
     }
 
     @Test
+    void synchronous_with_startupMode_is_rejected() {
+        assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", "ledger", true, false, false, false, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("@Snapshot")
+                .hasMessageContaining("ledger")
+                .hasMessageContaining("mode = SYNCHRONOUS")
+                .hasMessageContaining("startupMode");
+    }
+
+    @Test
     void startAt_together_with_startAtPosition_is_rejected() {
-        assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", "ledger", false, true, true, false))
+        assertThatThrownBy(() -> SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", "ledger", false, true, true, false, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("@Snapshot")
                 .hasMessageContaining("ledger")
@@ -60,19 +70,19 @@ class SubscriptionAnnotationsTest {
 
     @Test
     void asynchronous_with_all_catch_up_knobs_except_the_startAt_pair_is_allowed() {
-        assertThatCode(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", false, true, false, true))
+        assertThatCode(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", false, true, false, true, true))
                 .doesNotThrowAnyException();
     }
 
     @Test
     void synchronous_without_any_start_knob_is_allowed() {
-        assertThatCode(() -> SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", "ledger", true, false, false, false))
+        assertThatCode(() -> SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", "ledger", true, false, false, false, false))
                 .doesNotThrowAnyException();
     }
 
     @Test
     void asynchronous_with_only_startAtPosition_is_allowed() {
-        assertThatCode(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", false, false, true, true))
+        assertThatCode(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", false, false, true, true, true))
                 .doesNotThrowAnyException();
     }
 }

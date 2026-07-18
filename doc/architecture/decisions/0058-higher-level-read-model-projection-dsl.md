@@ -30,7 +30,7 @@ as the branches of the fold, and the view instance id is dug out of the payload 
 ## Decision
 
 **Introduce a read-side descriptor symmetric to `DcbDecider`, and reuse `View` rather than replace it.**
-`Projection<S, E, ID>` is a record that couples a `View` (the pure fold) with the `id` function deriving the view
+`Projection<S, E, ID>` is a final class, built through a builder, that couples a `View` (the pure fold) with the `id` function deriving the view
 instance an event updates, the set of event types the fold handles, and an optional explicit `Filter`.
 `DcbProjection<S, E, ID>` adds the `DcbCriteria` read boundary, the same way `DcbDecider` adds a criteria to a plain
 `Decider`. `View` stays the pure, dependency-light fold it already is, so a caller who only wants to fold events keeps
