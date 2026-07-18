@@ -64,6 +64,12 @@
             <artifactId>occurrent-subscription-api-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Position-ordered store read for BootstrappingProjectionFeed's bootstrap replay -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-api-reactor</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-filter</artifactId>
