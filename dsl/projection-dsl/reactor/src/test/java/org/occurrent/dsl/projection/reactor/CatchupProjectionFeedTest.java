@@ -37,6 +37,7 @@ import java.net.URI;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -145,6 +146,23 @@ class CatchupProjectionFeedTest {
         StepVerifier.create(feed.accept(new Counted("live")))
                 .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom"))
                 .verify(ofSeconds(5));
+    }
+
+    @Test
+    void catches_up_and_folds_live_events_through_a_caller_supplied_fold() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        // The parity overload: drive an existing reactive fold plus a replay filter, instead of a projection and
+        // repository. This is what the reactor DomainEventFeed uses to back a MaterializedView store.
+        Function<Counted, Mono<Void>> fold = event -> Mono.fromRunnable(() -> repo.merge("counter", 1, Integer::sum));
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", fold, Filter.all(), reader("1", "2"), converter, Counted::eventId, null);
+
+        feed.catchUp().block();
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
+
+        feed.accept(new Counted("3")).block();
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
     }
 
     // --- helpers ---

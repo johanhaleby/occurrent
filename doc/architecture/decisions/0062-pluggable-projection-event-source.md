@@ -123,7 +123,8 @@ store (CloudEvents) and decodes each event once, never a double round trip.
   several projections from one source. It carries the domain-specific event-id function as a constructor argument, which
   is why `@Projection(source = PUSH, subscriptionModelName = "...")` needs no event-id annotation attribute and no
   feed-handle registry: the listener feeds the bean it owns, and the registrar just registers projections on it and
-  catches them up. The reactor path requires a `ViewStateRepository` store (its fold runs on `boundedElastic`).
+  catches them up. Both stacks accept a `ViewStateRepository` or a `MaterializedView` store (on the reactor stack the
+  fold runs on `boundedElastic`).
 
 ## The `Pushable` capability
 

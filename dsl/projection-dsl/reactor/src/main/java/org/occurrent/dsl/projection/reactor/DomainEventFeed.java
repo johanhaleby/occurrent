@@ -22,6 +22,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.filter.Filter;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -66,6 +67,15 @@ public final class DomainEventFeed<E> {
         Objects.requireNonNull(repository, "repository cannot be null");
         CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, projection, repository, reader, converter, eventId, catchupMarker);
         feeds.add(feed);
+    }
+
+    /**
+     * Register a projection driving an existing reactive {@code fold} (for example
+     * {@code Projections.reactiveUpdate(materializedView)}), replaying stored events matching {@code replayFilter}. The
+     * reactor analog of the blocking {@code register(id, MaterializedView, Filter)}.
+     */
+    public void register(String id, Function<E, Mono<Void>> fold, Filter replayFilter) {
+        feeds.add(CatchupProjectionFeed.create(id, fold, replayFilter, reader, converter, eventId, catchupMarker));
     }
 
     /**

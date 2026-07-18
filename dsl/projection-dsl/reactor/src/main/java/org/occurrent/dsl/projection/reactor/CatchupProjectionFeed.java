@@ -128,6 +128,42 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
+     * Create a feed driving an existing reactive {@code fold}, replaying stored events matching {@code replayFilter}.
+     * The reactor analog of the blocking {@code create(id, MaterializedView, Filter, ...)}: the caller supplies the fold
+     * (for example {@code Projections.reactiveUpdate(materializedView)}) and the filter that selects the events to replay.
+     */
+    public static <E> CatchupProjectionFeed<E> create(
+            String id, Function<E, Mono<Void>> fold, Filter replayFilter,
+            PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
+            @Nullable CheckpointStorage catchupMarker) {
+        return create(id, fold, replayFilter, reader, converter, eventId, catchupMarker,
+                DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
+    }
+
+    /**
+     * As {@link #create(String, Function, Filter, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage)},
+     * with an explicit de-dup cache size and live-buffer cap.
+     */
+    public static <E> CatchupProjectionFeed<E> create(
+            String id, Function<E, Mono<Void>> fold, Filter replayFilter,
+            PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
+            @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+        Objects.requireNonNull(id, "id cannot be null");
+        Objects.requireNonNull(fold, "fold cannot be null");
+        Objects.requireNonNull(replayFilter, "replayFilter cannot be null");
+        Objects.requireNonNull(reader, "reader cannot be null");
+        Objects.requireNonNull(converter, "converter cannot be null");
+        Objects.requireNonNull(eventId, "eventId cannot be null");
+        if (dedupCacheSize <= 0) {
+            throw new IllegalArgumentException("dedupCacheSize must be greater than zero");
+        }
+        if (maxBufferedEvents <= 0) {
+            throw new IllegalArgumentException("maxBufferedEvents must be greater than zero");
+        }
+        return new CatchupProjectionFeed<>(id, fold, replayFilter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
+    }
+
+    /**
      * Feed a live domain event. The returned {@link Mono} completes once the event has been folded (or immediately if it
      * is a de-duplicated overlap), so the listener can acknowledge after processing. Events fed before or during the
      * catch-up are buffered and delivered after the replay.

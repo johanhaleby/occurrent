@@ -32,8 +32,10 @@ import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.projection.reactor.ReactiveDcbProjectionRunner;
 import org.occurrent.dsl.projection.reactor.DomainEventFeed;
+import org.occurrent.dsl.projection.reactor.Projections;
 import org.occurrent.dsl.projection.reactor.ReactiveProjectionRunner;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
@@ -93,6 +95,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
@@ -509,7 +512,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             if (feedBean instanceof PushSubscriptionModel pushModel) {
                 registerPushProjection(id, converter, descriptor, synchronous, annotation, pushModel);
             } else if (feedBean instanceof DomainEventFeed<?> domainFeed) {
-                registerDomainPushProjection(id, descriptor, synchronous, annotation, domainFeed);
+                registerDomainPushProjection(id, converter, descriptor, synchronous, annotation, domainFeed);
             } else {
                 throw new IllegalArgumentException("@Projection '%s' with source=PUSH resolved a %s, which is neither a PushSubscriptionModel nor a DomainEventFeed.".formatted(id, feedBean.getClass().getName()));
             }
@@ -577,14 +580,21 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Register a source=PUSH projection whose feed bean is a DomainEventFeed. The reactor feed folds via a
     // ViewStateRepository (through reactiveUpdate on boundedElastic), so the store must resolve to a ViewStateRepository.
     @SuppressWarnings("unchecked")
-    private <E, S, ID> void registerDomainPushProjection(String id, Object descriptor, boolean synchronous, org.occurrent.annotation.Projection annotation, DomainEventFeed<?> feedBean) {
+    private <E, S, ID> void registerDomainPushProjection(String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, org.occurrent.annotation.Projection annotation, DomainEventFeed<?> feedBean) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         Object store = resolveStore(annotation, id);
-        if (!(store instanceof ViewStateRepository)) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH and a DomainEventFeed requires a ViewStateRepository store on the reactor stack, but resolved %s.".formatted(id, store.getClass().getName()));
-        }
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
-        feed.register(id, projection, (ViewStateRepository<S, ID>) store);
+        if (store instanceof ViewStateRepository) {
+            feed.register(id, projection, (ViewStateRepository<S, ID>) store);
+        } else if (store instanceof MaterializedView) {
+            // Drive the existing MaterializedView with a reactive fold (folded on boundedElastic, as the normal
+            // reactor projection path does), replaying the events the projection handles.
+            Function<E, Mono<Void>> fold = Projections.reactiveUpdate((MaterializedView<E>) store);
+            Filter replayFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
+            feed.register(id, fold, replayFilter);
+        } else {
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH and a DomainEventFeed requires a ViewStateRepository or MaterializedView store on the reactor stack, but resolved %s.".formatted(id, store.getClass().getName()));
+        }
         domainFeedsToCatchUp.add(feed);
     }
 
