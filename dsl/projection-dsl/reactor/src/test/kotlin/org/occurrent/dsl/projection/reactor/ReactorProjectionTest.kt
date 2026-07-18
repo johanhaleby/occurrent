@@ -19,6 +19,7 @@ package org.occurrent.dsl.projection.reactor
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.cloudevents.CloudEvent
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
 import org.junit.jupiter.api.Test
@@ -138,14 +139,34 @@ class ReactorProjectionTest {
     }
 
     @Test
-    fun pull_folds_a_query_into_the_same_state_as_push() {
+    fun id_scoped_pull_folds_a_query_into_the_same_state_as_push() {
         val defined = NameDefined(id(), Date(), "johan", "Johan")
         val changed = NameWasChanged(id(), Date(), "johan", "Johan Haleby")
         val queries = DomainEventQueries(InMemoryEventStoreQueries(cloudEvents(defined, changed)), converter)
 
-        val state: String? = queries.project(currentNameProjection()).block()
+        val state: String? = queries.project(currentNameProjection(), "johan").block()
 
         assertThat(state).isEqualTo("Johan Haleby")
+    }
+
+    @Test
+    fun id_scoped_pull_folds_only_the_requested_instance_when_multiple_instances_exist() {
+        val johanDefined = NameDefined(id(), Date(), "johan", "Johan")
+        val johanChanged = NameWasChanged(id(), Date(), "johan", "Johan Haleby")
+        val eveDefined = NameDefined(id(), Date(), "eve", "Eve")
+        val queries = DomainEventQueries(InMemoryEventStoreQueries(cloudEvents(johanDefined, johanChanged, eveDefined)), converter)
+
+        assertThat(queries.project(currentNameProjection(), "johan").block()).isEqualTo("Johan Haleby")
+        assertThat(queries.project(currentNameProjection(), "eve").block()).isEqualTo("Eve")
+    }
+
+    @Test
+    fun unqualified_pull_errors_for_a_keyed_projection() {
+        val defined = NameDefined(id(), Date(), "johan", "Johan")
+        val queries = DomainEventQueries(InMemoryEventStoreQueries(cloudEvents(defined)), converter)
+
+        assertThatThrownBy { queries.project(currentNameProjection()).block() }
+            .isInstanceOf(IllegalArgumentException::class.java)
     }
 
     private fun cloudEvents(vararg events: DomainEvent): List<CloudEvent> = events.map { converter.toCloudEvent(it) }

@@ -82,6 +82,9 @@ the store.
 - The store stays out of the descriptor, so one projection can be materialized into different stores, or folded
   on demand, without changing its definition.
 - Delivery mode is a runner concern, so async, synchronous (ADR 57), and pull all reuse one descriptor.
+- The on-demand `project` now takes an optional instance id: a keyed projection folded without one throws, since
+  blending every instance into a single state on demand would silently produce nonsense, and passing the id folds
+  just that instance.
 - `compose` is not available yet, and read models compose less naturally than deciders to begin with. The
   `@Projection` annotation followed in ADR 59, reusing these same runners rather than a parallel mechanism, so
   catch-up and durable resume were never blocked on the annotation existing.

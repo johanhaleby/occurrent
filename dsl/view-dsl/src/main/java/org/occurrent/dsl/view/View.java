@@ -23,6 +23,7 @@ import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Iterator;
 import java.util.function.BiFunction;
 import java.util.stream.Stream;
 
@@ -90,22 +91,30 @@ public interface View<S extends @Nullable Object, E> {
 
     /**
      * Evolve initial state from a lazily-produced stream of events, for example a query result. The stream
-     * is collected and folded into the state.
+     * is folded incrementally, one event at a time, without collecting it into a list first.
      *
      * @return The evolved state
      */
     default S evolve(@NonNull Stream<E> events) {
-        return evolve(events.toList());
+        return evolve(initialState(), events);
     }
 
     /**
-     * Evolve from an explicit state and a lazily-produced stream of events. The stream is collected and
-     * folded into the state.
+     * Evolve from an explicit state and a lazily-produced stream of events. The stream is folded
+     * incrementally, one event at a time, without collecting it into a list first.
      *
      * @return The evolved state
      */
     default S evolve(S state, @NonNull Stream<E> events) {
-        return evolve(state, events.toList());
+        S result = state;
+        try (events) {
+            // Fold sequentially in encounter order, since a view fold is order-dependent and a parallel forEach is not.
+            Iterator<E> iterator = events.iterator();
+            while (iterator.hasNext()) {
+                result = evolve(result, iterator.next());
+            }
+        }
+        return result;
     }
 
     static <S extends @Nullable Object, E> View<S, E> create(S initialState, @NonNull BiFunction<S, E, S> evolve) {

@@ -18,6 +18,7 @@ package org.occurrent.dsl.projection.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.AfterEach
@@ -150,7 +151,7 @@ class ProjectionBlockingTest {
     }
 
     @Test
-    fun pull_projection_folds_the_matching_events_on_demand_and_matches_the_pushed_state() {
+    fun id_scoped_pull_projection_folds_the_matching_events_on_demand_and_matches_the_pushed_state() {
         val store = ConcurrentHashMap<String, String>()
         val repository = viewStateRepository<String, String>({ store[it] }, { id, s -> store[id] = s })
         subscriptions(subscriptionModel, converter) {
@@ -165,8 +166,29 @@ class ProjectionBlockingTest {
         await untilAsserted { assertThat(store["johan"]).isEqualTo("Johan Haleby") }
 
         val queries = DomainEventQueries(eventStore, converter)
-        val pulled = queries.project(currentNameProjection())
+        val pulled = queries.project(currentNameProjection(), "johan")
 
         assertThat(pulled).isEqualTo("Johan Haleby").isEqualTo(store["johan"])
+    }
+
+    @Test
+    fun id_scoped_pull_projection_folds_only_the_requested_instance_when_multiple_instances_exist() {
+        write("johan", NameDefined(UUID.randomUUID().toString(), Date(), "johan", "Johan"), NameWasChanged(UUID.randomUUID().toString(), Date(), "johan", "Johan Haleby"))
+        write("eve", NameDefined(UUID.randomUUID().toString(), Date(), "eve", "Eve"))
+
+        val queries = DomainEventQueries(eventStore, converter)
+
+        assertThat(queries.project(currentNameProjection(), "johan")).isEqualTo("Johan Haleby")
+        assertThat(queries.project(currentNameProjection(), "eve")).isEqualTo("Eve")
+    }
+
+    @Test
+    fun unqualified_pull_projection_throws_for_a_keyed_projection() {
+        write("johan", NameDefined(UUID.randomUUID().toString(), Date(), "johan", "Johan"))
+
+        val queries = DomainEventQueries(eventStore, converter)
+
+        assertThatThrownBy { queries.project(currentNameProjection()) }
+            .isInstanceOf(IllegalArgumentException::class.java)
     }
 }

@@ -74,9 +74,14 @@ fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String
 /**
  * Folds the events [projection] selects, read on demand, into its view state and returns it: the strongly-consistent,
  * query-driven counterpart to the subscription-fed [Subscriptions.project]. Uses the projection's explicit filter if
- * set, else its handled event types (empty means "all events").
+ * set, else its handled event types (empty means "all events"). Only valid for a single-instance (singleton)
+ * projection; a keyed projection throws, since folding every instance into one blended state on demand would produce
+ * a nonsense result. Use [project] with an `instanceId` for a keyed projection.
  */
 fun <S, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<S, E, ID>): S {
+    require(projection.id() == null) {
+        "projection is keyed; folding every instance into one blended state on demand is not supported, use project(projection, instanceId) to read a single instance, or a singleton projection for one shared state"
+    }
     val explicitFilter = projection.filter()
     val events: Stream<E> = when {
         explicitFilter != null -> query(explicitFilter)
@@ -84,4 +89,23 @@ fun <S, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<
         else -> query(projection.eventTypes().toList())
     }
     return projection.view().evolve(events)
+}
+
+/**
+ * Folds the events [projection] selects for [instanceId], read on demand, into that instance's view state and returns
+ * it: the strongly-consistent, query-driven, single-instance counterpart to the unqualified [project]. Uses the same
+ * filter or handled event types as the unqualified [project] to read candidate events, then keeps only the ones whose
+ * [Projection.id] resolves to [instanceId] before folding. A singleton projection (no id function) has a single
+ * instance regardless of [instanceId], so this folds all selected events, same as the unqualified [project].
+ */
+fun <S, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<S, E, ID>, instanceId: ID): S {
+    val explicitFilter = projection.filter()
+    val events: Stream<E> = when {
+        explicitFilter != null -> query(explicitFilter)
+        projection.eventTypes().isEmpty() -> all()
+        else -> query(projection.eventTypes().toList())
+    }
+    val id = projection.id()
+    val scopedEvents = if (id == null) events else events.filter { id.apply(it) == instanceId }
+    return projection.view().evolve(scopedEvents)
 }
