@@ -86,6 +86,12 @@
             <artifactId>occurrent-subscription-inmemory</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Push subscription model: feed the projection DSL from an external source (RabbitMQ, Kafka, ...) -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-push-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-application-service-blocking</artifactId>
