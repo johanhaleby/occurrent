@@ -57,7 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Verifies that a {@link Projection @Projection} with {@link Source#DOMAIN_PUSH} is fed by a {@link DomainEventFeed}:
+ * Verifies that a {@link Projection @Projection} with {@link Source#PUSH} is fed by a {@link DomainEventFeed}:
  * it bootstraps its history from the event store on startup, then materializes live domain events fed through the feed,
  * with no CloudEvent conversion on the live path. Docker-based, run by the CI/integration step.
  */
@@ -148,7 +148,7 @@ class ProjectionAnnotationDomainPushSourceMongoTest {
     }
 
     static class OrderCountProjection {
-        @Projection(id = "domain-push-order-count", source = Source.DOMAIN_PUSH, subscriptionModelName = "ordersFeed", storeName = "orderCountStore")
+        @Projection(id = "domain-push-order-count", source = Source.PUSH, subscriptionModelName = "ordersFeed", storeName = "orderCountStore")
         org.occurrent.dsl.projection.Projection<OrderCount, TestEvent, String> orderCount() {
             return org.occurrent.dsl.projection.Projection.<OrderCount, TestEvent, String>builder(new OrderCount(0))
                     .id(event -> "orders")

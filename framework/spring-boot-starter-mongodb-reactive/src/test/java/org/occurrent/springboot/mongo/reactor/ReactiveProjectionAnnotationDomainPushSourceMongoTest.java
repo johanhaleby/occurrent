@@ -62,7 +62,7 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Reactive counterpart of the blocking domain-push projection test: a {@link Projection @Projection} with
- * {@link Source#DOMAIN_PUSH} bootstraps its history from the reactive event store, then materializes live domain events
+ * {@link Source#PUSH} bootstraps its history from the reactive event store, then materializes live domain events
  * fed through a reactive {@link DomainEventFeed}. Docker-based, run by the CI/integration step.
  */
 @DisplayName("Reactive Projection annotation (domain-push source, bootstrap then live)")
@@ -152,7 +152,7 @@ class ReactiveProjectionAnnotationDomainPushSourceMongoTest {
 
     @Component
     static class OrderCountProjection {
-        @Projection(id = "reactive-domain-push-order-count", source = Source.DOMAIN_PUSH, subscriptionModelName = "ordersFeed", storeName = "orderCountStore")
+        @Projection(id = "reactive-domain-push-order-count", source = Source.PUSH, subscriptionModelName = "ordersFeed", storeName = "orderCountStore")
         org.occurrent.dsl.projection.Projection<OrderCount, TestEvent, String> orderCount() {
             return org.occurrent.dsl.projection.Projection.<OrderCount, TestEvent, String>builder(new OrderCount(0))
                     .id(event -> VIEW_ID)

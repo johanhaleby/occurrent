@@ -39,7 +39,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * The application declares it as a bean carrying the domain-specific {@code eventId} function (the catch-up de-dup key)
  * plus the CloudEvent-layer collaborators (the store {@link PositionOrderedReader}, the {@link CloudEventConverter} used
  * only to decode replayed history, and an optional {@link CheckpointStorage} bootstrap marker), registers projections on
- * it (directly, or through {@code @Projection(source = DOMAIN_PUSH)}), and feeds each received domain event to
+ * it (directly, or through {@code @Projection(source = PUSH)}), and feeds each received domain event to
  * {@link #accept(Object)} from its listener. Each registration is a {@link BootstrappingProjectionFeed}, so the
  * contract, live-resume owned by the broker, at-least-once idempotent folds, bounded buffering, is per projection.
  */

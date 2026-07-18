@@ -121,7 +121,7 @@ store (CloudEvents) and decodes each event once, never a double round trip.
   handover: broker owns live-resume, one-shot bootstrap marker, at-least-once idempotent folds, bounded fail-loud buffer.
 - `DomainEventFeed<E>` is the application-owned fan-out sink (the domain twin of `PushSubscriptionModel`) that drives
   several projections from one source. It carries the domain-specific event-id function as a constructor argument, which
-  is why `@Projection(source = DOMAIN_PUSH, subscriptionModelName = "...")` needs no event-id annotation attribute and no
+  is why `@Projection(source = PUSH, subscriptionModelName = "...")` needs no event-id annotation attribute and no
   feed-handle registry: the listener feeds the bean it owns, and the registrar just registers projections on it and
   bootstraps them. The reactor path requires a `ViewStateRepository` store (its fold runs on `boundedElastic`).
 

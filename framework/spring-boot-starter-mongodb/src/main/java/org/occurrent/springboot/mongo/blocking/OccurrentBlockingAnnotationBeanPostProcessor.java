@@ -222,12 +222,16 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         Object descriptor = invokeFactory(method, bean);
 
         if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
-            registerPushProjection(bean, method, annotation, id, converter, descriptor, synchronous);
-            return;
-        }
-
-        if (annotation.source() == org.occurrent.annotation.Source.DOMAIN_PUSH) {
-            registerDomainPushProjection(method, annotation, id, converter, descriptor, synchronous);
+            // The feed bean's type decides the flavor: a PushSubscriptionModel feeds CloudEvents, a DomainEventFeed
+            // feeds domain events directly.
+            Object feedBean = resolveFeedBean(annotation, id);
+            if (feedBean instanceof PushSubscriptionModel pushModel) {
+                registerPushProjection(method, annotation, id, converter, descriptor, synchronous, pushModel);
+            } else if (feedBean instanceof DomainEventFeed) {
+                registerDomainPushProjection(method, annotation, id, converter, descriptor, synchronous, (DomainEventFeed<?>) feedBean);
+            } else {
+                throw new IllegalArgumentException("@Projection '%s' with source=PUSH resolved a %s, which is neither a PushSubscriptionModel nor a DomainEventFeed.".formatted(id, feedBean.getClass().getName()));
+            }
             return;
         }
 
@@ -285,20 +289,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Register a @Projection(source = PUSH): feed it from an external push subscription model, wrapped in a
     // replay-then-push bootstrap catch-up so a new or rebuilt projection is backfilled from the event store first.
     @SuppressWarnings("unchecked")
-    private <E, S, ID> void registerPushProjection(Object bean, Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous) {
-        if (synchronous) {
-            throw new IllegalArgumentException("@Projection '%s' cannot combine source=PUSH with mode=SYNCHRONOUS: a push feed is asynchronous.".formatted(id));
-        }
-        if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
-                || annotation.resumeBehavior() != ResumeBehavior.DEFAULT || annotation.startupMode() != StartupMode.DEFAULT) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the bootstrap always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
-        }
-        if (!(descriptor instanceof org.occurrent.dsl.projection.Projection<?, ?, ?> raw)) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported yet, since a DCB boundary cannot be bootstrap-replayed in position order.".formatted(id));
-        }
-        org.occurrent.dsl.projection.Projection<S, E, ID> projection = (org.occurrent.dsl.projection.Projection<S, E, ID>) raw;
+    private <E, S, ID> void registerPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, PushSubscriptionModel pushModel) {
+        org.occurrent.dsl.projection.Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
-        PushSubscriptionModel pushModel = resolvePushModel(annotation, id);
         PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
         CheckpointStorage bootstrapMarker = applicationContext.getBean(CheckpointStorage.class);
         ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, pushModel, bootstrapMarker);
@@ -308,70 +301,69 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         runner.project(id, projection, materializedView);
     }
 
-    // Resolve the push subscription model bean referenced by subscriptionModel() (type) or subscriptionModelName() (name),
-    // falling back to the unique PushSubscriptionModel bean.
-    private PushSubscriptionModel resolvePushModel(org.occurrent.annotation.Projection annotation, String id) {
-        Class<?> type = annotation.subscriptionModel();
-        String name = annotation.subscriptionModelName();
-        boolean byType = type != Void.class;
-        boolean byName = !name.isBlank();
-        if (byType && !PushSubscriptionModel.class.isAssignableFrom(type)) {
-            throw new IllegalArgumentException("@Projection '%s' subscriptionModel type %s must be a PushSubscriptionModel.".formatted(id, type.getName()));
-        }
-        try {
-            if (byName) {
-                return applicationContext.getBean(name, PushSubscriptionModel.class);
-            }
-            if (byType) {
-                return (PushSubscriptionModel) applicationContext.getBean(type);
-            }
-            return applicationContext.getBean(PushSubscriptionModel.class);
-        } catch (BeansException e) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH could not resolve a PushSubscriptionModel bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(id, byType ? type.getName() : "unset", name, e.getMessage()), e);
-        }
-    }
-
-    // Register a @Projection(source = DOMAIN_PUSH) on an application-owned DomainEventFeed: the projection folds domain
-    // events directly (no CloudEvent conversion on the live path), with a bootstrap catch-up from the event store.
+    // Common validation for a source=PUSH projection: no synchronous mode, no catch-up start knobs, must be a Projection.
     @SuppressWarnings("unchecked")
-    private <E, S, ID> void registerDomainPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous) {
+    private <S, E, ID> org.occurrent.dsl.projection.Projection<S, E, ID> validatePushDescriptor(org.occurrent.annotation.Projection annotation, String id, Object descriptor, boolean synchronous) {
         if (synchronous) {
-            throw new IllegalArgumentException("@Projection '%s' cannot combine source=DOMAIN_PUSH with mode=SYNCHRONOUS: a push feed is asynchronous.".formatted(id));
+            throw new IllegalArgumentException("@Projection '%s' cannot combine source=PUSH with mode=SYNCHRONOUS: a push feed is asynchronous.".formatted(id));
         }
         if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
                 || annotation.resumeBehavior() != ResumeBehavior.DEFAULT || annotation.startupMode() != StartupMode.DEFAULT) {
-            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the bootstrap always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the bootstrap always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
         }
         if (!(descriptor instanceof org.occurrent.dsl.projection.Projection<?, ?, ?> raw)) {
-            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH must return a Projection. A DcbProjection domain-push source is not supported, since a DCB boundary cannot be bootstrap-replayed in position order.".formatted(id));
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be bootstrap-replayed in position order.".formatted(id));
         }
-        org.occurrent.dsl.projection.Projection<S, E, ID> projection = (org.occurrent.dsl.projection.Projection<S, E, ID>) raw;
-        MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
-        DomainEventFeed<E> feed = (DomainEventFeed<E>) resolveDomainFeed(annotation, id);
-        Filter eventFilter = ProjectionFilters.filterFor(converter, (org.occurrent.dsl.projection.Projection<?, E, ?>) projection);
-        feed.register(id, materializedView, eventFilter);
-        domainFeedsToBootstrap.add(feed);
+        return (org.occurrent.dsl.projection.Projection<S, E, ID>) raw;
     }
 
-    private DomainEventFeed<?> resolveDomainFeed(org.occurrent.annotation.Projection annotation, String id) {
+    // Resolve the push feed bean referenced by subscriptionModel (type) or subscriptionModelName (name), or the unique
+    // PushSubscriptionModel or DomainEventFeed bean when neither is set. The caller branches on the returned bean's type
+    // (PushSubscriptionModel feeds CloudEvents, DomainEventFeed feeds domain events).
+    private Object resolveFeedBean(org.occurrent.annotation.Projection annotation, String id) {
         Class<?> type = annotation.subscriptionModel();
         String name = annotation.subscriptionModelName();
         boolean byType = type != Void.class;
         boolean byName = !name.isBlank();
-        if (byType && !DomainEventFeed.class.isAssignableFrom(type)) {
-            throw new IllegalArgumentException("@Projection '%s' subscriptionModel type %s must be a DomainEventFeed for source=DOMAIN_PUSH.".formatted(id, type.getName()));
+        if (byType && !(PushSubscriptionModel.class.isAssignableFrom(type) || DomainEventFeed.class.isAssignableFrom(type))) {
+            throw new IllegalArgumentException("@Projection '%s' subscriptionModel type %s must be a PushSubscriptionModel or a DomainEventFeed for source=PUSH.".formatted(id, type.getName()));
         }
         try {
             if (byName) {
-                return (DomainEventFeed<?>) (type != Void.class ? applicationContext.getBean(name, type) : applicationContext.getBean(name, DomainEventFeed.class));
+                return byType ? applicationContext.getBean(name, type) : applicationContext.getBean(name);
             }
             if (byType) {
-                return (DomainEventFeed<?>) applicationContext.getBean(type);
+                return applicationContext.getBean(type);
             }
-            return applicationContext.getBean(DomainEventFeed.class);
+            List<String> names = new ArrayList<>();
+            for (String beanName : applicationContext.getBeanNamesForType(PushSubscriptionModel.class)) {
+                names.add(beanName);
+            }
+            for (String beanName : applicationContext.getBeanNamesForType(DomainEventFeed.class)) {
+                names.add(beanName);
+            }
+            if (names.isEmpty()) {
+                throw new IllegalStateException("@Projection '%s' with source=PUSH found no PushSubscriptionModel or DomainEventFeed bean. Declare one, or name it with subscriptionModelName.".formatted(id));
+            }
+            if (names.size() > 1) {
+                throw new IllegalStateException("@Projection '%s' with source=PUSH found several push feed beans (%s). Pick one with subscriptionModel or subscriptionModelName.".formatted(id, String.join(", ", names)));
+            }
+            return applicationContext.getBean(names.get(0));
         } catch (BeansException e) {
-            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH could not resolve a DomainEventFeed bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(id, byType ? type.getName() : "unset", name, e.getMessage()), e);
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH could not resolve a push feed bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(id, byType ? type.getName() : "unset", name, e.getMessage()), e);
         }
+    }
+
+    // Register a source=PUSH projection whose feed bean is a DomainEventFeed: the projection folds domain events directly
+    // (no CloudEvent conversion on the live path), with a bootstrap catch-up from the event store.
+    @SuppressWarnings("unchecked")
+    private <E, S, ID> void registerDomainPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, DomainEventFeed<?> feedBean) {
+        org.occurrent.dsl.projection.Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
+        MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
+        DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
+        Filter eventFilter = ProjectionFilters.filterFor(converter, (org.occurrent.dsl.projection.Projection<?, E, ?>) projection);
+        feed.register(id, materializedView, eventFilter);
+        domainFeedsToBootstrap.add(feed);
     }
 
     // Resolve the read-model store into a MaterializedView. Selected by store() type or storeName() when set, otherwise
