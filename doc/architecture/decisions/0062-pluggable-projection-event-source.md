@@ -4,8 +4,8 @@ Date: 2026-07-18
 
 ## Status
 
-Accepted (push subscription model). The replay-then-push catch-up handover in "Future direction" is proposed, not
-implemented.
+Accepted. The push subscription model and the v1 replay-then-push bootstrap catch-up (broker owns live-resume) are
+implemented. The broker-independent resume in "Future direction" (v2) is proposed, not implemented.
 
 ## Context
 
@@ -63,43 +63,57 @@ domain-event-level `Consumer<E>`. A separate per-projection feed factory would d
   does not guarantee global order, so a projection that depends on strict global order across streams needs a transport
   that preserves it.
 
-## Future direction: replay-then-push catch-up handover (proposed)
+## Decision: replay-then-push bootstrap catch-up (v1, broker owns live-resume)
 
-To let a push-fed projection resume after downtime without relying on the broker retaining the backlog, a catch-up model
-would, on subscribe, register on the push feed first and buffer, replay history from the resume point to the store head
-in position order (reusing `PositionOrderedReader`), then drain the buffer and switch to live, deduplicating the overlap
-by event id. Because buffering starts before the head snapshot, no separate reconcile pass is needed, unlike the
-seek-then-live catch-up for change streams. The resume point must be recovered from the store, not reconstructed from
-the delivery stream (see the checkpoint bullet).
+A push feed cannot backfill a new or rebuilt projection, because a broker is not a log. `ReplayThenPushSubscriptionModel`
+(blocking and reactor) fills that gap with a one-time bootstrap in front of a `PushSubscriptionModel`. It splits
+responsibility deliberately:
 
-This is deferred because it has genuine correctness questions that a naive implementation gets wrong, and it should be
-settled before it ships:
+- **Bootstrap is Occurrent's job**, run once per subscription id. On subscribe it registers on the live feed first and
+  buffers, replays the projection's history from the event store in position order (`PositionOrderedReader`), then drains
+  the buffer and goes live, de-duplicating the replay-to-live overlap by event id. Because buffering starts before the
+  head is read, an event committing during the replay is delivered either by the replay or by the buffered feed, and no
+  reconcile pass is needed. The buffer is bounded and fails loud on overflow, so a full from-scratch rebuild over a live
+  feed (unbounded buffering) is a fail-loud error rather than silent truncation: rebuild offline instead.
+- **Live-resume is the broker's job, not Occurrent's.** After bootstrap the listener acknowledges each message only once
+  `accept(...)` returns, so an unprocessed event is redelivered. The model persists no live position watermark, which is
+  what sidesteps the watermark problem below entirely. Delivery is at-least-once, so the fold must be idempotent, the
+  same contract as the change-stream path.
+- **A one-shot bootstrap-complete marker** (an optional `CheckpointStorage`) records that the replay finished, so a
+  restart skips it and lets the broker resume. The stored value marks completion, it is not a moving resume watermark.
 
-- **The resume point must come from the store, not from a feed-derived watermark.** Occurrent reserves global positions
-  from a shared counter outside the write transaction (`MongoEventStore.java:282-284`), so an abandoned or rolled-back
-  write leaves a permanent gap in the sequence, and a concurrent lower reservation can also commit after a higher one
-  (a temporary hole that fills in later). Positions are only guaranteed globally-unique and strictly monotonic, never
-  dense or in commit order (ADR 0007, ADR 0021, `MongoEventStorePositionTest`). A missing position is therefore
-  ambiguous from the delivery stream alone: it is either a temporary hole that must be waited for or a permanent gap that
-  never arrives, and the two are indistinguishable. So a feed-derived contiguity watermark (advance the checkpoint to the
-  highest gap-free position seen over broker-order delivery) is unworkable: it stalls forever at the first permanent gap,
-  and any timeout that lets it advance past a still-uncommitted position reintroduces the event loss it was meant to
-  prevent. Deduping the overlap by event id (not by position) is required for the same reason. The existing
-  `DurableSubscriptionModel` sidesteps all of this because it resumes by reading the store position-ordered from the
-  checkpoint, where a `position > P` scan simply skips gaps, rather than reconstructing a frontier from delivery. The
-  handover must do the same: recover the resume point from the store (a position-ordered catch-up read from a persisted
-  checkpoint, or a store-side safe marker) and treat the broker feed as a low-latency live tail with idempotent folds
-  over the replay-to-live overlap. What a live-feed checkpoint may safely persist, and how it interacts with the
-  store-side resume read, is the open question to settle before building.
-- **Bounded buffering.** Buffering the live feed across a full from-scratch replay is unbounded on a large history, so a
-  full rebuild must replay offline from the event store and then attach the feed. The handover is bounded and sound only
-  for resume with a small gap. The buffer needs a cap with fail-loud on overflow, not silent drop.
-- **Missing position on live events.** A live event used to advance a checkpoint must carry `position`; if it is absent,
-  fail loud rather than mis-checkpoint.
-- **`@Projection` push-source selection.** Binding `@Projection` to a push source (routing to a configured push
-  `SubscriptionModel` bean versus a new annotation attribute) is the most annotation-invasive piece and should be
-  settled here before coding, together with whether the catch-up start knobs (`startAt`, `startAtGlobalPosition`,
-  `resumeBehavior`) drive the replay start.
+**Why no feed-derived resume watermark.** Occurrent reserves global positions from a shared counter outside the write
+transaction (`MongoEventStore.java:282-284`), so an abandoned or rolled-back write leaves a permanent gap, and a
+concurrent lower reservation can commit after a higher one (a temporary hole that fills in later). Positions are only
+globally-unique and strictly monotonic, never dense or in commit order (ADR 0007, ADR 0021, `MongoEventStorePositionTest`).
+A missing position is therefore ambiguous from the delivery stream alone: a temporary hole to wait for, or a permanent gap
+that never arrives, indistinguishably. So a feed-derived contiguity watermark (advance a checkpoint to the highest
+gap-free position seen over broker-order delivery) is unworkable: it stalls forever at the first permanent gap, and any
+timeout that advances it past a still-uncommitted position reintroduces the event loss it was meant to prevent. This is
+also why the overlap is de-duplicated by event id, not by position. Putting live-resume on the broker avoids the whole
+problem: the broker delivers in commit order and redelivers what was not acknowledged, exactly like a change stream, so
+no position frontier is ever reconstructed.
 
-For RabbitMQ specifically, a durable queue already retains messages for an offline consumer, so the live push feed plus
-an offline event-store replay for new projections covers the common production case without this handover.
+Only stream and capability-agnostic subscription filters can be bootstrap-replayed (their plain `Filter` drives the
+position-ordered read). A DCB subscription filter is rejected, since a DCB boundary needs a different replay read.
+
+**Consequence and limit.** Correctness across a restart depends on the broker retaining the backlog for an offline
+consumer (a durable queue with a preserved offset). If the consumer is offline longer than the broker retains, or the
+offset or bootstrap marker is lost, the projection must be rebuilt. For RabbitMQ specifically a durable queue already
+retains messages for an offline consumer, so this v1 covers the common production case.
+
+## Future direction: broker-independent resume (v2, proposed)
+
+To make resume independent of broker retention, the model would replay from a store-side checkpoint on every restart
+rather than trusting the broker to redeliver the gap. The checkpoint cannot be a feed-derived frontier (see above); it
+would instead lag real time by MongoDB's `transactionLifetimeLimitSeconds`, since a reservation not committed within that
+window is guaranteed aborted by the database, so a checkpoint that lags by it cannot skip a still-pending low position.
+That is a hard database guarantee, not the arbitrary timeout rejected above, but it is intricate and MongoDB-coupled
+(reserved-head sampling, transaction-lifetime configuration), so it is deferred until a deployment needs resume that does
+not depend on broker durability.
+
+## `@Projection` push-source routing
+
+Binding `@Projection` to a push source (routing to a configured push `SubscriptionModel` bean versus a new annotation
+attribute, and whether the catch-up start knobs drive the bootstrap) is tracked as follow-up work on top of this
+decision.
