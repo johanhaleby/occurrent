@@ -19,6 +19,7 @@ package org.occurrent.subscription.push.reactor;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.reactor.Pushable;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import reactor.core.publisher.Mono;
@@ -39,7 +40,7 @@ import reactor.core.publisher.Mono;
  * {@link RegisteringSubscribable}.
  */
 @NullMarked
-public class PushSubscriptionModel extends RegisteringSubscribable {
+public class PushSubscriptionModel extends RegisteringSubscribable implements Pushable {
 
     /**
      * Feed a single event to the model, routing it to every matching registered handler, sequentially.

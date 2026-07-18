@@ -19,6 +19,7 @@ package org.occurrent.subscription.push.blocking;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.Pushable;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.Subscribable;
 
@@ -45,7 +46,7 @@ import java.util.function.Consumer;
  * {@link RegisteringSubscribable}.
  */
 @NullMarked
-public class PushSubscriptionModel extends RegisteringSubscribable implements Consumer<CloudEvent> {
+public class PushSubscriptionModel extends RegisteringSubscribable implements Pushable {
 
     /**
      * Feed a single event to the model, routing it to every matching registered handler, on the calling thread.

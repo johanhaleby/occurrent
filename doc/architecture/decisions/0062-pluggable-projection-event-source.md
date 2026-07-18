@@ -102,6 +102,38 @@ consumer (a durable queue with a preserved offset). If the consumer is offline l
 offset or bootstrap marker is lost, the projection must be rebuilt. For RabbitMQ specifically a durable queue already
 retains messages for an offline consumer, so this v1 covers the common production case.
 
+## Domain-event feeds (no double encode/decode)
+
+When the external source already delivers domain events (a listener with its own message converter), routing them
+through the CloudEvent push feed means `domainEvent -> toCloudEvent -> toDomainEvent -> fold`, a full serialize and
+deserialize per live event. That is avoided by feeding the projection in domain space directly.
+
+The layering is preserved: the CloudEvent components stay the base, and the converter is composed only where events are
+genuinely CloudEvents. The live path has a domain source and a domain sink (the `View` fold, itself a domain-typed base
+in the view DSL), so it folds directly with no CloudEvent hop. The only decode is the bootstrap replay, which reads the
+store (CloudEvents) and decodes each event once, never a double round trip.
+
+- `Projections.domainEventFeed(projection, repository)` returns the live-only domain feed (a `Consumer<E>` blocking, a
+  `Function<E, Mono<Void>>` reactor), a named form of the existing `materializedView(...)::update` / `reactiveUpdate(...)`.
+- `BootstrappingProjectionFeed` adds the one-time bootstrap catch-up to a domain feed: buffer live, replay the store
+  (decode once), drain, go live, de-duplicating the replay-to-live overlap by a caller-supplied `Function<E,String>`
+  event-id applied in domain space (so it does not depend on the CloudEvent id). Same v1 contract as the CloudEvent
+  handover: broker owns live-resume, one-shot bootstrap marker, at-least-once idempotent folds, bounded fail-loud buffer.
+- `DomainEventFeed<E>` is the application-owned fan-out sink (the domain twin of `PushSubscriptionModel`) that drives
+  several projections from one source. It carries the domain-specific event-id function as a constructor argument, which
+  is why `@Projection(source = DOMAIN_PUSH, subscriptionModelName = "...")` needs no event-id annotation attribute and no
+  feed-handle registry: the listener feeds the bean it owns, and the registrar just registers projections on it and
+  bootstraps them. The reactor path requires a `ViewStateRepository` store (its fold runs on `boundedElastic`).
+
+## The `Pushable` capability
+
+The `accept(CloudEvent)` capability is a small `Pushable` interface (blocking and reactor, in the subscription api
+modules) that `PushSubscriptionModel` implements, so a listener or wiring can depend on "a target I push cloud events
+into" rather than a concrete model, and a model may be pushable without every subscription model being one. Change-stream
+(pull-based, checkpoint-tracking) models are deliberately not made pushable: feeding external events into their cursor
+would double-deliver and corrupt the durable checkpoint. To offer both change-stream and push subscriptions from a single
+bean, compose a routing model that sends each subscription to exactly one source rather than unioning both into one.
+
 ## Non-goal: broker-independent resume (v2)
 
 Making live-resume independent of broker retention is a deliberate non-goal, and may never be built. The decision is a
