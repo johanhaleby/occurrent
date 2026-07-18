@@ -612,11 +612,14 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         try {
             if (!name.isBlank()) {
-                return applicationContext.getBean(name, DomainEventFeed.class);
+                return (DomainEventFeed<?>) (byType ? applicationContext.getBean(name, type) : applicationContext.getBean(name, DomainEventFeed.class));
+            }
+            if (byType) {
+                return (DomainEventFeed<?>) applicationContext.getBean(type);
             }
             return applicationContext.getBean(DomainEventFeed.class);
         } catch (BeansException e) {
-            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH could not resolve a DomainEventFeed bean (subscriptionModelName='%s'): %s".formatted(id, name, e.getMessage()), e);
+            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH could not resolve a DomainEventFeed bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(id, byType ? type.getName() : "unset", name, e.getMessage()), e);
         }
     }
 

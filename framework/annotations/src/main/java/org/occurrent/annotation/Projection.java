@@ -160,17 +160,19 @@ public @interface Projection {
     Source source() default Source.EVENT_STORE;
 
     /**
-     * The push subscription model bean to feed this projection, given as the bean's type, when {@link #source()} is
-     * {@link Source#PUSH}. {@link Void} (the default) leaves the type unset, in which case {@link #subscriptionModelName()}
-     * or the unique push model bean applies. When several beans of the given type exist, disambiguate with
-     * {@link #subscriptionModelName()}. Ignored for {@link Source#EVENT_STORE}.
+     * The feed bean to feed this projection, given as the bean's type: a {@code PushSubscriptionModel} when
+     * {@link #source()} is {@link Source#PUSH}, or a {@code DomainEventFeed} when {@link #source()} is
+     * {@link Source#DOMAIN_PUSH}. {@link Void} (the default) leaves the type unset, in which case
+     * {@link #subscriptionModelName()} or the unique feed bean of the required type applies. When several beans of the
+     * given type exist, disambiguate with {@link #subscriptionModelName()}. Ignored for {@link Source#EVENT_STORE}.
      */
     Class<?> subscriptionModel() default Void.class;
 
     /**
-     * Optional Spring bean name of the push subscription model, used when {@link #source()} is {@link Source#PUSH}. Used
-     * on its own to resolve the model by name, or together with {@link #subscriptionModel()} to pick one bean when
-     * several of that type exist. An empty string (the default) means unset. Ignored for {@link Source#EVENT_STORE}.
+     * Optional Spring bean name of the feed bean, used when {@link #source()} is {@link Source#PUSH} or
+     * {@link Source#DOMAIN_PUSH}. Used on its own to resolve the feed by name, or together with
+     * {@link #subscriptionModel()} to pick one bean when several of that type exist. An empty string (the default) means
+     * unset. Ignored for {@link Source#EVENT_STORE}.
      */
     String subscriptionModelName() default "";
 }

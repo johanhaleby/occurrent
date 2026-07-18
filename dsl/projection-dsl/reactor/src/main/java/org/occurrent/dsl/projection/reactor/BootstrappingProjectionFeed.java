@@ -152,13 +152,16 @@ public final class BootstrappingProjectionFeed<E> {
     public Mono<Void> bootstrap() {
         Sinks.One<Void> bootstrapDone = Sinks.one();
 
-        Flux<Item> replay = alreadyBootstrapped()
+        // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
+        // written only when the replay actually ran (not on a restart that skips it).
+        Mono<Boolean> alreadyDone = alreadyBootstrapped().cache();
+        Flux<Item> replay = alreadyDone
                 .flatMapMany(done -> done
                         ? Flux.empty()
                         : reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
                         .map(converter::toDomainEvent).map(this::replayedItem));
         Flux<Item> markerThenLive = Flux.concat(
-                markBootstrapped().thenMany(Flux.<Item>empty()),
+                alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : markBootstrapped()).thenMany(Flux.<Item>empty()),
                 Mono.<Item>fromRunnable(bootstrapDone::tryEmitEmpty),
                 liveSink.asFlux().map(this::liveItem));
 

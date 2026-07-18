@@ -363,11 +363,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         try {
             if (byName) {
-                return applicationContext.getBean(name, DomainEventFeed.class);
+                return (DomainEventFeed<?>) (type != Void.class ? applicationContext.getBean(name, type) : applicationContext.getBean(name, DomainEventFeed.class));
+            }
+            if (byType) {
+                return (DomainEventFeed<?>) applicationContext.getBean(type);
             }
             return applicationContext.getBean(DomainEventFeed.class);
         } catch (BeansException e) {
-            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH could not resolve a DomainEventFeed bean (subscriptionModelName='%s'): %s".formatted(id, name, e.getMessage()), e);
+            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH could not resolve a DomainEventFeed bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(id, byType ? type.getName() : "unset", name, e.getMessage()), e);
         }
     }
 
