@@ -58,7 +58,12 @@ import java.util.stream.Stream;
  *   <li><strong>Live resume</strong> is the broker's job, not Occurrent's. After bootstrap, the listener consumes the
  *       broker and acknowledges each message only once {@code accept(...)} returns, so an unprocessed event is
  *       redelivered by the broker. This model persists no live position watermark. Delivery is therefore at-least-once,
- *       so the projection fold must be idempotent, the same contract as the change-stream path.</li>
+ *       so the projection fold must be idempotent, the same contract as the change-stream path. The "acknowledge after
+ *       processing" guarantee holds for the live phase. During the bootstrap window {@code accept(...)} buffers the event
+ *       and returns before it is folded (the calling thread is not blocked for the whole replay), so a message may be
+ *       acknowledged before it is applied. That is safe because the bootstrap-complete marker is written only after the
+ *       drain, so a crash mid-bootstrap re-replays the whole history from the store, which is the backstop for any
+ *       event acknowledged but not yet folded.</li>
  *   <li>A one-shot <strong>bootstrap-complete marker</strong> (an optional {@link CheckpointStorage}) records that the
  *       replay finished, so a restart skips it and lets the broker resume. The stored value marks completion, it is not
  *       a live resume position. Correctness across a restart then depends on the broker retaining the backlog for an

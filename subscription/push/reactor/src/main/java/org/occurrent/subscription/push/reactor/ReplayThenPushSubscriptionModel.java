@@ -40,6 +40,8 @@ import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
@@ -102,9 +104,26 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
         BoundedIdCache deliveredIds = new BoundedIdCache(dedupCacheSize);
         Sinks.Many<LiveEvent> liveSink = Sinks.many().unicast().onBackpressureBuffer(new ArrayBlockingQueue<>(maxBufferedEvents));
         Sinks.One<Void> bootstrapDone = Sinks.one();
+        // Track the acks of live events buffered but not yet delivered, so a bootstrap failure fails them rather than
+        // leaving the listener's accept Monos hanging forever.
+        Set<reactor.core.publisher.MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
+        AtomicReference<Throwable> terminalError = new AtomicReference<>();
 
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not lost.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.create(ackSink -> {
+            ackSink.onDispose(() -> pendingLiveAcks.remove(ackSink));
+            Throwable failure = terminalError.get();
+            if (failure != null) {
+                ackSink.error(failure);
+                return;
+            }
+            pendingLiveAcks.add(ackSink);
+            // Re-check after registering: if the bootstrap failed concurrently, fail this ack rather than hang.
+            failure = terminalError.get();
+            if (failure != null) {
+                ackSink.error(failure);
+                return;
+            }
             Sinks.EmitResult result = liveSink.tryEmitNext(new LiveEvent(cloudEvent, ackSink));
             if (result.isFailure()) {
                 ackSink.error(new IllegalStateException("Live event buffer overflowed during bootstrap replay (cap "
@@ -128,7 +147,13 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
         Flux.concat(replay, markerThenLive)
                 .concatMap(item -> deliver(item, action, deliveredIds))
                 .subscribe(ignored -> {
-                }, error -> bootstrapDone.tryEmitError(error));
+                }, error -> {
+                    // A bootstrap-phase failure terminates the pipeline before the buffered live events are drained.
+                    // Fail their acks and reject later ones, so the listener sees the error instead of hanging.
+                    terminalError.set(error);
+                    bootstrapDone.tryEmitError(error);
+                    pendingLiveAcks.forEach(sink -> sink.error(error));
+                });
 
         return new AlreadyStartedSubscription(subscriptionId, bootstrapDone.asMono());
     }

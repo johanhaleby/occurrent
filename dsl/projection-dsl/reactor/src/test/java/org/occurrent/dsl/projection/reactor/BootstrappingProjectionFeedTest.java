@@ -116,6 +116,37 @@ class BootstrappingProjectionFeedTest {
                 .verifyErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("buffer overflowed"));
     }
 
+    @Test
+    void a_bootstrap_failure_fails_live_acks_instead_of_hanging() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        PositionOrderedReader failingReader = new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.error(new IllegalStateException("replay boom"));
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just(0L);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+        BootstrappingProjectionFeed<Counted> feed = feed("counter", failingReader, converter, repo, null);
+
+        feed.bootstrap().subscribe(v -> {
+        }, e -> {
+        }); // replay fails, so the pipeline terminates
+        // A live event fed after the failed bootstrap must error rather than hang.
+        StepVerifier.create(feed.accept(new Counted("live")))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom"))
+                .verify(ofSeconds(5));
+    }
+
     // --- helpers ---
 
     private static BootstrappingProjectionFeed<Counted> feed(String id, PositionOrderedReader reader, CloudEventConverter<Counted> converter,

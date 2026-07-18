@@ -37,6 +37,7 @@ import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /**
@@ -70,6 +71,10 @@ public final class BootstrappingProjectionFeed<E> {
     private final String id;
     private final BoundedIdCache deliveredIds;
     private final Sinks.Many<LiveEvent> liveSink;
+    // Acks of live events buffered but not yet folded, so a bootstrap failure fails them rather than leaving the
+    // listener's accept Monos hanging forever.
+    private final Set<reactor.core.publisher.MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.atomic.AtomicReference<Throwable> terminalError = new java.util.concurrent.atomic.AtomicReference<>();
 
     private BootstrappingProjectionFeed(String id, Function<E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -133,6 +138,19 @@ public final class BootstrappingProjectionFeed<E> {
     public Mono<Void> accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
         return Mono.create(ackSink -> {
+            ackSink.onDispose(() -> pendingLiveAcks.remove(ackSink));
+            Throwable failure = terminalError.get();
+            if (failure != null) {
+                ackSink.error(failure);
+                return;
+            }
+            pendingLiveAcks.add(ackSink);
+            // Re-check after registering: if the bootstrap failed concurrently, fail this ack rather than hang.
+            failure = terminalError.get();
+            if (failure != null) {
+                ackSink.error(failure);
+                return;
+            }
             Sinks.EmitResult result = liveSink.tryEmitNext(new LiveEvent(event, ackSink));
             if (result.isFailure()) {
                 ackSink.error(new IllegalStateException("Live event buffer overflowed during bootstrap replay. "
@@ -168,7 +186,13 @@ public final class BootstrappingProjectionFeed<E> {
         Flux.concat(replay, markerThenLive)
                 .concatMap(this::deliver)
                 .subscribe(ignored -> {
-                }, error -> bootstrapDone.tryEmitError(error));
+                }, error -> {
+                    // A bootstrap-phase failure terminates the pipeline before the buffered live events are drained.
+                    // Fail their acks and reject later ones, so the listener sees the error instead of hanging.
+                    terminalError.set(error);
+                    bootstrapDone.tryEmitError(error);
+                    pendingLiveAcks.forEach(sink -> sink.error(error));
+                });
 
         return bootstrapDone.asMono();
     }
