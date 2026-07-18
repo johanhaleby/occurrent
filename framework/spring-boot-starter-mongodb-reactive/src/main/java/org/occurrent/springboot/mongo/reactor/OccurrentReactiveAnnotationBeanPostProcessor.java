@@ -33,6 +33,7 @@ import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.reactor.ReactiveDcbProjectionRunner;
+import org.occurrent.dsl.projection.reactor.DomainEventFeed;
 import org.occurrent.dsl.projection.reactor.ReactiveProjectionRunner;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
@@ -123,6 +124,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Every subscription and projection id must be unique, since it is the durable checkpoint key. Subscription ids are
     // added as their annotations are processed (before singletons finish), projection ids when they register below.
     private final Set<String> registeredIds = new HashSet<>();
+    // Domain-push feeds collected during projection registration, bootstrapped once after all are registered.
+    private final Set<DomainEventFeed<?>> domainFeedsToBootstrap = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
@@ -458,6 +461,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         for (Object[] pm : projectionMethods) {
             processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
         }
+        // Bootstrap each domain-push feed once, after all its projections are registered.
+        for (DomainEventFeed<?> feed : domainFeedsToBootstrap) {
+            feed.bootstrapAll().block();
+        }
         for (Object[] sm : snapshotMethods) {
             processSnapshotAnnotation(applicationContext.getBean((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
         }
@@ -495,6 +502,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
 
         if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
             registerPushProjection(id, converter, descriptor, synchronous, annotation);
+            return;
+        }
+
+        if (annotation.source() == org.occurrent.annotation.Source.DOMAIN_PUSH) {
+            registerDomainPushProjection(id, descriptor, synchronous, annotation);
             return;
         }
 
@@ -565,6 +577,47 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // The bootstrap replay runs when the pipeline is subscribed; block until it has handed over to the live feed.
         var subscription = projectAgnosticOrStream(runner, id, projection, resolveStore(annotation, id), null);
         subscription.waitUntilStarted().block();
+    }
+
+    // Register a @Projection(source = DOMAIN_PUSH) on an application-owned DomainEventFeed. The reactor feed folds via a
+    // ViewStateRepository (through reactiveUpdate on boundedElastic), so the store must resolve to a ViewStateRepository.
+    @SuppressWarnings("unchecked")
+    private <E, S, ID> void registerDomainPushProjection(String id, Object descriptor, boolean synchronous, org.occurrent.annotation.Projection annotation) {
+        if (synchronous) {
+            throw new IllegalArgumentException("@Projection '%s' cannot combine source=DOMAIN_PUSH with mode=SYNCHRONOUS: a push feed is asynchronous.".formatted(id));
+        }
+        if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
+                || annotation.resumeBehavior() != ResumeBehavior.DEFAULT || annotation.startupMode() != StartupMode.DEFAULT) {
+            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the bootstrap always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
+        }
+        if (!(descriptor instanceof Projection<?, ?, ?> raw)) {
+            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH must return a Projection. A DcbProjection domain-push source is not supported, since a DCB boundary cannot be bootstrap-replayed in position order.".formatted(id));
+        }
+        Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
+        Object store = resolveStore(annotation, id);
+        if (!(store instanceof ViewStateRepository)) {
+            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH requires a ViewStateRepository store on the reactor stack, but resolved %s.".formatted(id, store.getClass().getName()));
+        }
+        DomainEventFeed<E> feed = (DomainEventFeed<E>) resolveDomainFeed(annotation, id);
+        feed.register(id, projection, (ViewStateRepository<S, ID>) store);
+        domainFeedsToBootstrap.add(feed);
+    }
+
+    private DomainEventFeed<?> resolveDomainFeed(org.occurrent.annotation.Projection annotation, String id) {
+        Class<?> type = annotation.subscriptionModel();
+        String name = annotation.subscriptionModelName();
+        boolean byType = type != Void.class;
+        if (byType && !DomainEventFeed.class.isAssignableFrom(type)) {
+            throw new IllegalArgumentException("@Projection '%s' subscriptionModel type %s must be a DomainEventFeed for source=DOMAIN_PUSH.".formatted(id, type.getName()));
+        }
+        try {
+            if (!name.isBlank()) {
+                return applicationContext.getBean(name, DomainEventFeed.class);
+            }
+            return applicationContext.getBean(DomainEventFeed.class);
+        } catch (BeansException e) {
+            throw new IllegalArgumentException("@Projection '%s' with source=DOMAIN_PUSH could not resolve a DomainEventFeed bean (subscriptionModelName='%s'): %s".formatted(id, name, e.getMessage()), e);
+        }
     }
 
     private PushSubscriptionModel resolvePushModel(org.occurrent.annotation.Projection annotation, String id) {

@@ -29,9 +29,18 @@ public enum Source {
     EVENT_STORE,
     /**
      * The projection is fed by an external push subscription model (a {@code PushSubscriptionModel} driven by a
-     * RabbitMQ, Kafka, or other listener). The framework wraps that model in a replay-then-push bootstrap catch-up so a
-     * new or rebuilt projection is backfilled from the event store before it goes live. Select the push model bean with
-     * {@link Projection#subscriptionModel()} or {@link Projection#subscriptionModelName()}.
+     * RabbitMQ, Kafka, or other listener) that delivers <strong>CloudEvents</strong>. The framework wraps that model in a
+     * replay-then-push bootstrap catch-up so a new or rebuilt projection is backfilled from the event store before it
+     * goes live. Select the push model bean with {@link Projection#subscriptionModel()} or
+     * {@link Projection#subscriptionModelName()}.
      */
-    PUSH
+    PUSH,
+    /**
+     * The projection is fed by an external source that delivers <strong>domain events</strong> directly (a listener with
+     * its own message converter), through a {@code DomainEventFeed} bean the application owns and feeds. The live path
+     * folds domain events with no CloudEvent conversion, and the framework gives each projection a bootstrap catch-up
+     * that replays the event store once. Select the feed bean with {@link Projection#subscriptionModel()} or
+     * {@link Projection#subscriptionModelName()}. The feed carries the event-id function used for catch-up de-dup.
+     */
+    DOMAIN_PUSH
 }
