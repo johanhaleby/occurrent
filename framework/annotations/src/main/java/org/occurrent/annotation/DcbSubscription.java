@@ -25,7 +25,7 @@ import java.lang.annotation.*;
  * this one filters by a DCB query (event types and tags) and starts at a {@code position}. For example:
  *
  * <pre lang="java">
- * &#64;DcbSubscription(id = "courseDashboard", startAt = DcbStartPosition.BEGINNING)
+ * &#64;DcbSubscription(id = "courseDashboard", startAt = StartPosition.BEGINNING)
  * void onEvent(CourseEvent event) {
  *     dashboard.update(event);
  * }
@@ -52,7 +52,7 @@ import java.lang.annotation.*;
  *
  * <h4>Start Position</h4>
  * <p>
- * {@link #startAt()} selects one of the {@link DcbStartPosition} values. {@link DcbStartPosition#BEGINNING} replays
+ * {@link #startAt()} selects one of the {@link StartPosition} values. {@link StartPosition#BEGINNING} replays
  * the whole DCB sequence by {@code position} before switching to live delivery, so a read model can be rebuilt
  * from history. As with {@link StreamSubscription}, the replay happens the first time the subscription starts, and on
  * later restarts it resumes from the last received event, unless {@link #resumeBehavior()} says otherwise.
@@ -94,29 +94,29 @@ public @interface DcbSubscription {
     String[] tags() default {};
 
     /**
-     * Specify the start position as one of the predefined {@link DcbStartPosition} values. Mutually exclusive with
+     * Specify the start position as one of the predefined {@link StartPosition} values. Mutually exclusive with
      * {@link #startAtDcbPosition()}, which starts from a specific position instead of a predefined one.
      */
-    DcbStartPosition startAt() default DcbStartPosition.DEFAULT;
+    StartPosition startAt() default StartPosition.DEFAULT;
 
     /**
      * Start after a specific DCB sequence position, that is deliver events from {@code startAtDcbPosition + 1} onward,
      * which is useful to rewind a durable read model to a known-good position. This is the DCB counterpart to
      * {@link StreamSubscription#startAtTimeEpochMillis()}. The default of {@code -1} means unset, in which case
-     * {@link #startAt()} is used. Mutually exclusive with a non-{@link DcbStartPosition#DEFAULT} {@link #startAt()}, and
-     * {@link #resumeBehavior()} applies the same way it does to {@link DcbStartPosition#BEGINNING}.
+     * {@link #startAt()} is used. Mutually exclusive with a non-{@link StartPosition#DEFAULT} {@link #startAt()}, and
+     * {@link #resumeBehavior()} applies the same way it does to {@link StartPosition#BEGINNING}.
      */
     long startAtDcbPosition() default -1;
 
     /**
      * Specify if the resume behavior for the subscription should differ from when it is started. By default
      * ({@link ResumeBehavior#DEFAULT}), a subscription that starts by replaying history (from
-     * {@link DcbStartPosition#BEGINNING} or from a {@link #startAtDcbPosition()}) replays only the first time it is
+     * {@link StartPosition#BEGINNING} or from a {@link #startAtDcbPosition()}) replays only the first time it is
      * started and then resumes from the last received event on application restart. That is the right behavior for a
      * durable read model that persists what it builds.
      * <p>
      * An in-memory read model is different: it keeps no durable state, so it has to replay the whole history on every
-     * boot. For that, combine {@link DcbStartPosition#BEGINNING} with {@link ResumeBehavior#SAME_AS_START_AT}, which
+     * boot. For that, combine {@link StartPosition#BEGINNING} with {@link ResumeBehavior#SAME_AS_START_AT}, which
      * replays from the beginning on every restart and keeps no checkpoint. With the default resume behavior an in-memory
      * model would, after a restart, resume mid-sequence and silently miss all history before the stored position.
      */
@@ -126,23 +126,4 @@ public @interface DcbSubscription {
      * Specify how the subscription should behave during startup.
      */
     StartupMode startupMode() default StartupMode.DEFAULT;
-
-    /**
-     * The predefined DCB start positions.
-     */
-    enum DcbStartPosition {
-        /**
-         * Replay the whole DCB sequence from the beginning (by {@code position}) before switching to live delivery.
-         */
-        BEGINNING,
-        /**
-         * Start from "now", delivering only events written after the subscription starts.
-         */
-        NOW,
-        /**
-         * Use the default behavior of the subscription model. Typically this resumes from the last stored position if
-         * the subscription has run before, otherwise it behaves like {@link #NOW}.
-         */
-        DEFAULT
-    }
 }

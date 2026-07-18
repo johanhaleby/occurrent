@@ -31,33 +31,34 @@ import org.occurrent.eventstore.api.WriteResult
 import org.occurrent.eventstore.api.blocking.EventStore
 import org.occurrent.eventstore.api.dcb.DcbAppendResult
 import org.occurrent.eventstore.api.dcb.DcbCriteria
-import java.util.Optional
 
 /**
  * Run [decider] against [streamId] but resume from the snapshot in [store] instead of replaying the whole stream. See
  * [SnapshotDeciderApplicationService].
  */
 fun <C : Any, S, E : Any> ApplicationService<E>.execute(streamId: String, command: C, decider: Decider<C, S, E>, store: SnapshotStore<S>, options: SnapshotOptions<S, E>): WriteResult =
-    SnapshotDeciderApplicationService(this).execute(streamId, command, decider, store, options)
+    SnapshotDeciderApplicationService(this, store, options).execute(streamId, command, decider)
 
 /**
  * Run [decider] with [commands] against [streamId], resuming from the snapshot in [store].
  */
 fun <C : Any, S, E : Any> ApplicationService<E>.execute(streamId: String, commands: List<C>, decider: Decider<C, S, E>, store: SnapshotStore<S>, options: SnapshotOptions<S, E>): WriteResult =
-    SnapshotDeciderApplicationService(this).execute(streamId, commands, decider, store, options)
+    SnapshotDeciderApplicationService(this, store, options).execute(streamId, commands, decider)
 
 /**
- * Run [dcbDecider] against its DCB boundary but resume from the snapshot in [store]. See
- * [SnapshotDcbDeciderApplicationService].
+ * Run [dcbDecider] against its DCB boundary but resume from the snapshot in [store]. Returns the [DcbAppendResult], or
+ * `null` when the decider produced no new events, the Kotlin-idiomatic counterpart to the Java facade's
+ * `Optional<DcbAppendResult>`. See [SnapshotDcbDeciderApplicationService].
  */
-fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(command: C, dcbDecider: DcbDecider<C, S, E>, store: SnapshotStore<S>, options: SnapshotOptions<S, E>): Optional<DcbAppendResult> =
-    SnapshotDcbDeciderApplicationService(this).execute(command, dcbDecider, store, options)
+fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(command: C, dcbDecider: DcbDecider<C, S, E>, store: SnapshotStore<S>, options: SnapshotOptions<S, E>): DcbAppendResult? =
+    SnapshotDcbDeciderApplicationService(this, store, options).execute(command, dcbDecider).orElse(null)
 
 /**
- * Run [dcbDecider] with [commands], resuming from the snapshot in [store], keyed by the resolved criteria.
+ * Run [dcbDecider] with [commands], resuming from the snapshot in [store], keyed by the resolved criteria. Returns the
+ * [DcbAppendResult], or `null` when the decider produced no new events.
  */
-fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(commands: List<C>, dcbDecider: DcbDecider<C, S, E>, store: SnapshotStore<S>, options: SnapshotOptions<S, E>, keyFunction: (DcbCriteria) -> String = DcbSnapshotKeys::canonicalKey): Optional<DcbAppendResult> =
-    SnapshotDcbDeciderApplicationService(this).execute(commands, dcbDecider, store, options, keyFunction)
+fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(commands: List<C>, dcbDecider: DcbDecider<C, S, E>, store: SnapshotStore<S>, options: SnapshotOptions<S, E>, keyFunction: (DcbCriteria) -> String = DcbSnapshotKeys::canonicalKey): DcbAppendResult? =
+    SnapshotDcbDeciderApplicationService(this, store, options, keyFunction).execute(commands, dcbDecider).orElse(null)
 
 /**
  * Read the current state of [snapshotView] for [streamId] on demand, folding only the events after the stored snapshot.

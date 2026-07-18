@@ -60,7 +60,6 @@ class SnapshotDcbDeciderApplicationServiceTest {
     private InMemoryEventStore eventStore;
     private CloudEventConverter<DomainEvent> converter;
     private DcbApplicationService<DomainEvent> applicationService;
-    private SnapshotDcbDeciderApplicationService<DomainEvent> snapshotService;
     private SnapshotStore<String> store;
     private AtomicInteger evolveCount;
     private DcbDecider<Cmd, String, DomainEvent> dcbDecider;
@@ -73,7 +72,6 @@ class SnapshotDcbDeciderApplicationServiceTest {
         eventStore = new InMemoryEventStore();
         converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         applicationService = new GenericDcbApplicationService<>(eventStore, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetryStrategy());
-        snapshotService = new SnapshotDcbDeciderApplicationService<>(applicationService);
         store = SnapshotStore.inMemory();
         evolveCount = new AtomicInteger();
         Decider<Cmd, String, DomainEvent> decider = countingDecider(evolveCount, time);
@@ -84,16 +82,16 @@ class SnapshotDcbDeciderApplicationServiceTest {
     @Test
     void executeAndReturnState_returns_the_folded_state() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
-        snapshotService.execute(new Define("A"), dcbDecider, store, options);
+        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Define("A"), dcbDecider);
 
-        String state = snapshotService.executeAndReturnState(new Change("B"), dcbDecider, store, options);
+        String state = new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).executeAndReturnState(new Change("B"), dcbDecider);
 
         assertThat(state).isEqualTo("B");
     }
 
     @Test
     void executeAndReturnDecision_returns_state_and_events() {
-        Decider.Decision<String, DomainEvent> decision = snapshotService.executeAndReturnDecision(new Define("A"), dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        Decider.Decision<String, DomainEvent> decision = new SnapshotDcbDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(1, SnapshotPolicy.always())).executeAndReturnDecision(new Define("A"), dcbDecider);
 
         assertAll(
                 () -> assertThat(decision.state()).isEqualTo("A"),
@@ -103,7 +101,7 @@ class SnapshotDcbDeciderApplicationServiceTest {
 
     @Test
     void first_execute_appends_and_saves_a_snapshot_keyed_by_criteria() {
-        snapshotService.execute(new Define("A"), dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        new SnapshotDcbDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(1, SnapshotPolicy.always())).execute(new Define("A"), dcbDecider);
 
         assertAll(
                 () -> assertThat(store.findLatest(key)).isPresent(),
@@ -114,10 +112,10 @@ class SnapshotDcbDeciderApplicationServiceTest {
     @Test
     void second_execute_resumes_from_the_snapshot_and_folds_only_the_tail() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
-        snapshotService.execute(new Define("A"), dcbDecider, store, options);
+        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Define("A"), dcbDecider);
 
         evolveCount.set(0);
-        snapshotService.execute(new Change("B"), dcbDecider, store, options);
+        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Change("B"), dcbDecider);
 
         assertAll(
                 // Empty tail after the snapshot, so only the produced event is folded (1), not a full replay.
@@ -129,13 +127,13 @@ class SnapshotDcbDeciderApplicationServiceTest {
     @Test
     void the_resume_read_folds_events_appended_after_the_snapshot_by_another_writer() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
-        snapshotService.execute(new Define("A"), dcbDecider, store, options);
+        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Define("A"), dcbDecider);
 
         // An event lands in the same boundary out-of-band, so the snapshot is now behind the boundary head.
         appendOutOfBand(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "X"));
 
         evolveCount.set(0);
-        snapshotService.execute(new Change("B"), dcbDecider, store, options);
+        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Change("B"), dcbDecider);
 
         assertAll(
                 // The out-of-band X and the produced B are both folded (2), proving the tail after the snapshot was read.
@@ -146,10 +144,10 @@ class SnapshotDcbDeciderApplicationServiceTest {
 
     @Test
     void a_schema_version_bump_ignores_the_old_snapshot() {
-        snapshotService.execute(new Define("A"), dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+        new SnapshotDcbDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(1, SnapshotPolicy.always())).execute(new Define("A"), dcbDecider);
 
         evolveCount.set(0);
-        snapshotService.execute(new Change("B"), dcbDecider, store, SnapshotOptions.of(2, SnapshotPolicy.always()));
+        new SnapshotDcbDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(2, SnapshotPolicy.always())).execute(new Change("B"), dcbDecider);
 
         assertAll(
                 // Old schema-1 snapshot ignored, whole boundary replayed: A (1) plus produced B (1) = 2.

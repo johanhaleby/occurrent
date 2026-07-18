@@ -24,7 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.DcbSubscription;
-import org.occurrent.annotation.DcbSubscription.DcbStartPosition;
+import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
@@ -236,7 +236,7 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
         private final AtomicInteger invocationCount = new AtomicInteger();
 
-        @DcbSubscription(id = "reactive-dcb-sp-now", startAt = DcbStartPosition.NOW)
+        @DcbSubscription(id = "reactive-dcb-sp-now", startAt = StartPosition.NOW)
         Mono<Void> onEvent(TestEvent event) {
             invocationCount.incrementAndGet();
             if (event.name().equals("live-now")) {

@@ -132,7 +132,7 @@ class ReactiveSynchronousProjectionAnnotationMongoTest {
 
     @Component
     static class NamesProjection {
-        @org.occurrent.annotation.Projection(id = "reactive-synchronous-names", mode = org.occurrent.annotation.Projection.Mode.SYNCHRONOUS)
+        @org.occurrent.annotation.Projection(id = "reactive-synchronous-names", mode = org.occurrent.annotation.Mode.SYNCHRONOUS)
         Projection<CountState, TestEvent, String> countRegistered() {
             return Projection.<CountState, TestEvent, String>builder(new CountState(0))
                     .id(event -> VIEW_ID)

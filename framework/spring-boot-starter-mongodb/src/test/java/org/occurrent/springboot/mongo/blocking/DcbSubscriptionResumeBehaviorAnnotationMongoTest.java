@@ -24,7 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.DcbSubscription;
-import org.occurrent.annotation.DcbSubscription.DcbStartPosition;
+import org.occurrent.annotation.StartPosition;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -278,7 +278,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     static class DefaultResumeSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        @DcbSubscription(id = "dcb-resume-default", startAt = DcbStartPosition.BEGINNING, resumeBehavior = ResumeBehavior.DEFAULT)
+        @DcbSubscription(id = "dcb-resume-default", startAt = StartPosition.BEGINNING, resumeBehavior = ResumeBehavior.DEFAULT)
         void onEvent(TestEvent event) {
             received.add(event);
         }
@@ -291,7 +291,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
     static class SameAsStartAtBeginningSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        @DcbSubscription(id = "dcb-resume-same-as-start-at-beginning", startAt = DcbStartPosition.BEGINNING, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        @DcbSubscription(id = "dcb-resume-same-as-start-at-beginning", startAt = StartPosition.BEGINNING, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
         void onEvent(TestEvent event) {
             received.add(event);
         }

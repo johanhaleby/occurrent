@@ -204,7 +204,7 @@ class ProjectionAnnotationDurableResumeMongoTest {
 
     // The agnostic Projection dispatch branch (not DcbProjection), with the Mongo-default store.
     static class OrderCountProjection {
-        @Projection(id = "order-count", capability = Projection.Capability.AGNOSTIC, startAt = Projection.StartPosition.BEGINNING, resumeBehavior = org.occurrent.annotation.ResumeBehavior.DEFAULT)
+        @Projection(id = "order-count", capability = org.occurrent.annotation.Capability.AGNOSTIC, startAt = org.occurrent.annotation.StartPosition.BEGINNING, resumeBehavior = org.occurrent.annotation.ResumeBehavior.DEFAULT)
         org.occurrent.dsl.projection.Projection<OrderCount, TestEvent, String> orderCount() {
             return org.occurrent.dsl.projection.Projection.<OrderCount, TestEvent, String>builder(new OrderCount("orders", 0))
                     .id(event -> "orders")

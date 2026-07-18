@@ -20,7 +20,9 @@ displayName: Migrate Occurrent renamed types (0.30.0 -> 0.31.0)
 description: >-
   Applies the mechanical type renames introduced between Occurrent 0.30.0 and 0.31.0: the ResumeBehavior and
   StartupMode enums, formerly nested inside each of the Subscription, StreamSubscription, DcbSubscription, and
-  Projection annotations, are now top-level types in org.occurrent.annotation.
+  Projection annotations, are now top-level types in org.occurrent.annotation. Subscription.StartPosition and
+  DcbSubscription.DcbStartPosition also move to the shared top-level org.occurrent.annotation.StartPosition (the
+  constants BEGINNING, NOW, and DEFAULT are unchanged).
 recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.annotation.Subscription$ResumeBehavior
@@ -53,4 +55,12 @@ recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.annotation.Projection$StartupMode
       newFullyQualifiedTypeName: org.occurrent.annotation.StartupMode
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.Subscription$StartPosition
+      newFullyQualifiedTypeName: org.occurrent.annotation.StartPosition
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.DcbSubscription$DcbStartPosition
+      newFullyQualifiedTypeName: org.occurrent.annotation.StartPosition
       ignoreDefinition: true

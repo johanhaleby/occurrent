@@ -146,7 +146,7 @@ class ProjectionAnnotationCrudStoreMongoTest {
     }
 
     static class OrderCountProjection {
-        @Projection(id = "order-count-crud", startAt = Projection.StartPosition.BEGINNING, store = OrderCountCrudRepository.class)
+        @Projection(id = "order-count-crud", startAt = org.occurrent.annotation.StartPosition.BEGINNING, store = OrderCountCrudRepository.class)
         DcbProjection<OrderCount, TestEvent, String> orderCount() {
             var projection = org.occurrent.dsl.projection.Projection.<OrderCount, TestEvent, String>builder(new OrderCount("orders", 0))
                     .id(event -> "orders")

@@ -37,27 +37,29 @@ fun main() {
     val converter = JacksonCloudEventConverter.Builder<LedgerEvent>(jacksonObjectMapper(), URI.create("urn:occurrent:example:snapshot"))
         .typeMapper(ReflectionCloudEventTypeMapper.simple(LedgerEvent::class.java))
         .build()
-    val snapshots = SnapshotDeciderApplicationService(GenericApplicationService(eventStore, converter))
+    val applicationService = GenericApplicationService(eventStore, converter)
     val decider = ledgerDecider()
     val store = SnapshotStore.inMemory<LedgerState>()
 
     // 1. Technical snapshot: take one every 100 events so a long-lived account does not replay its whole history.
     val everyHundred = SnapshotOptions.everyNEvents<LedgerState, LedgerEvent>(1, 100)
-    repeat(250) { snapshots.execute("account-1", Deposit(1), decider, store, everyHundred) }
+    val technicalSnapshots = SnapshotDeciderApplicationService(applicationService, store, everyHundred)
+    repeat(250) { technicalSnapshots.execute("account-1", Deposit(1), decider) }
     val technical = store.findLatest("account-1").orElseThrow()
     println("Technical snapshot for account-1 sits at version ${technical.version()} with balance ${technical.state().balance}")
-    val resumed = snapshots.executeAndReturnState("account-1", Deposit(5), decider, store, everyHundred)
+    val resumed = technicalSnapshots.executeAndReturnState("account-1", Deposit(5), decider)
     println("Next command resumed from the snapshot and only folded the tail, new balance ${resumed.balance}")
 
     // 2. Closing the books: snapshot the terminal state, carry the closing balance forward, then archive the old events.
     val onClose = SnapshotOptions.of(1, SnapshotPolicies.whenTerminal(decider).or(SnapshotPolicy.everyNEvents<LedgerState, LedgerEvent>(100)))
-    snapshots.execute("period-2026-Q1", Deposit(100), decider, store, onClose)
-    snapshots.execute("period-2026-Q1", Withdraw(30), decider, store, onClose)
-    snapshots.execute("period-2026-Q1", CloseBooks("2026-Q1"), decider, store, onClose)
+    val closingSnapshots = SnapshotDeciderApplicationService(applicationService, store, onClose)
+    closingSnapshots.execute("period-2026-Q1", Deposit(100), decider)
+    closingSnapshots.execute("period-2026-Q1", Withdraw(30), decider)
+    closingSnapshots.execute("period-2026-Q1", CloseBooks("2026-Q1"), decider)
     val closingBalance = store.findLatest("period-2026-Q1").orElseThrow().state().balance
     println("Closed 2026-Q1 with a closing balance of $closingBalance")
 
-    val opening = snapshots.executeAndReturnState("period-2026-Q2", SetOpeningBalance(closingBalance), decider, store, onClose)
+    val opening = closingSnapshots.executeAndReturnState("period-2026-Q2", SetOpeningBalance(closingBalance), decider)
     println("Opened 2026-Q2 carrying the balance forward, opening balance ${opening.balance}")
 
     eventStore.deleteEventStream("period-2026-Q1")

@@ -51,7 +51,7 @@ import java.lang.annotation.*;
  * <p>
  * {@link #mode()} chooses asynchronous delivery (the default, eventually consistent, catching up from history) or
  * synchronous (read-your-writes, updated on the write path in the write transaction). Synchronous mode is mutually
- * exclusive with {@link #startAt()}, {@link #startAtPosition()}, and {@link #resumeBehavior()}.
+ * exclusive with {@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, and {@link #startupMode()}.
  * </p>
  * <p>
  * {@link #startupMode()} chooses how startup behaves: the default or background mode may replay history before going
@@ -84,7 +84,7 @@ public @interface Projection {
 
     /**
      * Specify the start position as one of the predefined StartPosition values. Mutually exclusive
-     * with {@link #startAtPosition()}, which starts from a specific position instead. Also mutually
+     * with {@link #startAtGlobalPosition()}, which starts from a specific position instead. Also mutually
      * exclusive with {@link #mode()} set to {@link Mode#SYNCHRONOUS}.
      */
     StartPosition startAt() default StartPosition.DEFAULT;
@@ -95,7 +95,7 @@ public @interface Projection {
      * Mutually exclusive with a non-{@link StartPosition#DEFAULT} {@link #startAt()} and with
      * {@link Mode#SYNCHRONOUS}.
      */
-    long startAtPosition() default -1;
+    long startAtGlobalPosition() default -1;
 
     /**
      * Specify if the resume behavior differs from when the projection is started. By default
@@ -126,7 +126,7 @@ public @interface Projection {
      * asynchronously and eventually updates the read model. {@link Mode#SYNCHRONOUS} guarantees
      * read-your-writes semantics: the command that triggered an event sees the projection state
      * immediately. Synchronous mode is mutually exclusive with {@link #startAt()},
-     * {@link #startAtPosition()}, and {@link #resumeBehavior()}.
+     * {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, and {@link #startupMode()}.
      */
     Mode mode() default Mode.ASYNC;
 
@@ -147,55 +147,4 @@ public @interface Projection {
      * or {@code CrudRepository} bean, otherwise the default Mongo implementation on the blocking stack).
      */
     String storeName() default "";
-
-    /**
-     * A set of predefined start positions for a projection.
-     */
-    enum StartPosition {
-        /**
-         * Replay the whole event sequence from the beginning before switching to live delivery,
-         * so the read model can be rebuilt from history.
-         */
-        BEGINNING,
-        /**
-         * Start from now, delivering only events written after the projection starts.
-         */
-        NOW,
-        /**
-         * Use the default behavior. Typically this resumes from the last stored position if
-         * the projection has run before, otherwise it behaves like NOW.
-         */
-        DEFAULT
-    }
-
-    /**
-     * Specifies the capability scope for a projection.
-     */
-    enum Capability {
-        /**
-         * The projection receives events from all capabilities (both stream and DCB) on a store
-         * that supports both. This is the agnostic, neutral default.
-         */
-        AGNOSTIC,
-        /**
-         * The projection receives only stream-written events, ignored on a DCB descriptor.
-         */
-        STREAM
-    }
-
-    /**
-     * Specifies the processing mode for a projection.
-     */
-    enum Mode {
-        /**
-         * Events are processed asynchronously; the read model is eventually consistent with
-         * the command model.
-         */
-        ASYNC,
-        /**
-         * Events are processed synchronously before the command returns, providing
-         * read-your-writes semantics.
-         */
-        SYNCHRONOUS
-    }
 }

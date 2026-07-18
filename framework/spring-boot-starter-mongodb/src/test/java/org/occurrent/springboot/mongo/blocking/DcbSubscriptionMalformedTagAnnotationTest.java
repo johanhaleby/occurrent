@@ -22,7 +22,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.DcbSubscription;
-import org.occurrent.annotation.DcbSubscription.DcbStartPosition;
+import org.occurrent.annotation.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -93,7 +93,7 @@ class DcbSubscriptionMalformedTagAnnotationTest {
     }
 
     static class MalformedTagSubscriber {
-        @DcbSubscription(id = SUBSCRIPTION_ID, eventTypes = TestEvent.class, tags = " ", startAt = DcbStartPosition.NOW)
+        @DcbSubscription(id = SUBSCRIPTION_ID, eventTypes = TestEvent.class, tags = " ", startAt = StartPosition.NOW)
         void on(TestEvent event, DcbEventMetadata metadata) {
         }
     }

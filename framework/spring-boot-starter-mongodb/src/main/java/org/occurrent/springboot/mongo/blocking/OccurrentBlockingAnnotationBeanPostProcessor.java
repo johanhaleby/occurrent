@@ -200,10 +200,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Projection factory method %s#%s must take no parameters and return a Projection or DcbProjection.".formatted(bean.getClass().getName(), method.getName()));
         }
-        boolean synchronous = annotation.mode() == org.occurrent.annotation.Projection.Mode.SYNCHRONOUS;
+        boolean synchronous = annotation.mode() == org.occurrent.annotation.Mode.SYNCHRONOUS;
         SubscriptionAnnotations.validateModeStartKnobs("@Projection", id, synchronous,
-                annotation.startAt() != org.occurrent.annotation.Projection.StartPosition.DEFAULT,
-                annotation.startAtPosition() >= 0,
+                annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT,
+                annotation.startAtGlobalPosition() >= 0,
                 annotation.resumeBehavior() != ResumeBehavior.DEFAULT,
                 annotation.startupMode() != StartupMode.DEFAULT);
 
@@ -224,8 +224,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 return;
             }
             DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
-            DcbStartAt startAt = generateDcbStartAt(id, toDcbStartPosition(annotation.startAt()), annotation.startAtPosition(), annotation.resumeBehavior());
-            boolean replaysHistory = annotation.startAtPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.Projection.StartPosition.BEGINNING;
+            DcbStartAt startAt = generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+            boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
             applyStartupWorkarounds();
             var subscription = dcbSubscriptions.subscribeWithMetadata(id, dcbProjection.criteria(), startAt, (dcbMetadata, event) -> materializedView.update(event));
             if (shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
@@ -239,14 +239,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 materializedView.update(event);
                 return Unit.INSTANCE;
             };
-            boolean stream = annotation.capability() == org.occurrent.annotation.Projection.Capability.STREAM;
+            boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
             if (synchronous) {
                 Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
                 synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), StartAt.subscriptionModelDefault(), false, consumer);
                 return;
             }
-            StartAt startAt = generateAgnosticStartAt(id, toAgnosticStartPosition(annotation.startAt()), annotation.startAtPosition(), annotation.resumeBehavior());
-            boolean replaysHistory = annotation.startAtPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.Projection.StartPosition.BEGINNING;
+            StartAt startAt = generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+            boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
             boolean waitUntilStarted = shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
             applyStartupWorkarounds();
             if (stream) {
@@ -393,10 +393,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (method.getParameterCount() != 0) {
             throw new IllegalArgumentException("@Snapshot factory method %s#%s must take no parameters and return a SnapshotView.".formatted(bean.getClass().getName(), method.getName()));
         }
-        boolean synchronous = annotation.mode() == org.occurrent.annotation.Snapshot.Mode.SYNCHRONOUS;
+        boolean synchronous = annotation.mode() == org.occurrent.annotation.Mode.SYNCHRONOUS;
         SubscriptionAnnotations.validateModeStartKnobs("@Snapshot", id, synchronous,
-                annotation.startAt() != org.occurrent.annotation.Snapshot.StartPosition.BEGINNING,
-                annotation.startAtPosition() >= 0,
+                annotation.startAt() != org.occurrent.annotation.StartPosition.BEGINNING,
+                annotation.startAtGlobalPosition() >= 0,
                 annotation.resumeBehavior() != ResumeBehavior.DEFAULT,
                 annotation.startupMode() != StartupMode.DEFAULT);
 
@@ -442,14 +442,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             return Unit.INSTANCE;
         };
 
-        boolean stream = annotation.capability() == org.occurrent.annotation.Snapshot.Capability.STREAM;
+        boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         if (synchronous) {
             Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
             synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), StartAt.subscriptionModelDefault(), false, consumer);
             return;
         }
-        StartAt startAt = generateAgnosticStartAt(id, toAgnosticStartPosition(annotation.startAt()), annotation.startAtPosition(), annotation.resumeBehavior());
-        boolean replaysHistory = annotation.startAtPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.Snapshot.StartPosition.BEGINNING;
+        StartAt startAt = generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+        boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         boolean waitUntilStarted = shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         applyStartupWorkarounds();
         if (stream) {
@@ -478,7 +478,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         int schemaVersion = dcbSnapshotView.schemaVersion();
         DcbEventStore dcbEventStore = applicationContext.getBean(DcbEventStore.class);
 
-        DcbStartAt startAt = generateDcbStartAt(id, toDcbStartPosition(annotation.startAt()), annotation.startAtPosition(), annotation.resumeBehavior());
+        DcbStartAt startAt = generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
         applyStartupWorkarounds();
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
         var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, (dcbMetadata, event) -> {
@@ -495,18 +495,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             S newState = view.evolve(base.state(), range);
             store.save(key, new org.occurrent.dsl.snapshot.Snapshot<>(newState, position, schemaVersion));
         });
-        boolean replaysHistory = annotation.startAtPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.Snapshot.StartPosition.BEGINNING;
+        boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         if (shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
             subscription.waitUntilStarted();
         }
-    }
-
-    private static DcbSubscription.DcbStartPosition toDcbStartPosition(org.occurrent.annotation.Snapshot.StartPosition p) {
-        return switch (p) {
-            case BEGINNING -> DcbSubscription.DcbStartPosition.BEGINNING;
-            case NOW -> DcbSubscription.DcbStartPosition.NOW;
-            case DEFAULT -> DcbSubscription.DcbStartPosition.DEFAULT;
-        };
     }
 
     @SuppressWarnings("unchecked")
@@ -592,14 +584,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         };
     }
 
-    private static Subscription.StartPosition toAgnosticStartPosition(org.occurrent.annotation.Snapshot.StartPosition p) {
-        return switch (p) {
-            case BEGINNING -> Subscription.StartPosition.BEGINNING;
-            case NOW -> Subscription.StartPosition.NOW;
-            case DEFAULT -> Subscription.StartPosition.DEFAULT;
-        };
-    }
-
     private static Object invokeSnapshotFactory(Method method, Object bean) {
         try {
             method.setAccessible(true);
@@ -624,22 +608,6 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Failed to invoke @Projection factory %s#%s.".formatted(bean.getClass().getName(), method.getName()), e);
         }
-    }
-
-    private static Subscription.StartPosition toAgnosticStartPosition(org.occurrent.annotation.Projection.StartPosition p) {
-        return switch (p) {
-            case BEGINNING -> Subscription.StartPosition.BEGINNING;
-            case NOW -> Subscription.StartPosition.NOW;
-            case DEFAULT -> Subscription.StartPosition.DEFAULT;
-        };
-    }
-
-    private static DcbSubscription.DcbStartPosition toDcbStartPosition(org.occurrent.annotation.Projection.StartPosition p) {
-        return switch (p) {
-            case BEGINNING -> DcbSubscription.DcbStartPosition.BEGINNING;
-            case NOW -> DcbSubscription.DcbStartPosition.NOW;
-            case DEFAULT -> DcbSubscription.DcbStartPosition.DEFAULT;
-        };
     }
 
     @SuppressWarnings("unchecked")
@@ -679,11 +647,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         };
 
         long startAtGlobalPosition = annotation.startAtGlobalPosition();
-        if (startAtGlobalPosition >= 0 && annotation.startAt() != Subscription.StartPosition.DEFAULT) {
+        if (startAtGlobalPosition >= 0 && annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT) {
             throw new IllegalArgumentException("Specify either startAt or startAtGlobalPosition for @Subscription '%s', not both.".formatted(id));
         }
         StartAt startAt = generateAgnosticStartAt(id, annotation.startAt(), startAtGlobalPosition, annotation.resumeBehavior());
-        boolean replaysHistory = startAtGlobalPosition >= 0 || annotation.startAt() == Subscription.StartPosition.BEGINNING;
+        boolean replaysHistory = startAtGlobalPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         boolean shouldWaitUntilStarted = shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
 
@@ -729,7 +697,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Build the neutral StartAt over the unified global position. BEGINNING replays from global position 0,
     // startAtGlobalPosition replays after a specific position, both applying the same replay-then-resume logic. NOW and
     // DEFAULT go straight to live.
-    private StartAt generateAgnosticStartAt(String subscriptionId, Subscription.StartPosition startPosition, long startAtGlobalPosition, ResumeBehavior resumeBehavior) {
+    private StartAt generateAgnosticStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtGlobalPosition, ResumeBehavior resumeBehavior) {
         if (startAtGlobalPosition >= 0) {
             return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);
         }
@@ -793,11 +761,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         };
 
         long startAtDcbPosition = annotation.startAtDcbPosition();
-        if (startAtDcbPosition >= 0 && annotation.startAt() != DcbSubscription.DcbStartPosition.DEFAULT) {
+        if (startAtDcbPosition >= 0 && annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT) {
             throw new IllegalArgumentException("Specify either startAt or startAtDcbPosition for @DcbSubscription '%s', not both.".formatted(id));
         }
         DcbStartAt startAt = generateDcbStartAt(id, annotation.startAt(), startAtDcbPosition, annotation.resumeBehavior());
-        boolean replaysHistory = startAtDcbPosition >= 0 || annotation.startAt() == DcbSubscription.DcbStartPosition.BEGINNING;
+        boolean replaysHistory = startAtDcbPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
         boolean shouldWaitUntilStarted = shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
 
@@ -828,7 +796,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // End workarounds
     }
 
-    private DcbStartAt generateDcbStartAt(String subscriptionId, DcbSubscription.DcbStartPosition startPosition, long startAtDcbPosition, ResumeBehavior resumeBehavior) {
+    private DcbStartAt generateDcbStartAt(String subscriptionId, org.occurrent.annotation.StartPosition startPosition, long startAtDcbPosition, ResumeBehavior resumeBehavior) {
         if (startAtDcbPosition >= 0) {
             // Start after a specific position, applying the same replay-then-resume logic BEGINNING uses.
             return replayThenResume(subscriptionId, DcbStartAt.afterPosition(startAtDcbPosition), resumeBehavior);

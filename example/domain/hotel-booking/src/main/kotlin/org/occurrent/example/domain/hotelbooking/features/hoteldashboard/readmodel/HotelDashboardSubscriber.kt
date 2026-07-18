@@ -17,8 +17,8 @@
 package org.occurrent.example.domain.hotelbooking.features.hoteldashboard.readmodel
 
 import org.occurrent.annotation.DcbSubscription
-import org.occurrent.annotation.DcbSubscription.DcbStartPosition
 import org.occurrent.annotation.ResumeBehavior
+import org.occurrent.annotation.StartPosition
 import org.occurrent.example.domain.hotelbooking.common.DomainEvent
 import org.occurrent.example.domain.hotelbooking.features.booking.model.BookingCancelled
 import org.occurrent.example.domain.hotelbooking.features.booking.model.RoomBooked
@@ -32,7 +32,7 @@ import org.springframework.stereotype.Component
  * Feeds the [HotelDashboard] read model from a DCB subscription declared with [DcbSubscription].
  *
  * The read model is in-memory only, so it must be rebuilt from the whole DCB history on every boot. That is why this
- * combines [DcbStartPosition.BEGINNING] with [ResumeBehavior.SAME_AS_START_AT]: BEGINNING alone would replay only the
+ * combines [StartPosition.BEGINNING] with [ResumeBehavior.SAME_AS_START_AT]: BEGINNING alone would replay only the
  * first time and then resume from the stored position on later restarts, which would leave the in-memory model missing
  * all history before that position. SAME_AS_START_AT replays from the beginning on every boot (and keeps no checkpoint).
  * The event types are narrowed on the annotation, so the subscription receives only the dashboard's events server-side.
@@ -46,7 +46,7 @@ class HotelDashboardSubscriber(private val hotelDashboard: HotelDashboard) {
     @DcbSubscription(
         id = "hotel-dashboard",
         eventTypes = [RoomDefined::class, RoomClosed::class, GuestRegistered::class, GuestDeregistered::class, RoomBooked::class, BookingCancelled::class],
-        startAt = DcbStartPosition.BEGINNING,
+        startAt = StartPosition.BEGINNING,
         resumeBehavior = ResumeBehavior.SAME_AS_START_AT
     )
     fun update(event: DomainEvent) {

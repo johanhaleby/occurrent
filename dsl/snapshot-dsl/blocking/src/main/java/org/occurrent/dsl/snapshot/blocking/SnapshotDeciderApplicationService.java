@@ -36,6 +36,9 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * A blocking {@link ApplicationService} facade that runs a {@link Decider} but resumes from a snapshot instead of
  * replaying the whole stream, the snapshot counterpart to {@link org.occurrent.dsl.decider.DeciderApplicationService}.
+ * Construct it once around an application service together with the {@link SnapshotStore} and {@link SnapshotOptions}
+ * for the state it snapshots, then call it with a stream id, command(s), and a decider, the same call shape as the
+ * plain facade.
  * <p>
  * On each execute it loads the latest {@link Snapshot} for the stream, reads only the events written after it (via
  * {@link ExecuteOptions#fromStreamVersion(long)}), folds those onto the snapshot state with {@link Decider#evolve(Object, List)},
@@ -51,64 +54,139 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>
  * The decider's event type must equal the application service's event type {@code E}. Widen a narrower decider with
  * {@link Decider#adapt(Decider, Class, Class)} first.
+ *
+ * @param <S> the snapshot state type
+ * @param <E> the event type
  */
 @NullMarked
-public final class SnapshotDeciderApplicationService<E> {
+public final class SnapshotDeciderApplicationService<S extends @Nullable Object, E> {
 
     private final ApplicationService<E> applicationService;
+    private final SnapshotStore<S> store;
+    private final SnapshotOptions<S, E> options;
 
-    public SnapshotDeciderApplicationService(ApplicationService<E> applicationService) {
+    public SnapshotDeciderApplicationService(ApplicationService<E> applicationService, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
         this.applicationService = Objects.requireNonNull(applicationService, "applicationService cannot be null");
+        this.store = Objects.requireNonNull(store, "store cannot be null");
+        this.options = Objects.requireNonNull(options, "options cannot be null");
     }
 
     /**
-     * Execute a single command against {@code streamId}, resuming from the snapshot in {@code store}.
+     * Execute a single command against {@code streamId}, resuming from the snapshot.
      */
-    public <C, S extends @Nullable Object> WriteResult execute(String streamId, C command, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return execute(streamId, List.of(command), decider, store, options);
+    public <C> WriteResult execute(String streamId, C command, Decider<C, S, E> decider) {
+        return execute(streamId, List.of(command), decider);
     }
 
     /**
-     * Execute a single command against {@code streamId}, resuming from the snapshot in {@code store}.
+     * Execute a single command against {@code streamId}, resuming from the snapshot.
      */
-    public <C, S extends @Nullable Object> WriteResult execute(UUID streamId, C command, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return execute(streamId.toString(), command, decider, store, options);
+    public <C> WriteResult execute(UUID streamId, C command, Decider<C, S, E> decider) {
+        return execute(streamId.toString(), command, decider);
     }
 
     /**
-     * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot in {@code store}.
+     * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot.
      */
-    public <C, S extends @Nullable Object> WriteResult execute(String streamId, List<C> commands, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return doExecute(streamId, commands, decider, store, options).writeResult();
+    public <C> WriteResult execute(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return doExecute(streamId, commands, decider).writeResult();
     }
 
     /**
-     * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot in {@code store}.
+     * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot.
      */
-    public <C, S extends @Nullable Object> WriteResult execute(UUID streamId, List<C> commands, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return execute(streamId.toString(), commands, decider, store, options);
+    public <C> WriteResult execute(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return execute(streamId.toString(), commands, decider);
     }
 
     /**
-     * Execute {@code command} and return the folded state plus the events that were decided.
+     * Execute a single command and return the folded state plus the events that were decided.
      */
-    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(String streamId, C command, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return doExecute(streamId, List.of(command), decider, store, options).decision();
+    public <C> Decider.Decision<S, E> executeAndReturnDecision(String streamId, C command, Decider<C, S, E> decider) {
+        return doExecute(streamId, List.of(command), decider).decision();
     }
 
     /**
-     * Execute {@code command} and return the folded state after the decision.
+     * Execute a single command and return the folded state plus the events that were decided.
      */
-    public <C, S extends @Nullable Object> S executeAndReturnState(String streamId, C command, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return executeAndReturnDecision(streamId, command, decider, store, options).state();
+    public <C> Decider.Decision<S, E> executeAndReturnDecision(UUID streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId.toString(), command, decider);
     }
 
-    private <C, S extends @Nullable Object> Executed<S, E> doExecute(String streamId, List<C> commands, Decider<C, S, E> decider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    /**
+     * Execute {@code commands} and return the folded state plus the events that were decided.
+     */
+    public <C> Decider.Decision<S, E> executeAndReturnDecision(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return doExecute(streamId, commands, decider).decision();
+    }
+
+    /**
+     * Execute {@code commands} and return the folded state plus the events that were decided.
+     */
+    public <C> Decider.Decision<S, E> executeAndReturnDecision(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId.toString(), commands, decider);
+    }
+
+    /**
+     * Execute a single command and return the folded state after the decision.
+     */
+    public <C> S executeAndReturnState(String streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).state();
+    }
+
+    /**
+     * Execute a single command and return the folded state after the decision.
+     */
+    public <C> S executeAndReturnState(UUID streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).state();
+    }
+
+    /**
+     * Execute {@code commands} and return the folded state after the decision.
+     */
+    public <C> S executeAndReturnState(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).state();
+    }
+
+    /**
+     * Execute {@code commands} and return the folded state after the decision.
+     */
+    public <C> S executeAndReturnState(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).state();
+    }
+
+    /**
+     * Execute a single command and return the new events that were decided.
+     */
+    public <C> List<E> executeAndReturnEvents(String streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).events();
+    }
+
+    /**
+     * Execute a single command and return the new events that were decided.
+     */
+    public <C> List<E> executeAndReturnEvents(UUID streamId, C command, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, command, decider).events();
+    }
+
+    /**
+     * Execute {@code commands} and return the new events that were decided.
+     */
+    public <C> List<E> executeAndReturnEvents(String streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).events();
+    }
+
+    /**
+     * Execute {@code commands} and return the new events that were decided.
+     */
+    public <C> List<E> executeAndReturnEvents(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
+        return executeAndReturnDecision(streamId, commands, decider).events();
+    }
+
+    private <C> Executed<S, E> doExecute(String streamId, List<C> commands, Decider<C, S, E> decider) {
         Objects.requireNonNull(streamId, "streamId cannot be null");
         Objects.requireNonNull(commands, "commands cannot be null");
         Objects.requireNonNull(decider, "decider cannot be null");
-        Objects.requireNonNull(store, "store cannot be null");
-        Objects.requireNonNull(options, "options cannot be null");
 
         // Load once, outside the app service's optimistic-retry loop: the snapshot base does not change between attempts,
         // a conflict just re-reads a longer tail and folds it onto the same base again.

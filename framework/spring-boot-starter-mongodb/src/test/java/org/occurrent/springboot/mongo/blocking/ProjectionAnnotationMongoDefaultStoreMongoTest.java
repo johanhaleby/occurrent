@@ -146,7 +146,7 @@ class ProjectionAnnotationMongoDefaultStoreMongoTest {
     static class OrderSummaryProjection {
         // No store attribute. The state type (OrderSummary) is recovered from this method's generic return type so the
         // read model can default to MongoDB.
-        @Projection(id = "order-summary", startAt = Projection.StartPosition.BEGINNING)
+        @Projection(id = "order-summary", startAt = org.occurrent.annotation.StartPosition.BEGINNING)
         DcbProjection<OrderSummary, TestEvent, String> orderSummary() {
             var projection = org.occurrent.dsl.projection.Projection.<OrderSummary, TestEvent, String>builder(new OrderSummary("orders", 0))
                     .id(event -> "orders")

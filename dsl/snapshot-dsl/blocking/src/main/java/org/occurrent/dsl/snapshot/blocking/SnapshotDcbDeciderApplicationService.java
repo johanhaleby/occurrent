@@ -39,80 +39,97 @@ import java.util.function.Function;
 
 /**
  * The DCB counterpart to {@link SnapshotDeciderApplicationService}: runs a {@link DcbDecider} but resumes from a snapshot
- * instead of folding the whole DCB boundary. It wraps the lower-level {@link DcbApplicationService} so it can pass
- * {@link DcbExecuteOptions#fromPosition(long)} and the decider's tags.
+ * instead of folding the whole DCB boundary. Construct it once around a {@link DcbApplicationService} together with the
+ * {@link SnapshotStore} and {@link SnapshotOptions} for the state it snapshots, then call it with command(s) and a decider.
  * <p>
  * Because DCB has no stream id, the snapshot is keyed by the decider's read boundary. By default the key is a canonical,
  * order-insensitive rendering of the {@link DcbCriteria} that {@link DcbDecider#criteriaFor(List)} resolves for the
- * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}); pass a key function to override it. The snapshot's version
- * is the global DCB position the append landed at ({@link DcbAppendResult#lastSequencePosition()}), and the resume read
- * still captures the whole boundary's consistency token, so the append condition is unaffected and a stale snapshot only
- * lengthens the tail. It loads one snapshot per execute, and costs nothing when no snapshot is used.
+ * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}); pass a key function to the constructor to override it. The
+ * snapshot's version is the global DCB position the append landed at ({@link DcbAppendResult#lastSequencePosition()}), and
+ * the resume read still captures the whole boundary's consistency token, so the append condition is unaffected and a stale
+ * snapshot only lengthens the tail. It loads one snapshot per execute, and costs nothing when no snapshot is used.
+ *
+ * @param <S> the snapshot state type
+ * @param <E> the event type
  */
 @NullMarked
-public final class SnapshotDcbDeciderApplicationService<E> {
+public final class SnapshotDcbDeciderApplicationService<S extends @Nullable Object, E> {
 
     private final DcbApplicationService<E> applicationService;
+    private final SnapshotStore<S> store;
+    private final SnapshotOptions<S, E> options;
+    private final Function<DcbCriteria, String> keyFunction;
 
-    public SnapshotDcbDeciderApplicationService(DcbApplicationService<E> applicationService) {
+    public SnapshotDcbDeciderApplicationService(DcbApplicationService<E> applicationService, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+        this(applicationService, store, options, DcbSnapshotKeys::canonicalKey);
+    }
+
+    public SnapshotDcbDeciderApplicationService(DcbApplicationService<E> applicationService, SnapshotStore<S> store, SnapshotOptions<S, E> options, Function<DcbCriteria, String> keyFunction) {
         this.applicationService = Objects.requireNonNull(applicationService, "applicationService cannot be null");
+        this.store = Objects.requireNonNull(store, "store cannot be null");
+        this.options = Objects.requireNonNull(options, "options cannot be null");
+        this.keyFunction = Objects.requireNonNull(keyFunction, "keyFunction cannot be null");
     }
 
     /**
-     * Execute a single command, resuming from the snapshot in {@code store} keyed by the decider's criteria.
+     * Execute a single command, resuming from the snapshot keyed by the decider's criteria.
      */
-    public <C, S extends @Nullable Object> Optional<DcbAppendResult> execute(C command, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return execute(List.of(command), dcbDecider, store, options);
+    public <C> Optional<DcbAppendResult> execute(C command, DcbDecider<C, S, E> dcbDecider) {
+        return execute(List.of(command), dcbDecider);
     }
 
     /**
-     * Execute {@code commands} in order, resuming from the snapshot in {@code store} keyed by the decider's criteria.
+     * Execute {@code commands} in order, resuming from the snapshot keyed by the decider's criteria.
      */
-    public <C, S extends @Nullable Object> Optional<DcbAppendResult> execute(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return execute(commands, dcbDecider, store, options, DcbSnapshotKeys::canonicalKey);
+    public <C> Optional<DcbAppendResult> execute(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+        return doExecute(commands, dcbDecider).appendResult();
     }
 
     /**
-     * Execute {@code commands}, deriving the snapshot key from the resolved {@link DcbCriteria} with {@code keyFunction}.
+     * Execute a single command and return the folded state plus the events that were decided (even when nothing was appended).
      */
-    public <C, S extends @Nullable Object> Optional<DcbAppendResult> execute(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options, Function<DcbCriteria, String> keyFunction) {
-        return doExecute(commands, dcbDecider, store, options, keyFunction).appendResult();
-    }
-
-    /**
-     * Execute {@code command} and return the folded state plus the events that were decided (even when nothing was appended).
-     */
-    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(C command, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return executeAndReturnDecision(List.of(command), dcbDecider, store, options);
+    public <C> Decider.Decision<S, E> executeAndReturnDecision(C command, DcbDecider<C, S, E> dcbDecider) {
+        return executeAndReturnDecision(List.of(command), dcbDecider);
     }
 
     /**
      * Execute {@code commands} and return the folded state plus the events that were decided (even when nothing was appended).
      */
-    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return doExecute(commands, dcbDecider, store, options, DcbSnapshotKeys::canonicalKey).decision();
+    public <C> Decider.Decision<S, E> executeAndReturnDecision(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+        return doExecute(commands, dcbDecider).decision();
     }
 
     /**
-     * Execute {@code command} and return the folded state after the decision (even when nothing was appended).
+     * Execute a single command and return the folded state after the decision (even when nothing was appended).
      */
-    public <C, S extends @Nullable Object> S executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return executeAndReturnDecision(command, dcbDecider, store, options).state();
+    public <C> S executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider) {
+        return executeAndReturnDecision(command, dcbDecider).state();
     }
 
     /**
      * Execute {@code commands} and return the folded state after the decision (even when nothing was appended).
      */
-    public <C, S extends @Nullable Object> S executeAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        return executeAndReturnDecision(commands, dcbDecider, store, options).state();
+    public <C> S executeAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+        return executeAndReturnDecision(commands, dcbDecider).state();
     }
 
-    private <C, S extends @Nullable Object> Executed<S, E> doExecute(List<C> commands, DcbDecider<C, S, E> dcbDecider, SnapshotStore<S> store, SnapshotOptions<S, E> options, Function<DcbCriteria, String> keyFunction) {
+    /**
+     * Execute a single command and return the new events that were decided.
+     */
+    public <C> List<E> executeAndReturnEvents(C command, DcbDecider<C, S, E> dcbDecider) {
+        return executeAndReturnDecision(command, dcbDecider).events();
+    }
+
+    /**
+     * Execute {@code commands} and return the new events that were decided.
+     */
+    public <C> List<E> executeAndReturnEvents(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+        return executeAndReturnDecision(commands, dcbDecider).events();
+    }
+
+    private <C> Executed<S, E> doExecute(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
         Objects.requireNonNull(commands, "commands cannot be null");
         Objects.requireNonNull(dcbDecider, "dcbDecider cannot be null");
-        Objects.requireNonNull(store, "store cannot be null");
-        Objects.requireNonNull(options, "options cannot be null");
-        Objects.requireNonNull(keyFunction, "keyFunction cannot be null");
 
         DcbCriteria criteria = dcbDecider.criteriaFor(commands);
         String key = Objects.requireNonNull(keyFunction.apply(criteria), "snapshot key cannot be null");
