@@ -488,6 +488,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 return; // already folded (a redelivery), keep folding idempotent
             }
             SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, view::initialState);
+            if (position - base.version() < everyNEvents) {
+                return; // throttle before reading, matching events cannot exceed the position gap since the snapshot
+            }
             List<E> range = converter.toDomainEvents(dcbEventStore.read(criteria, DcbReadOptions.between(base.version(), position)).stream()).toList();
             if (range.size() < everyNEvents) {
                 return; // throttle: too few matching events since the last saved snapshot

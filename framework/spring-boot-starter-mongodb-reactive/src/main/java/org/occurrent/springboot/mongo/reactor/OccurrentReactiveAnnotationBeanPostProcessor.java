@@ -654,6 +654,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                     return Mono.<Void>empty(); // already folded (a redelivery), keep folding idempotent
                 }
                 SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, view::initialState);
+                if (position - base.version() < everyNEvents) {
+                    return Mono.<Void>empty(); // throttle before reading, matching events cannot exceed the position gap since the snapshot
+                }
                 return dcbEventStore.read(criteria, DcbReadOptions.between(base.version(), position)).flatMap(eventStream -> {
                     List<E> range = converter.toDomainEvents(eventStream.events().stream()).toList();
                     if (range.size() < everyNEvents) {
