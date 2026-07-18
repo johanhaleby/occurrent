@@ -43,17 +43,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class BootstrappingProjectionFeedTest {
+class CatchupProjectionFeedTest {
 
     private static final URI SOURCE = URI.create("urn:occurrent:test");
 
     @Test
-    void bootstraps_history_then_folds_live_domain_events() {
+    void catches_up_history_then_folds_live_domain_events() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();
-        BootstrappingProjectionFeed<Counted> feed = feed("counter", reader("1", "2"), converter, repo, null);
+        CatchupProjectionFeed<Counted> feed = feed("counter", reader("1", "2"), converter, repo, null);
 
-        feed.bootstrap().block();
+        feed.catchUp().block();
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
 
         feed.accept(new Counted("3")).block();
@@ -61,41 +61,41 @@ class BootstrappingProjectionFeedTest {
     }
 
     @Test
-    void an_event_both_replayed_and_delivered_live_during_bootstrap_is_folded_once() {
+    void an_event_both_replayed_and_delivered_live_during_catch_up_is_folded_once() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();
-        BootstrappingProjectionFeed<Counted> feed = feed("counter", reader("1", "2"), converter, repo, null);
+        CatchupProjectionFeed<Counted> feed = feed("counter", reader("1", "2"), converter, repo, null);
 
-        feed.accept(new Counted("2")).subscribe(); // buffered before bootstrap, overlaps the replay
-        feed.bootstrap().block();
+        feed.accept(new Counted("2")).subscribe(); // buffered before catch-up, overlaps the replay
+        feed.catchUp().block();
 
         await().during(ofSeconds(1)).atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
     }
 
     @Test
-    void a_live_event_not_in_the_replay_is_folded_after_the_bootstrap() {
+    void a_live_event_not_in_the_replay_is_folded_after_the_catch_up() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();
-        BootstrappingProjectionFeed<Counted> feed = feed("counter", reader("1", "2"), converter, repo, null);
+        CatchupProjectionFeed<Counted> feed = feed("counter", reader("1", "2"), converter, repo, null);
 
         feed.accept(new Counted("3")).subscribe(); // buffered, not in history
-        feed.bootstrap().block();
+        feed.catchUp().block();
 
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
     }
 
     @Test
-    void a_restart_skips_the_replay_when_the_bootstrap_marker_exists() {
+    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
 
-        feed("counter", reader("1", "2"), converter, repo, marker).bootstrap().block();
+        feed("counter", reader("1", "2"), converter, repo, marker).catchUp().block();
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
 
         // Restart: the replay is skipped, so the persisted count is not re-folded (which would double it).
-        BootstrappingProjectionFeed<Counted> restarted = feed("counter", reader("1", "2"), converter, repo, marker);
-        restarted.bootstrap().block();
+        CatchupProjectionFeed<Counted> restarted = feed("counter", reader("1", "2"), converter, repo, marker);
+        restarted.catchUp().block();
         await().during(ofSeconds(1)).atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
 
         restarted.accept(new Counted("3")).block();
@@ -103,11 +103,11 @@ class BootstrappingProjectionFeedTest {
     }
 
     @Test
-    void overflowing_the_live_buffer_during_bootstrap_fails_loud() {
+    void overflowing_the_live_buffer_during_catch_up_fails_loud() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
-        BootstrappingProjectionFeed<Counted> feed = BootstrappingProjectionFeed.create(
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
                 "counter", projection(), repository, reader(), converter, Counted::eventId, null, 10, 2);
 
         feed.accept(new Counted("l1")).subscribe();
@@ -117,7 +117,7 @@ class BootstrappingProjectionFeedTest {
     }
 
     @Test
-    void a_bootstrap_failure_fails_live_acks_instead_of_hanging() {
+    void a_catch_up_failure_fails_live_acks_instead_of_hanging() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         PositionOrderedReader failingReader = new PositionOrderedReader() {
@@ -136,12 +136,12 @@ class BootstrappingProjectionFeedTest {
                 return true;
             }
         };
-        BootstrappingProjectionFeed<Counted> feed = feed("counter", failingReader, converter, repo, null);
+        CatchupProjectionFeed<Counted> feed = feed("counter", failingReader, converter, repo, null);
 
-        feed.bootstrap().subscribe(v -> {
+        feed.catchUp().subscribe(v -> {
         }, e -> {
         }); // replay fails, so the pipeline terminates
-        // A live event fed after the failed bootstrap must error rather than hang.
+        // A live event fed after the failed catch-up must error rather than hang.
         StepVerifier.create(feed.accept(new Counted("live")))
                 .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom"))
                 .verify(ofSeconds(5));
@@ -149,10 +149,10 @@ class BootstrappingProjectionFeedTest {
 
     // --- helpers ---
 
-    private static BootstrappingProjectionFeed<Counted> feed(String id, PositionOrderedReader reader, CloudEventConverter<Counted> converter,
+    private static CatchupProjectionFeed<Counted> feed(String id, PositionOrderedReader reader, CloudEventConverter<Counted> converter,
                                                              Map<String, Integer> repo, CheckpointStorage marker) {
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
-        return BootstrappingProjectionFeed.create(id, projection(), repository, reader, converter, Counted::eventId, marker);
+        return CatchupProjectionFeed.create(id, projection(), repository, reader, converter, Counted::eventId, marker);
     }
 
     private static Projection<Integer, Counted, String> projection() {
@@ -167,7 +167,7 @@ class BootstrappingProjectionFeedTest {
         return new PositionOrderedReader() {
             @Override
             public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-                return Flux.fromIterable(List.of(eventIds)).map(BootstrappingProjectionFeedTest::cloudEvent);
+                return Flux.fromIterable(List.of(eventIds)).map(CatchupProjectionFeedTest::cloudEvent);
             }
 
             @Override

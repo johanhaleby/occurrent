@@ -30,7 +30,7 @@ public enum Source {
     /**
      * The projection is fed by an external push feed the application owns and feeds (driven by a RabbitMQ, Kafka, or
      * other listener), selected with {@link Projection#subscriptionModel()} or {@link Projection#subscriptionModelName()}.
-     * The framework gives the projection a replay-then-push bootstrap catch-up that backfills it from the event store
+     * The framework gives the projection a replay-then-push catch-up that backfills it from the event store
      * once before it goes live. The feed bean's type decides how live events are delivered: a {@code PushSubscriptionModel}
      * delivers <strong>CloudEvents</strong>, while a {@code DomainEventFeed} delivers <strong>domain events</strong>
      * directly, with no CloudEvent conversion on the live path (a {@code DomainEventFeed} carries the event-id function

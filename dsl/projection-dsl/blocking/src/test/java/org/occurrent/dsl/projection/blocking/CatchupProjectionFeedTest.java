@@ -40,19 +40,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class BootstrappingProjectionFeedTest {
+class CatchupProjectionFeedTest {
 
     private static final URI SOURCE = URI.create("urn:occurrent:test");
 
     @Test
-    void bootstraps_history_from_the_store_then_folds_live_domain_events() {
+    void catches_up_from_the_store_then_folds_live_domain_events() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
 
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
-        BootstrappingProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
-        feed.bootstrap();
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
+        feed.catchUp();
 
         assertThat(repo.get("counter")).isEqualTo(2);
 
@@ -62,40 +62,40 @@ class BootstrappingProjectionFeedTest {
     }
 
     @Test
-    void an_event_both_replayed_and_delivered_live_during_bootstrap_is_folded_once() {
+    void an_event_both_replayed_and_delivered_live_during_catch_up_is_folded_once() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
 
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
-        BootstrappingProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
 
-        // "2" also arrives live before the bootstrap completes (the replay-to-live overlap).
+        // "2" also arrives live before the catch-up completes (the replay-to-live overlap).
         feed.accept(new Counted("2"));
-        feed.bootstrap();
+        feed.catchUp();
 
         // Deduped by the domain event id: folded once (via the replay), so the count is 2, not 3.
         assertThat(repo.get("counter")).isEqualTo(2);
     }
 
     @Test
-    void a_live_event_not_in_the_replay_is_folded_after_the_bootstrap() {
+    void a_live_event_not_in_the_replay_is_folded_after_the_catch_up() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
 
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
-        BootstrappingProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
 
-        // "3" is not in history but arrives live during bootstrap; it must not be lost.
+        // "3" is not in history but arrives live during catch-up; it must not be lost.
         feed.accept(new Counted("3"));
-        feed.bootstrap();
+        feed.catchUp();
 
         assertThat(repo.get("counter")).isEqualTo(3);
     }
 
     @Test
-    void a_restart_skips_the_replay_when_the_bootstrap_marker_exists() {
+    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
@@ -103,13 +103,13 @@ class BootstrappingProjectionFeedTest {
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
 
-        feed("counter", store, converter, repo, marker).bootstrap();
+        feed("counter", store, converter, repo, marker).catchUp();
         assertThat(repo.get("counter")).isEqualTo(2);
 
         // Restart: a fresh feed over the same store, repository, and marker. The replay is skipped, so the persisted
         // count is not re-folded (which would double it to 4).
-        BootstrappingProjectionFeed<Counted> restarted = feed("counter", store, converter, repo, marker);
-        restarted.bootstrap();
+        CatchupProjectionFeed<Counted> restarted = feed("counter", store, converter, repo, marker);
+        restarted.catchUp();
         assertThat(repo.get("counter")).isEqualTo(2);
 
         restarted.accept(new Counted("3"));
@@ -117,13 +117,13 @@ class BootstrappingProjectionFeedTest {
     }
 
     @Test
-    void overflowing_the_live_buffer_during_bootstrap_fails_loud() {
+    void overflowing_the_live_buffer_during_catch_up_fails_loud() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
 
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
-        BootstrappingProjectionFeed<Counted> feed = BootstrappingProjectionFeed.create(
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
                 "counter", projection(), repository, store, converter, Counted::eventId, null, 10, 2);
 
         feed.accept(new Counted("l1"));
@@ -143,11 +143,11 @@ class BootstrappingProjectionFeedTest {
         int encodesAfterHistoryWrite = toCloudEventCalls.get();
 
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
-        BootstrappingProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
-        feed.bootstrap();
+        CatchupProjectionFeed<Counted> feed = feed("counter", store, converter, repo, null);
+        feed.catchUp();
         feed.accept(new Counted("2"));
 
-        // Bootstrap decodes the one replayed event; the live path does neither encode nor decode.
+        // The catch-up decodes the one replayed event; the live path does neither encode nor decode.
         assertThat(toDomainEventCalls.get()).isEqualTo(1);
         assertThat(toCloudEventCalls.get()).isEqualTo(encodesAfterHistoryWrite);
         assertThat(repo.get("counter")).isEqualTo(2);
@@ -155,10 +155,10 @@ class BootstrappingProjectionFeedTest {
 
     // --- helpers ---
 
-    private static BootstrappingProjectionFeed<Counted> feed(String id, InMemoryEventStore store, CloudEventConverter<Counted> converter,
+    private static CatchupProjectionFeed<Counted> feed(String id, InMemoryEventStore store, CloudEventConverter<Counted> converter,
                                                              Map<String, Integer> repo, CheckpointStorage marker) {
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
-        return BootstrappingProjectionFeed.create(id, projection(), repository, store, converter, Counted::eventId, marker);
+        return CatchupProjectionFeed.create(id, projection(), repository, store, converter, Counted::eventId, marker);
     }
 
     private static Projection<Integer, Counted, String> projection() {

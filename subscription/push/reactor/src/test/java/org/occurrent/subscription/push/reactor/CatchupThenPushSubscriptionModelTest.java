@@ -44,15 +44,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class ReplayThenPushSubscriptionModelTest {
+class CatchupThenPushSubscriptionModelTest {
 
     @Test
-    void bootstraps_history_then_delivers_the_live_feed() {
+    void catches_up_history_then_delivers_the_live_feed() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         List<String> delivered = new ArrayList<>();
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")), 3);
 
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, feed, null);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(delivered));
 
         assertThat(delivered).containsExactly("1", "2", "3");
@@ -62,7 +62,7 @@ class ReplayThenPushSubscriptionModelTest {
     }
 
     @Test
-    void an_event_both_replayed_and_delivered_live_during_bootstrap_is_delivered_once() {
+    void an_event_both_replayed_and_delivered_live_during_catch_up_is_delivered_once() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         List<String> delivered = new ArrayList<>();
         CloudEvent e1 = cloudEvent("1", "Created");
@@ -75,7 +75,7 @@ class ReplayThenPushSubscriptionModelTest {
             }
         }), 3);
 
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, feed, null);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(delivered));
 
         assertThat(delivered).containsExactly("1", "2", "3");
@@ -96,27 +96,27 @@ class ReplayThenPushSubscriptionModelTest {
             }
         }), 2);
 
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, feed, null);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(delivered));
 
         assertThat(delivered).containsExactly("1", "2", "late");
     }
 
     @Test
-    void a_restart_skips_the_replay_when_the_bootstrap_marker_exists() {
+    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
         InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created"), cloudEvent("2", "Updated")), 2);
 
         PushSubscriptionModel feed1 = new PushSubscriptionModel();
         List<String> firstRun = new ArrayList<>();
-        new ReplayThenPushSubscriptionModel(reader, feed1, marker)
+        new CatchupThenPushSubscriptionModel(reader, feed1, marker)
                 .subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(firstRun));
         assertThat(firstRun).containsExactly("1", "2");
 
         // Restart: fresh feed and model, same reader and marker. The replay is skipped.
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
         List<String> secondRun = new ArrayList<>();
-        new ReplayThenPushSubscriptionModel(reader, feed2, marker)
+        new CatchupThenPushSubscriptionModel(reader, feed2, marker)
                 .subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(secondRun));
         assertThat(secondRun).isEmpty();
 
@@ -141,7 +141,7 @@ class ReplayThenPushSubscriptionModelTest {
             }
         }), 1);
 
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, feed, null, 10, 2);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null, 10, 2);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
 
         // The event that overflowed the buffer reports the failure to its caller (the listener), which can nack it.
@@ -154,11 +154,11 @@ class ReplayThenPushSubscriptionModelTest {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         PositionOrderedReader reader = reader(Flux::empty, 0);
 
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, feed, null);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         Throwable thrown = catchThrowable(() ->
                 model.subscribe("proj", DcbSubscriptionFilter.filter(DcbCriteria.all()), StartAt.subscriptionModelDefault(), ce -> Mono.empty()));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Cannot bootstrap-replay");
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Cannot catch-up-replay");
     }
 
     // --- helpers ---

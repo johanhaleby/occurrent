@@ -64,7 +64,7 @@
             <artifactId>occurrent-subscription-api-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- Position-ordered store read for BootstrappingProjectionFeed's bootstrap replay -->
+        <!-- Position-ordered store read for CatchupProjectionFeed's catch-up replay -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-api-reactor</artifactId>

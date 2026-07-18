@@ -60,10 +60,10 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Reactive counterpart of the blocking push-source projection test: a {@link Projection @Projection} with
- * {@link Source#PUSH} bootstraps its history from the reactive event store, then materializes live events pushed
+ * {@link Source#PUSH} catches up its history from the reactive event store, then materializes live events pushed
  * through a reactive {@link PushSubscriptionModel}. Docker-based, run by the CI/integration step.
  */
-@DisplayName("Reactive Projection annotation (push source, bootstrap then live)")
+@DisplayName("Reactive Projection annotation (push source, catch-up then live)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @SpringBootTest(
         classes = ReactiveProjectionAnnotationPushSourceMongoTest.PushProjectionApplication.class,
@@ -90,8 +90,8 @@ class ReactiveProjectionAnnotationPushSourceMongoTest {
     private ViewStateRepository<OrderCount, String> orderCountStore;
 
     @Test
-    void bootstraps_history_from_the_event_store_then_materializes_pushed_live_events() {
-        // Two OrderPlaced events were written before startup, so the push projection bootstraps them.
+    void catches_up_history_from_the_event_store_then_materializes_pushed_live_events() {
+        // Two OrderPlaced events were written before startup, so the push projection catches them up.
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(2)));
 

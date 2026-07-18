@@ -59,10 +59,10 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Verifies that a {@link Projection @Projection} with {@link Source#PUSH} is fed by a {@link PushSubscriptionModel}:
- * it bootstraps its history from the event store on startup, then materializes live events pushed through the model.
+ * it catches up its history from the event store on startup, then materializes live events pushed through the model.
  * Docker-based, run by the CI/integration step.
  */
-@DisplayName("Projection annotation (push source, bootstrap then live)")
+@DisplayName("Projection annotation (push source, catch-up then live)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @SpringBootTest(
         classes = ProjectionAnnotationPushSourceMongoTest.PushProjectionApplication.class,
@@ -88,8 +88,8 @@ class ProjectionAnnotationPushSourceMongoTest {
     private OrderCountStore orderCountStore;
 
     @Test
-    void bootstraps_history_from_the_event_store_then_materializes_pushed_live_events() {
-        // Two OrderPlaced events were written before startup by HistoryAppender, so the push projection bootstraps them.
+    void catches_up_history_from_the_event_store_then_materializes_pushed_live_events() {
+        // Two OrderPlaced events were written before startup by HistoryAppender, so the push projection catches them up.
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.countFor("orders")).isEqualTo(2));
 

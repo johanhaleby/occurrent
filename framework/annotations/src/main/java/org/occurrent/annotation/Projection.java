@@ -151,12 +151,12 @@ public @interface Projection {
     /**
      * Where the projection reads its events from. {@link Source#EVENT_STORE} (the default) uses the framework's
      * asynchronous catch-up and durable subscription models. {@link Source#PUSH} feeds the projection from an external
-     * push feed (RabbitMQ, Kafka, ...) instead, wrapped in a replay-then-push bootstrap catch-up. Select the feed bean
+     * push feed (RabbitMQ, Kafka, ...) instead, wrapped in a replay-then-push catch-up. Select the feed bean
      * with {@link #subscriptionModel()} or {@link #subscriptionModelName()}; its type decides how live events are
      * delivered (a {@code PushSubscriptionModel} delivers CloudEvents, a {@code DomainEventFeed} delivers domain events
      * directly). Push source is mutually exclusive with {@link Mode#SYNCHRONOUS} and with the catch-up start knobs
      * ({@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, {@link #startupMode()}), since
-     * the bootstrap always replays from the beginning and live-resume is the broker's responsibility.
+     * the catch-up always replays from the beginning and live-resume is the broker's responsibility.
      */
     Source source() default Source.EVENT_STORE;
 

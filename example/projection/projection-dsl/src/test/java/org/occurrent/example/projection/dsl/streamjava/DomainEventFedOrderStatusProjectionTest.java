@@ -37,7 +37,7 @@ import static org.occurrent.example.projection.dsl.streamjava.OrderStatusProject
  * path never round-trips through {@code toCloudEvent}/{@code toDomainEvent}.
  * <p>
  * {@code Projections.domainEventFeed(...)} returns the plain {@link Consumer} the listener calls. This is the live-tail
- * form; for a new or rebuilt projection that also needs catch-up, use {@code BootstrappingProjectionFeed} instead.
+ * form; for a new or rebuilt projection that also needs catch-up, use {@code CatchupProjectionFeed} instead.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DomainEventFedOrderStatusProjectionTest {

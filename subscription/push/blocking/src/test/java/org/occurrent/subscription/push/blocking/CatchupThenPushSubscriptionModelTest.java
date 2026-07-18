@@ -44,10 +44,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class ReplayThenPushSubscriptionModelTest {
+class CatchupThenPushSubscriptionModelTest {
 
     @Test
-    void bootstraps_history_from_the_store_then_delivers_the_live_feed() {
+    void catches_up_from_the_store_then_delivers_the_live_feed() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         // Forward every written event to the feed, exactly as an application forwarding to a broker would.
         InMemoryEventStore store = new InMemoryEventStore(feed::accept);
@@ -56,7 +56,7 @@ class ReplayThenPushSubscriptionModelTest {
         store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
 
         List<String> delivered = new ArrayList<>();
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(store, feed, null);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
 
         assertThat(delivered).containsExactly("1", "2", "3");
@@ -67,7 +67,7 @@ class ReplayThenPushSubscriptionModelTest {
     }
 
     @Test
-    void an_event_both_replayed_and_delivered_live_during_bootstrap_is_delivered_once() {
+    void an_event_both_replayed_and_delivered_live_during_catch_up_is_delivered_once() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CloudEvent e1 = cloudEvent("1", "Created");
         CloudEvent e2 = cloudEvent("2", "Updated");
@@ -76,7 +76,7 @@ class ReplayThenPushSubscriptionModelTest {
         PositionOrderedReader reader = readerThatOnEachElementPushes(List.of(e1, e2, e3), e2, feed);
 
         List<String> delivered = new ArrayList<>();
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, feed, null);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
 
         // e2 deduped by id: delivered once, via the replay.
@@ -93,14 +93,14 @@ class ReplayThenPushSubscriptionModelTest {
         PositionOrderedReader reader = readerThatOnFirstElementPushes(List.of(e1, e2), late, feed);
 
         List<String> delivered = new ArrayList<>();
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, feed, null);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
 
         assertThat(delivered).containsExactly("1", "2", "late");
     }
 
     @Test
-    void a_restart_skips_the_replay_when_the_bootstrap_marker_exists() {
+    void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         AtomicReference<PushSubscriptionModel> sink = new AtomicReference<>();
         InMemoryEventStore store = new InMemoryEventStore(events -> {
@@ -111,11 +111,11 @@ class ReplayThenPushSubscriptionModelTest {
         });
         store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
 
-        // First run bootstraps and records the marker.
+        // First run catches up and records the marker.
         PushSubscriptionModel feed1 = new PushSubscriptionModel();
         sink.set(feed1);
         List<String> firstRun = new ArrayList<>();
-        new ReplayThenPushSubscriptionModel(store, feed1, marker)
+        new CatchupThenPushSubscriptionModel(store, feed1, marker)
                 .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> firstRun.add(ce.getId()));
         assertThat(firstRun).containsExactly("1", "2");
 
@@ -123,7 +123,7 @@ class ReplayThenPushSubscriptionModelTest {
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
         sink.set(feed2);
         List<String> secondRun = new ArrayList<>();
-        new ReplayThenPushSubscriptionModel(store, feed2, marker)
+        new CatchupThenPushSubscriptionModel(store, feed2, marker)
                 .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()));
         assertThat(secondRun).isEmpty();
 
@@ -142,7 +142,7 @@ class ReplayThenPushSubscriptionModelTest {
         // On the first replayed element, three live events arrive but the buffer cap is two.
         PositionOrderedReader reader = readerThatOnFirstElementPushesMany(List.of(e1), List.of(l1, l2, l3), feed);
 
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, feed, null, 10, 2);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null, 10, 2);
         Throwable thrown = catchThrowable(() ->
                 model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
                 }));
@@ -155,12 +155,12 @@ class ReplayThenPushSubscriptionModelTest {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         PositionOrderedReader reader = readerThatOnFirstElementPushes(List.of(), null, feed);
 
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, feed, null);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
         Throwable thrown = catchThrowable(() ->
                 model.subscribe("proj", DcbSubscriptionFilter.filter(DcbCriteria.all()), StartAt.subscriptionModelDefault(), ce -> {
                 }));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Cannot bootstrap-replay");
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Cannot catch-up-replay");
     }
 
     // --- helpers ---

@@ -33,7 +33,7 @@ import java.util.function.Function;
 /**
  * The reactor counterpart of the blocking {@code DomainEventFeed}: a register-only sink the application owns and feeds
  * with <strong>domain events</strong>, fanning each one out to every registered projection, with a per-projection
- * bootstrap catch-up. It lets one external feed drive several projections without any CloudEvent conversion on the live
+ * catch-up. It lets one external feed drive several projections without any CloudEvent conversion on the live
  * path. See the blocking {@code DomainEventFeed} for the full contract.
  */
 @NullMarked
@@ -42,15 +42,15 @@ public final class DomainEventFeed<E> {
     private final PositionOrderedReader reader;
     private final CloudEventConverter<E> converter;
     private final Function<E, String> eventId;
-    private final @Nullable CheckpointStorage bootstrapMarker;
-    private final CopyOnWriteArrayList<BootstrappingProjectionFeed<E>> feeds = new CopyOnWriteArrayList<>();
+    private final @Nullable CheckpointStorage catchupMarker;
+    private final CopyOnWriteArrayList<CatchupProjectionFeed<E>> feeds = new CopyOnWriteArrayList<>();
 
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
-                           Function<E, String> eventId, @Nullable CheckpointStorage bootstrapMarker) {
+                           Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
         this.converter = Objects.requireNonNull(converter, "converter cannot be null");
         this.eventId = Objects.requireNonNull(eventId, "eventId cannot be null");
-        this.bootstrapMarker = bootstrapMarker;
+        this.catchupMarker = catchupMarker;
     }
 
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId) {
@@ -58,13 +58,13 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Register a projection to be fed and bootstrapped by this feed, materializing into the blocking {@code repository}
+     * Register a projection to be fed and caught up by this feed, materializing into the blocking {@code repository}
      * (folded on {@code boundedElastic}).
      */
     public <S extends @Nullable Object, ID> void register(String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
-        BootstrappingProjectionFeed<E> feed = BootstrappingProjectionFeed.create(id, projection, repository, reader, converter, eventId, bootstrapMarker);
+        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, projection, repository, reader, converter, eventId, catchupMarker);
         feeds.add(feed);
     }
 
@@ -78,10 +78,10 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Run the one-time bootstrap of every registered projection. The returned {@link Mono} completes once every
-     * projection has been bootstrapped and gone live.
+     * Run the one-time catch-up of every registered projection. The returned {@link Mono} completes once every
+     * projection has caught up and gone live.
      */
-    public Mono<Void> bootstrapAll() {
-        return Flux.fromIterable(feeds).concatMap(BootstrappingProjectionFeed::bootstrap).then();
+    public Mono<Void> catchUpAll() {
+        return Flux.fromIterable(feeds).concatMap(CatchupProjectionFeed::catchUp).then();
     }
 }

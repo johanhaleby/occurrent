@@ -61,10 +61,10 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Verifies that a {@link Projection @Projection} with {@link Source#PUSH} is fed by a {@link DomainEventFeed}:
- * it bootstraps its history from the event store on startup, then materializes live domain events fed through the feed,
+ * it catches up its history from the event store on startup, then materializes live domain events fed through the feed,
  * with no CloudEvent conversion on the live path. Docker-based, run by the CI/integration step.
  */
-@DisplayName("Projection annotation (domain-push source, bootstrap then live)")
+@DisplayName("Projection annotation (domain-push source, catch-up then live)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @SpringBootTest(
         classes = ProjectionAnnotationDomainPushSourceMongoTest.DomainPushProjectionApplication.class,
@@ -90,7 +90,7 @@ class ProjectionAnnotationDomainPushSourceMongoTest {
     private OrderCountStore orderCountStore;
 
     @Test
-    void bootstraps_history_from_the_event_store_then_materializes_pushed_live_domain_events() {
+    void catches_up_history_from_the_event_store_then_materializes_pushed_live_domain_events() {
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.countFor("orders")).isEqualTo(2));
 
@@ -127,7 +127,7 @@ class ProjectionAnnotationDomainPushSourceMongoTest {
         }
 
         // The application-owned domain feed. It carries the domain-specific eventId; the framework's event store and
-        // checkpoint storage supply the CloudEvent-layer bits for bootstrap.
+        // checkpoint storage supply the CloudEvent-layer bits for the catch-up.
         @Bean
         DomainEventFeed<TestEvent> ordersFeed(PositionOrderedReader reader, CloudEventConverter<TestEvent> converter, CheckpointStorage checkpointStorage) {
             return new DomainEventFeed<>(reader, converter, TestEvent::eventId, checkpointStorage);

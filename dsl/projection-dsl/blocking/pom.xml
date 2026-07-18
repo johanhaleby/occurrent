@@ -59,7 +59,7 @@
             <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- Position-ordered store read + checkpoint marker for BootstrappingProjectionFeed's bootstrap replay -->
+        <!-- Position-ordered store read + checkpoint marker for CatchupProjectionFeed's catch-up replay -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-api-blocking</artifactId>

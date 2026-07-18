@@ -4,7 +4,7 @@ Date: 2026-07-18
 
 ## Status
 
-Accepted. The push subscription model and the v1 replay-then-push bootstrap catch-up (broker owns live-resume) are
+Accepted. The push subscription model and the v1 replay-then-push catch-up (broker owns live-resume) are
 implemented. Broker-independent resume (v2) is a deliberate non-goal, see the section below.
 
 ## Context
@@ -63,23 +63,23 @@ domain-event-level `Consumer<E>`. A separate per-projection feed factory would d
   does not guarantee global order, so a projection that depends on strict global order across streams needs a transport
   that preserves it.
 
-## Decision: replay-then-push bootstrap catch-up (v1, broker owns live-resume)
+## Decision: replay-then-push catch-up (v1, broker owns live-resume)
 
-A push feed cannot backfill a new or rebuilt projection, because a broker is not a log. `ReplayThenPushSubscriptionModel`
-(blocking and reactor) fills that gap with a one-time bootstrap in front of a `PushSubscriptionModel`. It splits
+A push feed cannot backfill a new or rebuilt projection, because a broker is not a log. `CatchupThenPushSubscriptionModel`
+(blocking and reactor) fills that gap with a one-time catch-up in front of a `PushSubscriptionModel`. It splits
 responsibility deliberately:
 
-- **Bootstrap is Occurrent's job**, run once per subscription id. On subscribe it registers on the live feed first and
+- **Catch-up is Occurrent's job**, run once per subscription id. On subscribe it registers on the live feed first and
   buffers, replays the projection's history from the event store in position order (`PositionOrderedReader`), then drains
   the buffer and goes live, de-duplicating the replay-to-live overlap by event id. Because buffering starts before the
   head is read, an event committing during the replay is delivered either by the replay or by the buffered feed, and no
   reconcile pass is needed. The buffer is bounded and fails loud on overflow, so a full from-scratch rebuild over a live
   feed (unbounded buffering) is a fail-loud error rather than silent truncation: rebuild offline instead.
-- **Live-resume is the broker's job, not Occurrent's.** After bootstrap the listener acknowledges each message only once
+- **Live-resume is the broker's job, not Occurrent's.** After catch-up the listener acknowledges each message only once
   `accept(...)` returns, so an unprocessed event is redelivered. The model persists no live position watermark, which is
   what sidesteps the watermark problem below entirely. Delivery is at-least-once, so the fold must be idempotent, the
   same contract as the change-stream path.
-- **A one-shot bootstrap-complete marker** (an optional `CheckpointStorage`) records that the replay finished, so a
+- **A one-shot catch-up-complete marker** (an optional `CheckpointStorage`) records that the replay finished, so a
   restart skips it and lets the broker resume. The stored value marks completion, it is not a moving resume watermark.
 
 **Why no feed-derived resume watermark.** Occurrent reserves global positions from a shared counter outside the write
@@ -94,12 +94,12 @@ also why the overlap is de-duplicated by event id, not by position. Putting live
 problem: the broker delivers in commit order and redelivers what was not acknowledged, exactly like a change stream, so
 no position frontier is ever reconstructed.
 
-Only stream and capability-agnostic subscription filters can be bootstrap-replayed (their plain `Filter` drives the
+Only stream and capability-agnostic subscription filters can be catch-up-replayed (their plain `Filter` drives the
 position-ordered read). A DCB subscription filter is rejected, since a DCB boundary needs a different replay read.
 
 **Consequence and limit.** Correctness across a restart depends on the broker retaining the backlog for an offline
 consumer (a durable queue with a preserved offset). If the consumer is offline longer than the broker retains, or the
-offset or bootstrap marker is lost, the projection must be rebuilt. For RabbitMQ specifically a durable queue already
+offset or catch-up marker is lost, the projection must be rebuilt. For RabbitMQ specifically a durable queue already
 retains messages for an offline consumer, so this v1 covers the common production case.
 
 ## Domain-event feeds (no double encode/decode)
@@ -110,20 +110,20 @@ deserialize per live event. That is avoided by feeding the projection in domain 
 
 The layering is preserved: the CloudEvent components stay the base, and the converter is composed only where events are
 genuinely CloudEvents. The live path has a domain source and a domain sink (the `View` fold, itself a domain-typed base
-in the view DSL), so it folds directly with no CloudEvent hop. The only decode is the bootstrap replay, which reads the
+in the view DSL), so it folds directly with no CloudEvent hop. The only decode is the catch-up replay, which reads the
 store (CloudEvents) and decodes each event once, never a double round trip.
 
 - `Projections.domainEventFeed(projection, repository)` returns the live-only domain feed (a `Consumer<E>` blocking, a
   `Function<E, Mono<Void>>` reactor), a named form of the existing `materializedView(...)::update` / `reactiveUpdate(...)`.
-- `BootstrappingProjectionFeed` adds the one-time bootstrap catch-up to a domain feed: buffer live, replay the store
+- `CatchupProjectionFeed` adds the one-time catch-up to a domain feed: buffer live, replay the store
   (decode once), drain, go live, de-duplicating the replay-to-live overlap by a caller-supplied `Function<E,String>`
   event-id applied in domain space (so it does not depend on the CloudEvent id). Same v1 contract as the CloudEvent
-  handover: broker owns live-resume, one-shot bootstrap marker, at-least-once idempotent folds, bounded fail-loud buffer.
+  handover: broker owns live-resume, one-shot catch-up marker, at-least-once idempotent folds, bounded fail-loud buffer.
 - `DomainEventFeed<E>` is the application-owned fan-out sink (the domain twin of `PushSubscriptionModel`) that drives
   several projections from one source. It carries the domain-specific event-id function as a constructor argument, which
   is why `@Projection(source = PUSH, subscriptionModelName = "...")` needs no event-id annotation attribute and no
   feed-handle registry: the listener feeds the bean it owns, and the registrar just registers projections on it and
-  bootstraps them. The reactor path requires a `ViewStateRepository` store (its fold runs on `boundedElastic`).
+  catches them up. The reactor path requires a `ViewStateRepository` store (its fold runs on `boundedElastic`).
 
 ## The `Pushable` capability
 
@@ -139,7 +139,7 @@ bean, compose a routing model that sends each subscription to exactly one source
 Making live-resume independent of broker retention is a deliberate non-goal, and may never be built. The decision is a
 boundary of responsibility: delivery guarantees for the live feed, ordering and no-loss redelivery, belong to the
 transport that already provides them (RabbitMQ, Kafka), not to Occurrent reconstructing them. The push source is meant to
-be driven by a transport that guarantees ordering. Occurrent's job is the one-time bootstrap from the event store, not to
+be driven by a transport that guarantees ordering. Occurrent's job is the one-time catch-up from the event store, not to
 compensate for a transport that drops or reorders messages.
 
 Should broker-independent resume ever be needed, it belongs with the push transport integration (the push module or a
@@ -155,10 +155,10 @@ broker cannot provide should rebuild the projection offline from the event store
 
 `@Projection` binds to a push source through a new explicit `source` attribute: `source = Source.PUSH` routes the
 projection to a `PushSubscriptionModel` bean (selected by `subscriptionModel` type or `subscriptionModelName`), which the
-bean-post-processor wraps in `ReplayThenPushSubscriptionModel` with the event store as the replay reader and the
-framework's `CheckpointStorage` as the bootstrap marker. The default `Source.EVENT_STORE` keeps the existing behavior.
+bean-post-processor wraps in `CatchupThenPushSubscriptionModel` with the event store as the replay reader and the
+framework's `CheckpointStorage` as the catch-up marker. The default `Source.EVENT_STORE` keeps the existing behavior.
 An explicit attribute was chosen over auto-detecting a push bean, since a durable public annotation should not change its
 event source implicitly based on which beans happen to be present. Push source is rejected together with
-`mode = SYNCHRONOUS` and the catch-up start knobs (the bootstrap always replays from the beginning and live-resume is the
-broker's job), and with a `DcbProjection` (a DCB boundary cannot be bootstrap-replayed in position order). Implemented on
+`mode = SYNCHRONOUS` and the catch-up start knobs (the catch-up always replays from the beginning and live-resume is the
+broker's job), and with a `DcbProjection` (a DCB boundary cannot be catch-up-replayed in position order). Implemented on
 both the blocking and reactor stacks.

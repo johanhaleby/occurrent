@@ -43,7 +43,7 @@
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
         </dependency>
-        <!-- Position-ordered event-store read for the one-time bootstrap replay in ReplayThenPushSubscriptionModel -->
+        <!-- Position-ordered event-store read for the one-time catch-up replay in CatchupThenPushSubscriptionModel -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-api-reactor</artifactId>

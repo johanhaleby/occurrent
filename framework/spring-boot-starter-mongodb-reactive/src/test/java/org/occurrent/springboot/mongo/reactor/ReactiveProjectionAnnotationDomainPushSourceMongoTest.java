@@ -62,10 +62,10 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Reactive counterpart of the blocking domain-push projection test: a {@link Projection @Projection} with
- * {@link Source#PUSH} bootstraps its history from the reactive event store, then materializes live domain events
+ * {@link Source#PUSH} catches up its history from the reactive event store, then materializes live domain events
  * fed through a reactive {@link DomainEventFeed}. Docker-based, run by the CI/integration step.
  */
-@DisplayName("Reactive Projection annotation (domain-push source, bootstrap then live)")
+@DisplayName("Reactive Projection annotation (domain-push source, catch-up then live)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @SpringBootTest(
         classes = ReactiveProjectionAnnotationDomainPushSourceMongoTest.DomainPushProjectionApplication.class,
@@ -92,7 +92,7 @@ class ReactiveProjectionAnnotationDomainPushSourceMongoTest {
     private ViewStateRepository<OrderCount, String> orderCountStore;
 
     @Test
-    void bootstraps_history_from_the_event_store_then_materializes_pushed_live_domain_events() {
+    void catches_up_history_from_the_event_store_then_materializes_pushed_live_domain_events() {
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(2)));
 

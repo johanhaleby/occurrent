@@ -24,7 +24,7 @@ import java.util.Queue;
 import java.util.Set;
 
 /**
- * A bounded set of event ids that de-duplicates the replay-to-live overlap in the bootstrap catch-up feeds. It retains
+ * A bounded set of event ids that de-duplicates the replay-to-live overlap in the catch-up feeds. It retains
  * the most recently added ids up to {@code maxSize}, evicting the oldest once the cap is reached. Not thread-safe: the
  * catch-up pipelines serialize all access to it.
  */

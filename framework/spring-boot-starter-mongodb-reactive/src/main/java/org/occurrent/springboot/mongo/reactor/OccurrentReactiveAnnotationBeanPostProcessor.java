@@ -37,7 +37,7 @@ import org.occurrent.dsl.projection.reactor.DomainEventFeed;
 import org.occurrent.dsl.projection.reactor.ReactiveProjectionRunner;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
-import org.occurrent.subscription.push.reactor.ReplayThenPushSubscriptionModel;
+import org.occurrent.subscription.push.reactor.CatchupThenPushSubscriptionModel;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
@@ -126,8 +126,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Every subscription and projection id must be unique, since it is the durable checkpoint key. Subscription ids are
     // added as their annotations are processed (before singletons finish), projection ids when they register below.
     private final Set<String> registeredIds = new HashSet<>();
-    // Domain-push feeds collected during projection registration, bootstrapped once after all are registered.
-    private final Set<DomainEventFeed<?>> domainFeedsToBootstrap = Collections.newSetFromMap(new IdentityHashMap<>());
+    // Domain-push feeds collected during projection registration, caught up once after all are registered.
+    private final Set<DomainEventFeed<?>> domainFeedsToCatchUp = Collections.newSetFromMap(new IdentityHashMap<>());
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
@@ -463,9 +463,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         for (Object[] pm : projectionMethods) {
             processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
         }
-        // Bootstrap each domain-push feed once, after all its projections are registered.
-        for (DomainEventFeed<?> feed : domainFeedsToBootstrap) {
-            feed.bootstrapAll().block();
+        // Catch up each domain-push feed once, after all its projections are registered.
+        for (DomainEventFeed<?> feed : domainFeedsToCatchUp) {
+            feed.catchUpAll().block();
         }
         for (Object[] sm : snapshotMethods) {
             processSnapshotAnnotation(applicationContext.getBean((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
@@ -560,16 +560,16 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     // Register a source=PUSH projection whose feed bean is a PushSubscriptionModel (CloudEvents), wrapped in a
-    // replay-then-push bootstrap catch-up so a new or rebuilt projection is backfilled from the event store.
+    // replay-then-push catch-up so a new or rebuilt projection is backfilled from the event store.
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerPushProjection(String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, org.occurrent.annotation.Projection annotation, PushSubscriptionModel pushModel) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
-        CheckpointStorage bootstrapMarker = applicationContext.getBean(CheckpointStorage.class);
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, pushModel, bootstrapMarker);
+        CheckpointStorage catchupMarker = applicationContext.getBean(CheckpointStorage.class);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ReactiveProjectionRunner<E> runner = stream ? ReactiveProjectionRunner.stream(model, converter) : ReactiveProjectionRunner.agnostic(model, converter);
-        // The bootstrap replay runs when the pipeline is subscribed; block until it has handed over to the live feed.
+        // The catch-up replay runs when the pipeline is subscribed; block until it has handed over to the live feed.
         var subscription = projectAgnosticOrStream(runner, id, projection, resolveStore(annotation, id), null);
         subscription.waitUntilStarted().block();
     }
@@ -585,7 +585,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         feed.register(id, projection, (ViewStateRepository<S, ID>) store);
-        domainFeedsToBootstrap.add(feed);
+        domainFeedsToCatchUp.add(feed);
     }
 
     // Common validation for a source=PUSH projection: no synchronous mode, no catch-up start knobs, must be a Projection.
@@ -596,10 +596,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
                 || annotation.resumeBehavior() != ResumeBehavior.DEFAULT || annotation.startupMode() != StartupMode.DEFAULT) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the bootstrap always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the catch-up always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
         }
         if (!(descriptor instanceof Projection<?, ?, ?> raw)) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be bootstrap-replayed in position order.".formatted(id));
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be catch-up-replayed in position order.".formatted(id));
         }
         return (Projection<S, E, ID>) raw;
     }

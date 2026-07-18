@@ -44,44 +44,44 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
- * The reactive counterpart of the blocking {@code ReplayThenPushSubscriptionModel}: a one-time <strong>bootstrap
- * catch-up</strong> in front of a reactive {@link PushSubscriptionModel}. On first subscribe it replays a projection's
+ * The reactive counterpart of the blocking {@code CatchupThenPushSubscriptionModel}: a one-time <strong>catch-up</strong>
+ * in front of a reactive {@link PushSubscriptionModel}. On first subscribe it replays a projection's
  * history from the event store, then hands over to the live push feed, so a brand-new or rebuilt projection is
  * backfilled before it consumes the broker.
  * <p>
- * The replay, a bootstrap-complete marker step, and the live feed are composed into one ordered pipeline with
+ * The replay, a catch-up-complete marker step, and the live feed are composed into one ordered pipeline with
  * {@link Flux#concat}: the replay is consumed first, then the marker is recorded, then the live feed. Live events that
  * arrive during the replay are buffered in a unicast sink until the pipeline reaches them, so nothing is lost across the
  * seam, and the overlap is de-duplicated by event id. Because the whole pipeline is serialized by {@code concatMap}, the
  * de-dup cache needs no locking.
  * <p>
- * Contract (see ADR 62 and the blocking model): bootstrap is Occurrent's job and runs once per subscription id, guarded
+ * Contract (see ADR 62 and the blocking model): catch-up is Occurrent's job and runs once per subscription id, guarded
  * by an optional {@link CheckpointStorage} marker so a restart skips it. Live-resume is the broker's job, so no live
  * position watermark is persisted and delivery is at-least-once over idempotent folds. A live event's {@code accept}
  * {@link Mono} completes only once its handler has run (including events buffered during the replay), so the listener
  * can acknowledge after processing. Only stream and capability-agnostic subscription filters can be replayed.
  */
 @NullMarked
-public class ReplayThenPushSubscriptionModel implements Subscribable {
+public class CatchupThenPushSubscriptionModel implements Subscribable {
 
-    /** @see org.occurrent.subscription.push.reactor.ReplayThenPushSubscriptionModel */
+    /** @see org.occurrent.subscription.push.reactor.CatchupThenPushSubscriptionModel */
     public static final int DEFAULT_DEDUP_CACHE_SIZE = 10_000;
     public static final int DEFAULT_MAX_BUFFERED_EVENTS = 100_000;
 
     private final PositionOrderedReader reader;
     private final PushSubscriptionModel liveFeed;
-    private final @Nullable CheckpointStorage bootstrapMarker;
+    private final @Nullable CheckpointStorage catchupMarker;
     private final int dedupCacheSize;
     private final int maxBufferedEvents;
 
-    public ReplayThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage bootstrapMarker) {
-        this(reader, liveFeed, bootstrapMarker, DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
+    public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker) {
+        this(reader, liveFeed, catchupMarker, DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
     }
 
-    public ReplayThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage bootstrapMarker, int dedupCacheSize, int maxBufferedEvents) {
+    public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
         this.liveFeed = Objects.requireNonNull(liveFeed, "liveFeed cannot be null");
-        this.bootstrapMarker = bootstrapMarker;
+        this.catchupMarker = catchupMarker;
         if (dedupCacheSize <= 0) {
             throw new IllegalArgumentException("dedupCacheSize must be greater than zero");
         }
@@ -102,8 +102,8 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
 
         BoundedIdCache deliveredIds = new BoundedIdCache(dedupCacheSize);
         Sinks.Many<Item> liveSink = Sinks.many().unicast().onBackpressureBuffer(new ArrayBlockingQueue<>(maxBufferedEvents));
-        Sinks.One<Void> bootstrapDone = Sinks.one();
-        // Track the acks of live events buffered but not yet delivered, so a bootstrap failure fails them rather than
+        Sinks.One<Void> catchupDone = Sinks.one();
+        // Track the acks of live events buffered but not yet delivered, so a catch-up failure fails them rather than
         // leaving the listener's accept Monos hanging forever.
         Set<MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
         AtomicReference<Throwable> terminalError = new AtomicReference<>();
@@ -117,7 +117,7 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
                 return;
             }
             pendingLiveAcks.add(ackSink);
-            // Re-check after registering: if the bootstrap failed concurrently, fail this ack rather than hang.
+            // Re-check after registering: if the catch-up failed concurrently, fail this ack rather than hang.
             failure = terminalError.get();
             if (failure != null) {
                 ackSink.error(failure);
@@ -125,36 +125,36 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
             }
             Sinks.EmitResult result = liveSink.tryEmitNext(new Item(cloudEvent, ackSink));
             if (result.isFailure()) {
-                ackSink.error(new IllegalStateException("Live event buffer overflowed during bootstrap replay (cap "
+                ackSink.error(new IllegalStateException("Live event buffer overflowed during catch-up replay (cap "
                         + maxBufferedEvents + "). The history is too large to buffer the live feed across a full replay. "
-                        + "Rebuild offline from the event store instead of bootstrapping over a live feed. Emit result: " + result));
+                        + "Rebuild offline from the event store instead of catching up over a live feed. Emit result: " + result));
             }
         }));
 
         // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
         // written only when the replay actually ran (not on a restart that skips it).
-        Mono<Boolean> alreadyDone = alreadyBootstrapped(subscriptionId).cache();
+        Mono<Boolean> alreadyDone = alreadyCaughtUp(subscriptionId).cache();
         Flux<Item> replay = alreadyDone
                 .flatMapMany(done -> done
                         ? Flux.empty()
                         : reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning()).map(Item::replayed));
         Flux<Item> markerThenLive = Flux.concat(
-                alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : markBootstrapped(subscriptionId)).thenMany(Flux.<Item>empty()),
-                Mono.<Item>fromRunnable(() -> bootstrapDone.tryEmitEmpty()),
+                alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : markCaughtUp(subscriptionId)).thenMany(Flux.<Item>empty()),
+                Mono.<Item>fromRunnable(() -> catchupDone.tryEmitEmpty()),
                 liveSink.asFlux());
 
         Flux.concat(replay, markerThenLive)
                 .concatMap(item -> deliver(item, action, deliveredIds))
                 .subscribe(ignored -> {
                 }, error -> {
-                    // A bootstrap-phase failure terminates the pipeline before the buffered live events are drained.
+                    // A catch-up-phase failure terminates the pipeline before the buffered live events are drained.
                     // Fail their acks and reject later ones, so the listener sees the error instead of hanging.
                     terminalError.set(error);
-                    bootstrapDone.tryEmitError(error);
+                    catchupDone.tryEmitError(error);
                     pendingLiveAcks.forEach(sink -> sink.error(error));
                 });
 
-        return new AlreadyStartedSubscription(subscriptionId, bootstrapDone.asMono());
+        return new AlreadyStartedSubscription(subscriptionId, catchupDone.asMono());
     }
 
     // Serialized by concatMap, so the de-dup cache is touched by one thread at a time and needs no synchronization.
@@ -181,21 +181,21 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
                         return Mono.empty();
                     });
         }
-        // Replay event: an error here propagates and fails the bootstrap.
+        // Replay event: an error here propagates and fails the catch-up.
         return Mono.defer(() -> action.apply(cloudEvent)).doOnSuccess(v -> deliveredIds.add(id));
     }
 
-    private Mono<Boolean> alreadyBootstrapped(String subscriptionId) {
-        return bootstrapMarker == null ? Mono.just(false) : bootstrapMarker.read(subscriptionId).hasElement();
+    private Mono<Boolean> alreadyCaughtUp(String subscriptionId) {
+        return catchupMarker == null ? Mono.just(false) : catchupMarker.read(subscriptionId).hasElement();
     }
 
-    private Mono<Void> markBootstrapped(String subscriptionId) {
-        if (bootstrapMarker == null) {
+    private Mono<Void> markCaughtUp(String subscriptionId) {
+        if (catchupMarker == null) {
             return Mono.empty();
         }
-        // The stored position marks that the bootstrap replay completed at this head, not a live resume watermark.
+        // The stored position marks that the catch-up replay completed at this head, not a live resume watermark.
         return reader.currentPosition()
-                .flatMap(head -> bootstrapMarker.save(subscriptionId, GlobalCheckpoint.of(head)))
+                .flatMap(head -> catchupMarker.save(subscriptionId, GlobalCheckpoint.of(head)))
                 .then();
     }
 
@@ -205,7 +205,7 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
             case StreamSubscriptionFilter streamSubscriptionFilter -> streamSubscriptionFilter.filter();
             case AgnosticSubscriptionFilter agnosticSubscriptionFilter -> agnosticSubscriptionFilter.filter();
             default ->
-                    throw new IllegalArgumentException("Cannot bootstrap-replay a " + filter.getClass().getSimpleName()
+                    throw new IllegalArgumentException("Cannot catch-up-replay a " + filter.getClass().getSimpleName()
                             + ". Only a stream or capability-agnostic subscription filter can be replayed in position order.");
         };
     }

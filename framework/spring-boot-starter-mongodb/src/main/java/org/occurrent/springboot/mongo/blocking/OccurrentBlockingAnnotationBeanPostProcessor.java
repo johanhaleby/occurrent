@@ -38,7 +38,7 @@ import org.occurrent.dsl.projection.blocking.Projections;
 import org.occurrent.dsl.projection.blocking.ProjectionRunner;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
-import org.occurrent.subscription.push.blocking.ReplayThenPushSubscriptionModel;
+import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -119,8 +119,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
 
     private ApplicationContext applicationContext;
     private final Set<String> registeredIds = new HashSet<>();
-    // Domain-push feeds collected during projection registration, bootstrapped once after all are registered.
-    private final Set<DomainEventFeed<?>> domainFeedsToBootstrap = Collections.newSetFromMap(new IdentityHashMap<>());
+    // Domain-push feeds collected during projection registration, caught up once after all are registered.
+    private final Set<DomainEventFeed<?>> domainFeedsToCatchUp = Collections.newSetFromMap(new IdentityHashMap<>());
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
@@ -185,9 +185,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         for (Object[] pm : projectionMethods) {
             processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
         }
-        // Bootstrap each domain-push feed once, after all its projections are registered.
-        for (DomainEventFeed<?> feed : domainFeedsToBootstrap) {
-            feed.bootstrapAll();
+        // Catch up each domain-push feed once, after all its projections are registered.
+        for (DomainEventFeed<?> feed : domainFeedsToCatchUp) {
+            feed.catchUpAll();
         }
         for (Object[] sm : snapshotMethods) {
             processSnapshotAnnotation(applicationContext.getBean((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
@@ -290,17 +290,17 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     // Register a @Projection(source = PUSH): feed it from an external push subscription model, wrapped in a
-    // replay-then-push bootstrap catch-up so a new or rebuilt projection is backfilled from the event store first.
+    // replay-then-push catch-up so a new or rebuilt projection is backfilled from the event store first.
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, PushSubscriptionModel pushModel) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
         PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
-        CheckpointStorage bootstrapMarker = applicationContext.getBean(CheckpointStorage.class);
-        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, pushModel, bootstrapMarker);
+        CheckpointStorage catchupMarker = applicationContext.getBean(CheckpointStorage.class);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(model, converter) : ProjectionRunner.agnostic(model, converter);
-        // The bootstrap replay runs here, synchronously, then hands over to the live push feed.
+        // The catch-up replay runs here, synchronously, then hands over to the live push feed.
         runner.project(id, projection, materializedView);
     }
 
@@ -312,16 +312,16 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
                 || annotation.resumeBehavior() != ResumeBehavior.DEFAULT || annotation.startupMode() != StartupMode.DEFAULT) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the bootstrap always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the catch-up always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
         }
         if (!(descriptor instanceof Projection<?, ?, ?> raw)) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be bootstrap-replayed in position order.".formatted(id));
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be catch-up-replayed in position order.".formatted(id));
         }
         return (Projection<S, E, ID>) raw;
     }
 
     // Register a source=PUSH projection whose feed bean is a DomainEventFeed: the projection folds domain events directly
-    // (no CloudEvent conversion on the live path), with a bootstrap catch-up from the event store.
+    // (no CloudEvent conversion on the live path), with a catch-up from the event store.
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerDomainPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, DomainEventFeed<?> feedBean) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
@@ -329,7 +329,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
         feed.register(id, materializedView, eventFilter);
-        domainFeedsToBootstrap.add(feed);
+        domainFeedsToCatchUp.add(feed);
     }
 
     // Resolve the read-model store into a MaterializedView. Selected by store() type or storeName() when set, otherwise
