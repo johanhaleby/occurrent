@@ -30,13 +30,12 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.internal.BoundedIdCache;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
-import java.util.HashSet;
 import java.util.Objects;
 import java.util.Queue;
-import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -230,35 +229,6 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
             }
             action.accept(cloudEvent);
             deliveredIds.add(id);
-        }
-    }
-
-    /**
-     * A fixed-size set of the most recently added ids, evicting the oldest. Bounds memory during a large replay at the
-     * cost of an at-least-once guarantee once the overlap exceeds the window.
-     */
-    private static final class BoundedIdCache {
-        private final int maxSize;
-        private final Set<String> ids;
-        private final Queue<String> order;
-
-        private BoundedIdCache(int maxSize) {
-            this.maxSize = maxSize;
-            this.ids = new HashSet<>(Math.min(maxSize, 1024));
-            this.order = new ArrayDeque<>();
-        }
-
-        boolean contains(String id) {
-            return ids.contains(id);
-        }
-
-        void add(String id) {
-            if (ids.add(id)) {
-                order.add(id);
-                if (order.size() > maxSize) {
-                    ids.remove(order.poll());
-                }
-            }
         }
     }
 

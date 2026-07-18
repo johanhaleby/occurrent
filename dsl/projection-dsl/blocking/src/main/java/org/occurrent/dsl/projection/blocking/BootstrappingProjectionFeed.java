@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.projection.internal.BoundedIdCache;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
@@ -31,10 +32,8 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import java.util.ArrayDeque;
-import java.util.HashSet;
 import java.util.Objects;
 import java.util.Queue;
-import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -241,31 +240,6 @@ public final class BootstrappingProjectionFeed<E> {
         if (bootstrapMarker != null) {
             // The stored position marks that the bootstrap replay completed, not a live resume watermark.
             bootstrapMarker.save(id, GlobalCheckpoint.of(reader.currentPosition()));
-        }
-    }
-
-    private static final class BoundedIdCache {
-        private final int maxSize;
-        private final Set<String> ids;
-        private final Queue<String> order;
-
-        private BoundedIdCache(int maxSize) {
-            this.maxSize = maxSize;
-            this.ids = new HashSet<>(Math.min(maxSize, 1024));
-            this.order = new ArrayDeque<>();
-        }
-
-        boolean contains(String id) {
-            return ids.contains(id);
-        }
-
-        void add(String id) {
-            if (ids.add(id)) {
-                order.add(id);
-                if (order.size() > maxSize) {
-                    ids.remove(order.poll());
-                }
-            }
         }
     }
 }

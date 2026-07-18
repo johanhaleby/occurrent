@@ -505,11 +505,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
             // The feed bean's type decides the flavor: a PushSubscriptionModel feeds CloudEvents, a DomainEventFeed
             // feeds domain events directly.
-            Object feedBean = resolveFeedBean(annotation, id);
+            Object feedBean = SubscriptionAnnotations.resolveFeedBean(applicationContext, annotation.subscriptionModel(), annotation.subscriptionModelName(), id, PushSubscriptionModel.class, DomainEventFeed.class);
             if (feedBean instanceof PushSubscriptionModel pushModel) {
                 registerPushProjection(id, converter, descriptor, synchronous, annotation, pushModel);
-            } else if (feedBean instanceof DomainEventFeed) {
-                registerDomainPushProjection(id, descriptor, synchronous, annotation, (DomainEventFeed<?>) feedBean);
+            } else if (feedBean instanceof DomainEventFeed<?> domainFeed) {
+                registerDomainPushProjection(id, descriptor, synchronous, annotation, domainFeed);
             } else {
                 throw new IllegalArgumentException("@Projection '%s' with source=PUSH resolved a %s, which is neither a PushSubscriptionModel nor a DomainEventFeed.".formatted(id, feedBean.getClass().getName()));
             }
@@ -602,42 +602,6 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be bootstrap-replayed in position order.".formatted(id));
         }
         return (Projection<S, E, ID>) raw;
-    }
-
-    // Resolve the push feed bean referenced by subscriptionModel (type) or subscriptionModelName (name), or the unique
-    // PushSubscriptionModel or DomainEventFeed bean when neither is set. The caller branches on the returned bean's type.
-    private Object resolveFeedBean(org.occurrent.annotation.Projection annotation, String id) {
-        Class<?> type = annotation.subscriptionModel();
-        String name = annotation.subscriptionModelName();
-        boolean byType = type != Void.class;
-        boolean byName = !name.isBlank();
-        if (byType && !(PushSubscriptionModel.class.isAssignableFrom(type) || DomainEventFeed.class.isAssignableFrom(type))) {
-            throw new IllegalArgumentException("@Projection '%s' subscriptionModel type %s must be a PushSubscriptionModel or a DomainEventFeed for source=PUSH.".formatted(id, type.getName()));
-        }
-        try {
-            if (byName) {
-                return byType ? applicationContext.getBean(name, type) : applicationContext.getBean(name);
-            }
-            if (byType) {
-                return applicationContext.getBean(type);
-            }
-            List<String> names = new ArrayList<>();
-            for (String beanName : applicationContext.getBeanNamesForType(PushSubscriptionModel.class)) {
-                names.add(beanName);
-            }
-            for (String beanName : applicationContext.getBeanNamesForType(DomainEventFeed.class)) {
-                names.add(beanName);
-            }
-            if (names.isEmpty()) {
-                throw new IllegalStateException("@Projection '%s' with source=PUSH found no PushSubscriptionModel or DomainEventFeed bean. Declare one, or name it with subscriptionModelName.".formatted(id));
-            }
-            if (names.size() > 1) {
-                throw new IllegalStateException("@Projection '%s' with source=PUSH found several push feed beans (%s). Pick one with subscriptionModel or subscriptionModelName.".formatted(id, String.join(", ", names)));
-            }
-            return applicationContext.getBean(names.get(0));
-        } catch (BeansException e) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH could not resolve a push feed bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(id, byType ? type.getName() : "unset", name, e.getMessage()), e);
-        }
     }
 
     // A @Snapshot maintains a per-stream, resume-ready snapshot: for each handled event it folds the event onto the

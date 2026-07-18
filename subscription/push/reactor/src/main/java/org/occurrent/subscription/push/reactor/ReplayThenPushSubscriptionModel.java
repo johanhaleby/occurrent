@@ -30,15 +30,13 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.internal.BoundedIdCache;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.Sinks;
 
-import java.util.ArrayDeque;
-import java.util.HashSet;
 import java.util.Objects;
-import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -103,7 +101,7 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
         Filter replayFilter = replayFilterFor(filter);
 
         BoundedIdCache deliveredIds = new BoundedIdCache(dedupCacheSize);
-        Sinks.Many<LiveEvent> liveSink = Sinks.many().unicast().onBackpressureBuffer(new ArrayBlockingQueue<>(maxBufferedEvents));
+        Sinks.Many<Item> liveSink = Sinks.many().unicast().onBackpressureBuffer(new ArrayBlockingQueue<>(maxBufferedEvents));
         Sinks.One<Void> bootstrapDone = Sinks.one();
         // Track the acks of live events buffered but not yet delivered, so a bootstrap failure fails them rather than
         // leaving the listener's accept Monos hanging forever.
@@ -125,7 +123,7 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
                 ackSink.error(failure);
                 return;
             }
-            Sinks.EmitResult result = liveSink.tryEmitNext(new LiveEvent(cloudEvent, ackSink));
+            Sinks.EmitResult result = liveSink.tryEmitNext(new Item(cloudEvent, ackSink));
             if (result.isFailure()) {
                 ackSink.error(new IllegalStateException("Live event buffer overflowed during bootstrap replay (cap "
                         + maxBufferedEvents + "). The history is too large to buffer the live feed across a full replay. "
@@ -143,7 +141,7 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
         Flux<Item> markerThenLive = Flux.concat(
                 alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : markBootstrapped(subscriptionId)).thenMany(Flux.<Item>empty()),
                 Mono.<Item>fromRunnable(() -> bootstrapDone.tryEmitEmpty()),
-                liveSink.asFlux().map(Item::live));
+                liveSink.asFlux());
 
         Flux.concat(replay, markerThenLive)
                 .concatMap(item -> deliver(item, action, deliveredIds))
@@ -163,12 +161,12 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
     private static Mono<Void> deliver(Item item, Function<CloudEvent, Mono<Void>> action, BoundedIdCache deliveredIds) {
         CloudEvent cloudEvent = item.event();
         String id = cloudEvent.getId();
-        if (item.live() != null) {
+        if (item.ack() != null) {
             // Live event: de-dup against the overlap, then run the handler and complete its accept Mono so the listener
             // can acknowledge only after processing. A handler error is reported to the listener but does not stop the
             // pipeline (the next event is still delivered).
             if (deliveredIds.contains(id)) {
-                item.live().success();
+                item.ack().success();
                 return Mono.empty();
             }
             // Mono.defer so a synchronous throw from action.apply becomes an onError signal onErrorResume can catch,
@@ -176,10 +174,10 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
             return Mono.defer(() -> action.apply(cloudEvent))
                     .doOnSuccess(v -> {
                         deliveredIds.add(id);
-                        item.live().success();
+                        item.ack().success();
                     })
                     .onErrorResume(error -> {
-                        item.live().error(error);
+                        item.ack().error(error);
                         return Mono.empty();
                     });
         }
@@ -212,48 +210,10 @@ public class ReplayThenPushSubscriptionModel implements Subscribable {
         };
     }
 
-    private record LiveEvent(CloudEvent event, MonoSink<Void> ack) {
-        void success() {
-            ack.success();
-        }
-
-        void error(Throwable throwable) {
-            ack.error(throwable);
-        }
-    }
-
-    private record Item(CloudEvent event, @Nullable LiveEvent live) {
+    // A replayed event has a null ack; a live event carries the MonoSink whose completion lets the listener acknowledge.
+    private record Item(CloudEvent event, @Nullable MonoSink<Void> ack) {
         static Item replayed(CloudEvent event) {
             return new Item(event, null);
-        }
-
-        static Item live(LiveEvent liveEvent) {
-            return new Item(liveEvent.event(), liveEvent);
-        }
-    }
-
-    private static final class BoundedIdCache {
-        private final int maxSize;
-        private final Set<String> ids;
-        private final Queue<String> order;
-
-        private BoundedIdCache(int maxSize) {
-            this.maxSize = maxSize;
-            this.ids = new HashSet<>(Math.min(maxSize, 1024));
-            this.order = new ArrayDeque<>();
-        }
-
-        boolean contains(String id) {
-            return ids.contains(id);
-        }
-
-        void add(String id) {
-            if (ids.add(id)) {
-                order.add(id);
-                if (order.size() > maxSize) {
-                    ids.remove(order.poll());
-                }
-            }
         }
     }
 

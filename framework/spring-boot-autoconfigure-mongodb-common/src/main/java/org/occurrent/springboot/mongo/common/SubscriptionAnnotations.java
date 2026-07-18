@@ -30,11 +30,14 @@ import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
+import org.springframework.beans.BeansException;
+import org.springframework.context.ApplicationContext;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Predicate;
@@ -212,6 +215,49 @@ public final class SubscriptionAnnotations {
         }
         if (startAtSet && startAtGlobalPositionSet) {
             throw new IllegalArgumentException("%s '%s' sets both startAt and startAtGlobalPosition, which are two ways to express the same start point, so set only one.".formatted(annotationName, id));
+        }
+    }
+
+    /**
+     * Resolve the push feed bean of a {@code source = PUSH} projection, selected by {@code subscriptionModelType}
+     * (the annotation's {@code subscriptionModel}) or {@code subscriptionModelName}, or the unique bean of one of
+     * {@code candidateTypes} when neither is set. Shared by the blocking and reactive processors so the resolution rules
+     * and error messages live in one place and cannot drift. The caller branches on the returned bean's runtime type.
+     *
+     * @param applicationContext    the Spring context to resolve beans from
+     * @param subscriptionModelType the annotation's {@code subscriptionModel} type, or {@code Void.class} if unset
+     * @param subscriptionModelName the annotation's {@code subscriptionModelName}, or blank if unset
+     * @param id                    the projection id, for error messages
+     * @param candidateTypes        the allowed feed bean types (the stack's PushSubscriptionModel and DomainEventFeed)
+     * @return the resolved feed bean
+     */
+    public static Object resolveFeedBean(ApplicationContext applicationContext, Class<?> subscriptionModelType,
+                                         String subscriptionModelName, String id, Class<?>... candidateTypes) {
+        boolean byType = subscriptionModelType != Void.class;
+        boolean byName = !subscriptionModelName.isBlank();
+        if (byType && Arrays.stream(candidateTypes).noneMatch(candidate -> candidate.isAssignableFrom(subscriptionModelType))) {
+            throw new IllegalArgumentException("@Projection '%s' subscriptionModel type %s must be a PushSubscriptionModel or a DomainEventFeed for source=PUSH.".formatted(id, subscriptionModelType.getName()));
+        }
+        try {
+            if (byName) {
+                return byType ? applicationContext.getBean(subscriptionModelName, subscriptionModelType) : applicationContext.getBean(subscriptionModelName);
+            }
+            if (byType) {
+                return applicationContext.getBean(subscriptionModelType);
+            }
+            List<String> names = new ArrayList<>();
+            for (Class<?> candidateType : candidateTypes) {
+                Collections.addAll(names, applicationContext.getBeanNamesForType(candidateType));
+            }
+            if (names.isEmpty()) {
+                throw new IllegalStateException("@Projection '%s' with source=PUSH found no PushSubscriptionModel or DomainEventFeed bean. Declare one, or name it with subscriptionModelName.".formatted(id));
+            }
+            if (names.size() > 1) {
+                throw new IllegalStateException("@Projection '%s' with source=PUSH found several push feed beans (%s). Pick one with subscriptionModel or subscriptionModelName.".formatted(id, String.join(", ", names)));
+            }
+            return applicationContext.getBean(names.get(0));
+        } catch (BeansException e) {
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH could not resolve a push feed bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(id, byType ? subscriptionModelType.getName() : "unset", subscriptionModelName, e.getMessage()), e);
         }
     }
 
