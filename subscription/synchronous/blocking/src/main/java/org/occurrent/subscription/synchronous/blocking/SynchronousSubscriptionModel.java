@@ -18,22 +18,12 @@ package org.occurrent.subscription.synchronous.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.application.service.SynchronousEventDispatcher;
-import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionFilterMatcher;
-import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 
-import java.time.Duration;
 import java.util.List;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
 
 /**
  * A register-only subscription model whose handlers are invoked <strong>synchronously</strong>, in-process, on
@@ -45,33 +35,12 @@ import java.util.function.Predicate;
  * handler exception propagates to the caller (so, under a transaction, it rolls the write back).
  * <p>
  * Unlike the asynchronous {@code SubscriptionModel}s, this model has no lifecycle, start position, checkpoint,
- * catch-up, or replay: it only ever reacts to events fed to it here and now. It therefore implements only
- * {@link Subscribable}, not the full {@code SubscriptionModelLifeCycle}. {@link StartAt} is accepted for
- * interface compatibility with the subscription DSLs but ignored, since "where to start" is meaningless for
- * synchronous, at-write-time dispatch.
+ * catch-up, or replay: it only ever reacts to events fed to it here and now. The register-and-route machinery
+ * lives in {@link RegisteringSubscribable}; this model adds the application-service dispatch entry point. For an
+ * externally driven push feed (RabbitMQ, Kafka, ...) use {@code PushSubscriptionModel} instead.
  */
 @NullMarked
-public class SynchronousSubscriptionModel implements Subscribable, SynchronousEventDispatcher, Consumer<List<CloudEvent>> {
-
-    private record Registration(String id, Predicate<CloudEvent> matcher, Consumer<CloudEvent> action) {
-    }
-
-    private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
-    private final CopyOnWriteArrayList<Registration> registrations = new CopyOnWriteArrayList<>();
-
-    @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        Objects.requireNonNull(startAt, "startAt cannot be null");
-        Objects.requireNonNull(action, "action cannot be null");
-        // Build the matcher before reserving the id, so an unsupported filter does not leave the id permanently taken.
-        Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
-        if (!subscriptionIds.add(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
-        }
-        registrations.add(new Registration(subscriptionId, matcher, action));
-        return new SynchronousSubscription(subscriptionId);
-    }
+public class SynchronousSubscriptionModel extends RegisteringSubscribable implements SynchronousEventDispatcher, Consumer<List<CloudEvent>> {
 
     /**
      * Dispatch the supplied cloud events to every matching registered handler, synchronously, on the calling
@@ -81,14 +50,7 @@ public class SynchronousSubscriptionModel implements Subscribable, SynchronousEv
      */
     @Override
     public void dispatch(List<CloudEvent> writtenCloudEvents) {
-        Objects.requireNonNull(writtenCloudEvents, "writtenCloudEvents cannot be null");
-        for (CloudEvent cloudEvent : writtenCloudEvents) {
-            for (Registration registration : registrations) {
-                if (registration.matcher().test(cloudEvent)) {
-                    registration.action().accept(cloudEvent);
-                }
-            }
-        }
+        route(writtenCloudEvents);
     }
 
     /**
@@ -98,18 +60,5 @@ public class SynchronousSubscriptionModel implements Subscribable, SynchronousEv
     @Override
     public void accept(List<CloudEvent> cloudEvents) {
         dispatch(cloudEvents);
-    }
-
-    @Override
-    public boolean hasSubscriptions() {
-        return !registrations.isEmpty();
-    }
-
-    private record SynchronousSubscription(String id) implements Subscription {
-        @Override
-        public boolean waitUntilStarted(Duration timeout) {
-            // Synchronous subscriptions are always "started": there is no background thread to wait for.
-            return true;
-        }
     }
 }
