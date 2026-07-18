@@ -138,6 +138,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-push-reactor</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-snapshot-dsl-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>

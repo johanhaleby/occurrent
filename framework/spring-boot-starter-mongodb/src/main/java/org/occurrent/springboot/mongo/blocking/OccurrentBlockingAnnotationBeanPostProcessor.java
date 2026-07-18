@@ -33,6 +33,10 @@ import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.projection.blocking.Projections;
+import org.occurrent.dsl.projection.blocking.ProjectionRunner;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.occurrent.subscription.push.blocking.ReplayThenPushSubscriptionModel;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -210,6 +214,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = invokeFactory(method, bean);
 
+        if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
+            registerPushProjection(bean, method, annotation, id, converter, descriptor, synchronous);
+            return;
+        }
+
         if (descriptor instanceof DcbProjection<?, ?, ?> raw) {
             DcbProjection<S, E, ID> dcbProjection = (DcbProjection<S, E, ID>) raw;
             MaterializedView<E> materializedView = resolveStore(annotation, method, dcbProjection.projection(), id);
@@ -258,6 +267,55 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
         } else {
             throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor == null ? "null" : descriptor.getClass().getName()));
+        }
+    }
+
+    // Register a @Projection(source = PUSH): feed it from an external push subscription model, wrapped in a
+    // replay-then-push bootstrap catch-up so a new or rebuilt projection is backfilled from the event store first.
+    @SuppressWarnings("unchecked")
+    private <E, S, ID> void registerPushProjection(Object bean, Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous) {
+        if (synchronous) {
+            throw new IllegalArgumentException("@Projection '%s' cannot combine source=PUSH with mode=SYNCHRONOUS: a push feed is asynchronous.".formatted(id));
+        }
+        if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
+                || annotation.resumeBehavior() != ResumeBehavior.DEFAULT || annotation.startupMode() != StartupMode.DEFAULT) {
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the bootstrap always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
+        }
+        if (!(descriptor instanceof org.occurrent.dsl.projection.Projection<?, ?, ?> raw)) {
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported yet, since a DCB boundary cannot be bootstrap-replayed in position order.".formatted(id));
+        }
+        org.occurrent.dsl.projection.Projection<S, E, ID> projection = (org.occurrent.dsl.projection.Projection<S, E, ID>) raw;
+        MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
+        PushSubscriptionModel pushModel = resolvePushModel(annotation, id);
+        PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
+        CheckpointStorage bootstrapMarker = applicationContext.getBean(CheckpointStorage.class);
+        ReplayThenPushSubscriptionModel model = new ReplayThenPushSubscriptionModel(reader, pushModel, bootstrapMarker);
+        boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
+        ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(model, converter) : ProjectionRunner.agnostic(model, converter);
+        // The bootstrap replay runs here, synchronously, then hands over to the live push feed.
+        runner.project(id, projection, materializedView);
+    }
+
+    // Resolve the push subscription model bean referenced by subscriptionModel() (type) or subscriptionModelName() (name),
+    // falling back to the unique PushSubscriptionModel bean.
+    private PushSubscriptionModel resolvePushModel(org.occurrent.annotation.Projection annotation, String id) {
+        Class<?> type = annotation.subscriptionModel();
+        String name = annotation.subscriptionModelName();
+        boolean byType = type != Void.class;
+        boolean byName = !name.isBlank();
+        if (byType && !PushSubscriptionModel.class.isAssignableFrom(type)) {
+            throw new IllegalArgumentException("@Projection '%s' subscriptionModel type %s must be a PushSubscriptionModel.".formatted(id, type.getName()));
+        }
+        try {
+            if (byName) {
+                return applicationContext.getBean(name, PushSubscriptionModel.class);
+            }
+            if (byType) {
+                return (PushSubscriptionModel) applicationContext.getBean(type);
+            }
+            return applicationContext.getBean(PushSubscriptionModel.class);
+        } catch (BeansException e) {
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH could not resolve a PushSubscriptionModel bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(id, byType ? type.getName() : "unset", name, e.getMessage()), e);
         }
     }
 

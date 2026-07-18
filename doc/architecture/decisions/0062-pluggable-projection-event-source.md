@@ -114,6 +114,12 @@ not depend on broker durability.
 
 ## `@Projection` push-source routing
 
-Binding `@Projection` to a push source (routing to a configured push `SubscriptionModel` bean versus a new annotation
-attribute, and whether the catch-up start knobs drive the bootstrap) is tracked as follow-up work on top of this
-decision.
+`@Projection` binds to a push source through a new explicit `source` attribute: `source = Source.PUSH` routes the
+projection to a `PushSubscriptionModel` bean (selected by `subscriptionModel` type or `subscriptionModelName`), which the
+bean-post-processor wraps in `ReplayThenPushSubscriptionModel` with the event store as the replay reader and the
+framework's `CheckpointStorage` as the bootstrap marker. The default `Source.EVENT_STORE` keeps the existing behavior.
+An explicit attribute was chosen over auto-detecting a push bean, since a durable public annotation should not change its
+event source implicitly based on which beans happen to be present. Push source is rejected together with
+`mode = SYNCHRONOUS` and the catch-up start knobs (the bootstrap always replays from the beginning and live-resume is the
+broker's job), and with a `DcbProjection` (a DCB boundary cannot be bootstrap-replayed in position order). Implemented on
+both the blocking and reactor stacks.
