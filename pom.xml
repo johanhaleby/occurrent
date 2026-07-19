@@ -566,6 +566,7 @@
                                 <excludeArtifact>occurrent</excludeArtifact>
                                 <excludeArtifact>projection-dsl</excludeArtifact>
                                 <excludeArtifact>query-dsl</excludeArtifact>
+                                <excludeArtifact>saga-dsl</excludeArtifact>
                                 <excludeArtifact>snapshot-dsl</excludeArtifact>
                                 <excludeArtifact>subscription-api</excludeArtifact>
                                 <excludeArtifact>subscription-dsl</excludeArtifact>
