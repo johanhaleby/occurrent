@@ -83,9 +83,11 @@ public @interface Snapshot {
     String id();
 
     /**
-     * The start position for the maintenance subscription. Defaults to {@link StartPosition#BEGINNING} so the snapshot
-     * folds the full history the first time. Mutually exclusive with {@link #startAtGlobalPosition()} and with
-     * {@link Mode#SYNCHRONOUS}.
+     * The start position for the maintenance subscription. Defaults to {@link StartPosition#BEGINNING}, deliberately:
+     * a maintained snapshot must fold an entity's full history to be a correct stand-in for a full replay, so unlike a
+     * projection or a plain subscription (which may legitimately start from {@code NOW}), a snapshot cannot skip the
+     * backlog without producing a snapshot that silently omits events its readers assume it has folded. Mutually
+     * exclusive with {@link #startAtGlobalPosition()} and with {@link Mode#SYNCHRONOUS}.
      */
     StartPosition startAt() default StartPosition.BEGINNING;
 

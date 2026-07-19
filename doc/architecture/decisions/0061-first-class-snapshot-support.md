@@ -53,7 +53,9 @@ during the tail fold.
 **One higher-order `SnapshotPolicy` unifies technical and domain-driven triggers.** It exposes `everyNEvents(n)` (driven by
 the version delta since the last snapshot), `onEvent(type)`, `whenState(predicate)`, `always()`, `never()`, and `or(...)`.
 `whenTerminal(decider)` is `whenState(decider::isTerminal)` and is the "closing the books" trigger. There is no per-command
-flag and no mode attribute, so a snapshot is a property of the handler, not of the call site.
+flag and no mode attribute, so a snapshot is a property of the handler, not of the call site. Being decider-aware,
+`whenTerminal` lives with the decider-aware executors (`org.occurrent.dsl.snapshot.blocking`/`.reactor`), not in the
+common module, per the layering below.
 
 **Closing the books is a policy plus an archival pattern, not a separate module.** The recommended model is to emit a real
 domain event for the period boundary, carrying the closing balance that becomes the opening balance of the next period, so the
