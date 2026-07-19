@@ -268,6 +268,21 @@ class SagaTest {
         }
 
         @Test
+        void create_unions_start_types_into_a_non_empty_eventTypes_so_a_start_type_is_never_filtered_off_the_subscription() {
+            // A non-empty eventTypes that omits the start type would otherwise narrow the subscription so the start event
+            // never reaches the saga and no instance could ever be created. create(...) must union it in, like builder().
+            Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.create(
+                    null,
+                    OrderEvent::orderId,
+                    Set.of(OrderPlaced.class),
+                    Set.of(PaymentReserved.class),
+                    (state, input) -> state,
+                    (state, input) -> List.of());
+
+            assertThat(saga.eventTypes()).containsExactlyInAnyOrder(OrderPlaced.class, PaymentReserved.class);
+        }
+
+        @Test
         void create_throws_IllegalArgumentException_when_startEventTypes_is_empty() {
             assertThatThrownBy(() -> Saga.<OrderEvent, OrderState, OrderCommand>create(
                     null,

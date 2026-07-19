@@ -41,6 +41,11 @@ import java.util.Set;
  * Drives one saga against one subscription and its own timer poller: it loads the instance, runs the pure
  * {@link SagaExecutionSupport} step, dispatches commands before saving (at-least-once), and retries a lost compare-and-set
  * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
+ * <p>
+ * Dispatch amplification: commands are dispatched before the save, and a lost compare-and-set retries the whole step, so a
+ * single input can re-dispatch its entire command list up to {@code maxCasAttempts} times (see {@link SagaRunnerConfig}).
+ * A command receiver must therefore be idempotent <em>and</em> tolerate that multiplicity, which is stronger than plain
+ * at-least-once: the same input can legitimately dispatch the same command several times within one delivery.
  */
 final class SagaExecution<E, S extends @Nullable Object, C> {
     private static final Logger log = LoggerFactory.getLogger(SagaExecution.class);
@@ -96,6 +101,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     private void process(String sagaId, SagaInput<E> input, EventMeta meta, @Nullable String requireTimerName) {
+        // Warn once when contention has eaten past half the retry budget, before the loop exhausts it and throws. Sustained
+        // contention on one instance points at a hot correlation id or an under-sized maxCasAttempts, and is worth surfacing
+        // early rather than only as the terminal SagaConcurrencyException.
+        int warnThreshold = Math.max(1, config.maxCasAttempts() / 2);
         for (int attempt = 0; attempt < config.maxCasAttempts(); attempt++) {
             Instant now = Instant.now();
             SagaEnvelope<S> current = stateStore.find(sagaId).orElse(null);
@@ -106,13 +115,19 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (!outcome.processed()) {
                 return;
             }
-            // Dispatch before saving so a command is never lost. A lost compare-and-set retry may re-dispatch (at-least-once).
+            // Dispatch before saving so a command is never lost. A lost compare-and-set retry re-runs this whole loop body,
+            // which re-dispatches the entire command list of this input (at-least-once, and up to maxCasAttempts times).
+            // Command receivers must therefore be idempotent and tolerate that multiplicity, not merely at-least-once.
             for (C command : outcome.commands()) {
                 dispatcher.dispatch(command);
             }
             SagaEnvelope<S> envelope = outcome.envelope();
             if (envelope != null && stateStore.compareAndSave(sagaId, envelope, outcome.expectedVersion())) {
                 return;
+            }
+            if (attempt + 1 == warnThreshold) {
+                log.warn("Saga '{}' has lost its compare-and-set save {} times (of a maximum {}) to concurrent writers; each retry re-dispatches the input's commands. Sustained contention may exhaust the retries and raise SagaConcurrencyException.",
+                        sagaId, attempt + 1, config.maxCasAttempts());
             }
         }
         throw new SagaConcurrencyException("Failed to save saga '" + sagaId + "' after " + config.maxCasAttempts()
