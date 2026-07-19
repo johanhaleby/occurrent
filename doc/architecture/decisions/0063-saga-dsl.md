@@ -176,3 +176,18 @@ every step" wildcard matching. A process that needs any of those drops down to t
   common module, mirroring how `projection-dsl` split blocking and reactor over one frozen common API (ADR 58).
 - The flow/step DSL and the machine-core descriptor are two authoring surfaces over one runtime type, so the
   executor, persistence, and timer polling are implemented once regardless of which surface a feature uses.
+- A flow saga's received-event log is bounded to a configurable window, not retained in full. `FlowState` keeps the
+  initiating event, the current step's events (a join must count over them), and a configurable carry-over of earlier
+  events (the flow builder's `historyWindow`, default 100); older events are dropped. This removes the per-save
+  O(N²) re-serialization, the per-append O(N²) in-memory copy, and the 16 MB document ceiling that unbounded history
+  hit. The trade-off is a behaviour contract: a guard, a join reaction, or a timeout reaction sees only the retained
+  window (the initiating event is always available), so a guard that must count history beyond the window needs a
+  wider `historyWindow`. An append-only side-collection for unbounded history remains a possible future path if a
+  real workload ever needs it, but no current one does, so it is not built. To keep the join-matching window
+  reconstructable after the prefix is dropped, `FlowState` carries an absolute `windowStart` offset and keeps
+  `stepEntryIndex` absolute.
+- `FlowState`'s bookkeeping fields (`stepEntryIndex`, `windowStart`, `previousStep`, `lastAction`,
+  `matchedBranchIndex`) are an implementation detail of the flow lowering, not a stable wire format: their meaning can
+  change between versions. A store that persists `FlowState` (the `instanceof FlowState` serialization branch in a
+  `SagaStateStore`) must round-trip whatever it wrote without interpreting them. Only `currentStep`, `received`, and
+  `completed` carry user-meaningful semantics.
