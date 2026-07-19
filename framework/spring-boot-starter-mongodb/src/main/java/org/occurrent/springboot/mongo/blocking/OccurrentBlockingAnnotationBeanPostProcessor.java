@@ -70,11 +70,13 @@ import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.blocking.CommandDispatcher;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
+import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -115,7 +117,7 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
  * Spring Boot. The stack-neutral reflection and event-type resolution is shared with the reactive processor through
  * {@link SubscriptionAnnotations}.
  */
-class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton {
+class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton, DisposableBean {
 
     /**
      * The bean name of the synchronous {@code Subscriptions} DSL declared by the auto-configuration. Resolved by name
@@ -128,6 +130,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private final Set<String> registeredIds = new HashSet<>();
     // Domain-push feeds collected during projection registration, caught up once after all are registered.
     private final Set<DomainEventFeed<?>> domainFeedsToCatchUp = Collections.newSetFromMap(new IdentityHashMap<>());
+    // Registered sagas own a timer poller each; stop them when the context is destroyed so no poller thread leaks.
+    private final List<SagaSubscription> sagaSubscriptions = new ArrayList<>();
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
@@ -731,7 +735,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         SagaRunner<E, C> runner = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
 
         applyStartupWorkarounds();
-        runner.run(id, saga, stateStore, commandDispatcher, startAt, config);
+        sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config));
+    }
+
+    @Override
+    public void destroy() {
+        // Stop each saga's timer poller so no poller thread survives context shutdown.
+        sagaSubscriptions.forEach(SagaSubscription::close);
+        sagaSubscriptions.clear();
     }
 
     private static Object invokeSagaFactory(Method method, Object bean) {
@@ -809,7 +820,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         boolean byName = !name.isBlank();
         Object dispatcherBean;
         if (byType && byName) {
-            dispatcherBean = applicationContext.getBean(name, type);
+            try {
+                dispatcherBean = applicationContext.getBean(name, type);
+            } catch (BeansException e) {
+                throw new IllegalArgumentException("@Saga '%s' could not resolve a command dispatcher bean named '%s' of type %s: %s".formatted(id, name, type.getName(), e.getMessage()), e);
+            }
         } else if (byType) {
             String[] names = applicationContext.getBeanNamesForType(type);
             if (names.length == 0) {
@@ -820,7 +835,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
             dispatcherBean = applicationContext.getBean(names[0]);
         } else if (byName) {
-            dispatcherBean = applicationContext.getBean(name);
+            try {
+                dispatcherBean = applicationContext.getBean(name);
+            } catch (BeansException e) {
+                throw new IllegalArgumentException("@Saga '%s' could not resolve a command dispatcher bean named '%s': %s".formatted(id, name, e.getMessage()), e);
+            }
         } else {
             String[] names = applicationContext.getBeanNamesForType(CommandDispatcher.class);
             if (names.length == 0) {

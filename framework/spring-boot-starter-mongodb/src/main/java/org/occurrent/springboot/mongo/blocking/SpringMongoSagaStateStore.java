@@ -129,7 +129,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 .append(VERSION, envelope.version());
         S state = envelope.state();
         if (state != null) {
-            document.append(STATE, mongoOperations.getConverter().convertToMongoType(state));
+            document.append(STATE, toStateValue(state));
         }
         List<Document> timers = new ArrayList<>();
         for (TimerEntry timer : envelope.timers()) {
@@ -145,6 +145,20 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         appendInstant(document, UPDATED_AT, envelope.updatedAt());
         appendInstant(document, COMPLETED_AT, envelope.completedAt());
         return document;
+    }
+
+    // Serialize the state. For a mapped entity (a POJO/record, including a flow saga's FlowState) use the converter's
+    // write path so it emits the _class type hints that let a polymorphic nested collection (FlowState.received, a
+    // List of heterogeneous domain events) reconstruct on read; convertToMongoType alone omits those hints. A simple or
+    // scalar state has no persistent entity, so it falls back to plain value conversion.
+    private Object toStateValue(S state) {
+        MongoConverter converter = mongoOperations.getConverter();
+        if (converter.getMappingContext().getPersistentEntity(state.getClass()) != null) {
+            Document stateDocument = new Document();
+            converter.write(state, stateDocument);
+            return stateDocument;
+        }
+        return converter.convertToMongoType(state);
     }
 
     private SagaEnvelope<S> toEnvelope(Document document) {

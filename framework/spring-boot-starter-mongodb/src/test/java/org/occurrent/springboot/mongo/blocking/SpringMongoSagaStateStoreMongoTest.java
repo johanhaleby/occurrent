@@ -22,9 +22,14 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.SagaInput;
+import org.occurrent.dsl.saga.flow.Continuation;
+import org.occurrent.dsl.saga.flow.FlowSaga;
+import org.occurrent.dsl.saga.flow.FlowState;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -125,6 +130,94 @@ class SpringMongoSagaStateStoreMongoTest {
         store.delete("gone");
 
         assertThat(store.find("gone")).isEmpty();
+    }
+
+    @Test
+    void round_trips_a_scalar_state_that_is_not_stored_as_a_document() {
+        SpringMongoSagaStateStore<String> scalarStore =
+                new SpringMongoSagaStateStore<>(mongoOperations, "saga-store-test-scalar-" + System.nanoTime(), String.class);
+        SagaEnvelope<String> envelope = new SagaEnvelope<>("scalar-1", "AWAITING_PAYMENT", Status.ACTIVE, 1,
+                List.of(new TimerEntry("payment", 9_000)), Map.of("stream-a", 3L), 7L,
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null);
+
+        scalarStore.compareAndSave("scalar-1", envelope, 0);
+        Optional<SagaEnvelope<String>> found = scalarStore.find("scalar-1");
+
+        assertThat(found).hasValueSatisfying(e -> {
+            assertThat(e.sagaId()).isEqualTo("scalar-1");
+            assertThat(e.state()).isEqualTo("AWAITING_PAYMENT");
+            assertThat(e.status()).isEqualTo(Status.ACTIVE);
+            assertThat(e.version()).isEqualTo(1);
+            assertThat(e.timers()).containsExactly(new TimerEntry("payment", 9_000));
+            assertThat(e.streamWatermarks()).containsEntry("stream-a", 3L);
+            assertThat(e.positionWatermark()).isEqualTo(7L);
+        });
+    }
+
+    @Test
+    void finds_active_instances_with_a_due_timer_and_excludes_active_instances_with_no_timers() {
+        store.compareAndSave("due", active("due", new Counter(1), 1, List.of(new TimerEntry("t", 1_000)), 0), 0);
+        store.compareAndSave("later", active("later", new Counter(1), 1, List.of(new TimerEntry("t", 10_000)), 0), 0);
+        store.compareAndSave("no-timers", active("no-timers", new Counter(1), 1, List.of(), 0), 0);
+        store.compareAndSave("done", completed("done", new Counter(1), 1), 0);
+
+        List<SagaEnvelope<Counter>> due = store.findWithDueTimers(Instant.ofEpochMilli(2_000), 10);
+
+        assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("due");
+    }
+
+    /**
+     * A flow saga's {@link FlowState#received()} is a {@code List<E>} with {@code E} erased, the hard serialization case:
+     * the elements are heterogeneous domain-event records with no static element type. The store writes the state through
+     * the converter's write path, which emits a {@code _class} discriminator per element, so the concrete record types are
+     * reconstructed on read rather than degrading to raw maps.
+     */
+    @Test
+    void round_trips_the_concrete_event_types_in_a_flow_saga_flow_state_received_list() {
+        SpringMongoSagaStateStore<FlowState<FlowEvent>> flowStore =
+                new SpringMongoSagaStateStore<>(mongoOperations, "saga-flowtest-" + System.nanoTime(), rawFlowStateType());
+
+        Saga<FlowEvent, FlowState<FlowEvent>, Object> saga = flowSaga();
+        FlowStarted startEvent = new FlowStarted("flow-1");
+        FlowState<FlowEvent> afterStart = saga.evolve(saga.initialState(), SagaInput.event(startEvent));
+        FlowContinued continuedEvent = new FlowContinued("flow-1");
+        FlowState<FlowEvent> finalState = saga.step(afterStart, SagaInput.event(continuedEvent)).state();
+        assertThat(finalState.received()).containsExactly(startEvent, continuedEvent);
+
+        SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-1", finalState, Status.COMPLETED, 1,
+                List.of(), Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), Instant.ofEpochMilli(3));
+        flowStore.compareAndSave("flow-1", envelope, 0);
+
+        Optional<SagaEnvelope<FlowState<FlowEvent>>> found = flowStore.find("flow-1");
+
+        assertThat(found).hasValueSatisfying(e -> {
+            assertThat(e.state().currentStep()).isEqualTo(finalState.currentStep());
+            assertThat(e.state().completed()).isEqualTo(finalState.completed());
+            assertThat(e.state().received()).containsExactly(startEvent, continuedEvent);
+        });
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Class<FlowState<FlowEvent>> rawFlowStateType() {
+        return (Class) FlowState.class;
+    }
+
+    private static Saga<FlowEvent, FlowState<FlowEvent>, Object> flowSaga() {
+        return FlowSaga.<FlowEvent, Object>builder()
+                .startsOn(FlowStarted.class, FlowStarted::id)
+                .correlate(FlowContinued.class, FlowContinued::id)
+                .step("started", step -> step.on(FlowContinued.class, Continuation.end(), c -> List.of()))
+                .build();
+    }
+
+    sealed interface FlowEvent permits FlowStarted, FlowContinued {
+        String id();
+    }
+
+    record FlowStarted(String id) implements FlowEvent {
+    }
+
+    record FlowContinued(String id) implements FlowEvent {
     }
 
     private static SagaEnvelope<Counter> active(String id, Counter state, long version, List<TimerEntry> timers, long positionWatermark) {

@@ -102,9 +102,10 @@ no such gap, because `StartTimeout`/`CancelTimeout` are saved atomically with th
 write. Duplicate dispatch is sound in practice because the recommended command receiver is an
 `ApplicationService.execute`-shaped handler backed by a real decider: it re-folds the authoritative event stream on
 every call and rejects a command that is already satisfied or stale, so a duplicate is a no-op rather than a double
-effect. The residual race is documented rather than papered over: an event and a timeout that interleave across two
-executor nodes can both attempt to react, and the CAS loser has already dispatched its command by the time it loses,
-so a stale command can still reach the receiver even though its saga-side effect is discarded. A v2 fix is designed
+effect. The residual race is documented rather than papered over: an event and a timeout that interleave (across two
+executor nodes, or on one node between the subscription thread and the timer poller) can both attempt to react, and the
+CAS loser has already dispatched its command by the time it loses, so a stale command can still reach the receiver even
+though its saga-side effect is discarded. A v2 fix is designed
 but not built: a document-local outbox that persists pending commands before dispatch and clears them after, giving
 exactly-once dispatch. It is deliberately deferred rather than built now, because it is additive: the outbox lives
 inside the same internal state envelope the CAS write already owns, so it can be added later without changing the

@@ -36,6 +36,10 @@ import java.util.Map;
  * cannot start an instance) and otherwise computes the next envelope and the commands to dispatch. It performs no I/O, so
  * a blocking or reactor runner can wrap it identically; the runner owns loading, the compare-and-set save, dispatch, and
  * timer polling.
+ * <p>
+ * Redelivery is deduplicated from the event's stream version (per stream) or its global position. An event that carries
+ * neither, which Occurrent's own stored events always do, cannot be deduplicated and is re-folded on redelivery, so a
+ * custom event source feeding a saga must carry the stream or position extension for the fold to be redelivery-safe.
  */
 public final class SagaExecutionSupport {
 
@@ -109,6 +113,11 @@ public final class SagaExecutionSupport {
             for (TimerEntry timer : current.timers()) {
                 timers.put(timer.name(), timer);
             }
+        }
+        // A timer is one-shot: firing it consumes it, so a timeout that neither cancels its timer nor completes the
+        // instance does not re-fire every poll. Recurrence is explicit, via a StartTimeout effect below (which re-adds it).
+        if (input instanceof SagaInput.Timeout<E> firedTimer) {
+            timers.remove(firedTimer.timeout().timerName());
         }
         applyEffects(effects, commands, timers, now);
 

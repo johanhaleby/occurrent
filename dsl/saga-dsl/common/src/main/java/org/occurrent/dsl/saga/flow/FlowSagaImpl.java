@@ -139,17 +139,24 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     private FlowState<E> evolveOnTimeout(FlowState<E> state, String timerName) {
         if (state.completed() || state.currentStep() == null) {
-            return state;
+            return clearedBookkeeping(state);
         }
         String expected = TIMER_PREFIX + state.currentStep();
         if (!timerName.equals(expected)) {
-            return state;
+            return clearedBookkeeping(state);
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
         if (step.timeout() == null) {
-            return state;
+            return clearedBookkeeping(state);
         }
         return applyTransition(state.currentStep(), step.timeout().then(), state.received(), ActionKind.TIMEOUT, -1);
+    }
+
+    // Reset the evolve-to-react bookkeeping on a no-op so react (which routes on lastAction) does nothing rather than
+    // re-running a previous transition's reaction. react's correctness must not depend on the executor's timer hygiene.
+    private FlowState<E> clearedBookkeeping(FlowState<E> state) {
+        return new FlowState<>(state.currentStep(), state.received(), state.stepEntryIndex(), state.completed(),
+                state.currentStep(), ActionKind.NONE, -1);
     }
 
     private FlowState<E> recordWithoutTransition(FlowState<E> state, List<E> received) {

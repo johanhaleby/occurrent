@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
@@ -33,6 +34,7 @@ import org.occurrent.dsl.saga.executor.SagaExecutionSupport.Outcome;
 import java.lang.System.Logger.Level;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Drives one saga against one subscription and its own timer poller: it loads the instance, runs the pure
@@ -67,38 +69,39 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     void pollTimers() {
-        Instant now = Instant.now();
-        long nowMillis = now.toEpochMilli();
-        List<SagaEnvelope<S>> due;
+        // Catch Throwable so a failure never lets the scheduled task die and stop all future polling; the schedule stays
+        // alive and the next tick recovers.
         try {
-            due = stateStore.findWithDueTimers(now, config.timerBatchLimit());
-        } catch (RuntimeException e) {
-            LOG.log(Level.WARNING, "Failed to query saga timers", e);
-            return;
-        }
-        for (SagaEnvelope<S> envelope : due) {
-            List<String> dueTimerNames = envelope.timers().stream()
-                    .filter(timer -> timer.firesAtEpochMilli() <= nowMillis)
-                    .map(TimerEntry::name)
-                    .toList();
-            for (String timerName : dueTimerNames) {
-                try {
-                    process(envelope.sagaId(), SagaInput.timeout(new SagaTimeout(envelope.sagaId(), timerName)), EventMeta.NONE, timerName);
-                } catch (RuntimeException e) {
-                    // Keep polling other timers/instances; this one stays due and is retried next poll unless consumed.
-                    LOG.log(Level.WARNING, "Failed to fire saga timer '" + timerName + "' for instance '" + envelope.sagaId() + "'", e);
+            Instant now = Instant.now();
+            long nowMillis = now.toEpochMilli();
+            List<SagaEnvelope<S>> due = stateStore.findWithDueTimers(now, config.timerBatchLimit());
+            for (SagaEnvelope<S> envelope : due) {
+                List<String> dueTimerNames = envelope.timers().stream()
+                        .filter(timer -> timer.firesAtEpochMilli() <= nowMillis)
+                        .map(TimerEntry::name)
+                        .toList();
+                for (String timerName : dueTimerNames) {
+                    try {
+                        process(envelope.sagaId(), SagaInput.timeout(new SagaTimeout(envelope.sagaId(), timerName)), EventMeta.NONE, timerName);
+                    } catch (RuntimeException e) {
+                        // Keep polling other timers/instances; this one stays due and is retried next poll unless consumed.
+                        LOG.log(Level.WARNING, "Failed to fire saga timer '" + timerName + "' for instance '" + envelope.sagaId() + "'", e);
+                    }
                 }
             }
+        } catch (Throwable t) {
+            LOG.log(Level.WARNING, "Saga timer poll failed", t);
         }
     }
 
     private void process(String sagaId, SagaInput<E> input, EventMeta meta, @Nullable String requireTimerName) {
         for (int attempt = 0; attempt < config.maxCasAttempts(); attempt++) {
+            Instant now = Instant.now();
             SagaEnvelope<S> current = stateStore.find(sagaId).orElse(null);
-            if (requireTimerName != null && !hasPendingTimer(current, requireTimerName)) {
-                return; // stale/superseded timer, or the instance completed: nothing to fire.
+            if (requireTimerName != null && !hasDueTimer(current, requireTimerName, now)) {
+                return; // stale/superseded/rescheduled timer, or the instance completed: nothing to fire.
             }
-            Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, input, meta, Instant.now());
+            Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, input, meta, now);
             if (!outcome.processed()) {
                 return;
             }
@@ -115,15 +118,22 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 + " attempts due to concurrent modification");
     }
 
-    private boolean hasPendingTimer(@Nullable SagaEnvelope<S> envelope, String timerName) {
-        return envelope != null && !envelope.isCompleted()
-                && envelope.timers().stream().anyMatch(timer -> timer.name().equals(timerName));
+    // Fence a timeout on due-ness, not just presence: if a concurrent event rescheduled the same timer to a later time
+    // (a reset-on-heartbeat pattern), the earlier poll must not fire it early.
+    private boolean hasDueTimer(@Nullable SagaEnvelope<S> envelope, String timerName, Instant now) {
+        if (envelope == null || envelope.isCompleted()) {
+            return false;
+        }
+        long nowMillis = now.toEpochMilli();
+        return envelope.timers().stream().anyMatch(timer -> timer.name().equals(timerName) && timer.firesAtEpochMilli() <= nowMillis);
     }
 
     private EventMeta extractMeta(CloudEvent cloudEvent) {
-        String streamId = cloudEvent.getExtension(OccurrentCloudEventExtension.STREAM_ID) instanceof String s ? s : null;
-        Long streamVersion = cloudEvent.getExtension(OccurrentCloudEventExtension.STREAM_VERSION) instanceof Long v ? v : null;
-        Long position = cloudEvent.getExtension(OccurrentCloudEventExtension.POSITION) instanceof Long p ? p : null;
+        Set<String> extensions = cloudEvent.getExtensionNames();
+        String streamId = extensions.contains(OccurrentCloudEventExtension.STREAM_ID) ? OccurrentExtensionGetter.getStreamId(cloudEvent) : null;
+        Long streamVersion = extensions.contains(OccurrentCloudEventExtension.STREAM_VERSION) ? OccurrentExtensionGetter.getStreamVersion(cloudEvent) : null;
+        // Use the framework's own position accessor, which accepts a Number or String, rather than narrowing to Long.
+        Long position = extensions.contains(OccurrentCloudEventExtension.POSITION) ? OccurrentCloudEventExtension.getPosition(cloudEvent) : null;
         return new EventMeta(streamId, streamVersion, position);
     }
 }
