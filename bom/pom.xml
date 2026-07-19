@@ -228,6 +228,16 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-subscription-synchronous-blocking</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-subscription-synchronous-reactor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-subscription-mongodb-spring-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -334,6 +344,16 @@
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-application-service-blocking</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-application-service-transaction-mongodb-native</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-application-service-reactor</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
