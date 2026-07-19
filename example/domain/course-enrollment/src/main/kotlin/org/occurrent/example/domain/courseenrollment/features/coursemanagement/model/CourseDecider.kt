@@ -67,14 +67,14 @@ sealed interface CourseState {
 private fun decide(command: CourseCommand, state: CourseState): List<CourseEvent> = when (command) {
     is CourseCommand.DefineCourse -> when (state) {
         CourseState.NotDefined -> listOf(CourseDefined(UUID.randomUUID(), command.occurredAt, command.courseId, command.title, command.capacity))
-        is CourseState.Defined -> throw IllegalArgumentException("Course ${command.title} is already defined")
-        CourseState.Cancelled -> throw IllegalArgumentException("Course ${command.courseId} was cancelled and cannot be redefined")
+        is CourseState.Defined -> throw CourseAlreadyDefinedException(command.title)
+        CourseState.Cancelled -> throw CourseCancelledCannotBeRedefinedException(command.courseId)
     }
 
     is CourseCommand.CancelCourse -> when (state) {
         is CourseState.Defined -> listOf(CourseCancelled(UUID.randomUUID(), command.occurredAt, command.courseId))
-        CourseState.NotDefined -> throw IllegalArgumentException("Course ${command.courseId} is not defined")
-        CourseState.Cancelled -> throw IllegalArgumentException("Course ${command.courseId} is already cancelled")
+        CourseState.NotDefined -> throw CourseNotDefinedException(command.courseId)
+        CourseState.Cancelled -> throw CourseAlreadyCancelledException(command.courseId)
     }
 }
 

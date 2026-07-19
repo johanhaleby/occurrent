@@ -26,8 +26,10 @@ import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.common.StudentId
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseNotDefinedException
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseTags
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
+import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentNotRegisteredException
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentTags
 import java.time.Instant
@@ -96,43 +98,30 @@ private fun decide(command: EnrollmentCommand, state: EnrollmentState): List<Dom
     val studentId = command.studentId
     val courseId = command.courseId
 
-    require(state.isCourseDefined(courseId)) {
-        "Course ${command.courseId} is not defined"
-    }
+    if (!state.isCourseDefined(courseId)) throw CourseNotDefinedException(courseId)
 
-    require(state.isStudentRegistered(studentId)) {
-        "Student ${command.studentId} is not registered"
-    }
+    if (!state.isStudentRegistered(studentId)) throw StudentNotRegisteredException(studentId)
 
     return when (command) {
         is EnrollmentCommand.EnrollStudent -> {
-            require(!state.isCourseCancelled(courseId)) {
-                "Course ${command.courseId} is cancelled"
-            }
+            if (state.isCourseCancelled(courseId)) throw CourseCancelledException(courseId)
 
-            require(!state.isStudentDeregistered(studentId)) {
-                "Student ${command.studentId} is deregistered"
-            }
+            if (state.isStudentDeregistered(studentId)) throw StudentDeregisteredException(studentId)
 
-            require(!state.isCourseFull(courseId)) {
-                "Course ${command.courseId} is full"
-            }
+            if (state.isCourseFull(courseId)) throw CourseFullException(courseId)
 
-            require(!state.isStudentAtCourseEnrollmentLimit(studentId)) {
-                "Student ${command.studentId} is already enrolled in ${EnrollmentPolicy.MAX_COURSES_PER_STUDENT} courses"
-            }
+            if (state.isStudentAtCourseEnrollmentLimit(studentId))
+                throw StudentCourseEnrollmentLimitReachedException(studentId, EnrollmentPolicy.MAX_COURSES_PER_STUDENT)
 
-            require(!state.isStudentRegisteredToCourse(courseId, studentId)) {
-                "Student ${command.studentId} is already enrolled in course ${command.courseId}"
-            }
+            if (state.isStudentRegisteredToCourse(courseId, studentId))
+                throw StudentAlreadyEnrolledInCourseException(courseId, studentId)
 
             listOf(StudentEnrolledInCourse(UUID.randomUUID(), command.occurredAt, courseId, studentId))
         }
 
         is EnrollmentCommand.UnenrollStudent -> {
-            require(state.isStudentRegisteredToCourse(courseId, studentId)) {
-                "Student ${command.studentId} is not enrolled in course ${command.courseId}"
-            }
+            if (!state.isStudentRegisteredToCourse(courseId, studentId))
+                throw StudentNotEnrolledInCourseException(courseId, studentId)
 
             listOf(StudentUnenrolledFromCourse(UUID.randomUUID(), command.occurredAt, courseId, studentId))
         }

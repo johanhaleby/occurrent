@@ -64,14 +64,14 @@ private fun decide(command: StudentCommand, state: StudentRegistry): List<Studen
     when (command) {
         is StudentCommand.RegisterStudent -> {
             val studentId = command.studentId
-            require(!state.isStudentRegistered(studentId)) { "Student $studentId is already registered" }
+            if (state.isStudentRegistered(studentId)) throw StudentAlreadyRegisteredException(studentId)
 
             listOf(StudentRegistered(command.eventId, command.occurredAt, studentId, command.name))
         }
 
         is StudentCommand.DeregisterStudent -> {
             val studentId = command.studentId
-            require(state.isStudentRegistered(studentId)) { "Student $studentId is not registered" }
+            if (!state.isStudentRegistered(studentId)) throw StudentNotRegisteredException(studentId)
 
             listOf(StudentDeregistered(command.eventId, command.occurredAt, studentId))
         }

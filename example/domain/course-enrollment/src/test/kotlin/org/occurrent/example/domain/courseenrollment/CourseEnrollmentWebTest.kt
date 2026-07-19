@@ -122,8 +122,37 @@ class CourseEnrollmentWebTest {
         await().atMost(10, TimeUnit.SECONDS).untilAsserted { assertThat(dashboardBody()).doesNotContain("Ada Lovelace") }
     }
 
+    @Test
+    fun `deregistering an enrolled student unenrolls them from the course and frees the seat`() {
+        val courseId = UUID.randomUUID()
+        val studentId = UUID.randomUUID()
+        applicationService.defineCourse(courseId, title = "Reactive Systems", capacity = 1)
+        applicationService.registerStudent(studentId, name = "Ada Lovelace")
+        applicationService.enrollStudent(courseId, studentId)
+
+        // The course detail is strongly consistent, so the enrollment shows immediately.
+        assertThat(courseDetailBody(courseId)).contains("Ada Lovelace")
+
+        mockMvc.post("/students/$studentId/deregistration").andExpect { status { isOk() } }
+
+        // The unenroll policy is eventually consistent, so wait for the student to drop out of the course detail.
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted {
+            assertThat(courseDetailBody(courseId)).doesNotContain("Ada Lovelace")
+        }
+
+        // The freed seat must be genuinely reusable: enrolling another student into the capacity-1 course succeeds,
+        // which it would not if the deregistered student's seat were still counted by the enrollment write model.
+        val newStudentId = UUID.randomUUID()
+        applicationService.registerStudent(newStudentId, name = "Grace Hopper")
+        applicationService.enrollStudent(courseId, newStudentId)
+        assertThat(courseDetailBody(courseId)).contains("Grace Hopper")
+    }
+
     private fun dashboardBody(): String =
         mockMvc.get("/dashboard").andExpect { status { isOk() } }.andReturn().response.contentAsString
+
+    private fun courseDetailBody(courseId: UUID): String =
+        mockMvc.get("/courses/$courseId").andExpect { status { isOk() } }.andReturn().response.contentAsString
 
     @Test
     fun `GET course detail returns strongly-consistent view with title and capacity`() {
