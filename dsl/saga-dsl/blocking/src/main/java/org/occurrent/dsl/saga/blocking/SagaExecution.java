@@ -27,9 +27,9 @@ import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaTimeout;
-import org.occurrent.dsl.saga.executor.SagaExecutionSupport;
-import org.occurrent.dsl.saga.executor.SagaExecutionSupport.EventMeta;
-import org.occurrent.dsl.saga.executor.SagaExecutionSupport.Outcome;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
 
 import java.lang.System.Logger.Level;
 import java.time.Instant;

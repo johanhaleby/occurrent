@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.saga.executor;
+package org.occurrent.dsl.saga.internal;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -28,8 +28,8 @@ import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaTimeout;
-import org.occurrent.dsl.saga.executor.SagaExecutionSupport.EventMeta;
-import org.occurrent.dsl.saga.executor.SagaExecutionSupport.Outcome;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
 
 import java.time.Duration;
 import java.time.Instant;

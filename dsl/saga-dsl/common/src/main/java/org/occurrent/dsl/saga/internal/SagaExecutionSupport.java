@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.saga.executor;
+package org.occurrent.dsl.saga.internal;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.Saga;
