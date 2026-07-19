@@ -1,0 +1,127 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.dsl.saga.blocking;
+
+import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.filter.Filter;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StreamSubscriptionFilter;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.Subscription;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.Function;
+
+import static java.util.Objects.requireNonNull;
+
+/**
+ * Runs a {@link Saga} as an asynchronous, subscription-fed process manager: it subscribes to the saga's events, folds and
+ * persists per-instance state, dispatches the commands each reaction issues, and polls the state store to fire timeouts.
+ * The write-side mirror of the read-side {@code ProjectionRunner}.
+ * <p>
+ * Pick the capability with the factory: {@link #agnostic(Subscribable, CloudEventConverter) agnostic} delivers both
+ * stream-written and DCB-appended events, {@link #stream(Subscribable, CloudEventConverter) stream} only stream-written
+ * ones. Timers are polled from the {@link SagaStateStore}, not scheduled through an external scheduler, so a run needs no
+ * deadline infrastructure. The returned {@link SagaSubscription} owns the timer poller, close it to stop polling.
+ *
+ * @param <E> the domain event type
+ * @param <C> the command type
+ */
+@NullMarked
+public final class SagaRunner<E, C> {
+
+    private final Subscribable subscriptionModel;
+    private final CloudEventConverter<E> cloudEventConverter;
+    private final Function<Filter, SubscriptionFilter> toSubscriptionFilter;
+
+    private SagaRunner(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter, Function<Filter, SubscriptionFilter> toSubscriptionFilter) {
+        this.subscriptionModel = requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
+        this.cloudEventConverter = requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null");
+        this.toSubscriptionFilter = requireNonNull(toSubscriptionFilter, "toSubscriptionFilter cannot be null");
+    }
+
+    /** A runner whose subscription is capability-agnostic: it delivers both stream-written and DCB-appended events. */
+    public static <E, C> SagaRunner<E, C> agnostic(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+        return new SagaRunner<>(subscriptionModel, cloudEventConverter, AgnosticSubscriptionFilter::filter);
+    }
+
+    /** A runner whose subscription is scoped to the {@code STREAM} capability, excluding DCB-appended events. */
+    public static <E, C> SagaRunner<E, C> stream(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+        return new SagaRunner<>(subscriptionModel, cloudEventConverter, StreamSubscriptionFilter::filter);
+    }
+
+    /** Runs {@code saga} with the default configuration, starting at the subscription model's default position. */
+    public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
+                                                             SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher) {
+        return run(subscriptionId, saga, stateStore, commandDispatcher, null, SagaRunnerConfig.defaults());
+    }
+
+    /** Runs {@code saga} with the default configuration, starting at {@code startAt} ({@code null} means the model's default). */
+    public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
+                                                             SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
+                                                             @Nullable StartAt startAt) {
+        return run(subscriptionId, saga, stateStore, commandDispatcher, startAt, SagaRunnerConfig.defaults());
+    }
+
+    /**
+     * Runs {@code saga}: subscribes with a filter derived from the saga's handled event types, materializes per-instance
+     * state into {@code stateStore}, dispatches issued commands through {@code commandDispatcher}, and starts a timer
+     * poller. The returned {@link SagaSubscription} is already started.
+     */
+    public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
+                                                             SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
+                                                             @Nullable StartAt startAt, SagaRunnerConfig config) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(saga, "saga cannot be null");
+        requireNonNull(stateStore, "stateStore cannot be null");
+        requireNonNull(commandDispatcher, "commandDispatcher cannot be null");
+        requireNonNull(config, "config cannot be null");
+
+        SagaExecution<E, S, C> execution = new SagaExecution<>(saga, stateStore, commandDispatcher, cloudEventConverter, config);
+        SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
+        Consumer<CloudEvent> action = execution::onCloudEvent;
+        StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
+        subscription.waitUntilStarted();
+
+        ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-saga-timer-" + subscriptionId));
+        long intervalMillis = config.timerPollInterval().toMillis();
+        poller.scheduleWithFixedDelay(execution::pollTimers, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
+        return new SagaSubscription(subscription, poller);
+    }
+
+    private static ThreadFactory daemonThreadFactory(String namePrefix) {
+        AtomicInteger counter = new AtomicInteger();
+        return runnable -> {
+            Thread thread = new Thread(runnable, namePrefix + "-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+}

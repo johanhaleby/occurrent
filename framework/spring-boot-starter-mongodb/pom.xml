@@ -149,6 +149,16 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-saga-dsl-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- Serialize a flow saga's received events as CloudEvents JSON so they persist by their stable CloudEvent type -->
+        <dependency>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-json-jackson</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-annotations</artifactId>
             <version>${project.version}</version>
         </dependency>

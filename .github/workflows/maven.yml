@@ -125,7 +125,7 @@ jobs:
           # sequentially on one runner, which tipped those waits over. Split by container load
           # (projection+forwarder ~5 vs domain ~7) to cut per-runner churn, keeping an in-run
           # retry as a backstop for residual timing flakiness.
-          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot", args: "-Dsurefire.rerunFailingTestsCount=2" }
+          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga", args: "-Dsurefire.rerunFailingTestsCount=2" }
           - { name: example-domain,              paths: "example/domain", args: "-Dsurefire.rerunFailingTestsCount=2" }
           - { name: misc,                        paths: "dsl application rewrite common deadline cloudevents-extension library" }
     steps:

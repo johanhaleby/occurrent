@@ -27,6 +27,7 @@
         <module>snapshot</module>
         <module>forwarder</module>
         <module>domain</module>
+        <module>saga</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 
