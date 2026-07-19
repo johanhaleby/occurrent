@@ -23,10 +23,16 @@ import static java.util.Objects.requireNonNull;
 /**
  * Tuning for a {@link SagaRunner}: how often it polls its state store for due timers, how many due instances it fires per
  * poll, and how many times it retries a compare-and-set save that lost to a concurrent write before giving up.
+ * <p>
+ * {@code maxCasAttempts} also bounds dispatch amplification: because commands are dispatched before the save and a lost
+ * compare-and-set retries the whole step, a single input can re-dispatch its entire command list up to
+ * {@code maxCasAttempts} times. Command receivers must be idempotent and tolerate that multiplicity, not merely
+ * at-least-once delivery.
  *
  * @param timerPollInterval how often to poll for due timers
  * @param timerBatchLimit   the maximum number of due instances fired per poll
- * @param maxCasAttempts    the maximum compare-and-set attempts for one input before failing
+ * @param maxCasAttempts    the maximum compare-and-set attempts for one input before failing; also the maximum number of
+ *                          times that input's commands can be re-dispatched
  */
 public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts) {
 

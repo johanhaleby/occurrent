@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -188,6 +189,21 @@ class FlowSagaTest {
                     () -> assertThat(saga.isTerminal(step.state())).isTrue(),
                     () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new CancelOrder("o1")))
             );
+        }
+    }
+
+    @Nested
+    class BuilderGuards {
+
+        @Test
+        void startsOn_throws_when_the_type_was_already_registered_by_a_prior_correlate() {
+            FlowSaga.Builder<OrderEvent, OrderCommand> builder = FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .correlate(OrderPlaced.class, OrderPlaced::orderId);
+
+            assertThatThrownBy(() -> builder.startsOn(OrderPlaced.class, OrderPlaced::orderId))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("correlate")
+                    .hasMessageContaining("OrderPlaced");
         }
     }
 }

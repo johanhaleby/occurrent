@@ -126,6 +126,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
+        if (stateType == FlowState.class && cloudEventConverter == null) {
+            // A flow saga's FlowState holds domain events, and this store serializes them as CloudEvents through the
+            // converter so they round-trip by their stable CloudEvent type (package-independent). Without it, the field-by-
+            // field FlowState path cannot run. The annotation path always supplies the converter; a hand-built store that
+            // omits it would silently lose that package independence, so fail loud here instead.
+            throw new IllegalArgumentException("a CloudEventConverter is required to store a flow saga's FlowState; use the four-argument constructor and pass the application's CloudEventConverter");
+        }
         // Safe: the converter only ever sees domain events read out of a FlowState, whose element type is erased anyway.
         this.cloudEventConverter = (CloudEventConverter<Object>) cloudEventConverter;
         mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));

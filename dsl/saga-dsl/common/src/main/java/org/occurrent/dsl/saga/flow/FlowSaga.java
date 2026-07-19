@@ -85,6 +85,11 @@ public final class FlowSaga {
             if (startType != null) {
                 throw new IllegalStateException("startsOn(...) has already been set and can only be set once");
             }
+            if (correlators.containsKey(type)) {
+                // startsOn also registers the correlation for its type; a prior correlate(type, ...) would be silently
+                // overwritten here, so reject it the same way correlate(...) rejects a duplicate.
+                throw new IllegalStateException("correlate(...) has already been registered for " + type.getName());
+            }
             startType = type;
             correlators.put(type, (Function<E, @Nullable String>) correlatedBy);
             onStartCommands = (Function<E, List<C>>) onStart;
