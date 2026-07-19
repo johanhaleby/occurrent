@@ -123,7 +123,7 @@ class DcbCriteriaBuilder<E : Any> private constructor(
 
     private fun requireNoBoundary(method: String) {
         check(boundary == null) {
-            "$method() cannot refine a boundary criterion. Call criteria() without a boundary to build a fresh criteria."
+            "$method() cannot refine a boundary criterion. Call criteria() without a boundary instead."
         }
     }
 }
