@@ -82,6 +82,7 @@ public class DcbDomainEventQueries<E> {
      * query-specific event types.
      */
     public DcbCriteriaBuilder<E> criteria(DcbCriterion boundary) {
+        requireNonNull(boundary, "Boundary cannot be null");
         return new DcbCriteriaBuilder<>(domainEventQueries.cloudEventConverter(), boundary);
     }
 

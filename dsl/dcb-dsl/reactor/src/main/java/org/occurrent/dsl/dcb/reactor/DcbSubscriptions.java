@@ -85,6 +85,7 @@ public final class DcbSubscriptions<E> {
      * subscription-specific event types.
      */
     public DcbCriteriaBuilder<E> criteria(DcbCriterion boundary) {
+        requireNonNull(boundary, "Boundary cannot be null");
         return new DcbCriteriaBuilder<>(cloudEventConverter, boundary);
     }
 
