@@ -28,6 +28,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
@@ -45,6 +47,7 @@ public final class DomainEventFeed<E> {
     private final Function<E, String> eventId;
     private final @Nullable CheckpointStorage catchupMarker;
     private final CopyOnWriteArrayList<CatchupProjectionFeed<E>> feeds = new CopyOnWriteArrayList<>();
+    private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
 
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
                            Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker) {
@@ -65,6 +68,10 @@ public final class DomainEventFeed<E> {
     public <S extends @Nullable Object, ID> void register(String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
+        // Each id must be unique because it is the durable checkpoint key.
+        if (!registeredIds.add(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
         CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, projection, repository, reader, converter, eventId, catchupMarker);
         feeds.add(feed);
     }
@@ -75,6 +82,10 @@ public final class DomainEventFeed<E> {
      * reactor analog of the blocking {@code register(id, MaterializedView, Filter)}.
      */
     public void register(String id, Function<E, Mono<Void>> fold, Filter replayFilter) {
+        // Each id must be unique because it is the durable checkpoint key.
+        if (!registeredIds.add(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
         feeds.add(CatchupProjectionFeed.create(id, fold, replayFilter, reader, converter, eventId, catchupMarker));
     }
 

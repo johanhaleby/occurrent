@@ -18,13 +18,18 @@ package org.occurrent.dsl.projection.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
+import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.filter.Filter;
 
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 
@@ -109,5 +114,65 @@ public final class Projections {
      */
     public static <S extends @Nullable Object, E, ID> Consumer<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
         return materializedView(projection, repository, singletonKey)::update;
+    }
+
+    /**
+     * Folds the events {@code projection} selects, read on demand, into its view state and returns it: the
+     * strongly-consistent, query-driven counterpart to the subscription-fed {@code project(subscriptionId, projection,
+     * ...)} runners. Uses the projection's explicit {@link Projection#filter() filter} if set, else its handled
+     * {@link Projection#eventTypes() event types} (empty means "all events"). Only valid for a single-instance
+     * (singleton) projection; a keyed projection throws, since folding every instance into one blended state on demand
+     * would produce a nonsense result. Use {@link #project(Projection, DomainEventQueries, Object)} with an
+     * {@code instanceId} for a keyed projection.
+     */
+    public static <S extends @Nullable Object, E, ID> S project(Projection<S, E, ID> projection, DomainEventQueries<E> queries) {
+        requireNonNull(projection, "projection cannot be null");
+        requireNonNull(queries, "queries cannot be null");
+        if (projection.id() != null) {
+            throw new IllegalArgumentException("projection is keyed; folding every instance into one blended state on demand is not supported, "
+                    + "use project(projection, queries, instanceId) to read a single instance, or a singleton projection for one shared state");
+        }
+        Stream<E> events = selectEvents(projection, queries);
+        return projection.view().evolve(events);
+    }
+
+    /**
+     * Folds the events {@code projection} selects for {@code instanceId}, read on demand, into that instance's view
+     * state and returns it: the strongly-consistent, query-driven, single-instance counterpart to the unqualified
+     * {@link #project(Projection, DomainEventQueries)}. Uses the same filter or handled event types as the unqualified
+     * {@code project} to read candidate events, then keeps only the ones whose {@link Projection#id()} resolves to
+     * {@code instanceId} before folding. A singleton projection (no id function) has a single instance regardless of
+     * {@code instanceId}, so this folds all selected events, same as the unqualified {@code project}.
+     */
+    public static <S extends @Nullable Object, E, ID> S project(Projection<S, E, ID> projection, DomainEventQueries<E> queries, ID instanceId) {
+        requireNonNull(projection, "projection cannot be null");
+        requireNonNull(queries, "queries cannot be null");
+        Stream<E> events = selectEvents(projection, queries);
+        Function<E, @Nullable ID> id = projection.id();
+        Stream<E> scopedEvents = id == null ? events : events.filter(event -> instanceId.equals(id.apply(event)));
+        return projection.view().evolve(scopedEvents);
+    }
+
+    private static <S extends @Nullable Object, E, ID> Stream<E> selectEvents(Projection<S, E, ID> projection, DomainEventQueries<E> queries) {
+        Filter explicitFilter = projection.filter();
+        if (explicitFilter != null) {
+            return queries.query(explicitFilter);
+        } else if (projection.eventTypes().isEmpty()) {
+            return queries.all();
+        } else {
+            return queries.query(projection.eventTypes());
+        }
+    }
+
+    /**
+     * Folds the events matching {@code dcbProjection}'s DCB criteria, read on demand, into its view state and returns
+     * it: the strongly-consistent, query-driven counterpart to the subscription-fed {@code DcbProjectionRunner}. This is
+     * the shape of a single-instance DCB projection such as "is this username claimed?", where the criteria itself
+     * already scopes the read, so there is no keyed/singleton ambiguity to guard against.
+     */
+    public static <S extends @Nullable Object, E, ID> S project(DcbProjection<S, E, ID> dcbProjection, DcbDomainEventQueries<E> queries) {
+        requireNonNull(dcbProjection, "dcbProjection cannot be null");
+        requireNonNull(queries, "queries cannot be null");
+        return dcbProjection.projection().view().evolve(queries.query(dcbProjection.criteria()));
     }
 }

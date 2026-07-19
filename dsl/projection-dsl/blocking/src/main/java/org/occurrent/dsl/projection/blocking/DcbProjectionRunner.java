@@ -41,8 +41,8 @@ import static java.util.Objects.requireNonNull;
  * to {@link #create}</strong>, since it subscribes through {@link DcbSubscriptions}, which is only as capable as that
  * model. A catch-up-capable model (the Spring composite, or a hand-wired {@code CatchupSubscriptionModel}) replays
  * history and resumes across restarts, a plain live model does neither. For a strongly consistent read, fold on demand
- * with the pull {@code DcbDomainEventQueries.project(...)}. For a declarative read model use the {@code @Projection}
- * annotation.
+ * with the pull {@link Projections#project(DcbProjection, org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries)}. For a
+ * declarative read model use the {@code @Projection} annotation.
  *
  * @param <E> the domain event type
  */
