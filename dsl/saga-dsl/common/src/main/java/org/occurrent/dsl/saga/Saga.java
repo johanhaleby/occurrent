@@ -133,7 +133,9 @@ public interface Saga<E, S extends @Nullable Object, C> {
     /**
      * Create a saga from functions instead of the {@link Builder}, the escape hatch mirroring {@code Decider#create}. The
      * supplied {@code evolve}/{@code react} handle the whole {@link SagaInput} union themselves. This saga is never
-     * terminal and has no {@code onStart}. Implement the interface directly for those.
+     * terminal and has no {@code onStart}. Implement the interface directly for those. {@code startEventTypes} must be
+     * non-empty, since a saga with no start type can never create an instance, the same guarantee {@link Builder#build()}
+     * gives.
      */
     static <E, S extends @Nullable Object, C> Saga<E, S, C> create(S initialState,
                                                                    Function<E, @Nullable String> sagaId,
@@ -147,6 +149,9 @@ public interface Saga<E, S extends @Nullable Object, C> {
         requireNonNull(evolve, "evolve cannot be null");
         requireNonNull(react, "react cannot be null");
         Set<Class<? extends E>> starts = Set.copyOf(startEventTypes);
+        if (starts.isEmpty()) {
+            throw new IllegalArgumentException("a saga needs at least one start event type, startEventTypes cannot be empty");
+        }
         Set<Class<? extends E>> types = Set.copyOf(eventTypes);
         return new Saga<>() {
             @Override

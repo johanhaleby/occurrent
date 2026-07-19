@@ -266,6 +266,19 @@ class SagaTest {
 
             assertThat(saga.eventTypes()).isEmpty();
         }
+
+        @Test
+        void create_throws_IllegalArgumentException_when_startEventTypes_is_empty() {
+            assertThatThrownBy(() -> Saga.<OrderEvent, OrderState, OrderCommand>create(
+                    null,
+                    OrderEvent::orderId,
+                    Set.of(),
+                    Set.of(),
+                    (state, input) -> state,
+                    (state, input) -> List.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("start event type");
+        }
     }
 
     @Nested
