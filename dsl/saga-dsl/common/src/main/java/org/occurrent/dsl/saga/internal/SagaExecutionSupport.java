@@ -180,7 +180,7 @@ public final class SagaExecutionSupport {
             switch (effect) {
                 case SagaEffect.IssueCommand<C> issue -> commands.add(issue.command());
                 case SagaEffect.StartTimeout<C> start ->
-                        timers.put(start.timerName(), new TimerEntry(start.timerName(), now.plus(start.within()).toEpochMilli()));
+                        timers.put(start.timerName(), new TimerEntry(start.timerName(), now.plus(start.after()).toEpochMilli()));
                 case SagaEffect.StartTimeoutAt<C> startAt ->
                         timers.put(startAt.timerName(), new TimerEntry(startAt.timerName(), startAt.at().toEpochMilli()));
                 case SagaEffect.CancelTimeout<C> cancel -> timers.remove(cancel.timerName());

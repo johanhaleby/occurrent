@@ -135,7 +135,7 @@ declarative authoring for the common case:
 saga {
   step("await-payment") {
     on<PaymentReserved>(then = ...) { ... }
-    timeout(within = Duration.ofMinutes(30), then = ...) { ... }
+    timeout(after = Duration.ofMinutes(30), then = ...) { ... }
   }
 }
 ```

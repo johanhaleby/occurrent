@@ -88,11 +88,11 @@ public final class StepBuilder<E, C> {
     }
 
     /** Sets a relative timeout: if it fires before the step completes, run {@code onExpiry} and follow {@code then}. */
-    public StepBuilder<E, C> timeout(Duration within, Continuation then, Function<ReceivedEvents<E>, List<C>> onExpiry) {
-        requireNonNull(within, "within cannot be null");
+    public StepBuilder<E, C> timeout(Duration after, Continuation then, Function<ReceivedEvents<E>, List<C>> onExpiry) {
+        requireNonNull(after, "after cannot be null");
         requireNonNull(then, "then cannot be null");
         requireNonNull(onExpiry, "onExpiry cannot be null");
-        setTimeout(new TimeoutSpec<>(within, null, onExpiry, then));
+        setTimeout(new TimeoutSpec<>(after, null, onExpiry, then));
         return this;
     }
 

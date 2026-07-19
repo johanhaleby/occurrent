@@ -247,8 +247,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
             return;
         }
         String timerName = TIMER_PREFIX + stepName;
-        if (timeout.within() != null) {
-            effects.add(SagaEffect.startTimeout(timerName, timeout.within()));
+        if (timeout.after() != null) {
+            effects.add(SagaEffect.startTimeout(timerName, timeout.after()));
         } else {
             effects.add(SagaEffect.startTimeoutAt(timerName, timeout.at().apply(received)));
         }
@@ -303,6 +303,6 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     record Branch<E, C>(Class<? extends E> eventType, @Nullable BiPredicate<E, ReceivedEvents<E>> guard, Function<E, List<C>> commands, Continuation then) {
     }
 
-    record TimeoutSpec<E, C>(@Nullable Duration within, @Nullable Function<ReceivedEvents<E>, Instant> at, Function<ReceivedEvents<E>, List<C>> onExpiry, Continuation then) {
+    record TimeoutSpec<E, C>(@Nullable Duration after, @Nullable Function<ReceivedEvents<E>, Instant> at, Function<ReceivedEvents<E>, List<C>> onExpiry, Continuation then) {
     }
 }

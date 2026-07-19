@@ -45,8 +45,8 @@ class AbsoluteTimeoutFlowSagaTest {
         correlate<BidPlaced> { it.auctionId }
         step("bidding") {
             on<BidPlaced>(then = goTo("bidding")) { }
-            timeout(at = { received -> received.initiating(AuctionStarted::class.java).endsAt }, then = end) { received ->
-                issue(CloseAuction(received.initiating(AuctionStarted::class.java).auctionId))
+            timeout(at = { received -> received.initiating<AuctionStarted>().endsAt }, then = end) { received ->
+                issue(CloseAuction(received.initiating<AuctionStarted>().auctionId))
             }
         }
     }

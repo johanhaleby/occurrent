@@ -42,15 +42,15 @@ public sealed interface SagaEffect<C> {
     }
 
     /**
-     * Start (or, if one with the same {@code timerName} already runs, restart) a timer that fires {@code within} the given
+     * Start (or, if one with the same {@code timerName} already runs, restart) a timer that fires {@code after} the given
      * duration. The duration is relative and resolved against the clock by the executor when it stores the timer, not
      * here: building an absolute time inside the pure {@code react} would read the clock and make the same reaction
      * produce different effect values on each call.
      */
-    record StartTimeout<C>(String timerName, Duration within) implements SagaEffect<C> {
+    record StartTimeout<C>(String timerName, Duration after) implements SagaEffect<C> {
         public StartTimeout {
             requireNonNull(timerName, "timerName cannot be null");
-            requireNonNull(within, "within cannot be null");
+            requireNonNull(after, "after cannot be null");
         }
     }
 
@@ -78,9 +78,9 @@ public sealed interface SagaEffect<C> {
         return new IssueCommand<>(command);
     }
 
-    /** Start (or restart) a timer firing after {@code within}. */
-    static <C> SagaEffect<C> startTimeout(String timerName, Duration within) {
-        return new StartTimeout<>(timerName, within);
+    /** Start (or restart) a timer firing once the duration {@code after} has elapsed. */
+    static <C> SagaEffect<C> startTimeout(String timerName, Duration after) {
+        return new StartTimeout<>(timerName, after);
     }
 
     /** Start (or restart) a timer firing at {@code at}. */

@@ -119,9 +119,9 @@ class SagaEffects<C : Any> @PublishedApi internal constructor() {
         effects += SagaEffect.issue(command)
     }
 
-    /** Start (or restart) the timer named [timerName] to fire after [within]. */
-    fun startTimeout(timerName: String, within: Duration) {
-        effects += SagaEffect.startTimeout(timerName, within)
+    /** Start (or restart) the timer named [timerName] to fire once [after] has elapsed. */
+    fun startTimeout(timerName: String, after: Duration) {
+        effects += SagaEffect.startTimeout(timerName, after)
     }
 
     /** Start (or restart) the timer named [timerName] to fire at [at]. */

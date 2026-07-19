@@ -18,6 +18,7 @@ package org.occurrent.example.saga.orderfulfillment.flow
 
 import org.occurrent.dsl.saga.Saga
 import org.occurrent.dsl.saga.flow.FlowState
+import org.occurrent.dsl.saga.flow.initiating
 import org.occurrent.dsl.saga.flow.saga
 import org.occurrent.example.saga.orderfulfillment.CancelOrder
 import org.occurrent.example.saga.orderfulfillment.OrderCommand
@@ -44,8 +45,8 @@ fun orderFulfillmentFlow(paymentTimeout: Duration): Saga<OrderEvent, FlowState<O
         step("awaiting-payment") {
             on<PaymentReserved>(then = end) { payment -> issue(ShipOrder(payment.orderId)) }
             on<PaymentFailed>(then = end) { failure -> issue(CancelOrder(failure.orderId, failure.reason)) }
-            timeout(within = paymentTimeout, then = end) { received ->
-                issue(CancelOrder(received.initiating(OrderPlaced::class.java).orderId, "payment timeout"))
+            timeout(after = paymentTimeout, then = end) { received ->
+                issue(CancelOrder(received.initiating<OrderPlaced>().orderId, "payment timeout"))
             }
         }
     }

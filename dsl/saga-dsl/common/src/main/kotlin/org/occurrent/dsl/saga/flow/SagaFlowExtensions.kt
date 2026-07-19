@@ -41,8 +41,8 @@ annotation class SagaDsl
  *     step("awaiting-payment") {
  *         on<PaymentReserved>(then = end) { payment -> issue(ShipOrder(payment.orderId)) }
  *         on<PaymentFailed>(then = end) { failure -> issue(CancelOrder(failure.orderId)) }
- *         timeout(within = Duration.ofMinutes(30), then = end) { received ->
- *             issue(CancelOrder(received.initiating(OrderPlaced::class.java).orderId))
+ *         timeout(after = Duration.ofMinutes(30), then = end) { received ->
+ *             issue(CancelOrder(received.initiating<OrderPlaced>().orderId))
  *         }
  *     }
  * }
@@ -121,8 +121,8 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     }
 
     /** A relative timeout: if it fires before the step completes, issue commands and follow [then]. */
-    fun timeout(within: Duration, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
-        delegate.timeout(within, then, Function { received -> FlowReactions<C>().apply { onExpiry(received) }.build() })
+    fun timeout(after: Duration, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
+        delegate.timeout(after, then, Function { received -> FlowReactions<C>().apply { onExpiry(received) }.build() })
     }
 
     /** An absolute, data-derived timeout: [at] is computed from the events received when the step is entered. */

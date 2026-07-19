@@ -63,8 +63,8 @@ class SagaFlowExtensionsTest {
             correlate<PlayerJoinedGame> { it.gameId }
             step("awaiting-first-player") {
                 on<PlayerJoinedGame>(then = end) {}
-                timeout(within = Duration.ofMinutes(10), then = end) { r ->
-                    issue(CloseGame(r.initiating(GameCreated::class.java).gameId))
+                timeout(after = Duration.ofMinutes(10), then = end) { r ->
+                    issue(CloseGame(r.initiating<GameCreated>().gameId))
                 }
             }
         }
@@ -131,10 +131,10 @@ class SagaFlowExtensionsTest {
             correlate<FirstPlayerMadeMove> { it.gameId }
             step("awaiting-game-start") {
                 join(expect<PlayerJoined>(2), expect<FirstPlayerMadeMove>(), then = end) { r ->
-                    issue(SendStartEmail(r.initiating(LobbyOpened::class.java).gameId))
+                    issue(SendStartEmail(r.initiating<LobbyOpened>().gameId))
                 }
-                timeout(within = Duration.ofMinutes(10), then = end) { r ->
-                    issue(RemindPlayers(r.initiating(LobbyOpened::class.java).gameId))
+                timeout(after = Duration.ofMinutes(10), then = end) { r ->
+                    issue(RemindPlayers(r.initiating<LobbyOpened>().gameId))
                 }
             }
         }
@@ -231,11 +231,11 @@ class SagaFlowExtensionsTest {
                 on<PaymentReserved>(then = end) { p -> issue(ShipOrder(p.orderId)) }
                 on<PaymentFailed>(
                     then = goTo("awaiting-payment"),
-                    onlyIf = { _, r -> r.count(PaymentFailed::class.java) < 3 }
+                    onlyIf = { _, r -> r.count<PaymentFailed>() < 3 }
                 ) { f -> issue(ReservePayment(f.orderId, f.amount)) }
                 on<PaymentFailed>(then = end) { f -> issue(CancelOrder(f.orderId)) }
-                timeout(within = Duration.ofMinutes(30), then = end) { r ->
-                    issue(CancelOrder(r.initiating(OrderPlaced::class.java).orderId))
+                timeout(after = Duration.ofMinutes(30), then = end) { r ->
+                    issue(CancelOrder(r.initiating<OrderPlaced>().orderId))
                 }
             }
         }
