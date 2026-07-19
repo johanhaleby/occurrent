@@ -149,6 +149,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-saga-dsl-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-annotations</artifactId>
             <version>${project.version}</version>
         </dependency>
