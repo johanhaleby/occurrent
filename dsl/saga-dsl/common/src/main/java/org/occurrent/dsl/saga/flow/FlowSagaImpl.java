@@ -42,6 +42,13 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     static final String TIMER_PREFIX = "step:";
 
+    /**
+     * Default number of received events kept behind the current step's entry, on top of the initiating event and the
+     * current step's own events (which are always retained because a join counts over them). 100 comfortably covers a
+     * retry loop or a guard that looks a few steps back, while keeping a long-running instance's state bounded.
+     */
+    static final int DEFAULT_HISTORY_WINDOW = 100;
+
     private final Class<? extends E> startType;
     private final Function<E, List<C>> onStartCommands;
     private final List<CompiledStep<E, C>> steps;
@@ -50,6 +57,9 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private final TypeDispatch<Function<E, @Nullable String>> correlators;
     private final Set<Class<? extends E>> startEventTypes;
     private final Set<Class<? extends E>> eventTypes;
+    // Carry-over: how many received events before the current step's entry are retained (and so visible to guards and
+    // reactions). The current step's own events are always kept regardless, since a join must count over them.
+    private final int historyWindow;
 
     FlowSagaImpl(Class<? extends E> startType,
                  Function<E, List<C>> onStartCommands,
@@ -58,7 +68,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                  Map<String, CompiledStep<E, C>> stepsByName,
                  Map<Class<?>, Function<E, @Nullable String>> correlators,
                  Set<Class<? extends E>> startEventTypes,
-                 Set<Class<? extends E>> eventTypes) {
+                 Set<Class<? extends E>> eventTypes,
+                 int historyWindow) {
         this.startType = startType;
         this.onStartCommands = onStartCommands;
         this.steps = steps;
@@ -67,6 +78,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         this.correlators = new TypeDispatch<>(correlators);
         this.startEventTypes = startEventTypes;
         this.eventTypes = eventTypes;
+        this.historyWindow = historyWindow;
     }
 
     @Override
@@ -105,13 +117,14 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     private FlowState<E> evolveOnEvent(FlowState<E> state, E event) {
         if (!state.completed() && state.currentStep() == null) {
-            // Instance creation: the start event enters the first step, its window opens after the start event itself.
+            // Instance creation: the start event enters the first step, its window opens after the start event itself. The
+            // start event is received.get(0) and is always retained; the retained tail begins at absolute position 1.
             if (!startType.isInstance(event)) {
                 return state;
             }
             String first = steps.get(0).name();
             // No react on the start event itself: onStart carries the instance-creation effects.
-            return new FlowState<>(first, List.of(event), 1, false, null, ActionKind.NONE, -1);
+            return new FlowState<>(first, List.of(event), 1, 1, false, null, ActionKind.NONE, -1);
         }
         if (state.completed() || state.currentStep() == null) {
             return state;
@@ -124,14 +137,14 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                 for (int i = 0; i < choice.branches().size(); i++) {
                     Branch<E, C> branch = choice.branches().get(i);
                     if (branch.eventType().isInstance(event) && (branch.guard() == null || branch.guard().test(event, receivedEvents))) {
-                        yield applyTransition(state.currentStep(), branch.then(), received, ActionKind.BRANCH, i);
+                        yield applyTransition(state, branch.then(), received, ActionKind.BRANCH, i);
                     }
                 }
                 yield withClearedBookkeeping(state, received);
             }
             case JoinBody<E, C> join -> {
-                if (joinFulfilled(join.expectations(), received, state.stepEntryIndex())) {
-                    yield applyTransition(state.currentStep(), join.then(), received, ActionKind.JOIN, -1);
+                if (joinFulfilled(join.expectations(), received, joinWindowStart(state))) {
+                    yield applyTransition(state, join.then(), received, ActionKind.JOIN, -1);
                 }
                 yield withClearedBookkeeping(state, received);
             }
@@ -150,29 +163,62 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         if (step.timeout() == null) {
             return withClearedBookkeeping(state, state.received());
         }
-        return applyTransition(state.currentStep(), step.timeout().then(), state.received(), ActionKind.TIMEOUT, -1);
+        return applyTransition(state, step.timeout().then(), state.received(), ActionKind.TIMEOUT, -1);
     }
 
     // Stay in the current step with no transition: keep the given received log but reset the evolve-to-react bookkeeping,
     // so react (which routes on lastAction) does nothing rather than re-running a previous transition's reaction. Used
-    // both when an event matches no branch / does not fulfil a join, and on an ignored timeout.
+    // both when an event matches no branch / does not fulfil a join, and on an ignored timeout. windowStart and
+    // stepEntryIndex are preserved: no transition happened, so the current step's window is unchanged and its accumulating
+    // events must not be dropped (a join counts over them).
     private FlowState<E> withClearedBookkeeping(FlowState<E> state, List<E> received) {
-        return new FlowState<>(state.currentStep(), received, state.stepEntryIndex(), state.completed(),
+        return new FlowState<>(state.currentStep(), received, state.windowStart(), state.stepEntryIndex(), state.completed(),
                 state.currentStep(), ActionKind.NONE, -1);
     }
 
-    private FlowState<E> applyTransition(String fromStep, Continuation continuation, List<E> received, ActionKind kind, int branchIndex) {
+    // The relative index into the retained received list where the current step's join window begins. received.get(0) is
+    // the pinned initiating event, so absolute position p maps to relative index p - windowStart + 1.
+    private static int joinWindowStart(FlowState<?> state) {
+        return state.stepEntryIndex() - state.windowStart() + 1;
+    }
+
+    private FlowState<E> applyTransition(FlowState<E> from, Continuation continuation, List<E> received, ActionKind kind, int branchIndex) {
+        // The new step is entered after every event received so far, so its entry is the absolute event count. received holds
+        // the initiating event (position 0) plus the tail starting at windowStart, so that count is windowStart plus the tail
+        // length, i.e. windowStart + (received.size() - 1). When nothing has been dropped (windowStart == 1) this is exactly
+        // received.size(), matching the pre-windowing behaviour.
+        int newStepEntry = from.windowStart() + received.size() - 1;
+        // Bound the retained history: drop received events older than historyWindow behind the step we are leaving. Anchoring
+        // on the step we leave (not the one we enter) guarantees that step's own events survive for its reaction to read;
+        // historyWindow adds earlier events on top for guards that look further back. windowStart only ever advances.
+        int newWindowStart = Math.max(from.windowStart(), from.stepEntryIndex() - historyWindow);
+        List<E> retained = retain(received, from.windowStart(), newWindowStart);
+        String fromStep = from.currentStep();
         return switch (continuation) {
             case Continuation.Next ignored -> {
                 int next = stepIndex.get(fromStep) + 1;
                 if (next < steps.size()) {
-                    yield new FlowState<>(steps.get(next).name(), received, received.size(), false, fromStep, kind, branchIndex);
+                    yield new FlowState<>(steps.get(next).name(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
                 }
-                yield new FlowState<>(null, received, received.size(), true, fromStep, kind, branchIndex);
+                yield new FlowState<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
             }
-            case Continuation.GoTo goTo -> new FlowState<>(goTo.stepName(), received, received.size(), false, fromStep, kind, branchIndex);
-            case Continuation.End ignored -> new FlowState<>(null, received, received.size(), true, fromStep, kind, branchIndex);
+            case Continuation.GoTo goTo -> new FlowState<>(goTo.stepName(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
+            case Continuation.End ignored -> new FlowState<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
         };
+    }
+
+    // Drop the retained-tail events older than newWindowStart, keeping the pinned initiating event (received.get(0)). The
+    // tail element at relative index 1 is at absolute position oldWindowStart, so advancing windowStart by n drops the
+    // first n tail elements. newWindowStart >= oldWindowStart always, so this only ever shrinks the tail.
+    private static <E> List<E> retain(List<E> received, int oldWindowStart, int newWindowStart) {
+        int drop = newWindowStart - oldWindowStart;
+        if (drop <= 0) {
+            return received;
+        }
+        List<E> retained = new ArrayList<>(received.size() - drop);
+        retained.add(received.get(0));
+        retained.addAll(received.subList(1 + drop, received.size()));
+        return retained;
     }
 
     @Override
