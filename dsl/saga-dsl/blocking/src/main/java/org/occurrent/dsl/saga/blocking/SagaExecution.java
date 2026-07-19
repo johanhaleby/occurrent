@@ -30,8 +30,9 @@ import org.occurrent.dsl.saga.SagaTimeout;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.lang.System.Logger.Level;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -42,7 +43,7 @@ import java.util.Set;
  * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
  */
 final class SagaExecution<E, S extends @Nullable Object, C> {
-    private static final System.Logger LOG = System.getLogger(SagaExecution.class.getName());
+    private static final Logger log = LoggerFactory.getLogger(SagaExecution.class);
 
     private final Saga<E, S, C> saga;
     private final SagaStateStore<S> stateStore;
@@ -85,12 +86,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         process(envelope.sagaId(), SagaInput.timeout(new SagaTimeout(envelope.sagaId(), timerName)), EventMeta.NONE, timerName);
                     } catch (RuntimeException e) {
                         // Keep polling other timers/instances. This one stays due and is retried next poll unless consumed.
-                        LOG.log(Level.WARNING, "Failed to fire saga timer '" + timerName + "' for instance '" + envelope.sagaId() + "'", e);
+                        log.warn("Failed to fire saga timer '{}' for instance '{}'", timerName, envelope.sagaId(), e);
                     }
                 }
             }
         } catch (Throwable t) {
-            LOG.log(Level.WARNING, "Saga timer poll failed", t);
+            log.warn("Saga timer poll failed", t);
         }
     }
 

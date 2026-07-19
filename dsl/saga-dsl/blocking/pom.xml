@@ -59,6 +59,10 @@
             <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
         <!-- Optional: the CommandDispatchers.decider(...) convenience adapter over a decider-backed application service -->
         <dependency>
             <groupId>org.occurrent</groupId>
