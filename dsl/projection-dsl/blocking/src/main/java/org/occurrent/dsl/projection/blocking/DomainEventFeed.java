@@ -28,6 +28,8 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
@@ -52,6 +54,7 @@ public final class DomainEventFeed<E> {
     private final Function<E, String> eventId;
     private final @Nullable CheckpointStorage catchupMarker;
     private final CopyOnWriteArrayList<CatchupProjectionFeed<E>> feeds = new CopyOnWriteArrayList<>();
+    private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
 
     /**
      * @param reader          The store read used to replay history during each projection's catch-up.
@@ -89,6 +92,10 @@ public final class DomainEventFeed<E> {
      * {@code replayFilter}.
      */
     public void register(String id, MaterializedView<E> view, Filter replayFilter) {
+        // Each id must be unique because it is the durable checkpoint key.
+        if (!registeredIds.add(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
         feeds.add(CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker));
     }
 

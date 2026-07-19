@@ -27,6 +27,9 @@ import java.util.Set;
  * A bounded set of event ids that de-duplicates the replay-to-live overlap in the catch-up feeds. It retains
  * the most recently added ids up to {@code maxSize}, evicting the oldest once the cap is reached. Not thread-safe: the
  * catch-up pipelines serialize all access to it.
+ * <p>
+ * This deliberately re-implements {@code org.occurrent.subscription.internal.BoundedIdCache} rather than depend on
+ * {@code subscription-core}, keeping this module independent of the subscription stack.
  */
 @NullMarked
 public final class BoundedIdCache {
