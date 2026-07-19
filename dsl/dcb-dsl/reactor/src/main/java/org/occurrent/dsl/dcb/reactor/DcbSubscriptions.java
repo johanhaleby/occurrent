@@ -24,6 +24,7 @@ import org.occurrent.dsl.dcb.DcbCriteriaBuilder;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.reactor.DcbSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
@@ -76,6 +77,15 @@ public final class DcbSubscriptions<E> {
      */
     public DcbCriteriaBuilder<E> criteria() {
         return new DcbCriteriaBuilder<>(cloudEventConverter);
+    }
+
+    /**
+     * A {@link DcbCriteriaBuilder} seeded with a boundary criterion: {@code type}/{@code types}/{@code tags} refine the
+     * boundary (setting their dimension, keeping the others), so a shared tag boundary can be reused and given
+     * subscription-specific event types.
+     */
+    public DcbCriteriaBuilder<E> criteria(DcbCriterion boundary) {
+        return new DcbCriteriaBuilder<>(cloudEventConverter, boundary);
     }
 
     /**
