@@ -22,6 +22,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbCriterion
 import org.occurrent.eventstore.api.dcb.Tag
+import java.util.Objects
 import kotlin.reflect.KClass
 
 /**
@@ -69,7 +70,8 @@ class DcbCriteriaBuilder<E : Any> private constructor(
     fun types(first: Class<out E>, vararg rest: Class<out E>): DcbCriterion {
         val mapped = ArrayList<String>(rest.size + 1)
         mapped.add(typeGetter.getCloudEventType(first))
-        for (type in rest) mapped.add(typeGetter.getCloudEventType(type))
+        // A Java caller can still pass a null vararg element despite the non-null Kotlin type, so validate each explicitly.
+        for (type in rest) mapped.add(typeGetter.getCloudEventType(Objects.requireNonNull(type, "Type cannot be null")))
         return if (boundary != null) boundary.types(mapped) else DcbCriteria.types(mapped)
     }
 
