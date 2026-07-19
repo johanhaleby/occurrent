@@ -170,6 +170,22 @@ class CatchupProjectionFeedTest {
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("writesPosition");
     }
 
+    @Test
+    void a_null_event_id_fails_fast_instead_of_silently_dropping() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", projection(), repository, store, converter, event -> null, null);
+
+        Throwable thrown = catchThrowable(feed::catchUp);
+
+        assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("eventId function returned null");
+    }
+
     // --- helpers ---
 
     private static CatchupProjectionFeed<Counted> feed(String id, InMemoryEventStore store, CloudEventConverter<Counted> converter,

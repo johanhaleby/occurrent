@@ -229,7 +229,7 @@ public final class CatchupProjectionFeed<E> {
     // Serialized by concatMap, so the de-dup cache is touched by one thread at a time and needs no synchronization.
     private Mono<Void> deliver(Item<E> item) {
         E event = item.event();
-        String key = eventId.apply(event);
+        String key = eventKey(event);
         MonoSink<Void> ack = item.ack();
         if (ack != null) {
             if (deliveredIds.contains(key)) {
@@ -249,6 +249,11 @@ public final class CatchupProjectionFeed<E> {
                     });
         }
         return Mono.defer(() -> fold.apply(event)).doOnSuccess(v -> deliveredIds.add(key));
+    }
+
+    // A null id would collapse every such event to one de-dup key and silently drop deliveries, so fail loud instead.
+    private String eventKey(E event) {
+        return Objects.requireNonNull(eventId.apply(event), "The eventId function returned null; every domain event must have a stable non-null id for de-duplication.");
     }
 
     private Mono<Boolean> alreadyCaughtUp() {

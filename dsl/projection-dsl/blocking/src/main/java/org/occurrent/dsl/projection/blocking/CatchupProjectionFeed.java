@@ -207,7 +207,7 @@ public final class CatchupProjectionFeed<E> {
                 E event = converter.toDomainEvent(cloudEvent);
                 view.update(event);
                 synchronized (lock) {
-                    deliveredIds.add(eventId.apply(event));
+                    deliveredIds.add(eventKey(event));
                 }
             });
         }
@@ -227,12 +227,17 @@ public final class CatchupProjectionFeed<E> {
 
     // Must be called holding lock. Folds unless the event was already folded by the replay or an earlier live copy.
     private void deliverLive(E event) {
-        String key = eventId.apply(event);
+        String key = eventKey(event);
         if (deliveredIds.contains(key)) {
             return;
         }
         view.update(event);
         deliveredIds.add(key);
+    }
+
+    // A null id would collapse every such event to one de-dup key and silently drop deliveries, so fail loud instead.
+    private String eventKey(E event) {
+        return Objects.requireNonNull(eventId.apply(event), "The eventId function returned null; every domain event must have a stable non-null id for de-duplication.");
     }
 
     private boolean isAlreadyCaughtUp() {
