@@ -61,7 +61,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
 
     void onCloudEvent(CloudEvent cloudEvent) {
         E event = converter.toDomainEvent(cloudEvent);
-        String sagaId = saga.correlationId(event);
+        String sagaId = saga.sagaId(event);
         if (sagaId == null) {
             return;
         }

@@ -83,7 +83,7 @@ retry policies, recurring-job management) does not apply to saga timers at all. 
 untouched and remains the right tool for general-purpose application scheduling; `saga-dsl` takes no dependency on
 it.
 
-**Correlation keys are strings, with a per-type mapping and a required fallback.** `correlationId(E) -> @Nullable
+**Correlation keys are strings, with a per-type mapping and a required fallback.** `sagaId(E) -> @Nullable
 String` returns a plain `String`, not a generic identifier type, because the correlation key must round-trip
 whatever the executor's store persists it as, and a generic ID type would force a conversion at that boundary for no
 benefit. Correlation is declared per event type on the builder, with a `correlateAll` fallback for the remaining

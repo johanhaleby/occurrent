@@ -75,7 +75,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     @Override
-    public @Nullable String correlationId(E event) {
+    public @Nullable String sagaId(E event) {
         Function<E, @Nullable String> correlator = correlators.resolve(event.getClass());
         return correlator == null ? null : correlator.apply(event);
     }

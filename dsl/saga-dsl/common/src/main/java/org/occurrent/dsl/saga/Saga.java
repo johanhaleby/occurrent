@@ -42,7 +42,7 @@ import static java.util.Objects.requireNonNull;
  *
  * <h2>Semantics an executor must honour</h2>
  * <ul>
- *   <li>An event with a {@code null} {@link #correlationId(Object)} belongs to no instance and is skipped.</li>
+ *   <li>An event with a {@code null} {@link #sagaId(Object)} belongs to no instance and is skipped.</li>
  *   <li>A correlated event whose type is not in {@link #startEventTypes()} and for which no instance exists is skipped.</li>
  *   <li>For each input the executor computes {@code s' = evolve(state, input)}, then {@code react(s', input)}: react sees
  *       the state <em>after</em> the fold. Replay only ever folds {@link #evolve}, so it produces no effects.</li>
@@ -98,7 +98,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * Which saga instance {@code event} belongs to, or {@code null} if it belongs to none (and should be skipped). The id
      * is a {@code String} so it round-trips losslessly through whatever the executor persists.
      */
-    @Nullable String correlationId(E event);
+    @Nullable String sagaId(E event);
 
     /** The event types that create a new instance when none exists for the correlation id. */
     Set<Class<? extends E>> startEventTypes();
@@ -136,12 +136,12 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * terminal and has no {@code onStart}. Implement the interface directly for those.
      */
     static <E, S extends @Nullable Object, C> Saga<E, S, C> create(S initialState,
-                                                                   Function<E, @Nullable String> correlationId,
+                                                                   Function<E, @Nullable String> sagaId,
                                                                    Set<Class<? extends E>> startEventTypes,
                                                                    Set<Class<? extends E>> eventTypes,
                                                                    BiFunction<S, SagaInput<E>, S> evolve,
                                                                    BiFunction<S, SagaInput<E>, List<SagaEffect<C>>> react) {
-        requireNonNull(correlationId, "correlationId cannot be null");
+        requireNonNull(sagaId, "sagaId cannot be null");
         requireNonNull(startEventTypes, "startEventTypes cannot be null");
         requireNonNull(eventTypes, "eventTypes cannot be null");
         requireNonNull(evolve, "evolve cannot be null");
@@ -165,8 +165,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
             }
 
             @Override
-            public @Nullable String correlationId(E event) {
-                return correlationId.apply(event);
+            public @Nullable String sagaId(E event) {
+                return sagaId.apply(event);
             }
 
             @Override
@@ -230,8 +230,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
             }
 
             @Override
-            public @Nullable String correlationId(E event) {
-                return eventType.isInstance(event) ? saga.correlationId(eventType.cast(event)) : null;
+            public @Nullable String sagaId(E event) {
+                return eventType.isInstance(event) ? saga.sagaId(eventType.cast(event)) : null;
             }
 
             @Override
@@ -468,7 +468,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 }
 
                 @Override
-                public @Nullable String correlationId(E event) {
+                public @Nullable String sagaId(E event) {
                     Function<E, @Nullable String> correlator = correlateDispatch.resolve(event.getClass());
                     if (correlator != null) {
                         return correlator.apply(event);

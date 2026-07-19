@@ -190,7 +190,7 @@ class SagaTest {
                     .startsOn(OrderPlaced.class)
                     .build();
 
-            assertThat(saga.correlationId(new OrderPlaced("order-1", 100))).isEqualTo("specific-order-1");
+            assertThat(saga.sagaId(new OrderPlaced("order-1", 100))).isEqualTo("specific-order-1");
         }
 
         @Test
@@ -201,7 +201,7 @@ class SagaTest {
                     .startsOn(OrderPlaced.class)
                     .build();
 
-            assertThat(saga.correlationId(new PaymentReserved("order-1"))).isEqualTo("fallback-order-1");
+            assertThat(saga.sagaId(new PaymentReserved("order-1"))).isEqualTo("fallback-order-1");
         }
 
         @Test
@@ -211,7 +211,7 @@ class SagaTest {
                     .startsOn(OrderPlaced.class)
                     .build();
 
-            assertThat(saga.correlationId(new PaymentFailed("order-1"))).isNull();
+            assertThat(saga.sagaId(new PaymentFailed("order-1"))).isNull();
         }
 
         @Test
@@ -222,7 +222,7 @@ class SagaTest {
                     .startsOn(OrderPlaced.class)
                     .build();
 
-            assertThat(saga.correlationId(new OrderPlaced("order-1", 100))).isEqualTo("order-1");
+            assertThat(saga.sagaId(new OrderPlaced("order-1", 100))).isEqualTo("order-1");
         }
     }
 
@@ -460,7 +460,7 @@ class SagaTest {
         void a_foreign_event_correlates_to_null() {
             Saga<Object, OrderState, Object> saga = widened();
 
-            assertThat(saga.correlationId("not-an-order-event")).isNull();
+            assertThat(saga.sagaId("not-an-order-event")).isNull();
         }
 
         @Test
@@ -515,11 +515,11 @@ class SagaTest {
                         List.of(SagaEffect.issue(new ReservePayment(placed.orderId(), placed.amount())));
                 default -> List.of();
             };
-            Function<OrderEvent, String> correlationId = OrderEvent::orderId;
+            Function<OrderEvent, String> sagaId = OrderEvent::orderId;
 
             Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.create(
                     null,
-                    correlationId,
+                    sagaId,
                     Set.of(OrderPlaced.class),
                     Set.of(OrderPlaced.class),
                     evolve,
@@ -531,7 +531,7 @@ class SagaTest {
                     () -> assertThat(saga.initialState()).isNull(),
                     () -> assertThat(step.state()).isEqualTo(new AwaitingPayment("order-1")),
                     () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new ReservePayment("order-1", 100))),
-                    () -> assertThat(saga.correlationId(new OrderPlaced("order-1", 100))).isEqualTo("order-1"),
+                    () -> assertThat(saga.sagaId(new OrderPlaced("order-1", 100))).isEqualTo("order-1"),
                     () -> assertThat(saga.startEventTypes()).containsExactly(OrderPlaced.class),
                     () -> assertThat(saga.eventTypes()).containsExactly(OrderPlaced.class)
             );

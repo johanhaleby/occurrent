@@ -184,8 +184,8 @@ class SagaExtensionsTest {
             val saga = gameSaga()
 
             assertAll(
-                { assertThat(saga.correlationId(GameStarted("game-1"))).isEqualTo("game-1") },
-                { assertThat(saga.correlationId(MoveMade("game-1", "alice"))).isEqualTo("game-1") }
+                { assertThat(saga.sagaId(GameStarted("game-1"))).isEqualTo("game-1") },
+                { assertThat(saga.sagaId(MoveMade("game-1", "alice"))).isEqualTo("game-1") }
             )
         }
     }
