@@ -84,7 +84,12 @@ public final class DomainEventFeed<E> {
      */
     public Mono<Void> accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        return Flux.fromIterable(feeds).concatMap(feed -> feed.accept(event)).then();
+        // Avoid allocating a Flux pipeline per live event for the common single-projection feed.
+        return switch (feeds.size()) {
+            case 0 -> Mono.empty();
+            case 1 -> feeds.get(0).accept(event);
+            default -> Flux.fromIterable(feeds).concatMap(feed -> feed.accept(event)).then();
+        };
     }
 
     /**

@@ -586,14 +586,12 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         if (store instanceof ViewStateRepository) {
             feed.register(id, projection, (ViewStateRepository<S, ID>) store);
-        } else if (store instanceof MaterializedView) {
-            // Drive the existing MaterializedView with a reactive fold (folded on boundedElastic, as the normal
-            // reactor projection path does), replaying the events the projection handles.
+        } else {
+            // resolveStore guarantees a ViewStateRepository or MaterializedView, so this is a MaterializedView. Drive it
+            // with a reactive fold (folded on boundedElastic, as the normal reactor projection path does).
             Function<E, Mono<Void>> fold = Projections.reactiveUpdate((MaterializedView<E>) store);
             Filter replayFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
             feed.register(id, fold, replayFilter);
-        } else {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH and a DomainEventFeed requires a ViewStateRepository or MaterializedView store on the reactor stack, but resolved %s.".formatted(id, store.getClass().getName()));
         }
         domainFeedsToCatchUp.add(feed);
     }

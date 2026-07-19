@@ -113,21 +113,11 @@ public final class CatchupProjectionFeed<E> {
             String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
             @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
-        Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
-        Objects.requireNonNull(reader, "reader cannot be null");
-        Objects.requireNonNull(converter, "converter cannot be null");
-        Objects.requireNonNull(eventId, "eventId cannot be null");
-        if (dedupCacheSize <= 0) {
-            throw new IllegalArgumentException("dedupCacheSize must be greater than zero");
-        }
-        if (maxBufferedEvents <= 0) {
-            throw new IllegalArgumentException("maxBufferedEvents must be greater than zero");
-        }
         Function<E, Mono<Void>> fold = Projections.reactiveUpdate(projection, repository, id);
         Filter filter = ProjectionFilters.filterFor(converter, projection);
-        return new CatchupProjectionFeed<>(id, fold, filter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
+        return create(id, fold, filter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
     }
 
     /**
