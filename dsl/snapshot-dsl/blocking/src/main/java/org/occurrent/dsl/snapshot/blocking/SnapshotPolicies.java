@@ -14,15 +14,19 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.snapshot;
+package org.occurrent.dsl.snapshot.blocking;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.decider.Decider;
+import org.occurrent.dsl.snapshot.SnapshotPolicy;
 
 import java.util.Objects;
 
 /**
  * Snapshot policies that need a {@link Decider}, complementing the storage-neutral built-ins on {@link SnapshotPolicy}.
+ * <p>
+ * This lives in the executor module (not {@code snapshot-dsl-common}) so that a {@code SnapshotView}-only consumer
+ * doesn't have to pull {@code occurrent-decider} onto its classpath just to read snapshots (see ADR 0061).
  */
 public final class SnapshotPolicies {
 
@@ -30,9 +34,9 @@ public final class SnapshotPolicies {
     }
 
     /**
-     * Snapshots whenever the decider's state becomes terminal, the natural "close the books" boundary. A terminal state
-     * is the end of an entity's lifecycle (a closed fiscal period, a completed process), so capturing it lets the next
-     * period resume from the closing state instead of replaying the closed one.
+     * Snapshots whenever the decider's state becomes terminal, the natural "close the books" boundary. A terminal
+     * state is the end of an entity's lifecycle (a closed fiscal period, a completed process), so capturing it lets
+     * the next period resume from the closing state instead of replaying the closed one.
      */
     public static <S extends @Nullable Object, E> SnapshotPolicy<S, E> whenTerminal(Decider<?, S, E> decider) {
         Objects.requireNonNull(decider, "decider cannot be null");

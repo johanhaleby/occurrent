@@ -35,11 +35,13 @@ today) or synchronous, via a separate `@SynchronousSubscription` annotation. The
 `mode` attribute on `@Subscription`. A separate annotation makes illegal states unrepresentable: it carries only an
 id, event types, and a filter, none of the async-only knobs (`startAt`, `resumeBehavior`, `startupMode`) that have no
 meaning for synchronous, at-write-time dispatch. The existing `@Subscription`/`@StreamSubscription`/`@DcbSubscription`
-are unchanged and stay asynchronous, following "mark the exception, not the default": in Occurrent "subscription"
-already denotes the asynchronous mechanism, so only the new special case gets an adjective. ADR 59 later gives
-`@Projection` (and `@Snapshot`) a `mode` attribute instead of a separate annotation. That divergence is intentional,
-not an oversight: a projection is one concept with two delivery timings, while a subscription is Occurrent's name for
-the asynchronous mechanism specifically. See ADR 59 for the reconciling argument.
+are unchanged and stay asynchronous: the knob surface argument cuts the same way for them, since `startAt`,
+`resumeBehavior`, and `startupMode` are exactly what those annotations exist to configure, so folding synchronous
+dispatch into them would either dead-letter those knobs for the synchronous case or force a mode switch that
+re-legalizes the very combination this ADR keeps unrepresentable. ADR 59 later gives `@Projection` (and `@Snapshot`)
+a `mode` attribute instead of a separate annotation. That divergence is intentional, not an oversight: a projection's
+async-only knobs (the catch-up start position and resume behavior) are optional there too, so a `mode` switch does
+not resurrect an illegal combination the way it would on `@Subscription`. See ADR 59 for the reconciling argument.
 
 **A register-only `SynchronousSubscriptionModel` implements the existing `Subscribable`,** so the `Subscriptions`
 DSL and the annotation front-ends target it unchanged. It has no lifecycle, start position, checkpoint, catch-up, or
