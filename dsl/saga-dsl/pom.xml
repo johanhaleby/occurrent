@@ -28,5 +28,6 @@
     <artifactId>saga-dsl</artifactId>
     <modules>
         <module>common</module>
+        <module>blocking</module>
     </modules>
 </project>
