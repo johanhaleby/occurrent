@@ -205,5 +205,111 @@ class FlowSagaTest {
                     .hasMessageContaining("correlate")
                     .hasMessageContaining("OrderPlaced");
         }
+
+        @Test
+        void historyWindow_rejects_a_negative_value() {
+            assertThatThrownBy(() -> FlowSaga.<OrderEvent, OrderCommand>builder().historyWindow(-1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("historyWindow");
+        }
+    }
+
+    @Nested
+    class BoundedRetentionWindow {
+
+        sealed interface WinEvent permits Begin, Tick {
+            String id();
+        }
+
+        record Begin(String id) implements WinEvent {
+        }
+
+        record Tick(String id) implements WinEvent {
+        }
+
+        sealed interface WinCommand permits Noop {
+        }
+
+        record Noop() implements WinCommand {
+        }
+
+        /** A two-step flow that ping-pongs between "a" and "b" on every Tick, so every event drives a transition. */
+        private static Saga<WinEvent, FlowState<WinEvent>, WinCommand> pingPong(int historyWindow) {
+            return FlowSaga.<WinEvent, WinCommand>builder()
+                    .historyWindow(historyWindow)
+                    .startsOn(Begin.class, Begin::id)
+                    .correlate(Tick.class, Tick::id)
+                    .step("a", step -> step.on(Tick.class, Continuation.goTo("b"), t -> List.of()))
+                    .step("b", step -> step.on(Tick.class, Continuation.goTo("a"), t -> List.of()))
+                    .build();
+        }
+
+        private static FlowState<WinEvent> runTicks(Saga<WinEvent, FlowState<WinEvent>, WinCommand> saga, int ticks) {
+            FlowState<WinEvent> state = saga.evolve(saga.initialState(), SagaInput.event(new Begin("w")));
+            for (int i = 0; i < ticks; i++) {
+                state = saga.evolve(state, SagaInput.event(new Tick("w")));
+            }
+            return state;
+        }
+
+        @Test
+        void a_join_still_matches_when_its_events_outnumber_the_history_window() {
+            // historyWindow(0) keeps no carry-over history, yet a join must still see every event received since the step
+            // was entered: the current step's own events are never dropped mid-step, only earlier history is bounded.
+            Saga<WinEvent, FlowState<WinEvent>, WinCommand> saga = FlowSaga.<WinEvent, WinCommand>builder()
+                    .historyWindow(0)
+                    .startsOn(Begin.class, Begin::id)
+                    .correlate(Tick.class, Tick::id)
+                    .step("wait", step -> step.join(List.of(Expectation.of(Tick.class, 3)), Continuation.end(), r -> List.of()))
+                    .build();
+
+            FlowState<WinEvent> beforeThird = runTicks(saga, 2);
+            FlowState<WinEvent> afterThird = saga.step(beforeThird, SagaInput.event(new Tick("w"))).state();
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(beforeThird)).as("not fulfilled after two ticks").isFalse(),
+                    () -> assertThat(saga.isTerminal(afterThird)).as("the three-tick join fulfils on the third").isTrue()
+            );
+        }
+
+        @Test
+        void the_retained_event_count_stays_bounded_no_matter_how_many_events_arrive() {
+            Saga<WinEvent, FlowState<WinEvent>, WinCommand> saga = pingPong(3);
+
+            int atTen = runTicks(saga, 10).received().size();
+            int atHundred = runTicks(saga, 100).received().size();
+            int atThousand = runTicks(saga, 1000).received().size();
+
+            assertAll(
+                    () -> assertThat(atHundred).as("constant once past the window").isEqualTo(atThousand),
+                    () -> assertThat(atTen).isEqualTo(atThousand),
+                    () -> assertThat(atThousand).as("bounded by the window plus the pinned initiating event").isLessThanOrEqualTo(3 + 2)
+            );
+        }
+
+        @Test
+        void events_older_than_the_window_are_dropped_but_the_initiating_event_is_kept() {
+            Saga<WinEvent, FlowState<WinEvent>, WinCommand> saga = pingPong(2);
+
+            FlowState<WinEvent> state = runTicks(saga, 50);
+
+            assertAll(
+                    () -> assertThat(state.received().get(0)).as("the initiating event is pinned at position 0").isEqualTo(new Begin("w")),
+                    () -> assertThat(state.received()).as("the whole 50-event history is not retained").hasSizeLessThan(10),
+                    () -> assertThat(state.receivedEvents().initiating(Begin.class)).isEqualTo(new Begin("w"))
+            );
+        }
+
+        @Test
+        void a_guard_reads_only_the_retained_window() {
+            // With historyWindow(1) the retained window holds the initiating event plus at most a couple of recent ticks, so
+            // a guard counting ticks sees a bounded count rather than the full run.
+            Saga<WinEvent, FlowState<WinEvent>, WinCommand> saga = pingPong(1);
+
+            FlowState<WinEvent> state = runTicks(saga, 40);
+            ReceivedEvents<WinEvent> received = state.receivedEvents();
+
+            assertThat(received.count(Tick.class)).isLessThan(40);
+        }
     }
 }

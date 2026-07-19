@@ -84,6 +84,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // Field names inside a persisted FlowState document.
     private static final String FLOW_CURRENT_STEP = "currentStep";
+    private static final String FLOW_WINDOW_START = "windowStart";
     private static final String FLOW_STEP_ENTRY_INDEX = "stepEntryIndex";
     private static final String FLOW_COMPLETED = "completed";
     private static final String FLOW_PREVIOUS_STEP = "previousStep";
@@ -168,6 +169,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(now, "now cannot be null");
         Query query = Query.query(where(STATUS).is(Status.ACTIVE.name()).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
                 .limit(limit);
+        // Project only the fields the poller needs to decide which timers are due. This deliberately excludes the state
+        // (a flow saga's received log can be large), so the poll never pays to decode it. The executor re-loads the full
+        // document with find(sagaId) before it processes a timer, which is the authoritative read the fire acts on.
+        query.fields().include(ID).include(STATUS).include(TIMERS).include(NEXT_TIMER_FIRES_AT).include(VERSION);
         return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
     }
 
@@ -217,6 +222,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (flowState.currentStep() != null) {
             document.append(FLOW_CURRENT_STEP, flowState.currentStep());
         }
+        document.append(FLOW_WINDOW_START, flowState.windowStart());
         document.append(FLOW_STEP_ENTRY_INDEX, flowState.stepEntryIndex());
         document.append(FLOW_COMPLETED, flowState.completed());
         if (flowState.previousStep() != null) {
@@ -280,6 +286,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return new FlowState<>(
                 document.getString(FLOW_CURRENT_STEP),
                 received,
+                document.getInteger(FLOW_WINDOW_START, 0),
                 document.getInteger(FLOW_STEP_ENTRY_INDEX, 0),
                 document.getBoolean(FLOW_COMPLETED, false),
                 document.getString(FLOW_PREVIOUS_STEP),
