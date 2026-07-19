@@ -32,6 +32,9 @@ import java.lang.annotation.*;
  *         .startsOn(OrderPlaced.class)
  *         .evolve(OrderPlaced.class, (state, event) -> state.placed(event))
  *         .react(OrderPlaced.class, (state, event) -> List.of(SagaEffect.startTimeout("payment", Duration.ofMinutes(30))))
+ *         .evolve(PaymentReserved.class, (state, event) -> state.paid())
+ *         .react(PaymentReserved.class, (state, event) -> List.of(SagaEffect.cancelTimeout("payment"), SagaEffect.issue(new ShipOrder(event.orderId()))))
+ *         .reactOnTimeout("payment", (state, timeout) -> List.of(SagaEffect.issue(new CancelOrder(timeout.sagaId()))))
  *         .build();
  * }
  * </pre>

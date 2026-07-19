@@ -347,7 +347,11 @@ public interface Saga<E, S extends @Nullable Object, C> {
             return this;
         }
 
-        /** Registers the reaction for one named timer firing, given the post-evolve state. Registering the same name twice throws. */
+        /**
+         * Registers the reaction for one named timer firing, given the post-evolve state. Registering the same name twice
+         * throws. A fired timer with no reaction registered here (and no {@link #evolveOnTimeout}) is consumed without
+         * changing state or issuing a command, so every {@link SagaEffect#startTimeout} you arm needs a matching handler.
+         */
         public Builder<E, S, C> reactOnTimeout(String timerName, BiFunction<S, SagaTimeout, List<SagaEffect<C>>> handler) {
             requireNonNull(timerName, "timerName cannot be null");
             requireNonNull(handler, "handler cannot be null");
