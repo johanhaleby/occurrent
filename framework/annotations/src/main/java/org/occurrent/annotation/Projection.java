@@ -147,4 +147,32 @@ public @interface Projection {
      * or {@code CrudRepository} bean, otherwise the default Mongo implementation on the blocking stack).
      */
     String storeName() default "";
+
+    /**
+     * Where the projection reads its events from. {@link Source#EVENT_STORE} (the default) uses the framework's
+     * asynchronous catch-up and durable subscription models. {@link Source#PUSH} feeds the projection from an external
+     * push feed (RabbitMQ, Kafka, ...) instead, wrapped in a replay-then-push catch-up. Select the feed bean
+     * with {@link #subscriptionModel()} or {@link #subscriptionModelName()}; its type decides how live events are
+     * delivered (a {@code PushSubscriptionModel} delivers CloudEvents, a {@code DomainEventFeed} delivers domain events
+     * directly). Push source is mutually exclusive with {@link Mode#SYNCHRONOUS} and with the catch-up start knobs
+     * ({@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, {@link #startupMode()}), since
+     * the catch-up always replays from the beginning and live-resume is the broker's responsibility.
+     */
+    Source source() default Source.EVENT_STORE;
+
+    /**
+     * The push feed bean to feed this projection when {@link #source()} is {@link Source#PUSH}, given as the bean's type
+     * (a {@code PushSubscriptionModel} for CloudEvents, or a {@code DomainEventFeed} for domain events). {@link Void}
+     * (the default) leaves the type unset, in which case {@link #subscriptionModelName()} or the unique push feed bean
+     * applies. When several beans of the given type exist, disambiguate with {@link #subscriptionModelName()}. Ignored
+     * for {@link Source#EVENT_STORE}.
+     */
+    Class<?> subscriptionModel() default Void.class;
+
+    /**
+     * Optional Spring bean name of the push feed bean, used when {@link #source()} is {@link Source#PUSH}. Used on its
+     * own to resolve the feed by name, or together with {@link #subscriptionModel()} to pick one bean when several of
+     * that type exist. An empty string (the default) means unset. Ignored for {@link Source#EVENT_STORE}.
+     */
+    String subscriptionModelName() default "";
 }

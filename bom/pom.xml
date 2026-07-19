@@ -218,6 +218,16 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-subscription-push-blocking</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-subscription-push-reactor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-subscription-mongodb-spring-common</artifactId>
                 <version>${project.version}</version>
             </dependency>

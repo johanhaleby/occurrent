@@ -23,6 +23,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
 
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
@@ -87,5 +88,26 @@ public final class Projections {
             S currentState = repository.findById(key).orElse(view.initialState());
             repository.save(key, view.evolve(currentState, event));
         };
+    }
+
+    /**
+     * A {@link Consumer} that folds a <strong>domain event</strong> straight into {@code repository} for a keyed
+     * projection, with no CloudEvent conversion. Use it to drive a projection from a source that already hands you
+     * domain events (a RabbitMQ or Kafka listener with its own message converter), so a live event is folded directly
+     * rather than round-tripped through {@code toCloudEvent}/{@code toDomainEvent}. An event whose id resolves to
+     * {@code null} is skipped, and the fold no-ops on an event type the projection does not handle. This is the live-tail
+     * feed only, with no catch-up: backfill a new or rebuilt projection from the event store first.
+     */
+    public static <S extends @Nullable Object, E, ID> Consumer<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+        return materializedView(projection, repository)::update;
+    }
+
+    /**
+     * A {@link Consumer} domain-event feed for a keyed or single-instance projection, folding directly into
+     * {@code repository} with no CloudEvent conversion. A single-instance projection (no id function) updates one slot
+     * keyed by {@code singletonKey}. See {@link #domainEventFeed(Projection, ViewStateRepository)}.
+     */
+    public static <S extends @Nullable Object, E, ID> Consumer<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
+        return materializedView(projection, repository, singletonKey)::update;
     }
 }

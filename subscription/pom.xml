@@ -33,6 +33,7 @@
         <module>util</module>
         <module>inmemory</module>
         <module>synchronous</module>
+        <module>push</module>
     </modules>
 
     <dependencyManagement>

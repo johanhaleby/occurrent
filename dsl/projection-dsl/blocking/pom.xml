@@ -59,6 +59,17 @@
             <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Position-ordered store read + checkpoint marker for CatchupProjectionFeed's catch-up replay -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-api-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-api-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib</artifactId>

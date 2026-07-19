@@ -117,8 +117,8 @@ jobs:
           - { name: eventstore-rest,             paths: "eventstore/api eventstore/inmemory eventstore/migration eventstore/mongodb/common eventstore/mongodb/native" }
           - { name: subscription-mongodb-spring, paths: "subscription/mongodb/spring" }
           - { name: subscription-mongodb-native, paths: "subscription/mongodb/native subscription/mongodb/common subscription/redis" }
-          - { name: subscription-util-blocking,  paths: "subscription/util/blocking subscription/synchronous/blocking" }
-          - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor subscription/synchronous/reactor" }
+          - { name: subscription-util-blocking,  paths: "subscription/util/blocking subscription/synchronous/blocking subscription/push/blocking" }
+          - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor subscription/synchronous/reactor subscription/push/reactor" }
           - { name: framework,                   paths: "framework" }
           # example modules run real MongoDB replica-set containers with timing-sensitive
           # Awaitility subscription-catchup tests. A single example shard started 12 containers

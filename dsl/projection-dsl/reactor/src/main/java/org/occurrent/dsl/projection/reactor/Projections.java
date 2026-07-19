@@ -102,4 +102,25 @@ public final class Projections {
         requireNonNull(materializedView, "materializedView cannot be null");
         return event -> Mono.<Void>fromRunnable(() -> materializedView.update(event)).subscribeOn(Schedulers.boundedElastic());
     }
+
+    /**
+     * A reactive {@code (E) -> Mono<Void>} feed that folds a <strong>domain event</strong> straight into the blocking
+     * {@code repository} for a keyed projection (on {@link Schedulers#boundedElastic()}), with no CloudEvent conversion.
+     * Use it to drive a projection from a source that already hands you domain events (a RabbitMQ or Kafka listener with
+     * its own message converter), so a live event is folded directly rather than round-tripped through
+     * {@code toCloudEvent}/{@code toDomainEvent}. The reactor counterpart of the blocking
+     * {@code Projections.domainEventFeed(...)}, and the same shape as {@link #reactiveUpdate(Projection, ViewStateRepository)}.
+     * This is the live-tail feed only, with no catch-up.
+     */
+    public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+        return reactiveUpdate(projection, repository);
+    }
+
+    /**
+     * A reactive domain-event feed for a keyed or single-instance projection, folding directly into {@code repository}
+     * with no CloudEvent conversion. See {@link #domainEventFeed(Projection, ViewStateRepository)}.
+     */
+    public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
+        return reactiveUpdate(projection, repository, singletonKey);
+    }
 }
