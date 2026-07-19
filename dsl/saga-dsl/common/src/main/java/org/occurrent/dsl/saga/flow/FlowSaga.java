@@ -22,6 +22,7 @@ import org.occurrent.dsl.saga.flow.FlowSagaImpl.Branch;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.ChoiceBody;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.CompiledStep;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.JoinBody;
+import org.occurrent.dsl.saga.internal.TypeDispatch;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -181,8 +182,8 @@ public final class FlowSaga {
         }
 
         private void validateCorrelationCoverage(Set<Class<? extends E>> eventTypes) {
-            org.occurrent.dsl.saga.internal.TypeDispatch<Function<E, @Nullable String>> coverage =
-                    new org.occurrent.dsl.saga.internal.TypeDispatch<>(correlators);
+            TypeDispatch<Function<E, @Nullable String>> coverage =
+                    new TypeDispatch<>(correlators);
             for (Class<? extends E> type : eventTypes) {
                 if (coverage.resolve(type) == null) {
                     throw new IllegalStateException("event type " + type.getName() + " is used by a step but has no correlation; "
