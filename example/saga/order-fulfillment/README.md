@@ -24,5 +24,5 @@ into the saga.
 Run it:
 
 ```
-rtk mvn -pl example/saga/order-fulfillment -am test
+mvn -pl example/saga/order-fulfillment -am test
 ```

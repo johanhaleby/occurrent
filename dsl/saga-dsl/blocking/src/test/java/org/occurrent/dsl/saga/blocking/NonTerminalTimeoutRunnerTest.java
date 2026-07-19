@@ -84,6 +84,7 @@ class NonTerminalTimeoutRunnerTest {
                     .untilAsserted(() -> assertThat(issued).containsExactly(new Ping("s1")));
         } finally {
             subscription.close();
+            subscriptionModel.shutdown();
         }
     }
 }
