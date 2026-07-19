@@ -87,10 +87,7 @@ Annotation attributes (`startAt`, `resumeBehavior`, `startupMode`) are compile-t
 
 ### Testcontainers gotchas
 
-- `MongoDBContainer.getReplicaSetUrl()` (no-arg) always targets the `"test"` database. Use `getReplicaSetUrl(String databaseName)` for isolation; do NOT string-concat a suffix (Mongo forbids dots in DB names and it silently stays `"test"`, causing cross-test collisions).
-- Booting via `SpringApplication.run(...)` (not `@SpringBootTest`) gets no `@ServiceConnection`; pass `--spring.data.mongodb.uri=...` in the `args`.
-- This repo pins the host port `27017:27017` with `.withReuse(true)` in the restart-pattern tests (see `OccurrentReactiveMongoAutoConfigurationWiringTest`). Root cause not fully isolated (likely Colima/Testcontainers flakiness), but the fixed-port+reuse pattern is reliable here.
-- Mongo Testcontainers on this machine intermittently fail with `MongoSocketOpenException`/`Prematurely reached end of stream` right after container start, a known Colima networking flake (`colima.md`). Retry once before concluding a test is broken.
+Moved to `AGENTS.md` (Testing): the container-start `MongoSocketOpenException` retry-once flake, `getReplicaSetUrl(String)` database isolation, and the `SpringApplication.run` restart-pattern with fixed port `27017` + `.withReuse(true)`. Machine-specific Docker-socket/VPN details stay in `colima.md`/`nordvpn.md`.
 
 ## Known Fragile Areas And Risks
 

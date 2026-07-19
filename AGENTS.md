@@ -48,6 +48,9 @@ Unreleased changes go under the existing `### Changelog next version` heading, n
 
 - JUnit 5 plus AssertJ is the dominant style. jqwik covers a small set of property tests. Awaitility backs async, subscription, and deadline assertions.
 - Docker and Testcontainers-backed tests are common, mainly MongoDB and Redis. Some tests bind MongoDB to host port `27017`, which can collide with a locally running MongoDB or a concurrent test run.
+- On a macOS Docker runtime such as Colima, Mongo Testcontainers can intermittently fail with `MongoSocketOpenException` or "Prematurely reached end of stream" right after container start. Retry once before concluding a test is broken.
+- `MongoDBContainer.getReplicaSetUrl()` (no argument) always targets the `test` database. Use `getReplicaSetUrl(String databaseName)` for isolation, and do not string-concat a suffix onto the URL, because MongoDB forbids dots in database names, so the name silently stays `test` and causes cross-test collisions.
+- Restart-pattern tests that boot a fresh context with `SpringApplication.run(...)` rather than `@SpringBootTest` get no `@ServiceConnection`, so pass `--spring.data.mongodb.uri=...` in the args. Those tests pin host port `27017` with `.withReuse(true)`, which is reliable here.
 - There is no Failsafe split. Unit and integration-style tests both run under Surefire.
 
 ## Build and verification
