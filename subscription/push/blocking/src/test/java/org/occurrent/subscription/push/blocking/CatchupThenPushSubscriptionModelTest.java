@@ -164,6 +164,23 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
+    void a_catch_up_failure_makes_the_live_feed_fail_fast() {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+        PositionOrderedReader failingReader = failingReader();
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader, liveFeed, null);
+
+        Throwable replayFailure = catchThrowable(() ->
+                model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+                }));
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+    }
+
+    @Test
     void a_reader_that_does_not_write_positions_fails_fast_at_construction() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         PositionOrderedReader reader = positionlessReader();
@@ -243,6 +260,25 @@ class CatchupThenPushSubscriptionModelTest {
             @Override
             public boolean writesPosition() {
                 return false;
+            }
+        };
+    }
+
+    private static PositionOrderedReader failingReader() {
+        return new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                throw new IllegalStateException("replay boom");
+            }
+
+            @Override
+            public long currentPosition() {
+                return 0;
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
             }
         };
     }

@@ -133,15 +133,22 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // lost in the gap between the replay head and going live.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::onLiveEvent);
 
-        if (isAlreadyCaughtUp(subscriptionId)) {
-            // The broker owns live-resume from here, so skip the replay and just start delivering the live feed.
-            handover.drainBufferAndGoLive();
-        } else {
-            try (Stream<CloudEvent> history = reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())) {
-                history.forEach(handover::deliverReplayed);
+        try {
+            if (isAlreadyCaughtUp(subscriptionId)) {
+                // The broker owns live-resume from here, so skip the replay and just start delivering the live feed.
+                handover.drainBufferAndGoLive();
+            } else {
+                try (Stream<CloudEvent> history = reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())) {
+                    history.forEach(handover::deliverReplayed);
+                }
+                handover.drainBufferAndGoLive();
+                markCaughtUp(subscriptionId);
             }
-            handover.drainBufferAndGoLive();
-            markCaughtUp(subscriptionId);
+        } catch (RuntimeException e) {
+            // The replay failed after the live feed was already registered. Fail live events fed from here on rather
+            // than buffering them until overflow while the handover never goes live.
+            handover.markFailed(e);
+            throw e;
         }
         return new AlreadyStartedSubscription(subscriptionId);
     }
@@ -181,6 +188,7 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         private final Queue<CloudEvent> buffer = new ArrayDeque<>();
         private final BoundedIdCache deliveredIds;
         private boolean live = false;
+        private @Nullable Throwable failure = null;
 
         private Handover(Consumer<CloudEvent> action, int dedupCacheSize, int maxBufferedEvents) {
             this.action = action;
@@ -200,6 +208,9 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // Called on the listener thread for every live event. Buffered until the handover completes, then delivered.
         void onLiveEvent(CloudEvent cloudEvent) {
             synchronized (lock) {
+                if (failure != null) {
+                    throw new IllegalStateException("Catch-up failed for this subscription, so it cannot accept live events. Rebuild it after fixing the cause.", failure);
+                }
                 if (live) {
                     deliverLive(cloudEvent);
                     return;
@@ -220,6 +231,13 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
                 }
                 buffer.clear();
                 live = true;
+            }
+        }
+
+        // Record a catch-up failure so subsequent live events fail fast instead of buffering until overflow.
+        void markFailed(Throwable t) {
+            synchronized (lock) {
+                failure = t;
             }
         }
 

@@ -171,6 +171,24 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
+    void a_catch_up_failure_makes_accept_fail_fast_instead_of_buffering() {
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        CloudEventConverter<Counted> converter = countedConverter();
+        PositionOrderedReader reader = failingReader();
+
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", projection(), repository, reader, converter, Counted::eventId, null);
+
+        Throwable replayFailure = catchThrowable(feed::catchUp);
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("x")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+    }
+
+    @Test
     void a_null_event_id_fails_fast_instead_of_silently_dropping() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
@@ -245,6 +263,25 @@ class CatchupProjectionFeedTest {
             @Override
             public boolean writesPosition() {
                 return false;
+            }
+        };
+    }
+
+    private static PositionOrderedReader failingReader() {
+        return new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                throw new IllegalStateException("replay boom");
+            }
+
+            @Override
+            public long currentPosition() {
+                return 0;
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
             }
         };
     }

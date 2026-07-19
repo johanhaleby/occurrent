@@ -78,6 +78,7 @@ public final class CatchupProjectionFeed<E> {
     private final Queue<E> buffer = new ArrayDeque<>();
     private final BoundedIdCache deliveredIds;
     private boolean live = false;
+    private @Nullable Throwable catchUpFailure = null;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -179,6 +180,9 @@ public final class CatchupProjectionFeed<E> {
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
         synchronized (lock) {
+            if (catchUpFailure != null) {
+                throw new IllegalStateException("Catch-up failed for this projection feed, so it cannot accept live events. Rebuild it after fixing the cause.", catchUpFailure);
+            }
             if (live) {
                 deliverLive(event);
                 return;
@@ -198,21 +202,30 @@ public final class CatchupProjectionFeed<E> {
      * after wiring the live feed, so events arriving during the replay are captured.
      */
     public void catchUp() {
-        if (isAlreadyCaughtUp()) {
+        try {
+            if (isAlreadyCaughtUp()) {
+                drainBufferAndGoLive();
+                return;
+            }
+            try (Stream<CloudEvent> history = reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())) {
+                history.forEach(cloudEvent -> {
+                    E event = converter.toDomainEvent(cloudEvent);
+                    view.update(event);
+                    synchronized (lock) {
+                        deliveredIds.add(eventKey(event));
+                    }
+                });
+            }
             drainBufferAndGoLive();
-            return;
+            markCaughtUp();
+        } catch (RuntimeException e) {
+            // Record the failure so a live event fed after a failed catch-up fails fast instead of buffering until
+            // overflow and hiding the error.
+            synchronized (lock) {
+                catchUpFailure = e;
+            }
+            throw e;
         }
-        try (Stream<CloudEvent> history = reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())) {
-            history.forEach(cloudEvent -> {
-                E event = converter.toDomainEvent(cloudEvent);
-                view.update(event);
-                synchronized (lock) {
-                    deliveredIds.add(eventKey(event));
-                }
-            });
-        }
-        drainBufferAndGoLive();
-        markCaughtUp();
     }
 
     private void drainBufferAndGoLive() {
