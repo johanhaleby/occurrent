@@ -150,11 +150,14 @@ public final class SnapshotDcbDeciderApplicationService<S extends @Nullable Obje
                 });
 
         Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
-        appendResult.ifPresent(result -> {
-            int eventsSinceSnapshot = tailSize.get() + decision.events().size();
-            SnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(),
-                    new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), eventsSinceSnapshot));
-        });
+        // DCB positions are global and monotonic, they never reset, so a snapshot can never be ahead of the head: no
+        // head guard or self-heal is needed here, and eventsSinceSnapshot (tail + events) cannot go negative. The
+        // Supplier-based best-effort is used only for symmetry with the stream executor.
+        appendResult.ifPresent(result ->
+                SnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(), () -> {
+                    int eventsSinceSnapshot = tailSize.get() + decision.events().size();
+                    return new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), eventsSinceSnapshot);
+                }));
         return new Executed<>(appendResult, decision);
     }
 

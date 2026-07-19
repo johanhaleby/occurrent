@@ -656,22 +656,36 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             String key = metadata.getStreamId();
             long eventVersion = metadata.getStreamVersion();
             return store.findLatest(key).map(Optional::of).defaultIfEmpty(Optional.empty()).flatMap(loaded -> {
-                if (SnapshotSupport.isRedelivery(loaded, schemaVersion, eventVersion)) {
-                    return Mono.<Void>empty(); // already folded (a redelivery), keep folding idempotent
-                }
-                SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, view::initialState);
-                if (eventVersion - base.version() < everyNEvents) {
-                    return Mono.<Void>empty(); // throttle: too few new events since the last saved snapshot
-                }
-                Mono<S> newState;
-                if (eventVersion == base.version() + 1) {
-                    newState = Mono.just(view.evolve(base.state(), event));
+                // A snapshot version at or beyond this delivery is normally a redelivery, but if the stream was reset
+                // below the snapshot the snapshot is stale and resuming from it would freeze the maintainer forever.
+                // Only in that ambiguous case do we probe the true head (a suffix read returns the real stream version
+                // regardless of skip/limit); the happy path (eventVersion beyond the snapshot) pays no extra read. A
+                // head below the snapshot version means a reset, so resolveBase demotes to initial and the range-fold
+                // below rebuilds and self-heals (the save overwrites the stale snapshot at the reset version).
+                Mono<Long> observedHead;
+                if (loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion && eventVersion <= loaded.get().version()) {
+                    observedHead = eventStore.read(key, Math.toIntExact(loaded.get().version()), 1).map(org.occurrent.eventstore.api.reactor.EventStream::version);
                 } else {
-                    newState = eventStore.read(key, (int) base.version(), (int) (eventVersion - base.version()))
-                            .flatMap(es -> es.events().collectList())
-                            .map(cloudEvents -> view.evolve(base.state(), converter.toDomainEvents(cloudEvents.stream()).toList()));
+                    observedHead = Mono.just(Long.MAX_VALUE);
                 }
-                return newState.flatMap(state -> store.save(key, new Snapshot<>(state, eventVersion, schemaVersion)));
+                return observedHead.flatMap(head -> {
+                    if (SnapshotSupport.isRedelivery(loaded, schemaVersion, eventVersion, head)) {
+                        return Mono.<Void>empty(); // already folded (a redelivery within the head), keep folding idempotent
+                    }
+                    SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, head, view::initialState);
+                    if (eventVersion - base.version() < everyNEvents) {
+                        return Mono.<Void>empty(); // throttle: too few new events since the last saved snapshot
+                    }
+                    Mono<S> newState;
+                    if (eventVersion == base.version() + 1) {
+                        newState = Mono.just(view.evolve(base.state(), event));
+                    } else {
+                        newState = eventStore.read(key, (int) base.version(), (int) (eventVersion - base.version()))
+                                .flatMap(es -> es.events().collectList())
+                                .map(cloudEvents -> view.evolve(base.state(), converter.toDomainEvents(cloudEvents.stream()).toList()));
+                    }
+                    return newState.flatMap(state -> store.save(key, new Snapshot<>(state, eventVersion, schemaVersion)));
+                });
             });
         };
 
@@ -729,6 +743,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, (dcbMetadata, event) -> {
             long position = dcbMetadata.eventMetadata().getPosition();
             return store.findLatest(key).map(Optional::of).defaultIfEmpty(Optional.empty()).flatMap(loaded -> {
+                // DCB positions are global and monotonic, they never reset, so a snapshot can never be ahead of the true
+                // head: no head probe is needed and the 3-arg isRedelivery is correct (unlike the stream path above).
                 if (SnapshotSupport.isRedelivery(loaded, schemaVersion, position)) {
                     return Mono.<Void>empty(); // already folded (a redelivery), keep folding idempotent
                 }
