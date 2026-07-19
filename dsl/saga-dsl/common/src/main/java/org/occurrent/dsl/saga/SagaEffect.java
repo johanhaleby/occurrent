@@ -23,7 +23,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * What a saga wants to happen once an input has been applied, expressed as data. A {@link Saga#react(Object, SagaInput)}
- * returns a list of these; an executor interprets them in order. The saga itself never performs an effect, which is what
+ * returns a list of these, and an executor interprets them in order. The saga itself never performs an effect, which is what
  * keeps it a pure, unit-testable function.
  *
  * @param <C> the command type the saga issues
@@ -66,7 +66,7 @@ public sealed interface SagaEffect<C> {
         }
     }
 
-    /** Cancel the timer named {@code timerName} if it is running; a no-op otherwise. */
+    /** Cancel the timer named {@code timerName} if it is running, a no-op otherwise. */
     record CancelTimeout<C>(String timerName) implements SagaEffect<C> {
         public CancelTimeout {
             requireNonNull(timerName, "timerName cannot be null");

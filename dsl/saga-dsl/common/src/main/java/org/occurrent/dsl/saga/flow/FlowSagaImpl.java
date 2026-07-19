@@ -34,8 +34,8 @@ import java.util.function.Function;
 
 /**
  * Compiles a flow definition (steps, branches, joins, timeouts) down to the machine-core {@link Saga} the executor runs.
- * The step name is the persisted position; a timer is named {@code "step:" + stepName}, and because a timer lives only in
- * the saga's own state envelope (there is exactly one per name), a re-armed timer simply replaces the previous one and no
+ * The step name is the persisted position, a timer is named {@code "step:" + stepName}, and because a timer lives only in
+ * the saga's own state envelope (there is exactly one per name), a re-armed timer replaces the previous one and no
  * separate fencing is needed here.
  */
 final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
@@ -105,7 +105,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     private FlowState<E> evolveOnEvent(FlowState<E> state, E event) {
         if (!state.completed() && state.currentStep() == null) {
-            // Instance creation: the start event enters the first step; its window opens after the start event itself.
+            // Instance creation: the start event enters the first step, its window opens after the start event itself.
             if (!startType.isInstance(event)) {
                 return state;
             }

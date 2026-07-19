@@ -38,7 +38,7 @@ import java.lang.annotation.*;
  * The Kotlin equivalent is the {@code saga(...) { }} / flow {@code saga { }} block.
  * <p>
  * The method may live on any Spring bean: a {@code @Bean} in a {@code @Configuration}, or a method on a
- * {@code @Component}. This is a blocking-stack feature; the reactive starter does not register {@code @Saga}.
+ * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @Saga}.
  *
  * <h4>State store</h4>
  * <p>
@@ -106,8 +106,8 @@ public @interface Saga {
 
     /**
      * Optional Spring bean name of the {@code SagaStateStore}. Used on its own to resolve the store by name, or together
-     * with {@link #store()} to pick one bean when several of that type exist. An empty string (the default) means unset;
-     * with both unset the store resolves by convention (the unique {@code SagaStateStore} bean, otherwise the default
+     * with {@link #store()} to pick one bean when several of that type exist. An empty string (the default) means unset.
+     * With both unset the store resolves by convention (the unique {@code SagaStateStore} bean, otherwise the default
      * MongoDB implementation).
      */
     String storeName() default "";

@@ -38,14 +38,14 @@ public interface SagaStateStore<S extends @Nullable Object> {
 
     /**
      * Save {@code envelope} only if the currently stored version equals {@code expectedVersion} (use {@code 0} to insert a
-     * new instance). Returns {@code false} on a version conflict, so the caller can reload and retry; returns {@code true}
+     * new instance). Returns {@code false} on a version conflict, so the caller can reload and retry. Returns {@code true}
      * on success.
      */
     boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion);
 
     /**
      * Active instances that have at least one timer due at or before {@code now}, at most {@code limit} of them. The
-     * executor's timer poller uses this to fire timeouts; a returned instance may have several due timers.
+     * executor's timer poller uses this to fire timeouts. A returned instance may have several due timers.
      */
     List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit);
 

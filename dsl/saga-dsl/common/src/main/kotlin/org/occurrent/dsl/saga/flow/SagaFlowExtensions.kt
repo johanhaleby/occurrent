@@ -101,7 +101,7 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     /** An expectation of [count] events of type [T], for a [join]. */
     inline fun <reified T : E> expect(count: Int = 1): Expectation<E> = Expectation(T::class.java, count)
 
-    /** A branch: on an event of type [T] (optionally only when [onlyIf] holds), issue commands and follow [then]. */
+    /** A branch: on an event of type [T] (optionally only when [onlyIf] is true), issue commands and follow [then]. */
     inline fun <reified T : E> on(
         then: Continuation,
         noinline onlyIf: ((T, ReceivedEvents<E>) -> Boolean)? = null,

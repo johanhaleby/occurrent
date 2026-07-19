@@ -32,7 +32,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * A saga (more precisely an event-driven <em>process manager</em>) described as pure data and pure functions: the
- * command-issuing mirror of {@code org.occurrent.dsl.decider.Decider}. A decider turns commands into events; a saga turns
+ * command-issuing mirror of {@code org.occurrent.dsl.decider.Decider}. A decider turns commands into events. A saga turns
  * events, and its own timeouts, into commands. Nothing here performs I/O. An executor feeds a saga inputs, folds and
  * persists its state, and interprets the {@link SagaEffect}s it returns.
  * <p>
@@ -47,7 +47,7 @@ import static java.util.Objects.requireNonNull;
  *   <li>For each input the executor computes {@code s' = evolve(state, input)}, then {@code react(s', input)}: react sees
  *       the state <em>after</em> the fold. Replay only ever folds {@link #evolve}, so it produces no effects.</li>
  *   <li>{@link #onStart(Object, Object)} runs exactly once, when a start event creates the instance, after the first
- *       {@code evolve} and before that event's {@code react}; the effects are concatenated in that order.</li>
+ *       {@code evolve} and before that event's {@code react}, and the effects are concatenated in that order.</li>
  *   <li>{@link #isTerminal(Object)} is absorbing: a terminal instance ignores further inputs, and the executor cancels
  *       all of the instance's outstanding timers when a state first becomes terminal.</li>
  *   <li>Timeouts never start an instance and are ignored by a terminal instance.</li>
@@ -133,7 +133,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
     /**
      * Create a saga from functions instead of the {@link Builder}, the escape hatch mirroring {@code Decider#create}. The
      * supplied {@code evolve}/{@code react} handle the whole {@link SagaInput} union themselves. This saga is never
-     * terminal and has no {@code onStart}; implement the interface directly for those.
+     * terminal and has no {@code onStart}. Implement the interface directly for those.
      */
     static <E, S extends @Nullable Object, C> Saga<E, S, C> create(S initialState,
                                                                    Function<E, @Nullable String> correlationId,
@@ -184,7 +184,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
     /**
      * Widen a saga so it can run against broader event and command types, mirroring {@code Decider#adapt}. Events that
      * are not {@code eventType} are ignored (the fold leaves the state unchanged, react produces no effects, correlation
-     * returns {@code null}, and they never start an instance); timeouts always belong to this saga and pass through.
+     * returns {@code null}, and they never start an instance). Timeouts always belong to this saga and pass through.
      * Commands widen by covariance ({@code SubC extends C}).
      *
      * @param saga      the feature saga to widen
@@ -255,7 +255,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
     }
 
     /**
-     * A type-safe builder assembling a saga from per-event-type and per-timer folds and reactions. Not thread-safe; build
+     * A type-safe builder assembling a saga from per-event-type and per-timer folds and reactions. Not thread-safe. Build
      * one, configure it, and call {@link #build()} once. Single-assignment methods throw {@link IllegalStateException} on
      * a second call, and registering the same event type or timer name twice throws, because that is a bug rather than an
      * intended override.

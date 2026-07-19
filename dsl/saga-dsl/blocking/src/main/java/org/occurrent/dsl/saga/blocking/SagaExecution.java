@@ -69,7 +69,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     void pollTimers() {
-        // Catch Throwable so a failure never lets the scheduled task die and stop all future polling; the schedule stays
+        // Catch Throwable so a failure never lets the scheduled task die and stop all future polling. The schedule stays
         // alive and the next tick recovers.
         try {
             Instant now = Instant.now();
@@ -84,7 +84,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     try {
                         process(envelope.sagaId(), SagaInput.timeout(new SagaTimeout(envelope.sagaId(), timerName)), EventMeta.NONE, timerName);
                     } catch (RuntimeException e) {
-                        // Keep polling other timers/instances; this one stays due and is retried next poll unless consumed.
+                        // Keep polling other timers/instances. This one stays due and is retried next poll unless consumed.
                         LOG.log(Level.WARNING, "Failed to fire saga timer '" + timerName + "' for instance '" + envelope.sagaId() + "'", e);
                     }
                 }
@@ -105,7 +105,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (!outcome.processed()) {
                 return;
             }
-            // Dispatch before saving so a command is never lost; a lost compare-and-set retry may re-dispatch (at-least-once).
+            // Dispatch before saving so a command is never lost. A lost compare-and-set retry may re-dispatch (at-least-once).
             for (C command : outcome.commands()) {
                 dispatcher.dispatch(command);
             }

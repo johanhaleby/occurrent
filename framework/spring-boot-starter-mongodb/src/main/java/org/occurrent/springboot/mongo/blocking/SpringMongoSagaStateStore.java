@@ -58,7 +58,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * serialized as CloudEvents through the supplied {@link CloudEventConverter} so they round-trip by their stable
  * {@code CloudEventTypeMapper} type rather than a Java class name. A domain event can therefore move to a different
  * package without breaking in-flight flow-saga state. Pass the converter (via the four-argument constructor) for a flow
- * saga; leave it out for a machine-core saga.
+ * saga, leave it out for a machine-core saga.
  * <p>
  * {@link #compareAndSave} is atomic: a new instance is inserted (a duplicate {@code _id} loses), and an update replaces
  * the document only when its stored {@code version} still equals the expected one, via a single {@code findAndReplace}.

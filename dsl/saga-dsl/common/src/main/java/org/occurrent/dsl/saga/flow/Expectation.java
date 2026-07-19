@@ -20,7 +20,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * One requirement of a {@code join} step: how many events of a given type must arrive (since the step was entered) before
- * the join is fulfilled. The count is fixed at build time; a join with a runtime-varying count is a documented non-goal
+ * the join is fulfilled. The count is fixed at build time. A join with a runtime-varying count is a documented non-goal
  * of the flow layer (drop to the machine-core {@code Saga} for that).
  *
  * @param eventType the event type to wait for

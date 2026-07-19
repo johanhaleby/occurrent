@@ -24,7 +24,7 @@ import static java.util.Objects.requireNonNull;
  */
 public sealed interface Continuation {
 
-    /** Advance to the next step in declaration order; completes the saga if the current step is the last one. */
+    /** Advance to the next step in declaration order, completes the saga if the current step is the last one. */
     record Next() implements Continuation {
     }
 

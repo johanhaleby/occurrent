@@ -48,7 +48,7 @@ import static java.util.Objects.requireNonNull;
  * Pick the capability with the factory: {@link #agnostic(Subscribable, CloudEventConverter) agnostic} delivers both
  * stream-written and DCB-appended events, {@link #stream(Subscribable, CloudEventConverter) stream} only stream-written
  * ones. Timers are polled from the {@link SagaStateStore}, not scheduled through an external scheduler, so a run needs no
- * deadline infrastructure. The returned {@link SagaSubscription} owns the timer poller; close it to stop polling.
+ * deadline infrastructure. The returned {@link SagaSubscription} owns the timer poller, close it to stop polling.
  *
  * @param <E> the domain event type
  * @param <C> the command type

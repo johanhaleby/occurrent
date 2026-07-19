@@ -34,7 +34,7 @@ import java.util.Map;
  * The pure, stack-agnostic decision step of the saga executor: given the current envelope (or {@code null} for a new
  * instance), one input, and its delivery metadata, it decides whether to skip (redelivery, terminal, or an event that
  * cannot start an instance) and otherwise computes the next envelope and the commands to dispatch. It performs no I/O, so
- * a blocking or reactor runner can wrap it identically; the runner owns loading, the compare-and-set save, dispatch, and
+ * a blocking or reactor runner can wrap it identically. The runner owns loading, the compare-and-set save, dispatch, and
  * timer polling.
  * <p>
  * Redelivery is deduplicated from the event's stream version (per stream) or its global position. An event that carries

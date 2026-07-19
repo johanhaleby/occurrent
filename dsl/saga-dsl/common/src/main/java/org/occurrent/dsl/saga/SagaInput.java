@@ -35,7 +35,7 @@ public sealed interface SagaInput<E> {
     }
 
     /**
-     * A saga timer that has fired. {@code E} is phantom here; it only exists so the union is well-typed against the event
+     * A saga timer that has fired. {@code E} is phantom here, it only exists so the union is well-typed against the event
      * variant.
      */
     record Timeout<E>(SagaTimeout timeout) implements SagaInput<E> {

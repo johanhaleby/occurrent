@@ -36,7 +36,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Configures one step of a {@link FlowSaga}: either a choice (one or more {@code on(...)} branches, first match wins) or a
  * single {@code join(...)}, optionally with a {@code timeout(...)}. A step cannot be both a choice and a join, and can
- * have at most one timeout; violating either throws {@link IllegalStateException}.
+ * have at most one timeout. Violating either throws {@link IllegalStateException}.
  *
  * @param <E> the domain event type
  * @param <C> the command type
@@ -56,7 +56,7 @@ public final class StepBuilder<E, C> {
         return on(type, null, then, commands);
     }
 
-    /** Adds a guarded branch: it matches only when {@code onlyIf} also holds for the event and events received so far. */
+    /** Adds a guarded branch: it matches only when {@code onlyIf} is also true for the event and events received so far. */
     @SuppressWarnings("unchecked")
     public <T extends E> StepBuilder<E, C> on(Class<T> type, @Nullable BiPredicate<T, ReceivedEvents<E>> onlyIf, Continuation then, Function<T, List<C>> commands) {
         requireNonNull(type, "type cannot be null");

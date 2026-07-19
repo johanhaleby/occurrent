@@ -19,7 +19,7 @@ package org.occurrent.dsl.saga.blocking;
 /**
  * How the executor issues a command a saga produced. The common case is a lambda over an {@code ApplicationService}, with
  * or without a decider, for example {@code cmd -> applicationService.execute(cmd.orderId(), events -> Order.cancel(events,
- * cmd))}; see {@link CommandDispatchers#decider} for a decider-backed convenience.
+ * cmd))}, see {@link CommandDispatchers#decider} for a decider-backed convenience.
  * <p>
  * Command dispatch is at-least-once: the same command may be dispatched more than once (a crash between dispatch and the
  * state save, or a compare-and-set retry). A dispatcher should therefore be idempotent, which an

@@ -27,7 +27,7 @@ import java.util.List;
  * The genuinely user-meaningful parts are {@link #currentStep()}, {@link #received()} and {@link #completed()}. The
  * remaining components ({@link #stepEntryIndex()}, {@link #previousStep()}, {@link #lastAction()} and
  * {@link #matchedBranchIndex()}) are transition bookkeeping the flow lowering writes in {@code evolve} and reads back in
- * {@code react}; they are part of the record only because {@code evolve} can communicate with {@code react} solely
+ * {@code react}, and they are part of the record only because {@code evolve} can communicate with {@code react} solely
  * through the returned state.
  *
  * @param <E> the domain event type

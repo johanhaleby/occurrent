@@ -111,7 +111,7 @@ class OrderFulfillmentFlowSagaTest {
 
             await.untilAsserted { assertThat(issued).containsExactly(ReservePayment(orderId, 42.0), ShipOrder(orderId)) }
             val envelope = stateStore.find(orderId).orElseThrow()
-            assertThat(envelope.state().isCompleted).isTrue()
+            assertThat(envelope.state().completed()).isTrue()
         }
     }
 
@@ -133,7 +133,7 @@ class OrderFulfillmentFlowSagaTest {
                 assertThat(issued).containsExactly(ReservePayment(orderId, 42.0), CancelOrder(orderId, "payment timeout"))
             }
             val envelope = stateStore.find(orderId).orElseThrow()
-            assertThat(envelope.state().isCompleted).isTrue()
+            assertThat(envelope.state().completed()).isTrue()
         }
     }
 }

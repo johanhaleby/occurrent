@@ -58,7 +58,7 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
     @PublishedApi
     internal val delegate: Saga.Builder<E, S, C> = Saga.builder(initialState)
 
-    /** Registers how to derive the correlation id from an event of type [T]; return `null` to skip the event. */
+    /** Registers how to derive the correlation id from an event of type [T]. Return `null` to skip the event. */
     inline fun <reified T : E> correlate(noinline id: (T) -> String?) {
         delegate.correlate(T::class.java, Function { e -> id(e) })
     }

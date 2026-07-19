@@ -37,10 +37,10 @@ import static java.util.Objects.requireNonNull;
 /**
  * Builds a flow saga: a linear, declarative process of steps, branches, joins and timeouts, which compiles down to the
  * machine-core {@code Saga<E, FlowState<E>, C>} the executor runs. Use it for the common case where a process moves
- * through a small number of named steps; drop to {@code Saga.builder(...)} for anything the flow model cannot express
+ * through a small number of named steps. Drop to {@code Saga.builder(...)} for anything the flow model cannot express
  * (dynamic joins, accumulators, an event valid in every step).
  * <p>
- * Kotlin has an equivalent {@code saga { }} block; see {@code SagaFlowExtensions.kt}.
+ * Kotlin has an equivalent {@code saga { }} block, see {@code SagaFlowExtensions.kt}.
  */
 public final class FlowSaga {
 
@@ -53,7 +53,7 @@ public final class FlowSaga {
     }
 
     /**
-     * Assembles a flow saga. Not thread-safe; configure it and call {@link #build()} once. {@code build()} validates the
+     * Assembles a flow saga. Not thread-safe, configure it and call {@link #build()} once. {@code build()} validates the
      * whole step graph: {@code startsOn} is required, every step name is unique, every {@code goTo} target exists, and
      * every referenced event type has a correlation.
      *

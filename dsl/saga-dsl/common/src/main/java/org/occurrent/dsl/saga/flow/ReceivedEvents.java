@@ -25,7 +25,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * The events a flow saga instance has received so far, in arrival order with the initiating event first. It is the only
  * "state" a flow saga has, and is what a reaction, a guard, or a not-fulfilled branch reads. Counts here span the whole
- * flow history (so a retry guard such as {@code count(PaymentFailed.class) < 3} works across a self-looping step); a
+ * flow history (so a retry guard such as {@code count(PaymentFailed.class) < 3} works across a self-looping step). A
  * {@code join} step's own fulfilment is counted separately, over the events received since it was entered.
  *
  * @param <E> the domain event type
@@ -50,7 +50,7 @@ public interface ReceivedEvents<E> {
     /** All received events, in arrival order, initiating first. */
     List<E> asList();
 
-    /** A view over {@code events} (which must be non-empty; element 0 is the initiating event). */
+    /** A view over {@code events} (which must be non-empty, element 0 is the initiating event). */
     static <E> ReceivedEvents<E> of(List<E> events) {
         return new ReceivedEventsList<>(events);
     }

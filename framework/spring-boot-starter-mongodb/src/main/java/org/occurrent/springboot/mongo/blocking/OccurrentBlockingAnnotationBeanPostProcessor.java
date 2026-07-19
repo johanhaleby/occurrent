@@ -131,7 +131,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private final Set<String> registeredIds = new HashSet<>();
     // Domain-push feeds collected during projection registration, caught up once after all are registered.
     private final Set<DomainEventFeed<?>> domainFeedsToCatchUp = Collections.newSetFromMap(new IdentityHashMap<>());
-    // Registered sagas own a timer poller each; stop them when the context is destroyed so no poller thread leaks.
+    // Registered sagas own a timer poller each, stop them when the context is destroyed so no poller thread leaks.
     private final List<SagaSubscription> sagaSubscriptions = new ArrayList<>();
 
     @Override
@@ -784,7 +784,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
         Class<S> stateType = (Class<S>) reflectSagaStateType(factoryMethod, id);
         if (stateType == FlowState.class) {
-            // A flow saga's FlowState holds domain events; serialize them as CloudEvents (stable types) so they can move packages.
+            // A flow saga's FlowState holds domain events, serialize them as CloudEvents (stable types) so they can move packages.
             CloudEventConverter<?> converter = applicationContext.getBean(CloudEventConverter.class);
             return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + id, stateType, converter);
         }

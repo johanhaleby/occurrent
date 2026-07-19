@@ -26,7 +26,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Ready-made {@link CommandDispatcher}s. A dispatcher is usually just a lambda over an {@code ApplicationService}, with or
  * without a decider, so these are conveniences, not the only way. The {@link #decider} adapter bridges a saga's commands
- * into the existing decider machinery; the non-decider path is a plain lambda the caller writes directly.
+ * into the existing decider machinery. The non-decider path is a plain lambda the caller writes directly.
  */
 public final class CommandDispatchers {
 
