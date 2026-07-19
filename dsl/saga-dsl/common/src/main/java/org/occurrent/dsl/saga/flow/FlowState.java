@@ -41,7 +41,7 @@ public record FlowState<E>(@Nullable String currentStep,
                            int matchedBranchIndex) {
 
     /** What the last {@code evolve} did, so {@code react} knows which reaction to run. Internal bookkeeping. */
-    public enum ActionKind {NONE, STARTED, BRANCH, JOIN, TIMEOUT}
+    public enum ActionKind {NONE, BRANCH, JOIN, TIMEOUT}
 
     public FlowState {
         received = List.copyOf(received);
@@ -50,11 +50,6 @@ public record FlowState<E>(@Nullable String currentStep,
     /** The initial state of a flow saga instance, before its start event has been applied. */
     public static <E> FlowState<E> initial() {
         return new FlowState<>(null, List.of(), 0, false, null, ActionKind.NONE, -1);
-    }
-
-    /** Whether the saga instance has completed. */
-    public boolean isCompleted() {
-        return completed;
     }
 
     /** A view over the received events, or {@code null} before the start event has been applied. */

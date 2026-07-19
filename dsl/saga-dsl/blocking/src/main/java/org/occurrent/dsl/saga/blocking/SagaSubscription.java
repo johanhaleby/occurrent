@@ -17,9 +17,11 @@
 package org.occurrent.dsl.saga.blocking;
 
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.internal.ExecutorShutdown;
 
 import java.time.Duration;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import static java.util.Objects.requireNonNull;
 
@@ -58,9 +60,9 @@ public final class SagaSubscription implements AutoCloseable {
         return subscription.waitUntilStarted(timeout);
     }
 
-    /** Stop the timer poller. */
+    /** Stop the timer poller, letting an in-flight poll finish before interrupting. */
     @Override
     public void close() {
-        timerPoller.shutdownNow();
+        ExecutorShutdown.shutdownSafely(timerPoller, 5, TimeUnit.SECONDS);
     }
 }

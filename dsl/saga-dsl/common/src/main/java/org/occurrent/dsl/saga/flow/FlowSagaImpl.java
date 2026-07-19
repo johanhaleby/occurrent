@@ -110,7 +110,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                 return state;
             }
             String first = steps.get(0).name();
-            return new FlowState<>(first, List.of(event), 1, false, null, ActionKind.STARTED, -1);
+            // No react on the start event itself: onStart carries the instance-creation effects.
+            return new FlowState<>(first, List.of(event), 1, false, null, ActionKind.NONE, -1);
         }
         if (state.completed() || state.currentStep() == null) {
             return state;
@@ -126,41 +127,38 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                         yield applyTransition(state.currentStep(), branch.then(), received, ActionKind.BRANCH, i);
                     }
                 }
-                yield recordWithoutTransition(state, received);
+                yield withClearedBookkeeping(state, received);
             }
             case JoinBody<E, C> join -> {
                 if (joinFulfilled(join.expectations(), received, state.stepEntryIndex())) {
                     yield applyTransition(state.currentStep(), join.then(), received, ActionKind.JOIN, -1);
                 }
-                yield recordWithoutTransition(state, received);
+                yield withClearedBookkeeping(state, received);
             }
         };
     }
 
     private FlowState<E> evolveOnTimeout(FlowState<E> state, String timerName) {
         if (state.completed() || state.currentStep() == null) {
-            return clearedBookkeeping(state);
+            return withClearedBookkeeping(state, state.received());
         }
         String expected = TIMER_PREFIX + state.currentStep();
         if (!timerName.equals(expected)) {
-            return clearedBookkeeping(state);
+            return withClearedBookkeeping(state, state.received());
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
         if (step.timeout() == null) {
-            return clearedBookkeeping(state);
+            return withClearedBookkeeping(state, state.received());
         }
         return applyTransition(state.currentStep(), step.timeout().then(), state.received(), ActionKind.TIMEOUT, -1);
     }
 
-    // Reset the evolve-to-react bookkeeping on a no-op so react (which routes on lastAction) does nothing rather than
-    // re-running a previous transition's reaction. react's correctness must not depend on the executor's timer hygiene.
-    private FlowState<E> clearedBookkeeping(FlowState<E> state) {
-        return new FlowState<>(state.currentStep(), state.received(), state.stepEntryIndex(), state.completed(),
+    // Stay in the current step with no transition: keep the given received log but reset the evolve-to-react bookkeeping,
+    // so react (which routes on lastAction) does nothing rather than re-running a previous transition's reaction. Used
+    // both when an event matches no branch / does not fulfil a join, and on an ignored timeout.
+    private FlowState<E> withClearedBookkeeping(FlowState<E> state, List<E> received) {
+        return new FlowState<>(state.currentStep(), received, state.stepEntryIndex(), state.completed(),
                 state.currentStep(), ActionKind.NONE, -1);
-    }
-
-    private FlowState<E> recordWithoutTransition(FlowState<E> state, List<E> received) {
-        return new FlowState<>(state.currentStep(), received, state.stepEntryIndex(), false, state.currentStep(), ActionKind.NONE, -1);
     }
 
     private FlowState<E> applyTransition(String fromStep, Continuation continuation, List<E> received, ActionKind kind, int branchIndex) {
@@ -190,7 +188,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     @Override
     public List<SagaEffect<C>> react(FlowState<E> state, SagaInput<E> input) {
         return switch (state.lastAction()) {
-            case NONE, STARTED -> List.of();
+            case NONE -> List.of();
             case BRANCH -> reactToBranch(state, input);
             case JOIN -> reactToJoin(state);
             case TIMEOUT -> reactToTimeout(state);
@@ -224,7 +222,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     /**
-     * Emit the timer effects for a transition: cancel the timer of the step we left (unless it just fired), and arm the
+     * Emit the timer effects for a transition: cancel the timer of the step we left (unless it just fired, since the
+     * executor already consumed it and re-cancelling would only add a redundant no-op to the effect list), and arm the
      * timer of the step we entered. A self-loop cancels then re-arms the same timer, which the executor applies in order.
      */
     private void retargetTimers(List<SagaEffect<C>> effects, FlowState<E> state, boolean firedFromTimer) {
@@ -280,9 +279,11 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     private static <E> List<E> append(List<E> received, E event) {
-        List<E> result = new ArrayList<>(received);
+        // FlowState's constructor makes the immutable copy, so build a single sized ArrayList here rather than copying twice.
+        List<E> result = new ArrayList<>(received.size() + 1);
+        result.addAll(received);
         result.add(event);
-        return List.copyOf(result);
+        return result;
     }
 
     // --- Compiled model (package-private) -----------------------------------------------------------------------------

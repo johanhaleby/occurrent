@@ -45,7 +45,10 @@ import java.lang.annotation.*;
  * The {@link #store()} attribute selects the {@code SagaStateStore} bean by type, {@link #storeName()} by name (or both to
  * disambiguate). With both unset, the store resolves by convention: the unique {@code SagaStateStore} bean, otherwise the
  * default MongoDB implementation (a {@code saga-<id>} collection), whose state type is read from the factory method's
- * generic return type.
+ * generic return type. A machine-core saga's state serializes with the application's {@code MongoConverter}, like the
+ * snapshot store. A flow saga's received events serialize as CloudEvents through the {@code CloudEventConverter}, so they
+ * persist by their stable {@code CloudEventTypeMapper} type and a domain event can move to a different package without
+ * breaking in-flight saga state.
  * </p>
  *
  * <h4>Command dispatcher</h4>

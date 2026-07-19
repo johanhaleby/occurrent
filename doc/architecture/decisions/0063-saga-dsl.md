@@ -141,7 +141,15 @@ saga {
 ```
 
 This compiles onto the same `Saga<E, FlowState<E>, C>` machine-core type, so the executor only ever runs one kind of
-descriptor regardless of which surface authored it. The flow layer's non-goals are stated up front so they are not
+descriptor regardless of which surface authored it.
+
+A flow saga's `FlowState` remembers the domain events it has received (joins, guards, and not-fulfilled branches all
+read them), so those events are persisted. They are serialized as CloudEvents through the application's
+`CloudEventConverter`, which means they persist by their stable `CloudEventTypeMapper` type, the same representation the
+event store uses, rather than by a Java class name. A domain event can therefore move to a different package without
+breaking in-flight flow-saga state, exactly as it can for events in the event store. A machine-core saga's state is the
+user's own model and is serialized like the snapshot store; a user who embeds events in it and needs the same package
+independence supplies a store that does the CloudEvent conversion. The flow layer's non-goals are stated up front so they are not
 mistaken for missing features: no dynamic N-of-M joins, no real accumulators across steps, no "this event is valid in
 every step" wildcard matching. A process that needs any of those drops down to the machine core directly, where
 `evolve`/`react` can express them without fighting the sugar layer's linear-step model.

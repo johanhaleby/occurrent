@@ -67,6 +67,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.blocking.CommandDispatcher;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
@@ -782,6 +783,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
         Class<S> stateType = (Class<S>) reflectSagaStateType(factoryMethod, id);
+        if (stateType == FlowState.class) {
+            // A flow saga's FlowState holds domain events; serialize them as CloudEvents (stable types) so they can move packages.
+            CloudEventConverter<?> converter = applicationContext.getBean(CloudEventConverter.class);
+            return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + id, stateType, converter);
+        }
         return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + id, stateType);
     }
 

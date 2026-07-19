@@ -30,8 +30,8 @@ import static java.util.Collections.addAll;
 
 /**
  * Resolves a value registered per event type, falling back through superclasses and then interfaces (nearest superclass
- * first), and caching the resolved lookup per concrete class. This is the same dispatch the projection DSL uses for its
- * per-event-type handlers, extracted so the saga descriptor can reuse it for its evolve, react and correlation maps.
+ * first), and caching the resolved lookup per concrete class. The saga descriptor uses it for its evolve, react and
+ * correlation maps. It mirrors the projection DSL's per-event-type handler dispatch; the two are not yet unified.
  *
  * @param <V> the registered value type
  */

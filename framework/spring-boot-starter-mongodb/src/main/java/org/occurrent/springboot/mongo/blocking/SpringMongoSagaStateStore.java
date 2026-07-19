@@ -17,18 +17,26 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import com.mongodb.client.model.Indexes;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.format.EventFormat;
+import io.cloudevents.core.provider.EventFormatProvider;
+import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.flow.FlowState;
+import org.occurrent.dsl.saga.flow.FlowState.ActionKind;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Query;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -41,10 +49,16 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 
 /**
  * A {@link SagaStateStore} backed by MongoDB. Each saga instance is one document keyed by its {@code _id} (the saga id),
- * carrying the user {@code state} (serialized with the application's {@code MongoConverter}, like the snapshot store), the
- * lifecycle {@code status}, the optimistic-lock {@code version}, the pending timers, and the dedup watermarks. A top-level
- * indexed {@code nextTimerFiresAt} (the earliest pending timer) makes {@link #findWithDueTimers(Instant, int)} an indexed
- * query.
+ * carrying the user {@code state}, the lifecycle {@code status}, the optimistic-lock {@code version}, the pending timers,
+ * and the dedup watermarks. A top-level indexed {@code nextTimerFiresAt} (the earliest pending timer) makes
+ * {@link #findWithDueTimers(Instant, int)} an indexed query.
+ * <p>
+ * State serialization: a machine-core saga's state is written with the application's {@code MongoConverter}, like the
+ * snapshot store. A flow saga's state ({@code FlowState}) is written field by field, with its received domain events
+ * serialized as CloudEvents through the supplied {@link CloudEventConverter} so they round-trip by their stable
+ * {@code CloudEventTypeMapper} type rather than a Java class name. A domain event can therefore move to a different
+ * package without breaking in-flight flow-saga state. Pass the converter (via the four-argument constructor) for a flow
+ * saga; leave it out for a machine-core saga.
  * <p>
  * {@link #compareAndSave} is atomic: a new instance is inserted (a duplicate {@code _id} loses), and an update replaces
  * the document only when its stored {@code version} still equals the expected one, via a single {@code findAndReplace}.
@@ -68,19 +82,52 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
 
+    // Field names inside a persisted FlowState document.
+    private static final String FLOW_CURRENT_STEP = "currentStep";
+    private static final String FLOW_STEP_ENTRY_INDEX = "stepEntryIndex";
+    private static final String FLOW_COMPLETED = "completed";
+    private static final String FLOW_PREVIOUS_STEP = "previousStep";
+    private static final String FLOW_LAST_ACTION = "lastAction";
+    private static final String FLOW_MATCHED_BRANCH_INDEX = "matchedBranchIndex";
+    private static final String FLOW_RECEIVED = "received";
+
+    private static final EventFormat CLOUD_EVENT_JSON_FORMAT = Objects.requireNonNull(
+            EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE), "CloudEvents JSON format must be on the classpath");
+
     private final MongoOperations mongoOperations;
     private final String collectionName;
     private final Class<S> stateType;
+    // Non-null only for a flow saga: used to serialize FlowState.received as CloudEvents (stable types, package-independent).
+    private final @Nullable CloudEventConverter<Object> cloudEventConverter;
 
     /**
+     * Creates a store for a machine-core saga, whose state serializes with the application's {@code MongoConverter}.
+     *
      * @param mongoOperations the {@link MongoOperations} used to read and write instance documents
      * @param collectionName  the collection the instances are stored in
      * @param stateType       the user state type, needed to read the stored state back into an object
      */
     public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType) {
+        this(mongoOperations, collectionName, stateType, null);
+    }
+
+    /**
+     * Creates a store that, when {@code cloudEventConverter} is supplied, serializes a flow saga's {@code FlowState}
+     * received events as CloudEvents so they round-trip by their stable CloudEvent type. Pass {@code null} for a
+     * machine-core saga.
+     *
+     * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
+     * @param collectionName      the collection the instances are stored in
+     * @param stateType           the user state type, needed to read the stored state back into an object
+     * @param cloudEventConverter the converter used to (de)serialize a flow saga's received events, or {@code null}
+     */
+    @SuppressWarnings("unchecked")
+    public SpringMongoSagaStateStore(MongoOperations mongoOperations, String collectionName, Class<S> stateType, @Nullable CloudEventConverter<?> cloudEventConverter) {
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
+        // Safe: the converter only ever sees domain events read out of a FlowState, whose element type is erased anyway.
+        this.cloudEventConverter = (CloudEventConverter<Object>) cloudEventConverter;
         mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
     }
 
@@ -147,18 +194,35 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return document;
     }
 
-    // Serialize the state. For a mapped entity (a POJO/record, including a flow saga's FlowState) use the converter's
-    // write path so it emits the _class type hints that let a polymorphic nested collection (FlowState.received, a
-    // List of heterogeneous domain events) reconstruct on read; convertToMongoType alone omits those hints. A simple or
-    // scalar state has no persistent entity, so it falls back to plain value conversion.
+    // Serialize the state. A flow saga's FlowState is written field by field with its received events as CloudEvents (see
+    // flowStateToDocument), so events round-trip by their stable CloudEvent type. Any other state (a machine-core saga's
+    // own model) goes through convertToMongoType, exactly like the snapshot store: a scalar stays a scalar and a
+    // POJO/record becomes a sub-document.
     private Object toStateValue(S state) {
-        MongoConverter converter = mongoOperations.getConverter();
-        if (converter.getMappingContext().getPersistentEntity(state.getClass()) != null) {
-            Document stateDocument = new Document();
-            converter.write(state, stateDocument);
-            return stateDocument;
+        if (cloudEventConverter != null && state instanceof FlowState<?> flowState) {
+            return flowStateToDocument(flowState);
         }
-        return converter.convertToMongoType(state);
+        return mongoOperations.getConverter().convertToMongoType(state);
+    }
+
+    private Document flowStateToDocument(FlowState<?> flowState) {
+        Document document = new Document();
+        if (flowState.currentStep() != null) {
+            document.append(FLOW_CURRENT_STEP, flowState.currentStep());
+        }
+        document.append(FLOW_STEP_ENTRY_INDEX, flowState.stepEntryIndex());
+        document.append(FLOW_COMPLETED, flowState.completed());
+        if (flowState.previousStep() != null) {
+            document.append(FLOW_PREVIOUS_STEP, flowState.previousStep());
+        }
+        document.append(FLOW_LAST_ACTION, flowState.lastAction().name());
+        document.append(FLOW_MATCHED_BRANCH_INDEX, flowState.matchedBranchIndex());
+        List<String> received = new ArrayList<>();
+        for (Object event : flowState.received()) {
+            received.add(toCloudEventJson(requireConverter().toCloudEvent(event)));
+        }
+        document.append(FLOW_RECEIVED, received);
+        return document;
     }
 
     private SagaEnvelope<S> toEnvelope(Document document) {
@@ -191,11 +255,41 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (stateField == null) {
             return null;
         }
+        if (cloudEventConverter != null && stateField instanceof Document flowDocument) {
+            return (S) flowStateFromDocument(flowDocument);
+        }
         MongoConverter converter = mongoOperations.getConverter();
         if (stateField instanceof Document stateDocument) {
             return converter.read(stateType, stateDocument);
         }
         return (S) converter.getConversionService().convert(stateField, stateType);
+    }
+
+    private FlowState<Object> flowStateFromDocument(Document document) {
+        List<Object> received = new ArrayList<>();
+        for (String json : document.getList(FLOW_RECEIVED, String.class, List.of())) {
+            received.add(requireConverter().toDomainEvent(fromCloudEventJson(json)));
+        }
+        return new FlowState<>(
+                document.getString(FLOW_CURRENT_STEP),
+                received,
+                document.getInteger(FLOW_STEP_ENTRY_INDEX, 0),
+                document.getBoolean(FLOW_COMPLETED, false),
+                document.getString(FLOW_PREVIOUS_STEP),
+                ActionKind.valueOf(document.getString(FLOW_LAST_ACTION)),
+                document.getInteger(FLOW_MATCHED_BRANCH_INDEX, -1));
+    }
+
+    private CloudEventConverter<Object> requireConverter() {
+        return Objects.requireNonNull(cloudEventConverter, "cloudEventConverter is required to (de)serialize a flow saga's received events");
+    }
+
+    private static String toCloudEventJson(CloudEvent cloudEvent) {
+        return new String(CLOUD_EVENT_JSON_FORMAT.serialize(cloudEvent), StandardCharsets.UTF_8);
+    }
+
+    private static CloudEvent fromCloudEventJson(String json) {
+        return CLOUD_EVENT_JSON_FORMAT.deserialize(json.getBytes(StandardCharsets.UTF_8));
     }
 
     private static void appendInstant(Document document, String field, @Nullable Instant instant) {

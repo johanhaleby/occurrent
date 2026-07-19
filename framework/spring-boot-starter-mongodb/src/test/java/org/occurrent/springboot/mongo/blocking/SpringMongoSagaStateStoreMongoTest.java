@@ -16,12 +16,17 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
+import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.Status;
@@ -40,7 +45,9 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import tools.jackson.databind.ObjectMapper;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +72,9 @@ class SpringMongoSagaStateStoreMongoTest {
 
     @Autowired
     private MongoOperations mongoOperations;
+
+    @Autowired
+    private CloudEventConverter<FlowEvent> cloudEventConverter;
 
     private SpringMongoSagaStateStore<Counter> store;
 
@@ -168,14 +178,16 @@ class SpringMongoSagaStateStoreMongoTest {
 
     /**
      * A flow saga's {@link FlowState#received()} is a {@code List<E>} with {@code E} erased, the hard serialization case:
-     * the elements are heterogeneous domain-event records with no static element type. The store writes the state through
-     * the converter's write path, which emits a {@code _class} discriminator per element, so the concrete record types are
-     * reconstructed on read rather than degrading to raw maps.
+     * the elements are heterogeneous domain-event records with no static element type. The store serializes them as
+     * CloudEvents through the {@code CloudEventConverter}, so they reconstruct to their concrete record types on read, and
+     * their persisted type is the stable CloudEvent type (here the simple name) rather than a Java fully-qualified class
+     * name, so a domain event can move to a different package without breaking in-flight flow-saga state.
      */
     @Test
-    void round_trips_the_concrete_event_types_in_a_flow_saga_flow_state_received_list() {
+    void round_trips_a_flow_saga_flow_state_by_its_stable_cloud_event_type() {
+        String collection = "saga-flowtest-" + System.nanoTime();
         SpringMongoSagaStateStore<FlowState<FlowEvent>> flowStore =
-                new SpringMongoSagaStateStore<>(mongoOperations, "saga-flowtest-" + System.nanoTime(), rawFlowStateType());
+                new SpringMongoSagaStateStore<>(mongoOperations, collection, rawFlowStateType(), cloudEventConverter);
 
         Saga<FlowEvent, FlowState<FlowEvent>, Object> saga = flowSaga();
         FlowStarted startEvent = new FlowStarted("flow-1");
@@ -189,12 +201,17 @@ class SpringMongoSagaStateStoreMongoTest {
         flowStore.compareAndSave("flow-1", envelope, 0);
 
         Optional<SagaEnvelope<FlowState<FlowEvent>>> found = flowStore.find("flow-1");
-
         assertThat(found).hasValueSatisfying(e -> {
             assertThat(e.state().currentStep()).isEqualTo(finalState.currentStep());
             assertThat(e.state().completed()).isEqualTo(finalState.completed());
             assertThat(e.state().received()).containsExactly(startEvent, continuedEvent);
         });
+
+        // The received events are stored as CloudEvents keyed by the stable simple type name, not the Java FQN.
+        Document raw = mongoOperations.findById("flow-1", Document.class, collection);
+        List<String> storedReceived = raw.get("state", Document.class).getList("received", String.class);
+        assertThat(storedReceived).hasSize(2);
+        assertThat(storedReceived.getFirst()).contains("\"type\":\"FlowStarted\"").doesNotContain(FlowStarted.class.getName());
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -245,5 +262,24 @@ class SpringMongoSagaStateStoreMongoTest {
     @SpringBootApplication
     @EnableOccurrent
     static class StoreApplication {
+
+        // A simple-name type mapper (with an explicit reverse map, since the test events are nested classes) so a stored
+        // received event carries the stable simple type "FlowStarted", proving package independence.
+        @Bean
+        CloudEventTypeMapper<FlowEvent> flowEventCloudEventTypeMapper() {
+            return ReflectionCloudEventTypeMapper.simple(type -> switch (type) {
+                case "FlowStarted" -> FlowStarted.class;
+                case "FlowContinued" -> FlowContinued.class;
+                default -> throw new IllegalArgumentException("Unknown cloud event type " + type);
+            });
+        }
+
+        @Bean
+        CloudEventConverter<FlowEvent> flowEventCloudEventConverter(CloudEventTypeMapper<FlowEvent> typeMapper) {
+            return new JacksonCloudEventConverter.Builder<FlowEvent>(new ObjectMapper(), URI.create("urn:occurrent:saga-store-test"))
+                    .typeMapper(typeMapper)
+                    .idMapper(event -> event.id() + ":" + event.getClass().getSimpleName())
+                    .build();
+        }
     }
 }
