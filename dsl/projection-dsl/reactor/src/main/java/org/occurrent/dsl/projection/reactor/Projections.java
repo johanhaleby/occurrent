@@ -145,7 +145,7 @@ public final class Projections {
                     + "use project(projection, queries, instanceId) to read a single instance, or a singleton projection for one shared state"));
         }
         Flux<E> events = selectEvents(projection, queries);
-        return events.collectList().flatMap(list -> Mono.justOrEmpty(projection.view().evolve(list)));
+        return foldIncrementally(projection.view(), events);
     }
 
     /**
@@ -164,7 +164,17 @@ public final class Projections {
         Flux<E> events = selectEvents(projection, queries);
         Function<E, @Nullable ID> id = projection.id();
         Flux<E> scopedEvents = id == null ? events : events.filter(event -> instanceId.equals(id.apply(event)));
-        return scopedEvents.collectList().flatMap(list -> Mono.justOrEmpty(projection.view().evolve(list)));
+        return foldIncrementally(projection.view(), scopedEvents);
+    }
+
+    // A record wrapper because Reactor's reduce cannot carry a null accumulator, but View.evolve is free to return a
+    // null state (a projection can model "not yet created" or "deleted" as null).
+    private record StateBox<S extends @Nullable Object>(S state) {
+    }
+
+    private static <S extends @Nullable Object, E> Mono<S> foldIncrementally(View<S, E> view, Flux<E> events) {
+        return events.reduce(new StateBox<>(view.initialState()), (box, event) -> new StateBox<>(view.evolve(box.state(), event)))
+                .flatMap(box -> Mono.justOrEmpty(box.state()));
     }
 
     private static <S extends @Nullable Object, E, ID> Flux<E> selectEvents(Projection<S, E, ID> projection, DomainEventQueries<E> queries) {
@@ -188,6 +198,6 @@ public final class Projections {
     public static <S extends @Nullable Object, E, ID> Mono<S> project(DcbProjection<S, E, ID> dcbProjection, DcbDomainEventQueries<E> queries) {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         requireNonNull(queries, "queries cannot be null");
-        return queries.query(dcbProjection.criteria()).collectList().flatMap(list -> Mono.justOrEmpty(dcbProjection.projection().view().evolve(list)));
+        return foldIncrementally(dcbProjection.projection().view(), queries.query(dcbProjection.criteria()));
     }
 }
