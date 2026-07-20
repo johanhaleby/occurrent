@@ -112,7 +112,10 @@ Three changes make the stated safety guarantee true on the stream paths:
   returns the real stream version regardless of skip and limit) to tell a genuine redelivery from a reset. A head below the
   snapshot version demotes to the initial state, and the existing range-fold rebuilds and self-heals by overwriting the
   stale snapshot at the reset version. Without this, a reset froze the maintainer forever: every delivery looked like a
-  redelivery and was skipped.
+  redelivery and was skipped. A per-stream cache of confirmed-good snapshot versions was tried to avoid re-probing every
+  delivery during a catch-up, and reverted: a cached confirmation cannot detect a reset that happens after it was cached,
+  which reintroduces the exact freeze this guard exists to prevent. The probe stays uncached and runs on every ambiguous
+  delivery.
 - **The DSL stream executor is fail-safe and self-healing.** After the write, when the snapshot base is ahead of
   `WriteResult.oldStreamVersion()` (the true head before this write), the executor skips the save and deletes the stale
   snapshot with `SnapshotStore.delete`, logging it, so the next command folds fresh. `oldStreamVersion()` is already
