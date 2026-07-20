@@ -20,10 +20,6 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.Tag;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
@@ -36,12 +32,11 @@ import static java.util.stream.Collectors.joining;
  * sets, so the same logical boundary can render in different orders and miss its snapshot. This canonicalizes by sorting
  * every part, so a boundary always yields the same key regardless of the order tags or types were supplied in.
  * <p>
- * The sorted, delimited representation is then SHA-256 hashed: types, tags, and excluded types are joined with plain
- * {@code ,}/{@code [}/{@code ]} characters that are not escaped, so two structurally distinct criteria could otherwise
- * render to the identical string (e.g. a single type named {@code "A,B"} versus the two types {@code "A"} and
- * {@code "B"} both render as {@code types[A,B]}). Hashing the fully-qualified, length-prefixed representation instead
- * of using the delimited string directly turns that silent snapshot-corrupting collision into a (practically
- * impossible) hash collision.
+ * Every type and tag value is length-prefixed ({@code value.length() + ":" + value}) before it is joined, so a
+ * delimiter character occurring inside a value cannot be mistaken for the boundary between two values. That makes the
+ * encoding injective, so two structurally distinct criteria always produce different keys instead of colliding on one
+ * snapshot (for example a single type named {@code "A,B"} and the two types {@code "A"} and {@code "B"}, which would
+ * both render as {@code types[A,B]} without the length prefix).
  */
 public final class DcbSnapshotKeys {
 
@@ -58,7 +53,7 @@ public final class DcbSnapshotKeys {
             case DcbCriterion criterion -> criterion(criterion);
             case DcbCriteria.Items items -> items.items().stream().map(DcbSnapshotKeys::criterion).sorted().collect(joining(",", "anyOf[", "]"));
         };
-        return sha256Hex(canonical);
+        return canonical;
     }
 
     private static String criterion(DcbCriterion criterion) {
@@ -75,16 +70,5 @@ public final class DcbSnapshotKeys {
      */
     private static String lengthPrefixedJoin(Stream<String> values) {
         return values.sorted().map(value -> value.length() + ":" + value).collect(joining(","));
-    }
-
-    private static String sha256Hex(String canonical) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(canonical.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            // SHA-256 is guaranteed to be available on every conforming JVM (java.security.MessageDigest javadoc).
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
     }
 }
