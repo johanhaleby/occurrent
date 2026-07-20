@@ -20,6 +20,8 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.Tag;
 
+import java.util.stream.Stream;
+
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;
 
@@ -29,6 +31,12 @@ import static java.util.stream.Collectors.joining;
  * {@link DcbCriteria#toString()} is not usable as a key because its types, tags, and alternatives live in unordered
  * sets, so the same logical boundary can render in different orders and miss its snapshot. This canonicalizes by sorting
  * every part, so a boundary always yields the same key regardless of the order tags or types were supplied in.
+ * <p>
+ * Every type and tag value is length-prefixed ({@code value.length() + ":" + value}) before it is joined, so a
+ * delimiter character occurring inside a value cannot be mistaken for the boundary between two values. That makes the
+ * encoding injective, so two structurally distinct criteria always produce different keys instead of colliding on one
+ * snapshot (for example a single type named {@code "A,B"} and the two types {@code "A"} and {@code "B"}, which would
+ * both render as {@code types[A,B]} without the length prefix).
  */
 public final class DcbSnapshotKeys {
 
@@ -40,17 +48,27 @@ public final class DcbSnapshotKeys {
      */
     public static String canonicalKey(DcbCriteria criteria) {
         requireNonNull(criteria, "criteria cannot be null");
-        return switch (criteria) {
+        String canonical = switch (criteria) {
             case DcbCriteria.MatchAll ignored -> "all";
             case DcbCriterion criterion -> criterion(criterion);
             case DcbCriteria.Items items -> items.items().stream().map(DcbSnapshotKeys::criterion).sorted().collect(joining(",", "anyOf[", "]"));
         };
+        return canonical;
     }
 
     private static String criterion(DcbCriterion criterion) {
-        String types = criterion.types().stream().sorted().collect(joining(",", "types[", "]"));
-        String tags = criterion.tags().stream().map(Tag::value).sorted().collect(joining(",", "tags[", "]"));
-        String excludedTypes = criterion.excludedTypes().stream().sorted().collect(joining(",", "excludingTypes[", "]"));
-        return types + tags + excludedTypes;
+        String types = lengthPrefixedJoin(criterion.types().stream());
+        String tags = lengthPrefixedJoin(criterion.tags().stream().map(Tag::value));
+        String excludedTypes = lengthPrefixedJoin(criterion.excludedTypes().stream());
+        return "types[" + types + "]tags[" + tags + "]excludingTypes[" + excludedTypes + "]";
+    }
+
+    /**
+     * Joins {@code values}, sorted, with each element prefixed by its length so that a delimiter occurring inside an
+     * element cannot be mistaken for the boundary between two elements (the collision {@link DcbSnapshotKeys} guards
+     * against).
+     */
+    private static String lengthPrefixedJoin(Stream<String> values) {
+        return values.sorted().map(value -> value.length() + ":" + value).collect(joining(","));
     }
 }

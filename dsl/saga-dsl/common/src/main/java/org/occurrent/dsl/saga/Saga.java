@@ -36,6 +36,14 @@ import static java.util.Objects.requireNonNull;
  * events, and its own timeouts, into commands. Nothing here performs I/O. An executor feeds a saga inputs, folds and
  * persists its state, and interprets the {@link SagaEffect}s it returns.
  * <p>
+ * The duality is exact in the type parameters, mirrored (not just described) end to end:
+ * <pre>{@code
+ * Decider<C, S, E>   // C command  -> S state -> E event(s)
+ * Saga   <E, S, C>   // E event    -> S state -> C command(s)
+ * }</pre>
+ * A decider consumes a command and its own state and produces events; a saga consumes an event (or one of its own
+ * timeouts) and its own state and produces commands. Same three type variables, same roles, the arrows reversed.
+ * <p>
  * A saga is <em>not</em> a substitute for a Dynamic Consistency Boundary: when two rules must hold atomically in one
  * append, use DCB. A saga is for genuinely cross-boundary, time-involving, eventually-consistent processes, such as
  * "cancel the order if payment is not reserved within 30 minutes".

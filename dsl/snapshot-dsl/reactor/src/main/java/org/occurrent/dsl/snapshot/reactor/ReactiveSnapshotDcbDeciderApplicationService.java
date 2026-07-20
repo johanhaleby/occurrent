@@ -52,6 +52,12 @@ import java.util.function.Function;
  * An empty result Mono from {@link #execute} means the domain function produced no new events, so nothing is appended and
  * no snapshot is written. {@link #executeAndReturnDecision}/{@link #executeAndReturnState} still emit the decided state
  * even for a no-op.
+ * <p>
+ * Deliberate asymmetry with the stream executor: this executor only advances the base when the decision actually
+ * appended events, since a no-op decision has no {@link DcbAppendResult} to key the save on.
+ * {@link ReactiveSnapshotDeciderApplicationService} instead saves unconditionally after every execute, because a
+ * stream write always has a {@code WriteResult} to advance the base from, whether or not new events were appended.
+ * Either way a missed save only costs a longer replay on the next execute; it is never a correctness issue.
  *
  * @param <S> the snapshot state type
  * @param <E> the event type
