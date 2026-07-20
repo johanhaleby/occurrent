@@ -54,6 +54,20 @@ class DomainEventFeedTest {
     }
 
     @Test
+    void registering_with_a_null_id_throws_instead_of_failing_inside_the_id_set() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+
+        Throwable thrown = catchThrowable(() -> feed.register(null, projection(), repository));
+
+        assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("id cannot be null");
+    }
+
+    @Test
     void registering_two_projections_with_different_ids_does_not_throw() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();

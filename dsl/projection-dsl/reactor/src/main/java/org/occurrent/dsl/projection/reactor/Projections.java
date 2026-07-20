@@ -160,6 +160,7 @@ public final class Projections {
     public static <S extends @Nullable Object, E, ID> Mono<S> project(Projection<S, E, ID> projection, DomainEventQueries<E> queries, ID instanceId) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(queries, "queries cannot be null");
+        requireNonNull(instanceId, "instanceId cannot be null");
         Flux<E> events = selectEvents(projection, queries);
         Function<E, @Nullable ID> id = projection.id();
         Flux<E> scopedEvents = id == null ? events : events.filter(event -> instanceId.equals(id.apply(event)));

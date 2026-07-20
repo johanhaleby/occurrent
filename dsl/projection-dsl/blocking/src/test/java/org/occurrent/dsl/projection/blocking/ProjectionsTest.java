@@ -64,6 +64,17 @@ class ProjectionsTest {
     }
 
     @Test
+    void project_with_a_null_instance_id_throws_instead_of_failing_inside_the_filter() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventQueries<Counted> queries = new DomainEventQueries<>(store, converter);
+
+        Throwable thrown = catchThrowable(() -> Projections.project(keyedProjection(), queries, null));
+
+        assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("instanceId cannot be null");
+    }
+
+    @Test
     void project_with_an_instance_id_folds_only_the_events_for_that_instance() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
