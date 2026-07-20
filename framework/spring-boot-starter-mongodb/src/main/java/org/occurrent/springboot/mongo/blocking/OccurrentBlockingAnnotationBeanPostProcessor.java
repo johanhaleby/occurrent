@@ -515,10 +515,23 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             String key = metadata.getStreamId();
             long eventVersion = metadata.getStreamVersion();
             Optional<org.occurrent.dsl.snapshot.Snapshot<S>> loaded = store.findLatest(key);
-            if (SnapshotSupport.isRedelivery(loaded, schemaVersion, eventVersion)) {
-                return Unit.INSTANCE; // already folded (a redelivery), skip so folding stays idempotent
+            // A snapshot version at or beyond this delivery is normally a redelivery, but if the stream was reset below
+            // the snapshot the snapshot is stale and resuming from it would freeze the maintainer forever. Only in that
+            // ambiguous case do we probe the true head (a suffix read returns the real stream version regardless of
+            // skip/limit); the happy path (eventVersion beyond the snapshot) pays no extra read. A head below the
+            // snapshot version means a reset, so resolveBase demotes to initial and the range-fold below rebuilds and
+            // self-heals (the save overwrites the stale snapshot at the reset version). Caching this probe was tried and
+            // reverted: a cached confirmation cannot detect a reset that happens after it was cached, which reintroduces
+            // the exact freeze this guard exists to prevent, so every ambiguous delivery is probed fresh.
+            long observedHead = Long.MAX_VALUE;
+            if (loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion && eventVersion <= loaded.get().version()) {
+                int snapshotVersion = SnapshotSupport.requireInt(loaded.get().version(), "the snapshot version used as the head-probe read offset");
+                observedHead = eventStore.read(key, snapshotVersion, 1).version();
             }
-            SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, snapshotView.view()::initialState);
+            if (SnapshotSupport.isRedelivery(loaded, schemaVersion, eventVersion, observedHead)) {
+                return Unit.INSTANCE; // already folded (a redelivery within the head), skip so folding stays idempotent
+            }
+            SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, observedHead, snapshotView.view()::initialState);
             if (eventVersion - base.version() < everyNEvents) {
                 return Unit.INSTANCE; // throttle: too few new events since the last saved snapshot, fold them in on a later save
             }
@@ -575,6 +588,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, (dcbMetadata, event) -> {
             long position = dcbMetadata.eventMetadata().getPosition();
             Optional<org.occurrent.dsl.snapshot.Snapshot<S>> loaded = store.findLatest(key);
+            // DCB positions are global and monotonic, they never reset, so a snapshot can never be ahead of the true
+            // head: no head probe is needed and the 3-arg isRedelivery is correct (unlike the stream path above).
             if (SnapshotSupport.isRedelivery(loaded, schemaVersion, position)) {
                 return; // already folded (a redelivery), keep folding idempotent
             }

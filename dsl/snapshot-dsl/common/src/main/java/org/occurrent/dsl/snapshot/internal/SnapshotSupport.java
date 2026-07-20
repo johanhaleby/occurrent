@@ -53,14 +53,32 @@ public final class SnapshotSupport {
     }
 
     /**
-     * Resolves the {@link Base} to resume from. Returns the snapshot's state and version when {@code loaded} is present
-     * and its {@link Snapshot#schemaVersion()} equals {@code expectedSchemaVersion}; otherwise the {@code initialState}
-     * at version {@code 0}.
+     * Resolves the {@link Base} to resume from, treating the snapshot as trustworthy no matter how high its version is.
+     * Equivalent to {@link #resolveBase(Optional, int, long, Supplier)} with an unbounded observed head, so a caller that
+     * already knows the snapshot cannot be ahead of the true head (the append still happens at the real version, so a
+     * stale snapshot only lengthens the tail) keeps the original behavior.
      */
     public static <S extends @Nullable Object> Base<S> resolveBase(Optional<Snapshot<S>> loaded, int expectedSchemaVersion, Supplier<? extends S> initialState) {
+        return resolveBase(loaded, expectedSchemaVersion, Long.MAX_VALUE, initialState);
+    }
+
+    /**
+     * Resolves the {@link Base} to resume from. Returns the snapshot's state and version when {@code loaded} is present,
+     * its {@link Snapshot#schemaVersion()} equals {@code expectedSchemaVersion}, and its version is at or below
+     * {@code observedHead}; otherwise the {@code initialState} at version {@code 0}. A schema mismatch is treated as no
+     * snapshot so a changed state shape falls back to a full replay rather than being read into the new shape.
+     * <p>
+     * The {@code observedHead} guard is the safety net for a reset stream: if the stream was truncated below the snapshot,
+     * the snapshot's version now exceeds the true head, so resuming from it would fold onto state that no longer exists.
+     * Discarding it and folding from the initial state instead is the only correct choice. Pass {@link Long#MAX_VALUE} (or
+     * use the 3-argument overload) when the head is not known and the snapshot is trusted unconditionally.
+     *
+     * @param observedHead the true current head the snapshot must not be ahead of (stream version, or DCB position)
+     */
+    public static <S extends @Nullable Object> Base<S> resolveBase(Optional<Snapshot<S>> loaded, int expectedSchemaVersion, long observedHead, Supplier<? extends S> initialState) {
         requireNonNull(loaded, "loaded cannot be null");
         requireNonNull(initialState, "initialState cannot be null");
-        if (loaded.isPresent() && loaded.get().schemaVersion() == expectedSchemaVersion) {
+        if (loaded.isPresent() && loaded.get().schemaVersion() == expectedSchemaVersion && loaded.get().version() <= observedHead) {
             Snapshot<S> snapshot = loaded.get();
             return new Base<>(snapshot.state(), snapshot.version());
         }
@@ -68,15 +86,33 @@ public final class SnapshotSupport {
     }
 
     /**
-     * Whether a maintained-snapshot delivery is a redelivery that should be skipped to keep folding idempotent. True when
-     * {@code loaded} is present, its {@link Snapshot#schemaVersion()} matches, and its version is at or beyond
-     * {@code deliveredVersion}. A schema mismatch is not a redelivery, so the caller rebuilds from the initial state.
+     * Whether a maintained-snapshot delivery is a redelivery that should be skipped to keep folding idempotent. Equivalent
+     * to {@link #isRedelivery(Optional, int, long, long)} with an unbounded observed head, for callers that trust the
+     * snapshot's version unconditionally.
      *
      * @param deliveredVersion the version (stream version, or DCB position) of the event being delivered
      */
     public static <S extends @Nullable Object> boolean isRedelivery(Optional<Snapshot<S>> loaded, int schemaVersion, long deliveredVersion) {
+        return isRedelivery(loaded, schemaVersion, deliveredVersion, Long.MAX_VALUE);
+    }
+
+    /**
+     * Whether a maintained-snapshot delivery is a redelivery that should be skipped to keep folding idempotent. True when
+     * {@code loaded} is present, its {@link Snapshot#schemaVersion()} matches, its version is at or beyond
+     * {@code deliveredVersion}, and its version is at or below {@code observedHead}. A schema mismatch is not a redelivery,
+     * so the caller rebuilds from the initial state.
+     * <p>
+     * The {@code observedHead} guard distinguishes a genuine redelivery from a reset: a snapshot version above
+     * {@code deliveredVersion} normally means the event was already folded, but if that version is also above the true
+     * head the stream was truncated and the snapshot is stale, so this is not a redelivery and the caller must rebuild.
+     *
+     * @param deliveredVersion the version (stream version, or DCB position) of the event being delivered
+     * @param observedHead     the true current head the snapshot must not be ahead of
+     */
+    public static <S extends @Nullable Object> boolean isRedelivery(Optional<Snapshot<S>> loaded, int schemaVersion, long deliveredVersion, long observedHead) {
         requireNonNull(loaded, "loaded cannot be null");
-        return loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion && deliveredVersion <= loaded.get().version();
+        return loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion
+                && deliveredVersion <= loaded.get().version() && loaded.get().version() <= observedHead;
     }
 
     /**
@@ -109,8 +145,25 @@ public final class SnapshotSupport {
      */
     public static <S extends @Nullable Object, E> boolean maybeSaveBestEffort(SnapshotStore<S> store, String key, int schemaVersion,
                                                                               SnapshotPolicy<S, E> policy, SnapshotDecision<S, E> decision) {
+        return maybeSaveBestEffort(store, key, schemaVersion, policy, () -> decision);
+    }
+
+    /**
+     * Best-effort variant of {@link #maybeSave} that builds the {@link SnapshotDecision} inside the try, so the
+     * arithmetic that assembles it (for example {@link #requireInt} narrowing {@code eventsSinceSnapshot}) is also
+     * swallowed on failure rather than thrown. The command's events have already committed by the time the executor calls
+     * this, so an exception escaping here would surface a committed command as a failure; building the decision lazily
+     * keeps every step after the commit best-effort.
+     *
+     * @param decisionSupplier supplies the decision to save; evaluated at most once, inside the best-effort boundary
+     * @return {@code true} if a snapshot was written, {@code false} if the policy declined it or anything after the
+     * commit (the decision build or the save) failed
+     */
+    public static <S extends @Nullable Object, E> boolean maybeSaveBestEffort(SnapshotStore<S> store, String key, int schemaVersion,
+                                                                              SnapshotPolicy<S, E> policy, Supplier<? extends SnapshotDecision<S, E>> decisionSupplier) {
+        requireNonNull(decisionSupplier, "decisionSupplier cannot be null");
         try {
-            return maybeSave(store, key, schemaVersion, policy, decision);
+            return maybeSave(store, key, schemaVersion, policy, decisionSupplier.get());
         } catch (RuntimeException e) {
             log.warn("Best-effort snapshot save failed for key '{}'. The write is committed, the snapshot will be rebuilt from events on the next replay.", key, e);
             return false;

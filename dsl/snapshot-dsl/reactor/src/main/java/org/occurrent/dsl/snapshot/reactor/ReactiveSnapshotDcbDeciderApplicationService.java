@@ -161,9 +161,14 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<S extends @Nulla
                                 })
                         .flatMap(result -> {
                             Decider.Decision<S, E> decision = requireDecision(decisionRef);
-                            int eventsSinceSnapshot = tailSize.get() + decision.events().size();
-                            return ReactiveSnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(),
-                                            new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), eventsSinceSnapshot))
+                            // DCB positions are global and monotonic, they never reset, so a snapshot can never be ahead
+                            // of the head: no head guard or self-heal is needed here, and eventsSinceSnapshot
+                            // (tail + events) cannot go negative. The Supplier-based best-effort is used only for
+                            // symmetry with the stream executor.
+                            return ReactiveSnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(), () -> {
+                                        int eventsSinceSnapshot = tailSize.get() + decision.events().size();
+                                        return new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), eventsSinceSnapshot);
+                                    })
                                     .thenReturn(new Executed<>(Optional.of(result), decision));
                         })
                         // The domain function produced no events, so nothing was appended, but the decider still folded a

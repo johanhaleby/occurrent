@@ -80,6 +80,9 @@ class ReactiveSnapshotAnnotationMongoTest {
     private ApplicationService<CounterEvent> applicationService;
 
     @Autowired
+    private org.occurrent.eventstore.api.reactor.EventStoreOperations eventStoreOperations;
+
+    @Autowired
     private ReactiveMongoOperations mongoOperations;
 
     @Test
@@ -100,6 +103,30 @@ class ReactiveSnapshotAnnotationMongoTest {
                 assertThat(snapshot.version()).isEqualTo(1L);
             });
         });
+    }
+
+    @Test
+    void a_reset_stream_rebuilds_the_snapshot_instead_of_freezing_the_maintainer() {
+        ReactiveSnapshotStore<Counter> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, Counter.class, "occurrent-snapshot-reactive-counter");
+
+        applicationService.execute("counter-reset", __ -> List.of(new Incremented(1), new Incremented(2), new Incremented(3))).block();
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(store.findLatest("counter-reset").blockOptional()).hasValueSatisfying(snapshot -> {
+                    assertThat(snapshot.version()).isEqualTo(3L);
+                    assertThat(snapshot.state().total()).isEqualTo(6);
+                }));
+
+        // Reset the stream below the surviving snapshot (still at version 3) and rewrite it shorter. The maintainer must
+        // not freeze on the stale snapshot: the head probe sees head 1 < snapshot 3, demotes to initial, folds the reset
+        // stream fresh, and self-heals the snapshot down to the reset stream's state.
+        eventStoreOperations.deleteEventStream("counter-reset").block();
+        applicationService.execute("counter-reset", __ -> List.of(new Incremented(100))).block();
+
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(store.findLatest("counter-reset").blockOptional()).hasValueSatisfying(snapshot -> {
+                    assertThat(snapshot.version()).isEqualTo(1L);
+                    assertThat(snapshot.state().total()).isEqualTo(100);
+                }));
     }
 
     @TestConfiguration(proxyBeanMethods = false)

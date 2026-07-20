@@ -27,6 +27,8 @@ import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.eventstore.api.WriteResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Objects;
@@ -60,6 +62,8 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @NullMarked
 public final class SnapshotDeciderApplicationService<S extends @Nullable Object, E> {
+
+    private static final Logger log = LoggerFactory.getLogger(SnapshotDeciderApplicationService.class);
 
     private final ApplicationService<E> applicationService;
     private final SnapshotStore<S> store;
@@ -201,10 +205,28 @@ public final class SnapshotDeciderApplicationService<S extends @Nullable Object,
         });
 
         Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
-        long newVersion = writeResult.newStreamVersion();
-        int eventsSinceSnapshot = SnapshotSupport.requireInt(newVersion - base.version(), "the number of events since the snapshot");
-        SnapshotSupport.maybeSaveBestEffort(store, streamId, options.schemaVersion(), options.policy(),
-                new SnapshotDecision<>(decision.state(), decision.events(), newVersion, eventsSinceSnapshot));
+        if (base.version() > writeResult.oldStreamVersion()) {
+            // Self-heal: the snapshot's version is ahead of the stream's true head before this write, so the stream was
+            // reset (truncated) below the snapshot after it was written. There is nothing valid to persist, and the
+            // stale snapshot must go, otherwise the next command resumes from state the reset stream no longer holds.
+            // Deleting it makes the next resolveBase fold fresh from the reset stream. This is misuse-only (a reset that
+            // did not pair with SnapshotStore.delete); the delete is best-effort because the command already committed.
+            log.warn("Snapshot for stream '{}' is at version {} but the stream's head was {} before this write, so the stream was reset below the snapshot. Deleting the stale snapshot; the next command folds fresh from the stream. Pair a stream reset with SnapshotStore.delete to avoid this.",
+                    streamId, base.version(), writeResult.oldStreamVersion());
+            try {
+                store.delete(streamId);
+            } catch (RuntimeException e) {
+                log.warn("Failed to delete the stale snapshot for stream '{}' after detecting a reset. It will be discarded again by the head guard on the next command.", streamId, e);
+            }
+            return new Executed<>(writeResult, decision);
+        }
+        // Build the decision (including the eventsSinceSnapshot narrowing) inside the best-effort boundary so nothing
+        // after the commit can surface the committed command as a failure.
+        SnapshotSupport.maybeSaveBestEffort(store, streamId, options.schemaVersion(), options.policy(), () -> {
+            long newVersion = writeResult.newStreamVersion();
+            int eventsSinceSnapshot = SnapshotSupport.requireInt(newVersion - base.version(), "the number of events since the snapshot");
+            return new SnapshotDecision<>(decision.state(), decision.events(), newVersion, eventsSinceSnapshot);
+        });
         return new Executed<>(writeResult, decision);
     }
 

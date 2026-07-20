@@ -181,6 +181,35 @@ class SnapshotDeciderApplicationServiceTest {
     }
 
     @Test
+    void a_reset_stream_with_a_surviving_snapshot_does_not_throw_and_folds_from_initial() {
+        String streamId = UUID.randomUUID().toString();
+        SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        SnapshotDeciderApplicationService<String, DomainEvent> service = new SnapshotDeciderApplicationService<>(applicationService, store, options);
+        service.execute(streamId, new Define("A"), decider);
+        service.execute(streamId, new Change("B"), decider);
+        assertThat(store.findLatest(streamId).orElseThrow().version()).as("snapshot ahead of the reset stream").isEqualTo(2L);
+
+        // Reset the stream below the surviving snapshot without deleting the snapshot: the misuse the head guard covers.
+        eventStore.deleteEventStream(streamId);
+
+        // The first post-reset command must not throw even though the snapshot's version (2) is ahead of the empty stream.
+        WriteResult reset = service.execute(streamId, new Define("C"), decider);
+        assertAll(
+                () -> assertThat(reset.oldStreamVersion()).as("wrote against the reset (empty) head").isEqualTo(0L),
+                () -> assertThat(reset.newStreamVersion()).isEqualTo(1L),
+                // Self-heal dropped the stale snapshot so the next command folds fresh.
+                () -> assertThat(store.findLatest(streamId)).as("stale snapshot deleted").isEmpty()
+        );
+
+        // The next command reads the reset stream fresh, folds from initial, and stays consistent.
+        String state = service.executeAndReturnState(streamId, new Change("D"), decider);
+        assertAll(
+                () -> assertThat(state).isEqualTo("D"),
+                () -> assertThat(store.findLatest(streamId).orElseThrow().version()).isEqualTo(2L)
+        );
+    }
+
+    @Test
     void sequential_executes_resuming_from_snapshots_stay_consistent() {
         String streamId = UUID.randomUUID().toString();
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
