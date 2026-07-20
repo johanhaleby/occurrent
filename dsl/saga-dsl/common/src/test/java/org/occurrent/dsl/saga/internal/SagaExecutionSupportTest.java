@@ -16,6 +16,12 @@
 
 package org.occurrent.dsl.saga.internal;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -30,6 +36,7 @@ import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaTimeout;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -317,6 +324,69 @@ class SagaExecutionSupportTest {
                     () -> assertThat(outcome.envelope().createdAt()).isEqualTo(NOW),
                     () -> assertThat(outcome.envelope().updatedAt()).isEqualTo(later)
             );
+        }
+    }
+
+    @Nested
+    class UnmatchedTimer {
+
+        private ListAppender<ILoggingEvent> appender;
+        private ch.qos.logback.classic.Logger logger;
+
+        @BeforeEach
+        void attachAppender() {
+            LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+            logger = context.getLogger(SagaExecutionSupport.class);
+            appender = new ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        @AfterEach
+        void detachAppender() {
+            logger.detachAppender(appender);
+        }
+
+        @Test
+        void a_fired_timer_with_no_registered_handler_is_consumed_without_effect_and_the_instance_does_not_advance() {
+            // "typo" is not registered on the saga: neither evolveOnTimeout nor reactOnTimeout knows it, mimicking a
+            // StartTimeout armed under one name and its handler registered under another.
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
+                    List.of(new TimerEntry("typo", NOW.plus(Duration.ofMinutes(5)).toEpochMilli())), Map.of(), null);
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    orderFulfillment(), "o1", current, SagaInput.timeout(new SagaTimeout("o1", "typo")), EventMeta.NONE, NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.commands()).isEmpty(),
+                    () -> assertThat(outcome.envelope().state()).isEqualTo(new AwaitingPayment("o1")),
+                    () -> assertThat(outcome.envelope().timers()).as("the fired timer is still consumed").isEmpty()
+            );
+        }
+
+        @Test
+        void warns_when_a_fired_timer_resolves_to_no_handler() {
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
+                    List.of(new TimerEntry("typo", NOW.plus(Duration.ofMinutes(5)).toEpochMilli())), Map.of(), null);
+
+            SagaExecutionSupport.process(orderFulfillment(), "o1",
+                    current, SagaInput.timeout(new SagaTimeout("o1", "typo")), EventMeta.NONE, NOW);
+
+            assertThat(appender.list)
+                    .filteredOn(event -> event.getLevel() == Level.WARN)
+                    .anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("typo"));
+        }
+
+        @Test
+        void does_not_warn_for_a_timer_whose_handler_folds_and_reacts() {
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1,
+                    List.of(new TimerEntry(PAYMENT_TIMER, NOW.plus(Duration.ofMinutes(5)).toEpochMilli())), Map.of(), null);
+
+            SagaExecutionSupport.process(orderFulfillment(), "o1",
+                    current, SagaInput.timeout(new SagaTimeout("o1", PAYMENT_TIMER)), EventMeta.NONE, NOW);
+
+            assertThat(appender.list).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
         }
     }
 

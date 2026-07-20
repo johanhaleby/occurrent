@@ -23,10 +23,16 @@ import java.util.Optional;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The events a flow saga instance has received so far, in arrival order with the initiating event first. It is the only
- * "state" a flow saga has, and is what a reaction, a guard, or a not-fulfilled branch reads. Counts here span the whole
- * flow history (so a retry guard such as {@code count(PaymentFailed.class) < 3} works across a self-looping step). A
- * {@code join} step's own fulfilment is counted separately, over the events received since it was entered.
+ * The events a flow saga instance has received, in arrival order with the initiating event first. It is the only "state" a
+ * flow saga has, and is what a reaction, a guard, or a not-fulfilled branch reads.
+ * <p>
+ * These are the events in the instance's <em>retained window</em>, not necessarily its whole history. A flow saga keeps a
+ * bounded window (the initiating event, always present, plus the current step's events and a configurable carry-over of
+ * earlier ones, see the flow builder's {@code historyWindow}), so counts and lookups here span that window. A retry guard
+ * such as {@code count(PaymentFailed.class) < 3} works as long as its threshold fits inside the window, which the default
+ * comfortably covers; a guard that must count far beyond it needs a wider {@code historyWindow}. {@link #initiating()} is
+ * the exception, it always returns the start event even after the window has moved past it. A {@code join} step's own
+ * fulfilment is counted separately, over the events received since it was entered.
  *
  * @param <E> the domain event type
  */

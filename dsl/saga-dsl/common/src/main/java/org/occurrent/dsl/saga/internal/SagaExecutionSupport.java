@@ -23,12 +23,15 @@ import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * The pure, stack-agnostic decision step of the saga executor: given the current envelope (or {@code null} for a new
@@ -42,6 +45,8 @@ import java.util.Map;
  * custom event source feeding a saga must carry the stream or position extension for the fold to be redelivery-safe.
  */
 public final class SagaExecutionSupport {
+
+    private static final Logger log = LoggerFactory.getLogger(SagaExecutionSupport.class);
 
     private SagaExecutionSupport() {
     }
@@ -106,6 +111,15 @@ public final class SagaExecutionSupport {
             effects.addAll(saga.onStart(nextState, startEvent));
         }
         effects.addAll(saga.react(nextState, input));
+
+        // A timer that fires into nothing, neither folding the state nor producing an effect, is almost always a name
+        // typo: a StartTimeout armed under one name and its evolveOnTimeout/reactOnTimeout registered under another. The
+        // timer is still consumed (below), so the saga stalls silently. Warn rather than change behaviour, so the mistake
+        // surfaces in the log instead of as a process that mysteriously never advances.
+        if (input instanceof SagaInput.Timeout<E> firedTimer && effects.isEmpty() && Objects.equals(previousState, nextState)) {
+            log.warn("Saga '{}' fired timer '{}' but no handler folded its state or produced an effect; the timer is consumed and the instance does not advance. Check that the timer name matches its evolveOnTimeout/reactOnTimeout registration.",
+                    sagaId, firedTimer.timeout().timerName());
+        }
 
         List<C> commands = new ArrayList<>();
         Map<String, TimerEntry> timers = new LinkedHashMap<>();

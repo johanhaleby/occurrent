@@ -18,7 +18,10 @@ package org.occurrent.dsl.saga.blocking;
 
 /**
  * Thrown when a saga's state cannot be saved because a concurrent writer kept winning the compare-and-set, exhausting the
- * configured retries. For an event this propagates to the subscription model, which will redeliver and retry.
+ * configured retries. For an event this propagates to the subscription model, which will redeliver and retry; because that
+ * subscription is one ordered channel shared by every instance the saga handles, an event that keeps failing here blocks
+ * the events queued behind it until it succeeds. For a timeout the poller catches it, logs it, and leaves the timer due
+ * for the next poll, so a failing timeout does not block other instances.
  */
 public class SagaConcurrencyException extends RuntimeException {
     public SagaConcurrencyException(String message) {

@@ -205,6 +205,8 @@ class SpringMongoSagaStateStoreMongoTest {
             assertThat(e.state().currentStep()).isEqualTo(finalState.currentStep());
             assertThat(e.state().completed()).isEqualTo(finalState.completed());
             assertThat(e.state().received()).containsExactly(startEvent, continuedEvent);
+            assertThat(e.state().windowStart()).as("the bounded-window offset round-trips").isEqualTo(finalState.windowStart());
+            assertThat(e.state().stepEntryIndex()).as("the absolute step-entry index round-trips").isEqualTo(finalState.stepEntryIndex());
         });
 
         // The received events are stored as CloudEvents keyed by the stable simple type name, not the Java FQN.
@@ -212,6 +214,30 @@ class SpringMongoSagaStateStoreMongoTest {
         List<String> storedReceived = raw.get("state", Document.class).getList("received", String.class);
         assertThat(storedReceived).hasSize(2);
         assertThat(storedReceived.getFirst()).contains("\"type\":\"FlowStarted\"").doesNotContain(FlowStarted.class.getName());
+    }
+
+    @Test
+    void the_due_timer_poll_projects_away_the_state_so_it_never_decodes_the_flow_saga_received_log() {
+        String collection = "saga-flowpoll-" + System.nanoTime();
+        SpringMongoSagaStateStore<FlowState<FlowEvent>> flowStore =
+                new SpringMongoSagaStateStore<>(mongoOperations, collection, rawFlowStateType(), cloudEventConverter);
+
+        Saga<FlowEvent, FlowState<FlowEvent>, Object> saga = flowSaga();
+        FlowState<FlowEvent> withReceived = saga.evolve(saga.initialState(), SagaInput.event(new FlowStarted("flow-poll")));
+        SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-poll", withReceived, Status.ACTIVE, 1,
+                List.of(new TimerEntry("step:started", 1_000)), Map.of(), null,
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null);
+        flowStore.compareAndSave("flow-poll", envelope, 0);
+
+        List<SagaEnvelope<FlowState<FlowEvent>>> due = flowStore.findWithDueTimers(Instant.ofEpochMilli(2_000), 10);
+
+        assertThat(due).singleElement().satisfies(e -> {
+            assertThat(e.sagaId()).isEqualTo("flow-poll");
+            assertThat(e.timers()).extracting(TimerEntry::name).containsExactly("step:started");
+            assertThat(e.state()).as("the projection excludes state, so the received log is never decoded on a poll").isNull();
+        });
+        // The authoritative find(...) the executor runs before firing still returns the full received log.
+        assertThat(flowStore.find("flow-poll")).hasValueSatisfying(e -> assertThat(e.state().received()).containsExactly(new FlowStarted("flow-poll")));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

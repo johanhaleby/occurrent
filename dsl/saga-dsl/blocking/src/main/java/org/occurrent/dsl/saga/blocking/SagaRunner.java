@@ -50,6 +50,23 @@ import static java.util.Objects.requireNonNull;
  * ones. Timers are polled from the {@link SagaStateStore}, not scheduled through an external scheduler, so a run needs no
  * deadline infrastructure. The returned {@link SagaSubscription} owns the timer poller, close it to stop polling.
  *
+ * <h2>Failure handling differs between the two input paths</h2>
+ * The event path and the timer-poll path do not handle a failed input the same way, and the difference matters when a
+ * reaction or a dispatch throws:
+ * <ul>
+ *   <li><strong>Event path.</strong> An exception (including a {@link SagaConcurrencyException} after the retries are
+ *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step. The event
+ *       is not lost, but the subscription is a single ordered channel shared by every instance this saga handles, so an
+ *       input that keeps failing blocks the events queued behind it (head-of-line blocking) until it succeeds or the
+ *       subscription is intervened on. One poisoned instance can stall the others multiplexed onto the same subscription.</li>
+ *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so the next poll
+ *       retries it while other instances keep progressing; a timeout failure does not block the poller. It also does not
+ *       propagate anywhere else, so it is only ever retried by the poller, never by a subscription redelivery.</li>
+ * </ul>
+ * Because commands are dispatched before the save and a lost compare-and-set retries the step, a single input can
+ * re-dispatch its whole command list several times (up to {@code maxCasAttempts}); receivers must be idempotent and
+ * tolerate that multiplicity. See {@link SagaRunnerConfig} and {@link SagaConcurrencyException}.
+ *
  * @param <E> the domain event type
  * @param <C> the command type
  */

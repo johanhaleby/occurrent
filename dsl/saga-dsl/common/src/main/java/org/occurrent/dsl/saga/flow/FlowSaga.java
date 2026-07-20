@@ -67,8 +67,25 @@ public final class FlowSaga {
         private final Map<Class<?>, Function<E, @Nullable String>> correlators = new LinkedHashMap<>();
         private final List<CompiledStep<E, C>> steps = new ArrayList<>();
         private final Set<String> stepNames = new LinkedHashSet<>();
+        private int historyWindow = FlowSagaImpl.DEFAULT_HISTORY_WINDOW;
 
         private Builder() {
+        }
+
+        /**
+         * Sets how many received events are retained behind the current step's entry, and so how far back a guard, a join
+         * reaction, or a timeout reaction can read history through {@link ReceivedEvents}. The initiating event and the
+         * current step's own events are always retained on top of this (a join must count over the current step's events),
+         * so this only bounds the earlier history. The default is {@value FlowSagaImpl#DEFAULT_HISTORY_WINDOW}. Raise it for
+         * a guard that counts far across a self-looping step (for example a retry cap higher than the default); lower it to
+         * trim the persisted state of a long-running instance. Must be at least zero.
+         */
+        public Builder<E, C> historyWindow(int events) {
+            if (events < 0) {
+                throw new IllegalArgumentException("historyWindow cannot be negative");
+            }
+            this.historyWindow = events;
+            return this;
         }
 
         /** Declares the event that starts an instance and how it correlates. Required, can be set only once. */
@@ -84,6 +101,11 @@ public final class FlowSaga {
             requireNonNull(onStart, "onStart cannot be null");
             if (startType != null) {
                 throw new IllegalStateException("startsOn(...) has already been set and can only be set once");
+            }
+            if (correlators.containsKey(type)) {
+                // startsOn also registers the correlation for its type; a prior correlate(type, ...) would be silently
+                // overwritten here, so reject it the same way correlate(...) rejects a duplicate.
+                throw new IllegalStateException("correlate(...) has already been registered for " + type.getName());
             }
             startType = type;
             correlators.put(type, (Function<E, @Nullable String>) correlatedBy);
@@ -141,7 +163,7 @@ public final class FlowSaga {
             validateCorrelationCoverage(eventTypes);
 
             return new FlowSagaImpl<>(startType, onStartCommands, List.copyOf(steps), stepIndex, stepsByName,
-                    correlators, Set.of(startType), eventTypes);
+                    correlators, Set.of(startType), eventTypes, historyWindow);
         }
 
         private void validateGoToTargets(Set<String> stepNamesInGraph) {

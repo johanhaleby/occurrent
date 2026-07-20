@@ -84,6 +84,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // Field names inside a persisted FlowState document.
     private static final String FLOW_CURRENT_STEP = "currentStep";
+    private static final String FLOW_WINDOW_START = "windowStart";
     private static final String FLOW_STEP_ENTRY_INDEX = "stepEntryIndex";
     private static final String FLOW_COMPLETED = "completed";
     private static final String FLOW_PREVIOUS_STEP = "previousStep";
@@ -126,6 +127,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         this.mongoOperations = Objects.requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collectionName = Objects.requireNonNull(collectionName, "collectionName cannot be null");
         this.stateType = Objects.requireNonNull(stateType, "stateType cannot be null");
+        if (stateType == FlowState.class && cloudEventConverter == null) {
+            // A flow saga's FlowState holds domain events, and this store serializes them as CloudEvents through the
+            // converter so they round-trip by their stable CloudEvent type (package-independent). Without it, the field-by-
+            // field FlowState path cannot run. The annotation path always supplies the converter; a hand-built store that
+            // omits it would silently lose that package independence, so fail loud here instead.
+            throw new IllegalArgumentException("a CloudEventConverter is required to store a flow saga's FlowState; use the four-argument constructor and pass the application's CloudEventConverter");
+        }
         // Safe: the converter only ever sees domain events read out of a FlowState, whose element type is erased anyway.
         this.cloudEventConverter = (CloudEventConverter<Object>) cloudEventConverter;
         mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
@@ -161,6 +169,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Objects.requireNonNull(now, "now cannot be null");
         Query query = Query.query(where(STATUS).is(Status.ACTIVE.name()).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
                 .limit(limit);
+        // Project only the fields the poller needs to decide which timers are due. This deliberately excludes the state
+        // (a flow saga's received log can be large), so the poll never pays to decode it. The executor re-loads the full
+        // document with find(sagaId) before it processes a timer, which is the authoritative read the fire acts on.
+        query.fields().include(ID).include(STATUS).include(TIMERS).include(NEXT_TIMER_FIRES_AT).include(VERSION);
         return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
     }
 
@@ -210,6 +222,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (flowState.currentStep() != null) {
             document.append(FLOW_CURRENT_STEP, flowState.currentStep());
         }
+        document.append(FLOW_WINDOW_START, flowState.windowStart());
         document.append(FLOW_STEP_ENTRY_INDEX, flowState.stepEntryIndex());
         document.append(FLOW_COMPLETED, flowState.completed());
         if (flowState.previousStep() != null) {
@@ -273,6 +286,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return new FlowState<>(
                 document.getString(FLOW_CURRENT_STEP),
                 received,
+                // A document written before this field existed never dropped anything, so its tail always started right
+                // after the pinned initiating event, position 1, not 0 (0 only holds for a never-started FlowState.initial()).
+                document.getInteger(FLOW_WINDOW_START, 1),
                 document.getInteger(FLOW_STEP_ENTRY_INDEX, 0),
                 document.getBoolean(FLOW_COMPLETED, false),
                 document.getString(FLOW_PREVIOUS_STEP),

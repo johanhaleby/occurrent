@@ -152,7 +152,18 @@ public interface Saga<E, S extends @Nullable Object, C> {
         if (starts.isEmpty()) {
             throw new IllegalArgumentException("a saga needs at least one start event type, startEventTypes cannot be empty");
         }
-        Set<Class<? extends E>> types = Set.copyOf(eventTypes);
+        // Union the start types into the subscription selector, exactly as Builder.build() does. eventTypes is the default
+        // subscription filter: a start type left out of a non-empty eventTypes would be filtered off the subscription, so a
+        // start event could never reach the saga and no instance could ever be created. An empty eventTypes still means
+        // "no type narrowing" (subscribe to everything), so only widen a set the caller has already narrowed.
+        Set<Class<? extends E>> types;
+        if (eventTypes.isEmpty()) {
+            types = Set.of();
+        } else {
+            Set<Class<? extends E>> union = new LinkedHashSet<>(eventTypes);
+            union.addAll(starts);
+            types = Set.copyOf(union);
+        }
         return new Saga<>() {
             @Override
             public S initialState() {
