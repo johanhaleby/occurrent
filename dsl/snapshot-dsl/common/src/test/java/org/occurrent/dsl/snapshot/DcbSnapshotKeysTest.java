@@ -55,8 +55,8 @@ class DcbSnapshotKeysTest {
 
     @Test
     void does_not_collide_when_a_type_name_contains_the_delimiter_character() {
-        // Before hashing with a length-prefixed join, both of these rendered as the literal string "types[A,B]" and
-        // would have collided onto the same snapshot key.
+        // Without the length-prefixed join, both of these rendered as the literal string "types[A,B]" and would have
+        // collided onto the same snapshot key.
         DcbCriteria singleTypeContainingComma = DcbCriteria.type("A,B");
         DcbCriteria twoTypes = DcbCriteria.types("A", "B");
 
@@ -64,9 +64,9 @@ class DcbSnapshotKeysTest {
     }
 
     @Test
-    void keys_are_64_character_hex_sha256_digests() {
+    void key_is_the_readable_canonical_string_not_a_hash() {
         String key = DcbSnapshotKeys.canonicalKey(DcbCriteria.tags(Tag.of("customer", "1")));
 
-        assertThat(key).hasSize(64).matches("[0-9a-f]{64}");
+        assertThat(key).contains("tags[");
     }
 }
