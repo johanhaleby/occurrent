@@ -69,11 +69,12 @@ public final class DomainEventFeed<E> {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
-        // Each id must be unique because it is the durable checkpoint key.
+        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, projection, repository, reader, converter, eventId, catchupMarker);
+        // Reserve the id only once the feed exists, so a failed registration (an invalid reader, for example) never
+        // permanently burns the id. Each id must be unique because it is the durable checkpoint key.
         if (!registeredIds.add(id)) {
             throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
         }
-        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, projection, repository, reader, converter, eventId, catchupMarker);
         feeds.add(feed);
     }
 
@@ -84,11 +85,12 @@ public final class DomainEventFeed<E> {
      */
     public void register(String id, Function<E, Mono<Void>> fold, Filter replayFilter) {
         Objects.requireNonNull(id, "id cannot be null");
-        // Each id must be unique because it is the durable checkpoint key.
+        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, fold, replayFilter, reader, converter, eventId, catchupMarker);
+        // Reserve the id only once the feed exists, so a failed registration never permanently burns the id.
         if (!registeredIds.add(id)) {
             throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
         }
-        feeds.add(CatchupProjectionFeed.create(id, fold, replayFilter, reader, converter, eventId, catchupMarker));
+        feeds.add(feed);
     }
 
     /**

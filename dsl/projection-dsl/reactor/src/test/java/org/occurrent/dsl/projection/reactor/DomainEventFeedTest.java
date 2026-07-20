@@ -72,6 +72,26 @@ class DomainEventFeedTest {
     }
 
     @Test
+    void a_failed_registration_does_not_permanently_reserve_the_id() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(readerThatDoesNotWritePosition(), converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+
+        Throwable firstAttempt = catchThrowable(() -> feed.register("counter", projection(), repository));
+        assertThat(firstAttempt).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("does not write positions");
+
+        // A second attempt with the same id must fail the same way, not with "already registered": the first attempt's
+        // feed was never created, so the id must not have been reserved.
+        Throwable secondAttempt = catchThrowable(() -> feed.register("counter", projection(), repository));
+
+        assertThat(secondAttempt).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not write positions")
+                .hasMessageNotContaining("already registered");
+    }
+
+    @Test
     void registering_two_projections_with_different_ids_does_not_throw() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
@@ -107,6 +127,25 @@ class DomainEventFeedTest {
             @Override
             public boolean writesPosition() {
                 return true;
+            }
+        };
+    }
+
+    private static PositionOrderedReader readerThatDoesNotWritePosition() {
+        return new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.empty();
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just(0L);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return false;
             }
         };
     }
