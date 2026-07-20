@@ -30,6 +30,9 @@ import org.occurrent.dsl.saga.SagaTimeout;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
+import org.occurrent.retry.Backoff;
+import org.occurrent.retry.RetryInfo;
+import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,6 +58,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private final CommandDispatcher<C> dispatcher;
     private final CloudEventConverter<E> converter;
     private final SagaRunnerConfig config;
+    // A lost compare-and-set is an optimistic-concurrency conflict, the same shape GenericApplicationService retries with
+    // RetryStrategy and its WriteConditionNotFulfilledException. Retry immediately (no backoff) up to maxCasAttempts, only
+    // on the internal CasConflict signal so a real dispatch/save failure still propagates on the first attempt.
+    private final RetryStrategy.Retry casRetry;
+    // Warn once when contention has eaten past half the retry budget, before the retries exhaust and throw. Sustained
+    // contention on one instance points at a hot correlation id or an under-sized maxCasAttempts.
+    private final int warnThreshold;
 
     SagaExecution(Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config) {
@@ -63,6 +73,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         this.dispatcher = dispatcher;
         this.converter = converter;
         this.config = config;
+        this.casRetry = RetryStrategy.retry()
+                .backoff(Backoff.none())
+                .maxAttempts(config.maxCasAttempts())
+                .retryIf(CasConflict.class::isInstance);
+        this.warnThreshold = Math.max(1, config.maxCasAttempts() / 2);
     }
 
     void onCloudEvent(CloudEvent cloudEvent) {
@@ -101,37 +116,49 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     private void process(String sagaId, SagaInput<E> input, EventMeta meta, @Nullable String requireTimerName) {
-        // Warn once when contention has eaten past half the retry budget, before the loop exhausts it and throws. Sustained
-        // contention on one instance points at a hot correlation id or an under-sized maxCasAttempts, and is worth surfacing
-        // early rather than only as the terminal SagaConcurrencyException.
-        int warnThreshold = Math.max(1, config.maxCasAttempts() / 2);
-        for (int attempt = 0; attempt < config.maxCasAttempts(); attempt++) {
-            Instant now = Instant.now();
-            SagaEnvelope<S> current = stateStore.find(sagaId).orElse(null);
-            if (requireTimerName != null && !hasDueTimer(current, requireTimerName, now)) {
-                return; // stale/superseded/rescheduled timer, or the instance completed: nothing to fire.
-            }
-            Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, input, meta, now);
-            if (!outcome.processed()) {
-                return;
-            }
-            // Dispatch before saving so a command is never lost. A lost compare-and-set retry re-runs this whole loop body,
-            // which re-dispatches the entire command list of this input (at-least-once, and up to maxCasAttempts times).
-            // Command receivers must therefore be idempotent and tolerate that multiplicity, not merely at-least-once.
-            for (C command : outcome.commands()) {
-                dispatcher.dispatch(command);
-            }
-            SagaEnvelope<S> envelope = outcome.envelope();
-            if (envelope != null && stateStore.compareAndSave(sagaId, envelope, outcome.expectedVersion())) {
-                return;
-            }
-            if (attempt + 1 == warnThreshold) {
-                log.warn("Saga '{}' has lost its compare-and-set save {} times (of a maximum {}) to concurrent writers; each retry re-dispatches the input's commands. Sustained contention may exhaust the retries and raise SagaConcurrencyException.",
-                        sagaId, attempt + 1, config.maxCasAttempts());
-            }
+        // A lost compare-and-set is a retryable concurrency conflict: signal it with CasConflict so casRetry retries the
+        // whole body, and map an exhausted retry to the public SagaConcurrencyException. Any other failure (a throwing
+        // dispatcher or store) is not a CasConflict, so retryIf leaves it alone and it propagates on the first attempt.
+        casRetry
+                .mapError(error -> error instanceof CasConflict
+                        ? new SagaConcurrencyException("Failed to save saga '" + sagaId + "' after " + config.maxCasAttempts() + " attempts due to concurrent modification")
+                        : error)
+                .execute((RetryInfo attempt) -> {
+                    Instant now = Instant.now();
+                    SagaEnvelope<S> current = stateStore.find(sagaId).orElse(null);
+                    if (requireTimerName != null && !hasDueTimer(current, requireTimerName, now)) {
+                        return null; // stale/superseded/rescheduled timer, or the instance completed: nothing to fire.
+                    }
+                    Outcome<S, C> outcome = SagaExecutionSupport.process(saga, sagaId, current, input, meta, now);
+                    if (!outcome.processed()) {
+                        return null;
+                    }
+                    // Dispatch before saving so a command is never lost. A lost compare-and-set retries this whole body,
+                    // which re-dispatches the entire command list of this input (at-least-once, and up to maxCasAttempts
+                    // times). Command receivers must therefore be idempotent and tolerate that multiplicity, not merely
+                    // at-least-once.
+                    for (C command : outcome.commands()) {
+                        dispatcher.dispatch(command);
+                    }
+                    SagaEnvelope<S> envelope = outcome.envelope();
+                    if (envelope != null && stateStore.compareAndSave(sagaId, envelope, outcome.expectedVersion())) {
+                        return null;
+                    }
+                    if (attempt.getAttemptNumber() == warnThreshold) {
+                        log.warn("Saga '{}' has lost its compare-and-set save {} times (of a maximum {}) to concurrent writers; each retry re-dispatches the input's commands. Sustained contention may exhaust the retries and raise SagaConcurrencyException.",
+                                sagaId, attempt.getAttemptNumber(), config.maxCasAttempts());
+                    }
+                    // A lost compare-and-set, or an outcome with nothing to save: retry the whole body.
+                    throw new CasConflict();
+                });
+    }
+
+    // Internal signal that a compare-and-set save was lost, so casRetry retries the transition. Never escapes process:
+    // an exhausted retry is mapped to SagaConcurrencyException. Carries no message or stack trace, it is control flow.
+    private static final class CasConflict extends RuntimeException {
+        private CasConflict() {
+            super(null, null, false, false);
         }
-        throw new SagaConcurrencyException("Failed to save saga '" + sagaId + "' after " + config.maxCasAttempts()
-                + " attempts due to concurrent modification");
     }
 
     // Fence a timeout on due-ness, not just presence: if a concurrent event rescheduled the same timer to a later time

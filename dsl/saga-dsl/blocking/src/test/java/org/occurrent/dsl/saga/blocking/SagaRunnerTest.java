@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,14 +41,18 @@ import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntPredicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
@@ -173,6 +178,85 @@ class SagaRunnerTest {
                     () -> assertThat(envelope.status()).isEqualTo(Status.COMPLETED),
                     () -> assertThat(envelope.timers()).isEmpty()
             );
+        }
+    }
+
+    @Nested
+    class CasContention {
+
+        // Drives the compare-and-set retry with a scripted store: find() is always empty, so every attempt starts the
+        // OrderPlaced instance fresh and produces an envelope to save, and compareAndSave decides whether that attempt wins.
+        private final class ScriptedCasStore implements SagaStateStore<OrderState> {
+            private final IntPredicate savedOnAttempt; // 1-based attempt number, did that save win?
+            private final RuntimeException failWith;    // when set, compareAndSave throws instead of returning
+            int saveAttempts = 0;
+
+            ScriptedCasStore(IntPredicate savedOnAttempt, RuntimeException failWith) {
+                this.savedOnAttempt = savedOnAttempt;
+                this.failWith = failWith;
+            }
+
+            @Override
+            public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
+                return Optional.empty();
+            }
+
+            @Override
+            public boolean compareAndSave(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+                saveAttempts++;
+                if (failWith != null) {
+                    throw failWith;
+                }
+                return savedOnAttempt.test(saveAttempts);
+            }
+
+            @Override
+            public List<SagaEnvelope<OrderState>> findWithDueTimers(Instant now, int limit) {
+                return List.of();
+            }
+
+            @Override
+            public void delete(String sagaId) {
+            }
+        }
+
+        private CloudEvent orderPlaced(String orderId) {
+            return converter.toCloudEvents(List.of(new OrderPlaced(UUID.randomUUID().toString(), orderId))).getFirst();
+        }
+
+        private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(SagaStateStore<OrderState> store, int maxCasAttempts) {
+            SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofMinutes(1), 100, maxCasAttempts);
+            return new SagaExecution<>(orderFulfillment(LONG_PAYMENT_TIMEOUT), store, command -> {
+            }, converter, config);
+        }
+
+        @Test
+        void a_lost_compare_and_set_retries_until_it_wins() {
+            ScriptedCasStore store = new ScriptedCasStore(attempt -> attempt >= 3, null);
+
+            execution(store, 5).onCloudEvent(orderPlaced("order-cas-1"));
+
+            assertThat(store.saveAttempts).isEqualTo(3);
+        }
+
+        @Test
+        void exhausting_the_retries_raises_SagaConcurrencyException_after_exactly_maxCasAttempts_saves() {
+            ScriptedCasStore store = new ScriptedCasStore(attempt -> false, null);
+
+            assertThatThrownBy(() -> execution(store, 3).onCloudEvent(orderPlaced("order-cas-2")))
+                    .isInstanceOf(SagaConcurrencyException.class)
+                    .hasMessageContaining("after 3 attempts");
+            assertThat(store.saveAttempts).isEqualTo(3);
+        }
+
+        @Test
+        void a_non_concurrency_failure_propagates_on_the_first_attempt_without_retrying() {
+            RuntimeException storeDown = new IllegalStateException("saga store is down");
+            ScriptedCasStore store = new ScriptedCasStore(attempt -> false, storeDown);
+
+            assertThatThrownBy(() -> execution(store, 5).onCloudEvent(orderPlaced("order-cas-3")))
+                    .isSameAs(storeDown);
+            assertThat(store.saveAttempts).isEqualTo(1);
         }
     }
 
