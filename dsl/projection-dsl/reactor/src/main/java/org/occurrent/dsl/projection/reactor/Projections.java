@@ -18,10 +18,15 @@ package org.occurrent.dsl.projection.reactor;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
+import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.filter.Filter;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -122,5 +127,77 @@ public final class Projections {
      */
     public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
         return reactiveUpdate(projection, repository, singletonKey);
+    }
+
+    /**
+     * Folds the events {@code projection} selects, read on demand, into its view state: the strongly-consistent,
+     * query-driven counterpart to the subscription-fed {@code project(subscriptionId, projection, ...)} runners. The
+     * returned {@link Mono} emits the folded state, or completes empty when that state is {@code null}. Only valid for
+     * a single-instance (singleton) projection; a keyed projection errors, since folding every instance into one
+     * blended state on demand would produce a nonsense result. Use {@link #project(Projection, DomainEventQueries, Object)}
+     * with an {@code instanceId} for a keyed projection.
+     */
+    public static <S extends @Nullable Object, E, ID> Mono<S> project(Projection<S, E, ID> projection, DomainEventQueries<E> queries) {
+        requireNonNull(projection, "projection cannot be null");
+        requireNonNull(queries, "queries cannot be null");
+        if (projection.id() != null) {
+            return Mono.error(new IllegalArgumentException("projection is keyed; folding every instance into one blended state on demand is not supported, "
+                    + "use project(projection, queries, instanceId) to read a single instance, or a singleton projection for one shared state"));
+        }
+        Flux<E> events = selectEvents(projection, queries);
+        return foldIncrementally(projection.view(), events);
+    }
+
+    /**
+     * Folds the events {@code projection} selects for {@code instanceId}, read on demand, into that instance's view
+     * state: the strongly-consistent, query-driven, single-instance counterpart to the unqualified
+     * {@link #project(Projection, DomainEventQueries)}. Uses the same filter or handled event types as the unqualified
+     * {@code project} to read candidate events, then keeps only the ones whose {@link Projection#id()} resolves to
+     * {@code instanceId} before folding. A singleton projection (no id function) has a single instance regardless of
+     * {@code instanceId}, so this folds all selected events, same as the unqualified {@code project}. The returned
+     * {@link Mono} emits the folded state, or completes empty when that state is {@code null}.
+     */
+    public static <S extends @Nullable Object, E, ID> Mono<S> project(Projection<S, E, ID> projection, DomainEventQueries<E> queries, ID instanceId) {
+        requireNonNull(projection, "projection cannot be null");
+        requireNonNull(queries, "queries cannot be null");
+        requireNonNull(instanceId, "instanceId cannot be null");
+        Flux<E> events = selectEvents(projection, queries);
+        Function<E, @Nullable ID> id = projection.id();
+        Flux<E> scopedEvents = id == null ? events : events.filter(event -> instanceId.equals(id.apply(event)));
+        return foldIncrementally(projection.view(), scopedEvents);
+    }
+
+    // A record wrapper because Reactor's reduce cannot carry a null accumulator, but View.evolve is free to return a
+    // null state (a projection can model "not yet created" or "deleted" as null).
+    private record StateBox<S extends @Nullable Object>(S state) {
+    }
+
+    private static <S extends @Nullable Object, E> Mono<S> foldIncrementally(View<S, E> view, Flux<E> events) {
+        return events.reduce(new StateBox<>(view.initialState()), (box, event) -> new StateBox<>(view.evolve(box.state(), event)))
+                .flatMap(box -> Mono.justOrEmpty(box.state()));
+    }
+
+    private static <S extends @Nullable Object, E, ID> Flux<E> selectEvents(Projection<S, E, ID> projection, DomainEventQueries<E> queries) {
+        Filter explicitFilter = projection.filter();
+        if (explicitFilter != null) {
+            return queries.query(explicitFilter);
+        } else if (projection.eventTypes().isEmpty()) {
+            return queries.all();
+        } else {
+            return queries.query(projection.eventTypes());
+        }
+    }
+
+    /**
+     * Folds the events matching {@code dcbProjection}'s DCB criteria, read on demand, into its view state: the
+     * strongly-consistent, query-driven counterpart to the subscription-fed {@code ReactiveDcbProjectionRunner}, and the
+     * shape of a single-instance DCB projection such as "is this username claimed?". The returned {@link Mono} emits the
+     * folded state, or completes empty when that state is {@code null}. The criteria itself already scopes the read, so
+     * there is no keyed/singleton ambiguity to guard against.
+     */
+    public static <S extends @Nullable Object, E, ID> Mono<S> project(DcbProjection<S, E, ID> dcbProjection, DcbDomainEventQueries<E> queries) {
+        requireNonNull(dcbProjection, "dcbProjection cannot be null");
+        requireNonNull(queries, "queries cannot be null");
+        return foldIncrementally(dcbProjection.projection().view(), queries.query(dcbProjection.criteria()));
     }
 }
