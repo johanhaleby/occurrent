@@ -104,8 +104,10 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -511,6 +513,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         Filter eventFilter = snapshotFilterFor(converter, snapshotView);
         EventStore eventStore = applicationContext.getBean(EventStore.class);
 
+        // Per-stream cache of the highest snapshot version whose head has already been probed and found not stale, so a
+        // catch-up replaying many events below an existing snapshot's version probes the head once per snapshot version
+        // instead of once per event: the head cannot be below a version it was already confirmed at or above.
+        Map<String, Long> headConfirmedAtOrAboveSnapshotVersion = new ConcurrentHashMap<>();
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
             String key = metadata.getStreamId();
             long eventVersion = metadata.getStreamVersion();
@@ -523,8 +529,17 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             // self-heals (the save overwrites the stale snapshot at the reset version).
             long observedHead = Long.MAX_VALUE;
             if (loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion && eventVersion <= loaded.get().version()) {
-                int snapshotVersion = SnapshotSupport.requireInt(loaded.get().version(), "the snapshot version used as the head-probe read offset");
-                observedHead = eventStore.read(key, snapshotVersion, 1).version();
+                long snapshotVersion = loaded.get().version();
+                if (Long.valueOf(snapshotVersion).equals(headConfirmedAtOrAboveSnapshotVersion.get(key))) {
+                    observedHead = Long.MAX_VALUE;
+                } else {
+                    int snapshotVersionInt = SnapshotSupport.requireInt(snapshotVersion, "the snapshot version used as the head-probe read offset");
+                    long probedHead = eventStore.read(key, snapshotVersionInt, 1).version();
+                    if (probedHead >= snapshotVersion) {
+                        headConfirmedAtOrAboveSnapshotVersion.put(key, snapshotVersion);
+                    }
+                    observedHead = probedHead;
+                }
             }
             if (SnapshotSupport.isRedelivery(loaded, schemaVersion, eventVersion, observedHead)) {
                 return Unit.INSTANCE; // already folded (a redelivery within the head), skip so folding stays idempotent

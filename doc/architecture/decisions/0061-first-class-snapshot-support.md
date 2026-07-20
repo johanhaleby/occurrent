@@ -128,6 +128,11 @@ net for when that pairing is missed, not a substitute for it. On the executor pa
 is one loud, self-healing bad decision: the first post-reset command decides against stale state once, commits, logs, then
 deletes the snapshot so every command after it is correct.
 
+The head guard only detects a reset that leaves the head strictly below the snapshot version. A stream reset and rewritten
+back to the same or a higher version, without deleting the snapshot, is indistinguishable from an untouched stream by
+version alone, and the guard trusts it. Version comparison detects one specific shape of reset, it is not a general content
+check. The operational rule stands regardless of the guard: delete the snapshot on every reset.
+
 ## Consequences
 
 - Snapshots are entirely opt-in. An application that does not use them pays nothing, because `fromStreamVersion` and

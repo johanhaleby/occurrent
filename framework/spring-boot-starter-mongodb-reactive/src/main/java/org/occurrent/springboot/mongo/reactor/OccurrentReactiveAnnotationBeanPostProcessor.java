@@ -92,8 +92,10 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -652,6 +654,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         Filter eventFilter = snapshotFilterFor(converter, snapshotView);
         org.occurrent.eventstore.api.reactor.EventStore eventStore = applicationContext.getBean(org.occurrent.eventstore.api.reactor.EventStore.class);
 
+        // Per-stream cache of the highest snapshot version whose head has already been probed and found not stale, so a
+        // catch-up replaying many events below an existing snapshot's version probes the head once per snapshot version
+        // instead of once per event: the head cannot be below a version it was already confirmed at or above.
+        Map<String, Long> headConfirmedAtOrAboveSnapshotVersion = new ConcurrentHashMap<>();
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) -> {
             String key = metadata.getStreamId();
             long eventVersion = metadata.getStreamVersion();
@@ -664,8 +670,18 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 // below rebuilds and self-heals (the save overwrites the stale snapshot at the reset version).
                 Mono<Long> observedHead;
                 if (loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion && eventVersion <= loaded.get().version()) {
-                    int snapshotVersion = SnapshotSupport.requireInt(loaded.get().version(), "the snapshot version used as the head-probe read offset");
-                    observedHead = eventStore.read(key, snapshotVersion, 1).map(org.occurrent.eventstore.api.reactor.EventStream::version);
+                    long snapshotVersion = loaded.get().version();
+                    if (Long.valueOf(snapshotVersion).equals(headConfirmedAtOrAboveSnapshotVersion.get(key))) {
+                        observedHead = Mono.just(Long.MAX_VALUE);
+                    } else {
+                        int snapshotVersionInt = SnapshotSupport.requireInt(snapshotVersion, "the snapshot version used as the head-probe read offset");
+                        observedHead = eventStore.read(key, snapshotVersionInt, 1).map(org.occurrent.eventstore.api.reactor.EventStream::version)
+                                .doOnNext(probedHead -> {
+                                    if (probedHead >= snapshotVersion) {
+                                        headConfirmedAtOrAboveSnapshotVersion.put(key, snapshotVersion);
+                                    }
+                                });
+                    }
                 } else {
                     observedHead = Mono.just(Long.MAX_VALUE);
                 }
