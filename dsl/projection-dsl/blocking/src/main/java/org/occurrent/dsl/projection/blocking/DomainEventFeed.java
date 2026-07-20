@@ -93,11 +93,12 @@ public final class DomainEventFeed<E> {
      */
     public void register(String id, MaterializedView<E> view, Filter replayFilter) {
         Objects.requireNonNull(id, "id cannot be null");
-        // Each id must be unique because it is the durable checkpoint key.
+        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker);
+        // Reserve the id only once the feed exists, so a failed registration never permanently burns the id.
         if (!registeredIds.add(id)) {
             throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
         }
-        feeds.add(CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker));
+        feeds.add(feed);
     }
 
     /**

@@ -17,6 +17,7 @@
 package org.occurrent.dsl.projection.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -24,10 +25,14 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.filter.Filter;
 
 import java.net.URI;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -65,6 +70,46 @@ class DomainEventFeedTest {
         Throwable thrown = catchThrowable(() -> feed.register(null, projection(), repository));
 
         assertThat(thrown).isInstanceOf(NullPointerException.class).hasMessageContaining("id cannot be null");
+    }
+
+    @Test
+    void a_failed_registration_does_not_permanently_reserve_the_id() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(readerThatDoesNotWritePosition(store), converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+
+        Throwable firstAttempt = catchThrowable(() -> feed.register("counter", projection(), repository));
+        assertThat(firstAttempt).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("does not write positions");
+
+        // A second attempt with the same id must fail the same way, not with "already registered": the first attempt's
+        // feed was never created, so the id must not have been reserved.
+        Throwable secondAttempt = catchThrowable(() -> feed.register("counter", projection(), repository));
+
+        assertThat(secondAttempt).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not write positions")
+                .hasMessageNotContaining("already registered");
+    }
+
+    private static PositionOrderedReader readerThatDoesNotWritePosition(PositionOrderedReader delegate) {
+        return new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return delegate.readInPositionOrder(filter, range);
+            }
+
+            @Override
+            public long currentPosition() {
+                return delegate.currentPosition();
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return false;
+            }
+        };
     }
 
     @Test
