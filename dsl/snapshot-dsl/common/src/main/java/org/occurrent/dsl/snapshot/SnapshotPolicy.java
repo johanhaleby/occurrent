@@ -26,7 +26,7 @@ import static java.util.Objects.requireNonNull;
  * Decides whether an execute should write a new snapshot, given its {@link SnapshotDecision}. This is the single trigger
  * abstraction for both technical snapshots ({@link #everyNEvents(int)}) and domain-driven ones ({@link #onEvent(Class)},
  * {@link #whenState(Predicate)}, and the decider-backed {@code SnapshotPolicies.whenTerminal(...)} in the blocking and
- * reactor executor modules — kept out of this module so a {@code SnapshotView}-only consumer doesn't need a
+ * reactor executor modules, kept out of this module so a {@code SnapshotView}-only consumer doesn't need a
  * {@code Decider} on its classpath).
  *
  * @param <S> the state type
