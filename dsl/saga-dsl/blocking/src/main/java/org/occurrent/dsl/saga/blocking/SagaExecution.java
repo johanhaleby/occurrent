@@ -77,7 +77,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 .backoff(Backoff.none())
                 .maxAttempts(config.maxCasAttempts())
                 .retryIf(CasConflict.class::isInstance);
-        this.warnThreshold = Math.max(1, config.maxCasAttempts() / 2);
+        this.warnThreshold = config.maxCasAttempts() / 2 + 1;
     }
 
     void onCloudEvent(CloudEvent cloudEvent) {

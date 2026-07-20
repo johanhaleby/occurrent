@@ -286,7 +286,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return new FlowState<>(
                 document.getString(FLOW_CURRENT_STEP),
                 received,
-                document.getInteger(FLOW_WINDOW_START, 0),
+                // A document written before this field existed never dropped anything, so its tail always started right
+                // after the pinned initiating event, position 1, not 0 (0 only holds for a never-started FlowState.initial()).
+                document.getInteger(FLOW_WINDOW_START, 1),
                 document.getInteger(FLOW_STEP_ENTRY_INDEX, 0),
                 document.getBoolean(FLOW_COMPLETED, false),
                 document.getString(FLOW_PREVIOUS_STEP),
