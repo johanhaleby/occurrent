@@ -17,7 +17,7 @@ model (ADR 22) backed by a Mongo lease, so for a given subscription id only one 
 is exactly the coordination a saga wants for its event side, and it comes for free from the default wiring.
 
 The timer poller has no such coordination. `SagaRunner.run` starts a `ScheduledExecutorService` on every instance that
-calls `SagaStateStore.findWithDueTimers` every poll interval (1 second by default). With N instances that is N times the
+calls `SagaStateStore.findWithDueTimers` every poll interval (15 seconds by default). With N instances that is N times the
 timer-query load against the store, every interval, forever, even though at most one instance needs to fire a given due
 timer. The firing itself stays correct under this redundancy, because the executor dispatches commands before a
 compare-and-set save and a lost CAS discards the duplicate (the at-least-once contract of ADR 63), but the query load is
