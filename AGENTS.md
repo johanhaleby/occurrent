@@ -33,6 +33,8 @@ Update `changelog.md` after any change that affects code behavior, a public API,
 
 Unreleased changes go under the existing `### Changelog next version` heading, never under a versioned `### X.Y.Z (date)` section. A version number and date are assigned only at release time, when the maintainer renames that heading. Never invent a version or date for pending work.
 
+When your change refines a feature that is itself still unreleased (its entry already lives under `### Changelog next version`), do not add a separate entry describing the refinement as a change. The release notes describe what ships, not how it was built, so a reader upgrading from the last release should see one coherent entry per feature, not its development history. Fold the final behavior into that feature's existing entry, or drop it if it is purely internal. For example, if flow sagas are new this release, describe the bounded received-event window inside the saga entry rather than adding "the flow saga log is now bounded" as its own change. Words like "now", "hardened", "restored", or "instead of" in an entry for a feature that never shipped are the tell that it should be folded in. This rule is only about refinements to still-unreleased features. A change to behavior that shipped in a previous release is a real change and gets its own entry as usual.
+
 ## Coding conventions
 
 - Java 21 and Kotlin coexist in most modules.
