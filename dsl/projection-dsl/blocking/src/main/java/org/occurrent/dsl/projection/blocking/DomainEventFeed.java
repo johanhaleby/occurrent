@@ -93,6 +93,11 @@ public final class DomainEventFeed<E> {
      */
     public void register(String id, MaterializedView<E> view, Filter replayFilter) {
         Objects.requireNonNull(id, "id cannot be null");
+        // Fail fast on the common duplicate-id case before building a feed. registeredIds.add(id) after creation stays
+        // the authoritative, race-safe check: this is only an optimization, not a substitute for it.
+        if (registeredIds.contains(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
         CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker);
         // Reserve the id only once the feed exists, so a failed registration never permanently burns the id.
         if (!registeredIds.add(id)) {
