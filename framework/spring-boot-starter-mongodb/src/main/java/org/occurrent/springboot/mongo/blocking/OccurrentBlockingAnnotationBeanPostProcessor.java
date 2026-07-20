@@ -523,7 +523,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             // self-heals (the save overwrites the stale snapshot at the reset version).
             long observedHead = Long.MAX_VALUE;
             if (loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion && eventVersion <= loaded.get().version()) {
-                observedHead = eventStore.read(key, Math.toIntExact(loaded.get().version()), 1).version();
+                int snapshotVersion = SnapshotSupport.requireInt(loaded.get().version(), "the snapshot version used as the head-probe read offset");
+                observedHead = eventStore.read(key, snapshotVersion, 1).version();
             }
             if (SnapshotSupport.isRedelivery(loaded, schemaVersion, eventVersion, observedHead)) {
                 return Unit.INSTANCE; // already folded (a redelivery within the head), skip so folding stays idempotent

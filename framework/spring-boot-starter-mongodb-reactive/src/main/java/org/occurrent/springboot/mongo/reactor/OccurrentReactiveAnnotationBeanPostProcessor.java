@@ -664,7 +664,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 // below rebuilds and self-heals (the save overwrites the stale snapshot at the reset version).
                 Mono<Long> observedHead;
                 if (loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion && eventVersion <= loaded.get().version()) {
-                    observedHead = eventStore.read(key, Math.toIntExact(loaded.get().version()), 1).map(org.occurrent.eventstore.api.reactor.EventStream::version);
+                    int snapshotVersion = SnapshotSupport.requireInt(loaded.get().version(), "the snapshot version used as the head-probe read offset");
+                    observedHead = eventStore.read(key, snapshotVersion, 1).map(org.occurrent.eventstore.api.reactor.EventStream::version);
                 } else {
                     observedHead = Mono.just(Long.MAX_VALUE);
                 }
