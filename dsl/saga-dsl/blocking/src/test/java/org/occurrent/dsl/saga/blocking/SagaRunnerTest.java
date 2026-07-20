@@ -65,6 +65,9 @@ class SagaRunnerTest {
     private static final String PAYMENT_TIMER = "payment";
     private static final Duration LONG_PAYMENT_TIMEOUT = Duration.ofMinutes(30);
     private static final Duration SHORT_PAYMENT_TIMEOUT = Duration.ofMillis(150);
+    // Every runner here polls fast, so a timer fires promptly and no test is slowed by the production default (15s). Set
+    // the interval explicitly rather than leaning on SagaRunnerConfig.defaults(), so no test depends on that value.
+    private static final SagaRunnerConfig FAST_POLL_CONFIG = SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofMillis(50));
 
     // --- The tiny order/payment domain described in the test brief ---
 
@@ -169,7 +172,7 @@ class SagaRunnerTest {
             SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
             CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
             CommandDispatcher<OrderCommand> dispatcher = issued::add;
-            run("event-to-command", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, SagaRunnerConfig.defaults()).waitUntilStarted();
+            run("event-to-command", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, FAST_POLL_CONFIG).waitUntilStarted();
 
             write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
             write(orderId, new PaymentReserved(UUID.randomUUID().toString(), orderId));
@@ -273,7 +276,7 @@ class SagaRunnerTest {
             InMemoryEventStore commandEventStore = new InMemoryEventStore();
             ApplicationService<OrderEvent> applicationService = new GenericApplicationService<>(commandEventStore, converter);
             CommandDispatcher<OrderCommand> dispatcher = cmd -> applicationService.execute(cmd.orderId(), events -> List.of(toShipmentEvent(cmd)));
-            run("real-application-service", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, SagaRunnerConfig.defaults()).waitUntilStarted();
+            run("real-application-service", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, FAST_POLL_CONFIG).waitUntilStarted();
 
             write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
             write(orderId, new PaymentReserved(UUID.randomUUID().toString(), orderId));
@@ -301,8 +304,7 @@ class SagaRunnerTest {
             SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
             CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
             CommandDispatcher<OrderCommand> dispatcher = issued::add;
-            SagaRunnerConfig config = SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofMillis(50));
-            run("timer-fires", orderFulfillment(SHORT_PAYMENT_TIMEOUT), stateStore, dispatcher, config).waitUntilStarted();
+            run("timer-fires", orderFulfillment(SHORT_PAYMENT_TIMEOUT), stateStore, dispatcher, FAST_POLL_CONFIG).waitUntilStarted();
 
             write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
 
@@ -325,8 +327,7 @@ class SagaRunnerTest {
             SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
             CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
             CommandDispatcher<OrderCommand> dispatcher = issued::add;
-            SagaRunnerConfig config = SagaRunnerConfig.defaults().withTimerPollInterval(Duration.ofMillis(50));
-            run("timer-cancelled", orderFulfillment(SHORT_PAYMENT_TIMEOUT), stateStore, dispatcher, config).waitUntilStarted();
+            run("timer-cancelled", orderFulfillment(SHORT_PAYMENT_TIMEOUT), stateStore, dispatcher, FAST_POLL_CONFIG).waitUntilStarted();
 
             write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
             write(orderId, new PaymentReserved(UUID.randomUUID().toString(), orderId));
@@ -348,7 +349,7 @@ class SagaRunnerTest {
             SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
             CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
             CommandDispatcher<OrderCommand> dispatcher = issued::add;
-            run("correlation-skip", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, SagaRunnerConfig.defaults()).waitUntilStarted();
+            run("correlation-skip", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, FAST_POLL_CONFIG).waitUntilStarted();
 
             // A blank order id correlates to null per orderFulfillment()'s correlateAll and must be skipped.
             write("blank-stream", new OrderPlaced(UUID.randomUUID().toString(), ""));
@@ -396,7 +397,7 @@ class SagaRunnerTest {
                     (state, event) -> state
             );
             CommandDispatcher<OrderCommand> dispatcher = CommandDispatchers.decider(deciderApplicationService, shipmentDecider, OrderCommand::orderId);
-            run("decider-dispatcher", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, SagaRunnerConfig.defaults()).waitUntilStarted();
+            run("decider-dispatcher", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, FAST_POLL_CONFIG).waitUntilStarted();
 
             write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
             write(orderId, new PaymentReserved(UUID.randomUUID().toString(), orderId));
@@ -428,7 +429,7 @@ class SagaRunnerTest {
                 }
                 issued.add(cmd);
             };
-            run("crash-between-dispatch-and-save", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, flaky, SagaRunnerConfig.defaults()).waitUntilStarted();
+            run("crash-between-dispatch-and-save", orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, flaky, FAST_POLL_CONFIG).waitUntilStarted();
 
             write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
             write(orderId, new PaymentReserved(UUID.randomUUID().toString(), orderId));
