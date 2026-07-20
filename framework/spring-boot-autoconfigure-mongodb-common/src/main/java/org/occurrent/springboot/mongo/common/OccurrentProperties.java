@@ -318,7 +318,7 @@ public class OccurrentProperties {
 
         /**
          * How often a saga's timer poller queries its state store for due timeouts. Defaults to 15 seconds, matching
-         * {@code SagaRunnerConfig.defaults()} and the default JobRunr uses. The interval only bounds how late a due timer
+         * {@code SagaRunnerConfig.defaults()} and JobRunr's default. The interval only bounds how late a due timer
          * fires, and saga timeouts run at a minutes-to-days timescale, so a shorter interval mostly adds empty queries.
          * Lower it only when you rely on short timeouts firing promptly.
          */
