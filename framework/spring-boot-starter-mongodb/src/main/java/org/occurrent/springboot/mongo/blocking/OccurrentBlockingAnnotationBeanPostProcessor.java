@@ -57,6 +57,7 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
@@ -64,6 +65,7 @@ import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaStateStore;
@@ -749,9 +751,24 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         SagaRunnerConfig config = SagaRunnerConfig.defaults().withTimerPollInterval(sagaTimerPollInterval());
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         SagaRunner<E, C> runner = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
+        CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
 
         applyStartupWorkarounds();
-        sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config));
+        sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config, competingConsumerStrategy));
+    }
+
+    // Gate the saga timer poller on the shared competing-consumer lease so only one instance polls, mirroring the
+    // subscription model. On by default, opt out with occurrent.saga.competing-consumer.enabled=false. When disabled, or
+    // when no strategy bean exists (for example subscriptions disabled), the poller runs on every instance as before.
+    private CompetingConsumerStrategy resolveSagaCompetingConsumerStrategy() {
+        if (!occurrentProperties().getSaga().getCompetingConsumer().isEnabled()) {
+            return null;
+        }
+        return applicationContext.getBeanProvider(CompetingConsumerStrategy.class).getIfAvailable();
+    }
+
+    private OccurrentProperties occurrentProperties() {
+        return applicationContext.getBean(OccurrentProperties.class);
     }
 
     @Override
@@ -879,7 +896,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     }
 
     private Duration sagaTimerPollInterval() {
-        return applicationContext.getEnvironment().getProperty("occurrent.saga.timer-poll-interval", Duration.class, SagaRunnerConfig.defaults().timerPollInterval());
+        return occurrentProperties().getSaga().getTimerPollInterval();
     }
 
     // The saga state type is the second type argument of the factory return type Saga<E, S, C>.

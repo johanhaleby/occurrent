@@ -37,6 +37,7 @@ import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
@@ -48,6 +49,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntPredicate;
 
@@ -438,6 +440,151 @@ class SagaRunnerTest {
                     () -> assertThat(envelope.status()).isEqualTo(Status.COMPLETED),
                     () -> assertThat(envelope.version()).isEqualTo(2)
             );
+        }
+    }
+
+    @Nested
+    class TimerLeaseGating {
+
+        private static final Duration FAST_POLL = Duration.ofMillis(30);
+        private static final SagaRunnerConfig FAST = new SagaRunnerConfig(FAST_POLL, 100, 50);
+
+        // Records what the runner asked of the strategy and lets a test flip leadership on and off.
+        private final class StubStrategy implements CompetingConsumerStrategy {
+            private final AtomicBoolean locked;
+            private final CopyOnWriteArrayList<String> registered = new CopyOnWriteArrayList<>();
+            private final CopyOnWriteArrayList<String> unregistered = new CopyOnWriteArrayList<>();
+
+            StubStrategy(boolean initiallyLocked) {
+                this.locked = new AtomicBoolean(initiallyLocked);
+            }
+
+            @Override
+            public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
+                registered.add(subscriptionId + "|" + subscriberId);
+                return locked.get();
+            }
+
+            @Override
+            public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+                unregistered.add(subscriptionId + "|" + subscriberId);
+            }
+
+            @Override
+            public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
+            }
+
+            @Override
+            public boolean hasLock(String subscriptionId, String subscriberId) {
+                return locked.get();
+            }
+
+            @Override
+            public void addListener(CompetingConsumerListener listenerConsumer) {
+            }
+
+            @Override
+            public void removeListener(CompetingConsumerListener listenerConsumer) {
+            }
+        }
+
+        // Wraps an in-memory store and counts the due-timer queries, the DB load this feature is meant to remove.
+        private final class CountingStateStore implements SagaStateStore<OrderState> {
+            private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
+            private final AtomicInteger dueTimerQueries = new AtomicInteger();
+
+            @Override
+            public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
+                return delegate.find(sagaId);
+            }
+
+            @Override
+            public boolean compareAndSave(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+                return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+            }
+
+            @Override
+            public List<SagaEnvelope<OrderState>> findWithDueTimers(Instant now, int limit) {
+                dueTimerQueries.incrementAndGet();
+                return delegate.findWithDueTimers(now, limit);
+            }
+
+            @Override
+            public void delete(String sagaId) {
+                delegate.delete(sagaId);
+            }
+        }
+
+        private SagaSubscription run(String subscriptionId, SagaStateStore<OrderState> stateStore,
+                                    CommandDispatcher<OrderCommand> dispatcher, CompetingConsumerStrategy strategy) {
+            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.agnostic(subscriptionModel, converter);
+            SagaSubscription subscription = runner.run(subscriptionId, orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, null, FAST, strategy);
+            subscriptionsToClose.add(subscription);
+            return subscription;
+        }
+
+        @Test
+        void a_standby_instance_never_queries_the_store_for_due_timers() {
+            CountingStateStore store = new CountingStateStore();
+            run("standby", store, cmd -> {
+            }, new StubStrategy(false)).waitUntilStarted();
+
+            // The poller ticks several times over this window, and a non-leader must not touch the store on any tick.
+            await().during(Duration.ofMillis(250)).atMost(Duration.ofSeconds(1)).until(() -> store.dueTimerQueries.get() == 0);
+        }
+
+        @Test
+        void the_leader_instance_polls_the_store_for_due_timers() {
+            CountingStateStore store = new CountingStateStore();
+            run("leader", store, cmd -> {
+            }, new StubStrategy(true)).waitUntilStarted();
+
+            await().atMost(Duration.ofSeconds(2)).until(() -> store.dueTimerQueries.get() > 0);
+        }
+
+        @Test
+        void polling_starts_when_this_instance_wins_the_lease() {
+            CountingStateStore store = new CountingStateStore();
+            StubStrategy strategy = new StubStrategy(false);
+            run("failover", store, cmd -> {
+            }, strategy).waitUntilStarted();
+
+            await().during(Duration.ofMillis(200)).atMost(Duration.ofSeconds(1)).until(() -> store.dueTimerQueries.get() == 0);
+            strategy.locked.set(true);
+            await().atMost(Duration.ofSeconds(2)).until(() -> store.dueTimerQueries.get() > 0);
+        }
+
+        @Test
+        void the_poller_registers_and_releases_a_lease_keyed_apart_from_the_event_subscription() {
+            String subscriptionId = "lease-key-order";
+            StubStrategy strategy = new StubStrategy(true);
+            SagaSubscription subscription = run(subscriptionId, new CountingStateStore(), cmd -> {
+            }, strategy);
+            subscription.waitUntilStarted();
+
+            assertThat(strategy.registered).hasSize(1);
+            String registration = strategy.registered.getFirst();
+            String leaseKey = registration.substring(0, registration.indexOf('|'));
+            assertAll(
+                    () -> assertThat(leaseKey).isEqualTo(SagaRunner.timerLeaseKey(subscriptionId)),
+                    () -> assertThat(leaseKey).isNotEqualTo(subscriptionId)
+            );
+
+            subscription.close();
+            subscriptionsToClose.remove(subscription);
+            assertThat(strategy.unregistered).containsExactly(registration);
+        }
+
+        @Test
+        void without_a_strategy_the_poller_runs_on_every_instance() {
+            CountingStateStore store = new CountingStateStore();
+            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.agnostic(subscriptionModel, converter);
+            SagaSubscription subscription = runner.run("ungated", orderFulfillment(LONG_PAYMENT_TIMEOUT), store, cmd -> {
+            }, null, FAST);
+            subscriptionsToClose.add(subscription);
+            subscription.waitUntilStarted();
+
+            await().atMost(Duration.ofSeconds(2)).until(() -> store.dueTimerQueries.get() > 0);
         }
     }
 }

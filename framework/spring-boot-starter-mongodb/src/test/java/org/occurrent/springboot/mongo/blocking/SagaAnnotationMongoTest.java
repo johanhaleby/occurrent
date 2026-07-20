@@ -27,9 +27,11 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.bson.Document;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.blocking.CommandDispatcher;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -79,6 +81,8 @@ class SagaAnnotationMongoTest {
     private ApplicationService<OrderEvent> applicationService;
     @Autowired
     private RecordingDispatcher recordingDispatcher;
+    @Autowired
+    private MongoOperations mongoOperations;
 
     @Test
     void reacts_to_an_event_by_issuing_a_command() {
@@ -98,6 +102,20 @@ class SagaAnnotationMongoTest {
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(recordingDispatcher.issued).contains(new CancelOrder("order-2")));
         assertThat(recordingDispatcher.issued).doesNotContain(new ShipOrder("order-2"));
+    }
+
+    @Test
+    void gates_the_timer_poller_with_a_lease_keyed_apart_from_the_event_subscription() {
+        // The saga registers its timer lease on startup. It must coexist with the event subscription's own lease as a
+        // separate document, so both the raw id (event subscription) and the saga-timer: key (poller) are present.
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
+            assertThat(hasLeaseDocument("saga-timer:order-fulfillment")).isTrue();
+            assertThat(hasLeaseDocument("order-fulfillment")).isTrue();
+        });
+    }
+
+    private boolean hasLeaseDocument(String id) {
+        return mongoOperations.getCollection("competing-consumer-locks").countDocuments(new Document("_id", id)) > 0;
     }
 
     @TestConfiguration(proxyBeanMethods = false)
