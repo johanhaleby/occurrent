@@ -92,6 +92,7 @@ public final class DomainEventFeed<E> {
      * {@code replayFilter}.
      */
     public void register(String id, MaterializedView<E> view, Filter replayFilter) {
+        Objects.requireNonNull(id, "id cannot be null");
         // Each id must be unique because it is the durable checkpoint key.
         if (!registeredIds.add(id)) {
             throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");

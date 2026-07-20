@@ -66,6 +66,7 @@ public final class DomainEventFeed<E> {
      * (folded on {@code boundedElastic}).
      */
     public <S extends @Nullable Object, ID> void register(String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+        Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
         // Each id must be unique because it is the durable checkpoint key.
@@ -82,6 +83,7 @@ public final class DomainEventFeed<E> {
      * reactor analog of the blocking {@code register(id, MaterializedView, Filter)}.
      */
     public void register(String id, Function<E, Mono<Void>> fold, Filter replayFilter) {
+        Objects.requireNonNull(id, "id cannot be null");
         // Each id must be unique because it is the durable checkpoint key.
         if (!registeredIds.add(id)) {
             throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
