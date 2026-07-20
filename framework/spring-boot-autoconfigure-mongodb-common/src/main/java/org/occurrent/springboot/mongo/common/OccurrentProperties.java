@@ -22,6 +22,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Set;
 
@@ -49,6 +50,11 @@ public class OccurrentProperties {
      * Application Service Configuration (see <a href="https://occurrent.org/documentation#application-service">docs</a>)
      */
     private ApplicationServiceProperties applicationService = new ApplicationServiceProperties();
+
+    /**
+     * Saga Configuration (the {@code @Saga} process manager, blocking stack only)
+     */
+    private SagaProperties saga = new SagaProperties();
 
 
     public static class ApplicationServiceProperties {
@@ -298,5 +304,63 @@ public class OccurrentProperties {
 
     public void setApplicationService(ApplicationServiceProperties applicationService) {
         this.applicationService = applicationService;
+    }
+
+    public SagaProperties getSaga() {
+        return saga;
+    }
+
+    public void setSaga(SagaProperties saga) {
+        this.saga = saga;
+    }
+
+    public static class SagaProperties {
+
+        /**
+         * How often a saga's timer poller queries its state store for due timeouts. Defaults to 1 second, matching
+         * {@code SagaRunnerConfig.defaults()}.
+         */
+        private Duration timerPollInterval = Duration.ofSeconds(1);
+
+        /**
+         * Competing-consumer (leader-election) configuration for the saga timer poller.
+         */
+        private CompetingConsumerProperties competingConsumer = new CompetingConsumerProperties();
+
+        public Duration getTimerPollInterval() {
+            return timerPollInterval;
+        }
+
+        public void setTimerPollInterval(Duration timerPollInterval) {
+            this.timerPollInterval = timerPollInterval;
+        }
+
+        public CompetingConsumerProperties getCompetingConsumer() {
+            return competingConsumer;
+        }
+
+        public void setCompetingConsumer(CompetingConsumerProperties competingConsumer) {
+            this.competingConsumer = competingConsumer;
+        }
+
+        public static class CompetingConsumerProperties {
+
+            /**
+             * Whether to gate the saga timer poller with the shared competing-consumer lease so only one instance polls
+             * for due timers in a multi-instance deployment, mirroring the competing-consumer subscription model.
+             * Enabled by default. When disabled (or when no competing-consumer strategy is available, for example with
+             * subscriptions disabled) every instance runs its own poller, which stays correct but multiplies the query
+             * load against the state store.
+             */
+            private boolean enabled = true;
+
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean enabled) {
+                this.enabled = enabled;
+            }
+        }
     }
 }
