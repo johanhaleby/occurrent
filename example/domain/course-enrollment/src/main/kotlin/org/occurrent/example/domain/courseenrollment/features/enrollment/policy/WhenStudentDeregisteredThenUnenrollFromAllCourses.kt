@@ -57,7 +57,7 @@ class WhenStudentDeregisteredThenUnenrollFromAllCourses(
     private fun coursesEnrolledBy(studentId: StudentId): Set<CourseId> {
         // Scope the read to the student's enrollment events server-side (event types AND tag), so the fold sees only them.
         val enrollments = queries.criteria()
-            .types(StudentEnrolledInCourse::class.java, StudentUnenrolledFromCourse::class.java)
+            .types<StudentEnrolledInCourse, StudentUnenrolledFromCourse>()
             .tags(StudentTags.student(studentId))
         return queries.queryForSequence(enrollments)
             .fold(emptySet<CourseId>()) { enrolled, event ->

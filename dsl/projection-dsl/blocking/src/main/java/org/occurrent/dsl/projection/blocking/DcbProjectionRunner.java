@@ -98,7 +98,8 @@ public final class DcbProjectionRunner<E> {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         requireNonNull(materializedView, "materializedView cannot be null");
-        Subscription subscription = dcbSubscriptions.subscribe(subscriptionId, dcbProjection.criteria(), startAt, materializedView::update);
+        Subscription subscription = dcbSubscriptions.subscribeWithMetadata(subscriptionId, dcbProjection.criteria(), startAt,
+                (dcbMetadata, event) -> materializedView.update(dcbMetadata.eventMetadata(), event));
         subscription.waitUntilStarted();
         return subscription;
     }

@@ -18,6 +18,7 @@ package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
+import org.occurrent.dsl.subscription.EventMetadata;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -87,10 +88,23 @@ public interface Saga<E, S extends @Nullable Object, C> {
 
     /**
      * Effects to run exactly once when a start event creates a new instance, called after the first {@link #evolve} and
-     * before that event's {@link #react}. The canonical use is arming the first timeout for the process. Default: none.
+     * before that event's {@link #react}. The canonical use is arming the first timeout for the process. {@code metadata}
+     * is the start event's delivery metadata (stream id and version, global position, CloudEvent extensions). This is the
+     * canonical form the executor calls, so an implementation overrides this one. The event-only
+     * {@link #onStart(Object, Object)} is a convenience for callers that have no metadata and delegates here.
+     * Default: none.
+     */
+    default List<SagaEffect<C>> onStart(S state, EventMetadata metadata, E startEvent) {
+        return List.of();
+    }
+
+    /**
+     * Event-only convenience for a caller that has no metadata, delegating to {@link #onStart(Object, EventMetadata, Object)}
+     * with empty metadata. An implementation overrides the metadata-carrying form rather than this one, since that is the
+     * form the executor calls.
      */
     default List<SagaEffect<C>> onStart(S state, E startEvent) {
-        return List.of();
+        return onStart(state, EventMetadata.empty(), startEvent);
     }
 
     /**
@@ -128,6 +142,26 @@ public interface Saga<E, S extends @Nullable Object, C> {
 
     /** The outcome of one transition: the new {@code state} and the {@code effects} it produced. Mirror of {@code Decider.Decision}. */
     record Step<S extends @Nullable Object, C>(S state, List<SagaEffect<C>> effects) {
+    }
+
+    /**
+     * The metadata-carrying fold for one event type, the three-argument sibling of a {@code BiFunction<S, T, S>}: it also
+     * receives the event's delivery {@link EventMetadata}. Java has no three-argument {@code BiFunction}, so the builder's
+     * metadata {@link Builder#evolve(Class, EventEvolver)} overload takes this instead.
+     */
+    @FunctionalInterface
+    interface EventEvolver<S extends @Nullable Object, T> {
+        S evolve(S state, EventMetadata metadata, T event);
+    }
+
+    /**
+     * The metadata-carrying reaction for one event type, the three-argument sibling of a
+     * {@code BiFunction<S, T, List<SagaEffect<C>>>}: it also receives the event's delivery {@link EventMetadata}. Used by
+     * the builder's metadata {@link Builder#react(Class, EventReactor)} and {@link Builder#onStart(EventReactor)} overloads.
+     */
+    @FunctionalInterface
+    interface EventReactor<S extends @Nullable Object, T, C> {
+        List<SagaEffect<C>> react(S state, EventMetadata metadata, T event);
     }
 
     /**
@@ -244,8 +278,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
             }
 
             @Override
-            public List<SagaEffect<C>> onStart(S state, E startEvent) {
-                return eventType.isInstance(startEvent) ? widen(saga.onStart(state, eventType.cast(startEvent))) : List.of();
+            public List<SagaEffect<C>> onStart(S state, EventMetadata metadata, E startEvent) {
+                return eventType.isInstance(startEvent) ? widen(saga.onStart(state, metadata, eventType.cast(startEvent))) : List.of();
             }
 
             @Override
@@ -286,14 +320,14 @@ public interface Saga<E, S extends @Nullable Object, C> {
      */
     final class Builder<E, S extends @Nullable Object, C> {
         private final S initialState;
-        private final Map<Class<?>, BiFunction<S, E, S>> eventEvolvers = new LinkedHashMap<>();
-        private final Map<Class<?>, BiFunction<S, E, List<SagaEffect<C>>>> eventReactors = new LinkedHashMap<>();
+        private final Map<Class<?>, EventEvolver<S, E>> eventEvolvers = new LinkedHashMap<>();
+        private final Map<Class<?>, EventReactor<S, E, C>> eventReactors = new LinkedHashMap<>();
         private final Map<String, BiFunction<S, SagaTimeout, S>> timeoutEvolvers = new LinkedHashMap<>();
         private final Map<String, BiFunction<S, SagaTimeout, List<SagaEffect<C>>>> timeoutReactors = new LinkedHashMap<>();
         private final Map<Class<?>, Function<E, @Nullable String>> correlators = new LinkedHashMap<>();
         private final Set<Class<? extends E>> startTypes = new LinkedHashSet<>();
         private @Nullable Function<E, @Nullable String> correlateAll;
-        private @Nullable BiFunction<S, E, List<SagaEffect<C>>> onStart;
+        private @Nullable EventReactor<S, E, C> onStart;
         private @Nullable Predicate<S> isTerminal;
 
         private Builder(S initialState) {
@@ -337,26 +371,48 @@ public interface Saga<E, S extends @Nullable Object, C> {
         }
 
         /** Registers the fold for one event type. Registering the same type twice throws. */
-        @SuppressWarnings("unchecked")
         public <T extends E> Builder<E, S, C> evolve(Class<T> type, BiFunction<S, ? super T, S> handler) {
+            requireNonNull(handler, "handler cannot be null");
+            EventEvolver<S, T> wrapped = (state, metadata, event) -> handler.apply(state, event);
+            return evolve(type, wrapped);
+        }
+
+        /**
+         * Registers the metadata-carrying fold for one event type: the handler also receives the event's delivery
+         * {@link EventMetadata}. The metadata-first sibling of {@link #evolve(Class, BiFunction)}, which delegates here.
+         * Registering the same type twice throws.
+         */
+        @SuppressWarnings("unchecked")
+        public <T extends E> Builder<E, S, C> evolve(Class<T> type, EventEvolver<S, ? super T> handler) {
             requireNonNull(type, "type cannot be null");
             requireNonNull(handler, "handler cannot be null");
             if (eventEvolvers.containsKey(type)) {
                 throw new IllegalStateException("evolve(...) has already been registered for " + type.getName());
             }
-            eventEvolvers.put(type, (BiFunction<S, E, S>) handler);
+            eventEvolvers.put(type, (EventEvolver<S, E>) handler);
             return this;
         }
 
         /** Registers the reaction for one event type, given the post-evolve state. Registering the same type twice throws. */
-        @SuppressWarnings("unchecked")
         public <T extends E> Builder<E, S, C> react(Class<T> type, BiFunction<S, ? super T, List<SagaEffect<C>>> handler) {
+            requireNonNull(handler, "handler cannot be null");
+            EventReactor<S, T, C> wrapped = (state, metadata, event) -> handler.apply(state, event);
+            return react(type, wrapped);
+        }
+
+        /**
+         * Registers the metadata-carrying reaction for one event type, given the post-evolve state: the handler also
+         * receives the event's delivery {@link EventMetadata}. The metadata-first sibling of {@link #react(Class, BiFunction)},
+         * which delegates here. Registering the same type twice throws.
+         */
+        @SuppressWarnings("unchecked")
+        public <T extends E> Builder<E, S, C> react(Class<T> type, EventReactor<S, ? super T, C> handler) {
             requireNonNull(type, "type cannot be null");
             requireNonNull(handler, "handler cannot be null");
             if (eventReactors.containsKey(type)) {
                 throw new IllegalStateException("react(...) has already been registered for " + type.getName());
             }
-            eventReactors.put(type, (BiFunction<S, E, List<SagaEffect<C>>>) handler);
+            eventReactors.put(type, (EventReactor<S, E, C>) handler);
             return this;
         }
 
@@ -388,11 +444,21 @@ public interface Saga<E, S extends @Nullable Object, C> {
 
         /** Effects to run once when a start event creates the instance. Optional, can be set only once. */
         public Builder<E, S, C> onStart(BiFunction<S, ? super E, List<SagaEffect<C>>> onStart) {
+            requireNonNull(onStart, "onStart cannot be null");
+            EventReactor<S, E, C> wrapped = (state, metadata, event) -> onStart.apply(state, event);
+            return onStart(wrapped);
+        }
+
+        /**
+         * Effects to run once when a start event creates the instance, with the start event's delivery {@link EventMetadata}.
+         * The metadata-first sibling of {@link #onStart(BiFunction)}, which delegates here. Optional, can be set only once.
+         */
+        public Builder<E, S, C> onStart(EventReactor<S, ? super E, C> onStart) {
             if (this.onStart != null) {
                 throw new IllegalStateException("onStart(...) has already been set and can only be set once");
             }
             @SuppressWarnings("unchecked")
-            BiFunction<S, E, List<SagaEffect<C>>> widened = (BiFunction<S, E, List<SagaEffect<C>>>) onStart;
+            EventReactor<S, E, C> widened = (EventReactor<S, E, C>) onStart;
             this.onStart = requireNonNull(widened, "onStart cannot be null");
             return this;
         }
@@ -440,13 +506,13 @@ public interface Saga<E, S extends @Nullable Object, C> {
             }
 
             S initial = this.initialState;
-            TypeDispatch<BiFunction<S, E, S>> evolveDispatch = new TypeDispatch<>(eventEvolvers);
-            TypeDispatch<BiFunction<S, E, List<SagaEffect<C>>>> reactDispatch = new TypeDispatch<>(eventReactors);
+            TypeDispatch<EventEvolver<S, E>> evolveDispatch = new TypeDispatch<>(eventEvolvers);
+            TypeDispatch<EventReactor<S, E, C>> reactDispatch = new TypeDispatch<>(eventReactors);
             TypeDispatch<Function<E, @Nullable String>> correlateDispatch = new TypeDispatch<>(correlators);
             Map<String, BiFunction<S, SagaTimeout, S>> timeoutEvolveByName = new LinkedHashMap<>(timeoutEvolvers);
             Map<String, BiFunction<S, SagaTimeout, List<SagaEffect<C>>>> timeoutReactByName = new LinkedHashMap<>(timeoutReactors);
             Function<E, @Nullable String> allCorrelator = this.correlateAll;
-            BiFunction<S, E, List<SagaEffect<C>>> onStartFn = this.onStart;
+            EventReactor<S, E, C> onStartFn = this.onStart;
             Predicate<S> terminalFn = this.isTerminal;
             Set<Class<? extends E>> starts = Set.copyOf(startTypes);
             Set<Class<? extends E>> types = Set.copyOf(allTypes);
@@ -461,8 +527,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 public S evolve(S state, SagaInput<E> input) {
                     return switch (input) {
                         case SagaInput.Event<E> ev -> {
-                            BiFunction<S, E, S> handler = evolveDispatch.resolve(ev.event().getClass());
-                            yield handler == null ? state : handler.apply(state, ev.event());
+                            EventEvolver<S, E> handler = evolveDispatch.resolve(ev.event().getClass());
+                            yield handler == null ? state : handler.evolve(state, ev.metadata(), ev.event());
                         }
                         case SagaInput.Timeout<E> to -> {
                             BiFunction<S, SagaTimeout, S> handler = timeoutEvolveByName.get(to.timeout().timerName());
@@ -475,8 +541,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 public List<SagaEffect<C>> react(S state, SagaInput<E> input) {
                     return switch (input) {
                         case SagaInput.Event<E> ev -> {
-                            BiFunction<S, E, List<SagaEffect<C>>> handler = reactDispatch.resolve(ev.event().getClass());
-                            yield handler == null ? List.of() : handler.apply(state, ev.event());
+                            EventReactor<S, E, C> handler = reactDispatch.resolve(ev.event().getClass());
+                            yield handler == null ? List.of() : handler.react(state, ev.metadata(), ev.event());
                         }
                         case SagaInput.Timeout<E> to -> {
                             BiFunction<S, SagaTimeout, List<SagaEffect<C>>> handler = timeoutReactByName.get(to.timeout().timerName());
@@ -486,8 +552,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 }
 
                 @Override
-                public List<SagaEffect<C>> onStart(S state, E startEvent) {
-                    return onStartFn == null ? List.of() : onStartFn.apply(state, startEvent);
+                public List<SagaEffect<C>> onStart(S state, EventMetadata metadata, E startEvent) {
+                    return onStartFn == null ? List.of() : onStartFn.react(state, metadata, startEvent);
                 }
 
                 @Override

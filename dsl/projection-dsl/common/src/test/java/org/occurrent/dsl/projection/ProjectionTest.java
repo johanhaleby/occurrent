@@ -18,8 +18,13 @@ package org.occurrent.dsl.projection;
 
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.view.View;
 import org.occurrent.filter.Filter;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -145,6 +150,65 @@ class ProjectionTest {
 
             assertThat(projection.id().apply(new AccountRegistered("acc-1", "bob"))).isEqualTo("acc-1");
             assertThat(projection.id().apply(new AccountClosed("acc-1"))).isNull();
+        }
+    }
+
+    @Nested
+    class MetadataAware {
+
+        private static EventMetadata metadata(String streamId, long position) {
+            Map<String, Object> data = new HashMap<>();
+            data.put(OccurrentCloudEventExtension.STREAM_ID, streamId);
+            data.put(OccurrentCloudEventExtension.POSITION, position);
+            return new EventMetadata(data);
+        }
+
+        // A projection keyed on the stream id (metadata) rather than a domain field, folding the global position.
+        private static Projection<Long, AccountEvent, String> lastPositionPerStream() {
+            return Projection.<Long, AccountEvent, String>builder(0L)
+                    .id((m, event) -> m.getStreamId())
+                    .on(AccountRegistered.class, (state, m, event) -> m.getPosition())
+                    .build();
+        }
+
+        @Test
+        void keys_the_view_instance_by_stream_id_from_metadata() {
+            Projection<Long, AccountEvent, String> projection = lastPositionPerStream();
+
+            String instanceId = projection.idWithMetadata().apply(metadata("stream-1", 42L), new AccountRegistered("acc-1", "bob"));
+
+            assertThat(instanceId).isEqualTo("stream-1");
+        }
+
+        @Test
+        void folds_using_the_position_from_metadata() {
+            Projection<Long, AccountEvent, String> projection = lastPositionPerStream();
+
+            Long state = projection.view().evolve(projection.view().initialState(), metadata("stream-1", 42L), new AccountRegistered("acc-1", "bob"));
+
+            assertThat(state).isEqualTo(42L);
+        }
+
+        @Test
+        void metadata_less_evolve_folds_with_empty_metadata() {
+            Projection<Long, AccountEvent, String> projection = lastPositionPerStream();
+
+            // The query/replay path has no CloudEvent, so it folds with EventMetadata.empty() whose position is null.
+            Long state = projection.view().evolve(0L, new AccountRegistered("acc-1", "bob"));
+
+            assertThat(state).isNull();
+        }
+
+        @Test
+        void event_only_id_still_works_alongside_metadata_folds() {
+            // Keyed by a domain field via the event-only id(...), but folding with metadata via the 3-arg on(...).
+            Projection<Long, AccountEvent, String> projection = Projection.<Long, AccountEvent, String>builder(0L)
+                    .id(AccountEvent::accountId)
+                    .on(AccountRegistered.class, (state, m, event) -> m.getPosition())
+                    .build();
+
+            assertThat(projection.id().apply(new AccountRegistered("acc-1", "bob"))).isEqualTo("acc-1");
+            assertThat(projection.view().evolve(0L, metadata("stream-1", 7L), new AccountRegistered("acc-1", "bob"))).isEqualTo(7L);
         }
     }
 

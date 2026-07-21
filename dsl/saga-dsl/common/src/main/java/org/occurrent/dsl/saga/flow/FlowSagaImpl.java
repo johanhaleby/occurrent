@@ -22,6 +22,7 @@ import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.flow.FlowState.ActionKind;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
+import org.occurrent.dsl.subscription.EventMetadata;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -29,6 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
 
@@ -222,7 +224,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     @Override
-    public List<SagaEffect<C>> onStart(FlowState<E> state, E startEvent) {
+    public List<SagaEffect<C>> onStart(FlowState<E> state, EventMetadata metadata, E startEvent) {
         List<SagaEffect<C>> effects = new ArrayList<>();
         for (C command : onStartCommands.apply(startEvent)) {
             effects.add(SagaEffect.issue(command));
@@ -245,8 +247,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         ChoiceBody<E, C> choice = (ChoiceBody<E, C>) from.body();
         Branch<E, C> branch = choice.branches().get(state.matchedBranchIndex());
-        E event = ((SagaInput.Event<E>) input).event();
-        List<SagaEffect<C>> effects = issueAll(branch.commands().apply(event));
+        SagaInput.Event<E> triggering = (SagaInput.Event<E>) input;
+        List<SagaEffect<C>> effects = issueAll(branch.commands().apply(triggering.metadata(), triggering.event()));
         retargetTimers(effects, state, false);
         return effects;
     }
@@ -346,7 +348,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     record JoinBody<E, C>(List<Expectation<E>> expectations, Function<ReceivedEvents<E>, List<C>> whenFulfilled, Continuation then) implements StepBody<E, C> {
     }
 
-    record Branch<E, C>(Class<? extends E> eventType, @Nullable BiPredicate<E, ReceivedEvents<E>> guard, Function<E, List<C>> commands, Continuation then) {
+    record Branch<E, C>(Class<? extends E> eventType, @Nullable BiPredicate<E, ReceivedEvents<E>> guard, BiFunction<EventMetadata, E, List<C>> commands, Continuation then) {
     }
 
     record TimeoutSpec<E, C>(@Nullable Duration after, @Nullable Function<ReceivedEvents<E>, Instant> at, Function<ReceivedEvents<E>, List<C>> onExpiry, Continuation then) {

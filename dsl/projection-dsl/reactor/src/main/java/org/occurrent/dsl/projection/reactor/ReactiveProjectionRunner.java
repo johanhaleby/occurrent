@@ -22,6 +22,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.filter.Filter;
@@ -33,6 +34,7 @@ import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
 import reactor.core.publisher.Mono;
 
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
@@ -119,7 +121,7 @@ public final class ReactiveProjectionRunner<E> {
      * skipping events whose id resolves to {@code null}.
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
-        return project(subscriptionId, projection, Projections.reactiveUpdate(projection, repository, subscriptionId), startAt);
+        return projectWithMetadata(subscriptionId, projection, Projections.reactiveUpdateWithMetadata(projection, repository, subscriptionId), startAt);
     }
 
     /**
@@ -135,6 +137,19 @@ public final class ReactiveProjectionRunner<E> {
      * and drives the blocking {@code materializedView} (scheduled on {@code boundedElastic}) for every matching event.
      */
     public Subscription project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView, @Nullable StartAt startAt) {
-        return project(subscriptionId, projection, Projections.reactiveUpdate(materializedView), startAt);
+        return projectWithMetadata(subscriptionId, projection, Projections.reactiveUpdateWithMetadata(materializedView), startAt);
+    }
+
+    // Threads the delivered event's EventMetadata into the update. The public (E) -> Mono<Void> primitive overload stays
+    // event-only, since a caller-supplied reactive update composes at the domain-event level; the repository and
+    // MaterializedView overloads route here so a metadata-keyed projection folds with real metadata.
+    private Subscription projectWithMetadata(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable StartAt startAt) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(projection, "projection cannot be null");
+        requireNonNull(update, "update cannot be null");
+        SubscriptionFilter filter = toSubscriptionFilter.apply(ProjectionFilters.filterFor(cloudEventConverter, projection));
+        Function<CloudEvent, Mono<Void>> action = cloudEvent -> update.apply(EventMetadata.from(cloudEvent), cloudEventConverter.toDomainEvent(cloudEvent));
+        StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
+        return subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
     }
 }
