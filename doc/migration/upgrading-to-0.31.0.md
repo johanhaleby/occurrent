@@ -1,9 +1,10 @@
 # Upgrading to Occurrent 0.31.0
 
-0.31.0 has one breaking change: the `ResumeBehavior` and `StartupMode` enums move out of `@Subscription`,
+0.31.0 has two breaking changes. First, the `ResumeBehavior` and `StartupMode` enums move out of `@Subscription`,
 `@StreamSubscription`, `@DcbSubscription`, and `@Projection` and become shared top-level types. `Subscription.StartPosition`
 and `DcbSubscription.DcbStartPosition` move the same way, to a shared top-level `org.occurrent.annotation.StartPosition`
-(the constants are unchanged). An OpenRewrite recipe handles the rewrite for you.
+(the constants are unchanged). Second, the four subscription checkpoint-storage modules are renamed from
+`-position-storage` to `-checkpoint-storage`. One OpenRewrite recipe handles both rewrites for you.
 
 ## 1. Run the recipe
 
@@ -41,7 +42,8 @@ a nested `ResumeBehavior`/`StartupMode`, for example `Subscription.ResumeBehavio
 `org.occurrent.annotation.ResumeBehavior`/`org.occurrent.annotation.StartupMode`. It also rewrites
 `Subscription.StartPosition` and `DcbSubscription.DcbStartPosition` to the shared top-level
 `org.occurrent.annotation.StartPosition`. This covers a fully-qualified reference, an import, and a static import.
-Safe to run and commit without review.
+It also composes `org.occurrent.MigrateCoordinates_0_31`, which renames the four checkpoint-storage dependency
+coordinates in your Maven and Gradle build files (see section 3). Safe to run and commit without review.
 
 ## 2. What changed
 
@@ -60,7 +62,18 @@ already used this same shared `StartPosition`. `StreamSubscription.StartPosition
 `BEGINNING_OF_TIME`, not `BEGINNING`, a genuinely different start position over wall-clock time rather than the
 unified global or DCB position, so it stays nested and annotation-specific.
 
-## 3. If the recipe cannot reach a reference
+## 3. Checkpoint-storage module coordinates
+
+0.30.0 renamed the `SubscriptionPosition` type family to `Checkpoint` (see [ADR 46](../architecture/decisions/0046-rename-subscription-position-to-checkpoint.md)), including the storage adapter classes, but left the four modules that ship those adapters named `-position-storage`. 0.31.0 renames the coordinates to match the `CheckpointStorage` type each ships. The `org.occurrent` groupId, the packages, and the classes are unchanged, so this is a coordinate-only change, and the recipe from section 1 rewrites it for Maven and Gradle. Rationale is in [ADR 65](../architecture/decisions/0065-rename-checkpoint-storage-module-coordinates.md).
+
+| Old artifactId | New artifactId |
+|---|---|
+| `occurrent-subscription-mongodb-native-blocking-position-storage` | `occurrent-subscription-mongodb-native-blocking-checkpoint-storage` |
+| `occurrent-subscription-mongodb-spring-blocking-position-storage` | `occurrent-subscription-mongodb-spring-blocking-checkpoint-storage` |
+| `occurrent-subscription-mongodb-spring-reactor-position-storage` | `occurrent-subscription-mongodb-spring-reactor-checkpoint-storage` |
+| `occurrent-subscription-redis-spring-blocking-position-storage` | `occurrent-subscription-redis-spring-blocking-checkpoint-storage` |
+
+## 4. If the recipe cannot reach a reference
 
 The recipe rewrites source references it can see. A reference produced only in a compiled `.class` from 0.30.0
 (a binary dependency, not source you can run the recipe over) needs a rebuild against 0.31.0 instead, since the

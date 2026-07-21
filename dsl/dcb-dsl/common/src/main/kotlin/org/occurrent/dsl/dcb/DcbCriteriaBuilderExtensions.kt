@@ -21,9 +21,10 @@ import org.occurrent.eventstore.api.dcb.DcbCriterion
 /**
  * Creates a criterion matching events whose CloudEvent type is the type string mapped from the reified [T].
  *
- * The name is [typeOf] rather than `type` so it does not collide with the Java member [DcbCriteriaBuilder.type],
- * which Kotlin overload resolution would otherwise prefer (see ADR 0012).
- *
  * @see DcbCriteriaBuilder.type
  */
+@Deprecated(
+    "Renamed to type(); the base event type is now inferred from the builder, so the second type argument is gone.",
+    ReplaceWith("type<T>()")
+)
 inline fun <reified T : E, E : Any> DcbCriteriaBuilder<E>.typeOf(): DcbCriterion = type(T::class.java)

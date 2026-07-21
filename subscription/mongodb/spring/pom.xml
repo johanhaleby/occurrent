@@ -29,9 +29,9 @@
 
     <modules>
         <module>reactor</module>
-        <module>reactor-position-storage</module>
+        <module>reactor-checkpoint-storage</module>
         <module>blocking</module>
-        <module>blocking-position-storage</module>
+        <module>blocking-checkpoint-storage</module>
         <module>common</module>
         <module>blocking-competing-consumer-strategy</module>
     </modules>

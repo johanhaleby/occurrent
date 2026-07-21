@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright 2021 Johan Haleby
+  ~ Copyright 2020 Johan Haleby
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -18,39 +18,38 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>subscription-redis-spring</artifactId>
+        <artifactId>subscription-mongodb-spring</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>occurrent-subscription-redis-spring-blocking-position-storage</artifactId>
+    <artifactId>occurrent-subscription-mongodb-spring-reactor-checkpoint-storage</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-api-reactor</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-mongodb-common-base</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.mongodb</groupId>
+            <artifactId>mongodb-driver-reactivestreams</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.data</groupId>
-            <artifactId>spring-data-redis</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-core</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-api-blocking</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-retry</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency> <!-- Required for @PreDestroy -->
-            <groupId>jakarta.annotation</groupId>
-            <artifactId>jakarta.annotation-api</artifactId>
+            <artifactId>spring-data-mongodb</artifactId>
         </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
@@ -60,25 +59,14 @@
 
         <!-- Test -->
         <dependency>
-            <groupId>io.lettuce</groupId>
-            <artifactId>lettuce-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-eventstore-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-durable-blocking</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-reactor</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

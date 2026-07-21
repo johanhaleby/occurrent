@@ -21,13 +21,15 @@ import org.openrewrite.test.RecipeSpec;
 import org.openrewrite.test.RewriteTest;
 import org.openrewrite.test.TypeValidation;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.openrewrite.java.Assertions.java;
+import static org.openrewrite.maven.Assertions.pomXml;
 
 /**
- * Verifies the umbrella {@code UpgradeToOccurrent_0_31} recipe resolves its sub-recipe through a classpath-scanning
- * Environment, which is what proves the cross-file recipe reference actually links. The individual transforms are
- * covered exhaustively in {@link AnnotationEnumRenameTest} and {@link AnnotationEnumKotlinRenameTest}; here one
- * rename is enough to show the umbrella recipe runs it.
+ * Verifies the umbrella {@code UpgradeToOccurrent_0_31} recipe resolves its sub-recipes through a classpath-scanning
+ * Environment, which is what proves the cross-file recipe references actually link. The individual transforms are
+ * covered exhaustively in {@link AnnotationEnumRenameTest}, {@link AnnotationEnumKotlinRenameTest}, and
+ * {@link CoordinateRename_0_31Test}; here one rename per sub-recipe is enough to show the umbrella recipe runs them.
  */
 class UpgradeToOccurrent_0_31Test implements RewriteTest {
 
@@ -76,6 +78,35 @@ class UpgradeToOccurrent_0_31Test implements RewriteTest {
                         class Foo {
                         }
                         """
+                )
+        );
+    }
+
+    @Test
+    void appliesTheCheckpointStorageCoordinateRenameFromItsSubRecipe() {
+        rewriteRun(
+                pomXml(
+                        """
+                        <project>
+                            <modelVersion>4.0.0</modelVersion>
+                            <groupId>com.example</groupId>
+                            <artifactId>app</artifactId>
+                            <version>1.0.0</version>
+                            <dependencies>
+                                <dependency>
+                                    <groupId>org.occurrent</groupId>
+                                    <artifactId>occurrent-subscription-mongodb-native-blocking-position-storage</artifactId>
+                                    <version>0.30.0</version>
+                                </dependency>
+                            </dependencies>
+                        </project>
+                        """,
+                        spec -> spec.after(actual -> {
+                            assertThat(actual)
+                                    .contains("<artifactId>occurrent-subscription-mongodb-native-blocking-checkpoint-storage</artifactId>")
+                                    .doesNotContain("position-storage");
+                            return actual;
+                        })
                 )
         );
     }

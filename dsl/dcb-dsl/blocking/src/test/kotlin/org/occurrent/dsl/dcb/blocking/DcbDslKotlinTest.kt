@@ -23,6 +23,7 @@ import org.occurrent.dsl.dcb.typeOf
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.cloudevents.CloudEvent
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -79,7 +80,7 @@ class DcbDslKotlinTest {
         append("name:1", nameDefined, nameWasChanged)
 
         assertThat(dcbQueries.queryForSequence(DcbCriteria.tags(Tag.of("name", "1"))).toList()).containsExactly(nameDefined, nameWasChanged)
-        assertThat(dcbQueries.queryForList(dcbQueries.criteria().typeOf<NameDefined, DomainEvent>())).containsExactly(nameDefined)
+        assertThat(dcbQueries.queryForList(dcbQueries.criteria().type<NameDefined>())).containsExactly(nameDefined)
         assertThat(dcbQueries.queryForList(DcbCriteria.tags(Tag.of("name", "1")), DcbReadOptions.afterPosition(1))).containsExactly(nameWasChanged)
     }
 
@@ -98,12 +99,52 @@ class DcbDslKotlinTest {
     }
 
     @Test
+    fun reified_single_and_dual_type_criteria_match_the_KClass_and_Java_class_forms() {
+        val nameDefined = NameDefined("eventId1", time, "name", "Some Doe")
+        val nameWasChanged = NameWasChanged("eventId2", time, "name", "Jane Doe")
+        append("name:1", nameDefined, nameWasChanged)
+
+        val reifiedSingle = dcbQueries.criteria().type<NameDefined>()
+        val kClassSingle = dcbQueries.criteria().type(NameDefined::class)
+        @Suppress("DEPRECATION")
+        val deprecatedSingle = dcbQueries.criteria().typeOf<NameDefined, DomainEvent>()
+        assertThat(reifiedSingle).isEqualTo(kClassSingle)
+        assertThat(reifiedSingle).isEqualTo(deprecatedSingle)
+        assertThat(dcbQueries.queryForList(reifiedSingle)).containsExactly(nameDefined)
+
+        val reifiedDual = dcbQueries.criteria().types<NameDefined, NameWasChanged>()
+        val kClassDual = dcbQueries.criteria().types(NameDefined::class, NameWasChanged::class)
+        val javaClassDual = dcbQueries.criteria().types(NameDefined::class.java, NameWasChanged::class.java)
+        assertThat(reifiedDual).isEqualTo(kClassDual)
+        assertThat(reifiedDual).isEqualTo(javaClassDual)
+        assertThat(dcbQueries.queryForList(reifiedDual)).containsExactly(nameDefined, nameWasChanged)
+    }
+
+    @Test
+    fun criteria_seeded_with_a_boundary_refines_the_boundary_and_rejects_the_combinators() {
+        val taggedNameDefined = NameDefined("eventId1", time, "name", "Some Doe")
+        val taggedNameWasChanged = NameWasChanged("eventId2", time, "name", "Jane Doe")
+        val untaggedNameDefined = NameDefined("eventId3", time, "name", "Other Doe")
+        append(listOf("name:1", "tenant:1"), taggedNameDefined)
+        append(listOf("name:1", "tenant:1"), taggedNameWasChanged)
+        append("name:1", untaggedNameDefined)
+
+        val boundary = DcbCriteria.tags(Tag.of("tenant", "1"))
+
+        // Same tag, but only the matching type is returned; the same-tag NameWasChanged and the untagged NameDefined are excluded.
+        assertThat(dcbQueries.queryForList(dcbQueries.criteria(boundary).type<NameDefined>())).containsExactly(taggedNameDefined)
+
+        assertThatThrownBy { dcbQueries.criteria(boundary).all() }.isInstanceOf(IllegalStateException::class.java)
+        assertThatThrownBy { dcbQueries.criteria(boundary).anyOf(DcbCriteria.tags(Tag.of("tenant", "1"))) }.isInstanceOf(IllegalStateException::class.java)
+    }
+
+    @Test
     fun queryWithPosition_for_KClass_keeps_the_DCB_sequence_position() {
         val nameDefined = NameDefined("eventId1", time, "name", "Some Doe")
         append("other:1", NameWasChanged("eventId2", time, "name", "Jane Doe"))
         append("name:1", nameDefined)
 
-        val eventStream = dcbQueries.queryWithPosition(dcbQueries.criteria().typeOf<NameDefined, DomainEvent>())
+        val eventStream = dcbQueries.queryWithPosition(dcbQueries.criteria().type<NameDefined>())
 
         assertThat(eventStream.events()).containsExactly(nameDefined)
         assertThat(eventStream.lastSequencePosition()).isEqualTo(2)
