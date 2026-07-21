@@ -48,8 +48,8 @@ public class NativeMongoSubscriptionModelConfig {
         if (batchSize != null && batchSize <= 0) {
             throw new IllegalArgumentException("batchSize must be greater than 0 but was " + batchSize);
         }
-        if (maxAwaitTime != null && (maxAwaitTime.isNegative() || maxAwaitTime.isZero())) {
-            throw new IllegalArgumentException("maxAwaitTime must be greater than 0 but was " + maxAwaitTime);
+        if (maxAwaitTime != null && maxAwaitTime.toMillis() <= 0) {
+            throw new IllegalArgumentException("maxAwaitTime must be at least 1 ms but was " + maxAwaitTime);
         }
         this.retryStrategy = retryStrategy;
         this.restartSubscriptionsOnChangeStreamHistoryLost = restartSubscriptionsOnChangeStreamHistoryLost;

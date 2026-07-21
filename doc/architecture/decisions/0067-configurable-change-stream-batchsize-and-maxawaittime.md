@@ -1,4 +1,4 @@
-# 66. Configurable change stream batchSize and maxAwaitTime
+# 67. Configurable change stream batchSize and maxAwaitTime
 
 Date: 2026-07-21
 

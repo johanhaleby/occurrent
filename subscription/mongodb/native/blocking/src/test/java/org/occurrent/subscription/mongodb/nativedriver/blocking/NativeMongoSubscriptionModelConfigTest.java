@@ -81,6 +81,13 @@ class NativeMongoSubscriptionModelConfigTest {
     }
 
     @Test
+    void max_await_time_throws_iae_when_it_truncates_to_zero_milliseconds() {
+        Throwable throwable = catchThrowable(() -> withConfig().maxAwaitTime(Duration.ofNanos(1)));
+
+        assertThat(throwable).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("maxAwaitTime");
+    }
+
+    @Test
     void max_await_time_throws_iae_when_negative() {
         Throwable throwable = catchThrowable(() -> withConfig().maxAwaitTime(Duration.ofMillis(-1)));
 

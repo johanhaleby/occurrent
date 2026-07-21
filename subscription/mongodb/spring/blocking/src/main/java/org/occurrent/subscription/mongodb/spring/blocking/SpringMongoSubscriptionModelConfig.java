@@ -42,8 +42,8 @@ public class SpringMongoSubscriptionModelConfig {
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         requireNonNull(executor, Executor.class.getSimpleName() + " cannot be null");
-        if (maxAwaitTime != null && (maxAwaitTime.isNegative() || maxAwaitTime.isZero())) {
-            throw new IllegalArgumentException("maxAwaitTime must be greater than 0 but was " + maxAwaitTime);
+        if (maxAwaitTime != null && maxAwaitTime.toMillis() <= 0) {
+            throw new IllegalArgumentException("maxAwaitTime must be at least 1 ms but was " + maxAwaitTime);
         }
         this.eventCollection = eventCollection;
         this.timeRepresentation = timeRepresentation;
