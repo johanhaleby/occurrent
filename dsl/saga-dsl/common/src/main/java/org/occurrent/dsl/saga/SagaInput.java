@@ -18,8 +18,6 @@ package org.occurrent.dsl.saga;
 
 import org.occurrent.dsl.subscription.EventMetadata;
 
-import java.util.Map;
-
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -31,11 +29,9 @@ import static java.util.Objects.requireNonNull;
  */
 public sealed interface SagaInput<E> {
 
-    // Metadata-less delivery marker, used by the event-only convenience factory. A metadata-less input carries an
-    // EventMetadata with no extensions, so its typed accessors have nothing to return; a reaction that wants metadata must
-    // be delivered through a runner that captures it. (The subscription DSL exposes EventMetadata.from(cloudEvent); there
-    // is no EventMetadata.empty() on this base commit, so we build an empty one directly.)
-    EventMetadata NO_METADATA = new EventMetadata(Map.of());
+    // Metadata-less delivery marker for the event-only convenience factory. Its typed accessors have nothing to return,
+    // so a reaction that wants real metadata must be delivered through a runner that builds it from the CloudEvent.
+    EventMetadata NO_METADATA = EventMetadata.empty();
 
     /**
      * A domain event delivered to the saga, together with its delivery {@link EventMetadata} (stream id and version,

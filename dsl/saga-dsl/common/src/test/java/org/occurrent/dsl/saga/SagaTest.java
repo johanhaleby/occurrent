@@ -228,7 +228,7 @@ class SagaTest {
 
         @Test
         void event_only_handlers_still_work_when_the_input_carries_metadata() {
-            // The metadata-less builder overloads keep working unchanged; the metadata riding on the input is simply
+            // The metadata-less builder overloads keep working unchanged. The metadata riding on the input is simply
             // ignored by a handler registered through the two-argument form.
             Saga<OrderEvent, OrderState, OrderCommand> saga = orderFulfillment();
 

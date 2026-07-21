@@ -109,8 +109,8 @@ public final class SagaExecutionSupport {
 
         List<SagaEffect<C>> effects = new ArrayList<>();
         if (starting) {
-            // A start always arrives as an Event, so its delivery metadata rides on the input; fall back to metadata-less
-            // only defensively.
+            // A start always arrives as an Event, so its delivery metadata rides on the input. The fall back to
+            // metadata-less is only defensive.
             EventMetadata startMetadata = input instanceof SagaInput.Event<E> ev ? ev.metadata() : SagaInput.NO_METADATA;
             effects.addAll(saga.onStart(nextState, startMetadata, startEvent));
         }
