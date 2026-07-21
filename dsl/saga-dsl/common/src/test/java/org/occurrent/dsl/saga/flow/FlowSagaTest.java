@@ -94,7 +94,8 @@ class FlowSagaTest {
     /** Applies a start event the way an executor would: evolve, then concatenate onStart's and react's effects. */
     private static Saga.Step<FlowState<OrderEvent>, OrderCommand> start(Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga, OrderEvent event) {
         FlowState<OrderEvent> state = saga.evolve(saga.initialState(), SagaInput.event(event));
-        List<SagaEffect<OrderCommand>> effects = new ArrayList<>(saga.onStart(state, event));
+        // Call the metadata-carrying onStart the executor actually calls, so this exercises the same override the runtime hits.
+        List<SagaEffect<OrderCommand>> effects = new ArrayList<>(saga.onStart(state, EventMetadata.empty(), event));
         effects.addAll(saga.react(state, SagaInput.event(event)));
         return new Saga.Step<>(state, effects);
     }

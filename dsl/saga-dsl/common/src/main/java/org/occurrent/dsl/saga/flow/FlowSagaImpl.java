@@ -224,7 +224,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     @Override
-    public List<SagaEffect<C>> onStart(FlowState<E> state, E startEvent) {
+    public List<SagaEffect<C>> onStart(FlowState<E> state, EventMetadata metadata, E startEvent) {
         List<SagaEffect<C>> effects = new ArrayList<>();
         for (C command : onStartCommands.apply(startEvent)) {
             effects.add(SagaEffect.issue(command));

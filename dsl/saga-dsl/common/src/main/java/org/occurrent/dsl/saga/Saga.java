@@ -90,19 +90,21 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * Effects to run exactly once when a start event creates a new instance, called after the first {@link #evolve} and
      * before that event's {@link #react}. The canonical use is arming the first timeout for the process. {@code metadata}
      * is the start event's delivery metadata (stream id and version, global position, CloudEvent extensions). This is the
-     * form the executor calls; the event-only {@link #onStart(Object, Object)} delegates here. Default: none.
+     * canonical form the executor calls, so an implementation overrides this one. The event-only
+     * {@link #onStart(Object, Object)} is a convenience for callers that have no metadata and delegates here.
+     * Default: none.
      */
     default List<SagaEffect<C>> onStart(S state, EventMetadata metadata, E startEvent) {
         return List.of();
     }
 
     /**
-     * Event-only convenience form of {@link #onStart(Object, EventMetadata, Object)}: delegates to it with metadata-less
-     * delivery. Callers that have no metadata (and most tests) can use this; an implementation should override the
-     * metadata-carrying form.
+     * Event-only convenience for a caller that has no metadata, delegating to {@link #onStart(Object, EventMetadata, Object)}
+     * with empty metadata. An implementation overrides the metadata-carrying form rather than this one, since that is the
+     * form the executor calls.
      */
     default List<SagaEffect<C>> onStart(S state, E startEvent) {
-        return onStart(state, SagaInput.NO_METADATA, startEvent);
+        return onStart(state, EventMetadata.empty(), startEvent);
     }
 
     /**
