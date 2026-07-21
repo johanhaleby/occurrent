@@ -66,6 +66,30 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
+    void catch_up_threads_event_metadata_into_the_fold() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        // Keyed by the stream id from the metadata and folding the global position: both come from the replayed
+        // CloudEvent, so if the catch-up did not thread the metadata, keying on getStreamId() would fail on empty metadata.
+        Projection<Long, Counted, String> projection = Projection.<Long, Counted, String>builder(0L)
+                .id((metadata, event) -> metadata.getStreamId())
+                .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
+                .build();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "positions", projection, repository, store, converter, Counted::eventId, null);
+
+        feed.catchUp();
+
+        // The instance is keyed under the stream id "s" (from metadata) and holds a real, non-null position.
+        assertThat(repo).containsKey("s");
+        assertThat(repo.get("s")).isNotNull();
+    }
+
+    @Test
     void an_event_both_replayed_and_delivered_live_during_catch_up_is_folded_once() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();

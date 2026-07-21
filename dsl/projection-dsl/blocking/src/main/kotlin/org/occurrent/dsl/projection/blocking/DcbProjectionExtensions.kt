@@ -35,7 +35,7 @@ import org.occurrent.subscription.api.blocking.Subscription
  * demand with the pull [DcbDomainEventQueries.project]. For a declarative read model use the `@Projection` annotation.
  */
 fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, materializedView: MaterializedView<E>, startAt: DcbStartAt? = null): Subscription =
-    subscribe(subscriptionId, dcbProjection.criteria(), startAt) { e -> materializedView.update(e) }.also { it.waitUntilStarted() }
+    subscribeWithMetadata(subscriptionId, dcbProjection.criteria(), startAt) { dcbMetadata, e -> materializedView.update(dcbMetadata.eventMetadata(), e) }.also { it.waitUntilStarted() }
 
 /**
  * Runs [dcbProjection] as an asynchronous, subscription-fed DCB read model materialized into [repository], skipping

@@ -19,6 +19,7 @@ package org.occurrent.dsl.projection.reactor
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions
 import org.occurrent.dsl.dcb.reactor.subscribeDcb
+import org.occurrent.dsl.dcb.reactor.subscribeDcbWithMetadata
 import org.occurrent.dsl.projection.DcbProjection
 import org.occurrent.dsl.view.MaterializedView
 import org.occurrent.dsl.view.ViewStateRepository
@@ -44,8 +45,8 @@ fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection:
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
 fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: DcbStartAt? = null): Subscription {
-    val update = Projections.reactiveUpdate(dcbProjection.projection(), repository, subscriptionId)
-    return project(subscriptionId, dcbProjection, { e -> update.apply(e) }, startAt)
+    val update = Projections.reactiveUpdateWithMetadata(dcbProjection.projection(), repository, subscriptionId)
+    return subscribeDcbWithMetadata(subscriptionId, dcbProjection.criteria(), startAt) { dcbMetadata, e -> update.apply(dcbMetadata.eventMetadata(), e) }
 }
 
 /**
@@ -53,8 +54,8 @@ fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, d
  * (scheduled on `boundedElastic`).
  */
 fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, materializedView: MaterializedView<E>, startAt: DcbStartAt? = null): Subscription {
-    val update = Projections.reactiveUpdate(materializedView)
-    return project(subscriptionId, dcbProjection, { e -> update.apply(e) }, startAt)
+    val update = Projections.reactiveUpdateWithMetadata(materializedView)
+    return subscribeDcbWithMetadata(subscriptionId, dcbProjection.criteria(), startAt) { dcbMetadata, e -> update.apply(dcbMetadata.eventMetadata(), e) }
 }
 
 /**

@@ -22,11 +22,13 @@ import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.filter.Filter;
 
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -60,16 +62,24 @@ public final class Projections {
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
-        Function<E, @Nullable ID> id = projection.id();
+        BiFunction<EventMetadata, E, @Nullable ID> id = projection.idWithMetadata();
         requireNonNull(id, "projection is single-instance; use materializedView(projection, repository, singletonKey)");
         View<S, E> view = projection.view();
-        return event -> {
-            @Nullable ID instanceId = id.apply(event);
-            if (instanceId == null) {
-                return;
+        return new MaterializedView<>() {
+            @Override
+            public void update(E event) {
+                update(EventMetadata.empty(), event);
             }
-            S currentState = repository.findById(instanceId).orElse(view.initialState());
-            repository.save(instanceId, view.evolve(currentState, event));
+
+            @Override
+            public void update(EventMetadata metadata, E event) {
+                @Nullable ID instanceId = id.apply(metadata, event);
+                if (instanceId == null) {
+                    return;
+                }
+                S currentState = repository.findById(instanceId).orElse(view.initialState());
+                repository.save(instanceId, view.evolve(currentState, metadata, event));
+            }
         };
     }
 
@@ -89,9 +99,17 @@ public final class Projections {
         requireNonNull(singletonKey, "singletonKey cannot be null");
         View<S, E> view = projection.view();
         ID key = (ID) singletonKey; // a single-instance projection is Projection<S, E, String>
-        return event -> {
-            S currentState = repository.findById(key).orElse(view.initialState());
-            repository.save(key, view.evolve(currentState, event));
+        return new MaterializedView<>() {
+            @Override
+            public void update(E event) {
+                update(EventMetadata.empty(), event);
+            }
+
+            @Override
+            public void update(EventMetadata metadata, E event) {
+                S currentState = repository.findById(key).orElse(view.initialState());
+                repository.save(key, view.evolve(currentState, metadata, event));
+            }
         };
     }
 

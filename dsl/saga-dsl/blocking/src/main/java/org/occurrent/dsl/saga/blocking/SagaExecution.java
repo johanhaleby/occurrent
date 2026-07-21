@@ -27,6 +27,7 @@ import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaTimeout;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
@@ -86,7 +87,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         if (sagaId == null) {
             return;
         }
-        process(sagaId, SagaInput.event(event), extractMeta(cloudEvent), null);
+        // The full delivery metadata (stream id and version, position, and any CloudEvent extensions) rides on the input
+        // so reactions can read it. The separate EventMeta drives redelivery dedup and is derived independently below, so
+        // its null-tolerant watermark behaviour is unchanged.
+        EventMetadata metadata = EventMetadata.from(cloudEvent);
+        process(sagaId, SagaInput.event(event, metadata), extractMeta(cloudEvent), null);
     }
 
     void pollTimers() {

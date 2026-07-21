@@ -21,14 +21,18 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaTimeout;
+import org.occurrent.dsl.subscription.EventMetadata;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -90,9 +94,43 @@ class FlowSagaTest {
     /** Applies a start event the way an executor would: evolve, then concatenate onStart's and react's effects. */
     private static Saga.Step<FlowState<OrderEvent>, OrderCommand> start(Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga, OrderEvent event) {
         FlowState<OrderEvent> state = saga.evolve(saga.initialState(), SagaInput.event(event));
-        List<SagaEffect<OrderCommand>> effects = new ArrayList<>(saga.onStart(state, event));
+        // Call the metadata-carrying onStart the executor actually calls, so this exercises the same override the runtime hits.
+        List<SagaEffect<OrderCommand>> effects = new ArrayList<>(saga.onStart(state, EventMetadata.empty(), event));
         effects.addAll(saga.react(state, SagaInput.event(event)));
         return new Saga.Step<>(state, effects);
+    }
+
+    @Nested
+    class BranchMetadata {
+
+        @Test
+        void a_metadata_carrying_on_branch_receives_the_triggering_events_metadata() {
+            AtomicReference<EventMetadata> seen = new AtomicReference<>();
+            Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(OrderPlaced.class, OrderPlaced::orderId)
+                    .correlate(PaymentReserved.class, PaymentReserved::orderId)
+                    .step("awaiting-payment", step -> step
+                            .on(PaymentReserved.class, Continuation.end(), (metadata, p) -> {
+                                seen.set(metadata);
+                                return List.of(new ShipOrder(p.orderId()));
+                            }))
+                    .build();
+
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
+            EventMetadata metadata = new EventMetadata(Map.of(
+                    OccurrentCloudEventExtension.STREAM_ID, "stream-1",
+                    OccurrentCloudEventExtension.STREAM_VERSION, 5L,
+                    OccurrentCloudEventExtension.POSITION, 88L));
+
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> step = saga.step(started.state(), SagaInput.event(new PaymentReserved("o1"), metadata));
+
+            assertAll(
+                    () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new ShipOrder("o1"))),
+                    () -> assertThat(seen.get().getStreamId()).isEqualTo("stream-1"),
+                    () -> assertThat(seen.get().getStreamVersion()).isEqualTo(5L),
+                    () -> assertThat(seen.get().getPosition()).isEqualTo(88L)
+            );
+        }
     }
 
     @Nested

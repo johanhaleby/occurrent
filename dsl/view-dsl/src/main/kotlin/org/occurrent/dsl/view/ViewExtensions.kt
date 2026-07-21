@@ -17,7 +17,17 @@
 
 package org.occurrent.dsl.view
 
+import org.occurrent.dsl.subscription.EventMetadata
+
 fun <S, E : Any> view(initialState: S, updateState: (S, E) -> S): View<S, E> = View.create(initialState, updateState)
+
+/**
+ * Builds a metadata-aware [View]: the fold sees the event's [EventMetadata] (stream id and version, global position,
+ * DCB tags, CloudEvent extensions) as well as the event. Metadata is only available on the CloudEvent-fed paths; the
+ * query/replay `evolve` overloads fold with [EventMetadata.empty].
+ */
+fun <S, E : Any> view(initialState: S, updateState: (S, EventMetadata, E) -> S): View<S, E> =
+    View.create(initialState, View.Fold { state, metadata, event -> updateState(state, metadata, event) })
 
 // =========================
 // Single event (convenience)

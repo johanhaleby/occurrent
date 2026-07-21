@@ -22,6 +22,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.filter.Filter;
@@ -117,7 +118,7 @@ public final class ProjectionRunner<E> {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(materializedView, "materializedView cannot be null");
         SubscriptionFilter filter = toSubscriptionFilter.apply(ProjectionFilters.filterFor(cloudEventConverter, projection));
-        Consumer<CloudEvent> action = cloudEvent -> materializedView.update(cloudEventConverter.toDomainEvent(cloudEvent));
+        Consumer<CloudEvent> action = cloudEvent -> materializedView.update(EventMetadata.from(cloudEvent), cloudEventConverter.toDomainEvent(cloudEvent));
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
         Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
         subscription.waitUntilStarted();

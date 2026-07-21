@@ -22,6 +22,8 @@ import org.junit.jupiter.api.DisplayNameGenerator
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertAll
+import org.occurrent.cloudevents.OccurrentCloudEventExtension
+import org.occurrent.dsl.subscription.EventMetadata
 import java.time.Duration
 
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
@@ -166,6 +168,57 @@ class SagaExtensionsTest {
                 { assertThat(saga.isTerminal(Finished("game-1", "alice"))).isTrue() },
                 { assertThat(saga.isTerminal(InProgress("game-1"))).isFalse() }
             )
+        }
+    }
+
+    @Nested
+    inner class MetadataOverloads {
+
+        private fun metadata(streamId: String, streamVersion: Long, position: Long) = EventMetadata(
+            mapOf(
+                OccurrentCloudEventExtension.STREAM_ID to streamId,
+                OccurrentCloudEventExtension.STREAM_VERSION to streamVersion,
+                OccurrentCloudEventExtension.POSITION to position
+            )
+        )
+
+        @Test
+        fun `the three-argument evolve and react overloads receive the delivered event's metadata`() {
+            var seenByEvolve: EventMetadata? = null
+            var seenByReact: EventMetadata? = null
+            val saga = saga<GameEvent, GameState?, GameCommand>(initialState = null) {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+                evolve<GameStarted> { _, metadata, e ->
+                    seenByEvolve = metadata
+                    InProgress(e.gameId)
+                }
+                react<GameStarted> { _, metadata, e ->
+                    seenByReact = metadata
+                    issue(NotifyPlayer(e.gameId, "started"))
+                }
+            }
+
+            val step = saga.step(null, SagaInput.event(GameStarted("game-1"), metadata("game-1", 2L, 9L)))
+
+            assertAll(
+                { assertThat(step.state()).isEqualTo(InProgress("game-1")) },
+                { assertThat(step.effects()).containsExactly(SagaEffect.issue(NotifyPlayer("game-1", "started"))) },
+                { assertThat(seenByEvolve?.streamId).isEqualTo("game-1") },
+                { assertThat(seenByEvolve?.streamVersion).isEqualTo(2L) },
+                { assertThat(seenByEvolve?.position).isEqualTo(9L) },
+                { assertThat(seenByReact?.streamId).isEqualTo("game-1") },
+                { assertThat(seenByReact?.position).isEqualTo(9L) }
+            )
+        }
+
+        @Test
+        fun `the two-argument overloads still work when the input carries metadata`() {
+            val saga = gameSaga()
+
+            val step = saga.step(null, SagaInput.event(GameStarted("game-1"), metadata("game-1", 1L, 1L)))
+
+            assertThat(step.state()).isEqualTo(InProgress("game-1"))
         }
     }
 

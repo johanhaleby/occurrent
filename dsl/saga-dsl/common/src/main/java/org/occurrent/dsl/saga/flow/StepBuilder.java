@@ -23,11 +23,13 @@ import org.occurrent.dsl.saga.flow.FlowSagaImpl.CompiledStep;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.JoinBody;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.StepBody;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.TimeoutSpec;
+import org.occurrent.dsl.subscription.EventMetadata;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
 
@@ -53,19 +55,33 @@ public final class StepBuilder<E, C> {
 
     /** Adds a branch: on an event of {@code type}, run {@code commands} and follow {@code then}. First matching branch wins. */
     public <T extends E> StepBuilder<E, C> on(Class<T> type, Continuation then, Function<T, List<C>> commands) {
-        return on(type, null, then, commands);
+        return on(type, (BiPredicate<T, ReceivedEvents<E>>) null, then, commands);
     }
 
     /** Adds a guarded branch: it matches only when {@code onlyIf} is also true for the event and events received so far. */
-    @SuppressWarnings("unchecked")
     public <T extends E> StepBuilder<E, C> on(Class<T> type, @Nullable BiPredicate<T, ReceivedEvents<E>> onlyIf, Continuation then, Function<T, List<C>> commands) {
+        requireNonNull(commands, "commands cannot be null");
+        return on(type, onlyIf, then, (metadata, event) -> commands.apply(event));
+    }
+
+    /**
+     * Adds a branch whose commands also receive the triggering event's delivery {@link EventMetadata} (stream id and
+     * version, global position, CloudEvent extensions). The metadata-first sibling of {@link #on(Class, Continuation, Function)}.
+     */
+    public <T extends E> StepBuilder<E, C> on(Class<T> type, Continuation then, BiFunction<EventMetadata, T, List<C>> commands) {
+        return on(type, (BiPredicate<T, ReceivedEvents<E>>) null, then, commands);
+    }
+
+    /** Adds a guarded, metadata-carrying branch: the metadata-first sibling of {@link #on(Class, BiPredicate, Continuation, Function)}. */
+    @SuppressWarnings("unchecked")
+    public <T extends E> StepBuilder<E, C> on(Class<T> type, @Nullable BiPredicate<T, ReceivedEvents<E>> onlyIf, Continuation then, BiFunction<EventMetadata, T, List<C>> commands) {
         requireNonNull(type, "type cannot be null");
         requireNonNull(then, "then cannot be null");
         requireNonNull(commands, "commands cannot be null");
         if (join != null) {
             throw new IllegalStateException("step '" + stepName + "' is a join step and cannot also have on(...) branches");
         }
-        branches.add(new Branch<>(type, (BiPredicate<E, ReceivedEvents<E>>) onlyIf, (Function<E, List<C>>) commands, then));
+        branches.add(new Branch<>(type, (BiPredicate<E, ReceivedEvents<E>>) onlyIf, (BiFunction<EventMetadata, E, List<C>>) commands, then));
         return this;
     }
 
