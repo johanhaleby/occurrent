@@ -19,6 +19,7 @@ package org.occurrent.dsl.view;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.subscription.EventMetadata;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -47,6 +48,38 @@ public interface View<S extends @Nullable Object, E> {
      * @return The evolved state
      */
     S evolve(@Nullable S state, @NonNull E event);
+
+    /**
+     * Evolve state by applying the event together with its {@link EventMetadata} (stream id and version, global
+     * position, DCB tags, and any CloudEvent extensions). Metadata is only available where an event arrives as a
+     * CloudEvent (the live and catch-up runner paths); the on-demand query/replay paths ({@link #evolve(List)},
+     * {@link #evolve(Stream)}, the varargs forms) have no CloudEvent and fold with {@link EventMetadata#empty()}.
+     * <p>
+     * The default ignores the metadata and delegates to {@link #evolve(Object, Object)}, so a plain event-only view
+     * transparently sees a metadata-carrying feed. Build a metadata-aware view with {@link #create(Object, Fold)}.
+     *
+     * @param state    The current state
+     * @param metadata The event's metadata
+     * @param event    The event
+     * @return The evolved state
+     */
+    default S evolve(@Nullable S state, EventMetadata metadata, @NonNull E event) {
+        return evolve(state, event);
+    }
+
+    /**
+     * A metadata-aware fold: current state, the event's {@link EventMetadata}, and the event, returning the new state.
+     * The three-argument counterpart to a {@code BiFunction<S, E, S>}, used by {@link #create(Object, Fold)}.
+     *
+     * @param <S> The state type
+     * @param <E> The event type
+     */
+    @FunctionalInterface
+    interface Fold<S extends @Nullable Object, E> {
+        // Deliberately unannotated (like the BiFunction in create(S, BiFunction)), so a Kotlin (S, EventMetadata, E) -> S
+        // lambda binds with the same flexible nullability as the two-arg view builder rather than forcing S? on state.
+        S evolve(S state, EventMetadata metadata, E event);
+    }
 
     /**
      * Evolve initial state from events
@@ -127,6 +160,31 @@ public interface View<S extends @Nullable Object, E> {
             @Override
             public S evolve(@Nullable S state, @NonNull E event) {
                 return evolve.apply(state, event);
+            }
+        };
+    }
+
+    /**
+     * Creates a metadata-aware view from a three-argument {@link Fold}. Its {@link #evolve(Object, EventMetadata, Object)}
+     * applies the fold with the event's metadata, and its metadata-less {@link #evolve(Object, Object)} applies the fold
+     * with {@link EventMetadata#empty()}, so the same fold drives both the CloudEvent-fed paths (with real metadata) and
+     * the query/replay paths (with empty metadata).
+     */
+    static <S extends @Nullable Object, E> View<S, E> create(S initialState, @NonNull Fold<S, E> fold) {
+        return new View<>() {
+            @Override
+            public S initialState() {
+                return initialState;
+            }
+
+            @Override
+            public S evolve(@Nullable S state, @NonNull E event) {
+                return fold.evolve(state, EventMetadata.empty(), event);
+            }
+
+            @Override
+            public S evolve(@Nullable S state, EventMetadata metadata, @NonNull E event) {
+                return fold.evolve(state, metadata, event);
             }
         };
     }

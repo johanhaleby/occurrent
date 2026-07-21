@@ -35,9 +35,9 @@ import java.util.stream.Stream
 fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription {
     val explicitFilter = projection.filter()
     return if (explicitFilter != null) {
-        subscribe(subscriptionId, AgnosticSubscriptionFilter.filter(explicitFilter), startAt) { e -> materializedView.update(e) }
+        subscribe(subscriptionId, AgnosticSubscriptionFilter.filter(explicitFilter), startAt) { metadata, e -> materializedView.update(metadata, e) }
     } else {
-        subscribe(subscriptionId, projection.eventTypes().toList(), startAt) { e -> materializedView.update(e) }
+        subscribe(subscriptionId, projection.eventTypes().toList(), startAt) { metadata, e -> materializedView.update(metadata, e) }
     }
 }
 
@@ -58,9 +58,9 @@ fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, proj
 fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription {
     val explicitFilter = projection.filter()
     return if (explicitFilter != null) {
-        subscribe(subscriptionId, StreamSubscriptionFilter.filter(explicitFilter), startAt) { e -> materializedView.update(e) }
+        subscribe(subscriptionId, StreamSubscriptionFilter.filter(explicitFilter), startAt) { metadata, e -> materializedView.update(metadata, e) }
     } else {
-        subscribe(subscriptionId, projection.eventTypes().toList(), startAt) { e -> materializedView.update(e) }
+        subscribe(subscriptionId, projection.eventTypes().toList(), startAt) { metadata, e -> materializedView.update(metadata, e) }
     }
 }
 
