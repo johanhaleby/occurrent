@@ -50,7 +50,8 @@ meaning the driver/server default still applies and no existing subscription cha
 profile on upgrade. Adopting the issue's suggested values (`batchSize` around 500, `maxAwaitTime` 200&ndash;1000 ms) as
 defaults would have been a silent behavior change for every deployment; those values are documented as javadoc guidance
 instead. This keeps the change additive, matching the repository convention. Values are validated eagerly:
-`batchSize > 0` and a non-zero, non-negative `maxAwaitTime`, throwing `IllegalArgumentException` otherwise.
+`batchSize > 0` and `maxAwaitTime` at least 1 millisecond (`toMillis() > 0`, since the driver call is millisecond-based
+and a sub-millisecond value would otherwise silently truncate to 0), throwing `IllegalArgumentException` otherwise.
 
 **The Reactor path is deferred rather than bypassed now.** Supporting both knobs on Reactor requires leaving
 `ReactiveMongoTemplate.changeStream` and driving the raw reactive driver, which concentrates real regression risk on the
