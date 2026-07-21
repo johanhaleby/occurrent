@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.Tag;
 
@@ -74,6 +75,16 @@ public class DcbDomainEventQueries<E> {
      */
     public DcbCriteriaBuilder<E> criteria() {
         return new DcbCriteriaBuilder<>(domainEventQueries.cloudEventConverter());
+    }
+
+    /**
+     * A {@link DcbCriteriaBuilder} seeded with a boundary criterion: {@code type}/{@code types}/{@code tags} refine the
+     * boundary (setting their dimension, keeping the others), so a shared tag boundary can be reused and given
+     * query-specific event types.
+     */
+    public DcbCriteriaBuilder<E> criteria(DcbCriterion boundary) {
+        requireNonNull(boundary, "Boundary cannot be null");
+        return new DcbCriteriaBuilder<>(domainEventQueries.cloudEventConverter(), boundary);
     }
 
     // ------------------------------------------------------------------------------------------------------

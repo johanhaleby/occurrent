@@ -34,6 +34,7 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.dcb.toDcb
+import org.occurrent.dsl.dcb.typeOf
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.dsl.query.reactor.DomainEventQueries
@@ -148,6 +149,48 @@ class DcbReactorDslTest {
         assertThat(queries.tags(Tag.of("name", "name")).collectList().block()).containsExactly(nameDefined)
         assertThat(queries.tags("name:name").collectList().block()).containsExactly(nameDefined)
         assertThat(queries.tagsAnyOf("name:name", "other:1").collectList().block()).containsExactly(nameDefined)
+    }
+
+    @Test
+    fun reified_single_and_dual_type_criteria_match_the_KClass_and_Java_class_forms() {
+        val nameDefined = NameDefined("event-0", time, "name", "Jane Doe")
+        val nameWasChanged = NameWasChanged("event-1", time, "name", "Jane Doe")
+        append(nameDefined, nameWasChanged)
+
+        val reifiedSingle = queries.criteria().type<NameDefined>()
+        val kClassSingle = queries.criteria().type(NameDefined::class)
+        @Suppress("DEPRECATION")
+        val deprecatedSingle = queries.criteria().typeOf<NameDefined, DomainEvent>()
+        assertThat(reifiedSingle).isEqualTo(kClassSingle)
+        assertThat(reifiedSingle).isEqualTo(deprecatedSingle)
+        assertThat(queries.query(reifiedSingle).collectList().block()).containsExactly(nameDefined)
+
+        val reifiedDual = queries.criteria().types<NameDefined, NameWasChanged>()
+        val kClassDual = queries.criteria().types(NameDefined::class, NameWasChanged::class)
+        val javaClassDual = queries.criteria().types(NameDefined::class.java, NameWasChanged::class.java)
+        assertThat(reifiedDual).isEqualTo(kClassDual)
+        assertThat(reifiedDual).isEqualTo(javaClassDual)
+        assertThat(queries.query(reifiedDual).collectList().block()).containsExactly(nameDefined, nameWasChanged)
+    }
+
+    @Test
+    fun criteria_seeded_with_a_boundary_refines_the_boundary_and_rejects_the_combinators() {
+        val taggedNameDefined = NameDefined("event-0", time, "name", "Jane Doe")
+        val taggedNameWasChanged = NameWasChanged("event-1", time, "name", "Jane Doe")
+        val untaggedNameDefined = NameDefined("event-2", time, "name", "Other Doe")
+
+        val taggedCloudEvents = converter.toCloudEvents(listOf(taggedNameDefined, taggedNameWasChanged))
+            .map { event -> DcbCloudEvents.withTags(event, setOf(Tag.of("tenant", "1"))) }
+        eventStore.append(taggedCloudEvents).block()
+        append(untaggedNameDefined)
+
+        val boundary = DcbCriteria.tags(Tag.of("tenant", "1"))
+
+        // Same tag, but only the matching type is returned; the same-tag NameWasChanged and the untagged NameDefined are excluded.
+        assertThat(queries.query(queries.criteria(boundary).type<NameDefined>()).collectList().block()).containsExactly(taggedNameDefined)
+
+        org.assertj.core.api.Assertions.assertThatThrownBy { queries.criteria(boundary).all() }.isInstanceOf(IllegalStateException::class.java)
+        org.assertj.core.api.Assertions.assertThatThrownBy { queries.criteria(boundary).anyOf(DcbCriteria.tags(Tag.of("tenant", "1"))) }.isInstanceOf(IllegalStateException::class.java)
     }
 
     @Test
