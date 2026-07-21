@@ -1,4 +1,4 @@
-# 65. First-grade event metadata in the saga and projection/view DSLs
+# 68. First-grade event metadata in the saga and projection/view DSLs
 
 Date: 2026-07-21
 
