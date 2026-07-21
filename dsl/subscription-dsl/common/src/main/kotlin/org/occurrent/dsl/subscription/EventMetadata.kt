@@ -60,6 +60,16 @@ data class EventMetadata(val data: Map<String, Any?>) {
     inline operator fun <reified T : Any?> get(key: String) = data[key] as T
 
     companion object {
+        private val EMPTY = EventMetadata(emptyMap())
+
+        /**
+         * Metadata with no extensions, for a fold or reaction invoked without a CloudEvent (for example on-demand
+         * replay from a query, where events never carried a CloudEvent). [position] is `null` and the stream accessors
+         * throw, since there is no stream id or version to read.
+         */
+        @JvmStatic
+        fun empty(): EventMetadata = EMPTY
+
         /**
          * Build the metadata from a [CloudEvent], capturing its extensions (stream id and version, the DCB position and
          * tags, and any others). Used by both the blocking and the reactive subscription DSLs so the two read the same
