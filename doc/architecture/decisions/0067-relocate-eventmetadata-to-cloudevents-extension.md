@@ -10,7 +10,7 @@ Accepted. Breaking for 0.30.0 callers, automated by the `org.occurrent.UpgradeTo
 
 `EventMetadata` (`org.occurrent.dsl.subscription.EventMetadata`, module `dsl/subscription-dsl/common`) started as a
 subscription-delivery type: the bag of stream id, stream version, and position built from a CloudEvent's extensions
-and handed to a subscriber alongside the event. ADR 65 made it the shared fold currency for the saga DSL and the
+and handed to a subscriber alongside the event. [ADR 65](0065-first-grade-event-metadata-in-the-dsls.md) made it the shared fold currency for the saga DSL and the
 projection/view DSLs too, so a saga reaction, a projection fold, and a view fold now all receive an `EventMetadata`,
 none of them through the subscription DSL. The type outgrew the module it lives in: `dsl/subscription-dsl/common`
 is pulled in by saga, projection, and DCB DSL modules purely for a type that is no longer subscription-specific, and

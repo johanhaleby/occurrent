@@ -127,6 +127,7 @@ public final class EventMetadata {
      * tags, and any others). Used by both the blocking and the reactive subscription DSLs so the two read the same thing.
      */
     public static EventMetadata from(CloudEvent cloudEvent) {
+        Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         Map<String, @Nullable Object> data = new HashMap<>();
         for (String name : cloudEvent.getExtensionNames()) {
             Object value = cloudEvent.getExtension(name);
