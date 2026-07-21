@@ -248,7 +248,7 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
-                <artifactId>occurrent-subscription-mongodb-spring-reactor-position-storage</artifactId>
+                <artifactId>occurrent-subscription-mongodb-spring-reactor-checkpoint-storage</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -268,7 +268,7 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
-                <artifactId>occurrent-subscription-mongodb-spring-blocking-position-storage</artifactId>
+                <artifactId>occurrent-subscription-mongodb-spring-blocking-checkpoint-storage</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -278,7 +278,7 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
-                <artifactId>occurrent-subscription-mongodb-native-blocking-position-storage</artifactId>
+                <artifactId>occurrent-subscription-mongodb-native-blocking-checkpoint-storage</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -288,7 +288,7 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
-                <artifactId>occurrent-subscription-redis-spring-blocking-position-storage</artifactId>
+                <artifactId>occurrent-subscription-redis-spring-blocking-checkpoint-storage</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

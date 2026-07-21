@@ -18,32 +18,29 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>subscription-mongodb-spring</artifactId>
+        <artifactId>subscription-redis-spring</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>occurrent-subscription-mongodb-spring-blocking-position-storage</artifactId>
+    <artifactId>occurrent-subscription-redis-spring-blocking-checkpoint-storage</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-mongodb</artifactId>
-        </dependency>
-        <dependency>
             <groupId>org.springframework.data</groupId>
-            <artifactId>spring-data-mongodb</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.mongodb</groupId>
-            <artifactId>mongodb-driver-sync</artifactId>
+            <artifactId>spring-data-redis</artifactId>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-mongodb-spring-blocking</artifactId>
+            <artifactId>occurrent-subscription-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -51,7 +48,7 @@
             <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <dependency>
+        <dependency> <!-- Required for @PreDestroy -->
             <groupId>jakarta.annotation</groupId>
             <artifactId>jakarta.annotation-api</artifactId>
         </dependency>
@@ -62,6 +59,17 @@
         </dependency>
 
         <!-- Test -->
+        <dependency>
+            <groupId>io.lettuce</groupId>
+            <artifactId>lettuce-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
