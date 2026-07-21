@@ -69,7 +69,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-mongodb-spring-blocking-position-storage</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking-checkpoint-storage</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
