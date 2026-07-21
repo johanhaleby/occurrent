@@ -21,11 +21,15 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.dsl.subscription.EventMetadata;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -151,6 +155,92 @@ class SagaTest {
             List<SagaEffect<OrderCommand>> effects = saga.onStart(new AwaitingPayment("order-1"), new OrderPlaced("order-1", 100));
 
             assertThat(effects).containsExactly(SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)));
+        }
+    }
+
+    @Nested
+    class MetadataOverloads {
+
+        private static EventMetadata metadata(String streamId, long streamVersion, long position) {
+            return new EventMetadata(Map.of(
+                    OccurrentCloudEventExtension.STREAM_ID, streamId,
+                    OccurrentCloudEventExtension.STREAM_VERSION, streamVersion,
+                    OccurrentCloudEventExtension.POSITION, position));
+        }
+
+        @Test
+        void evolve_and_react_metadata_handlers_receive_the_delivered_events_metadata() {
+            AtomicReference<EventMetadata> seenByEvolve = new AtomicReference<>();
+            AtomicReference<EventMetadata> seenByReact = new AtomicReference<>();
+
+            Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, meta, e) -> {
+                        seenByEvolve.set(meta);
+                        return new AwaitingPayment(e.orderId());
+                    })
+                    .react(OrderPlaced.class, (state, meta, e) -> {
+                        seenByReact.set(meta);
+                        return List.of(SagaEffect.issue(new ReservePayment(e.orderId(), e.amount())));
+                    })
+                    .build();
+
+            EventMetadata metadata = metadata("stream-1", 7L, 42L);
+            Saga.Step<OrderState, OrderCommand> step = saga.step(null, SagaInput.event(new OrderPlaced("order-1", 100), metadata));
+
+            assertAll(
+                    () -> assertThat(step.state()).isEqualTo(new AwaitingPayment("order-1")),
+                    () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new ReservePayment("order-1", 100))),
+                    () -> assertThat(seenByEvolve.get().getStreamId()).isEqualTo("stream-1"),
+                    () -> assertThat(seenByEvolve.get().getStreamVersion()).isEqualTo(7L),
+                    () -> assertThat(seenByEvolve.get().getPosition()).isEqualTo(42L),
+                    () -> assertThat(seenByReact.get().getStreamId()).isEqualTo("stream-1"),
+                    () -> assertThat(seenByReact.get().getStreamVersion()).isEqualTo(7L),
+                    () -> assertThat(seenByReact.get().getPosition()).isEqualTo(42L)
+            );
+        }
+
+        @Test
+        void onStart_metadata_handler_receives_the_start_events_metadata() {
+            AtomicReference<EventMetadata> seenByOnStart = new AtomicReference<>();
+
+            Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
+                    .onStart((state, meta, e) -> {
+                        seenByOnStart.set(meta);
+                        return List.of(SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)));
+                    })
+                    .build();
+
+            EventMetadata metadata = metadata("stream-9", 3L, 11L);
+            List<SagaEffect<OrderCommand>> effects = saga.onStart(new AwaitingPayment("order-1"), metadata, new OrderPlaced("order-1", 100));
+
+            assertAll(
+                    () -> assertThat(effects).containsExactly(SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30))),
+                    () -> assertThat(seenByOnStart.get().getStreamId()).isEqualTo("stream-9"),
+                    () -> assertThat(seenByOnStart.get().getStreamVersion()).isEqualTo(3L),
+                    () -> assertThat(seenByOnStart.get().getPosition()).isEqualTo(11L)
+            );
+        }
+
+        @Test
+        void event_only_handlers_still_work_when_the_input_carries_metadata() {
+            // The metadata-less builder overloads keep working unchanged. The metadata riding on the input is simply
+            // ignored by a handler registered through the two-argument form.
+            Saga<OrderEvent, OrderState, OrderCommand> saga = orderFulfillment();
+
+            Saga.Step<OrderState, OrderCommand> step = saga.step(null,
+                    SagaInput.event(new OrderPlaced("order-1", 100), metadata("stream-1", 1L, 1L)));
+
+            assertAll(
+                    () -> assertThat(step.state()).isEqualTo(new AwaitingPayment("order-1")),
+                    () -> assertThat(step.effects()).containsExactly(
+                            SagaEffect.issue(new ReservePayment("order-1", 100)),
+                            SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)))
+            );
         }
     }
 
@@ -671,7 +761,13 @@ class SagaTest {
 
         @Test
         void throws_NullPointerException_when_SagaInput_Event_wraps_null() {
-            assertThatThrownBy(() -> new SagaInput.Event<OrderEvent>(null))
+            assertThatThrownBy(() -> SagaInput.<OrderEvent>event(null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void throws_NullPointerException_when_SagaInput_Event_metadata_is_null() {
+            assertThatThrownBy(() -> new SagaInput.Event<>(new OrderPlaced("order-1", 100), null))
                     .isInstanceOf(NullPointerException.class);
         }
 

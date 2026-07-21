@@ -268,7 +268,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 // projection receives every synchronously dispatched event and the fold no-ops on unhandled types.
                 Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
                 synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.subscriptionModelDefault(), false, (metadata, event) -> {
-                    materializedView.update(event);
+                    materializedView.update(metadata, event);
                     return Unit.INSTANCE;
                 });
                 return;
@@ -277,7 +277,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             DcbStartAt startAt = generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
             boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
             applyStartupWorkarounds();
-            var subscription = dcbSubscriptions.subscribeWithMetadata(id, dcbProjection.criteria(), startAt, (dcbMetadata, event) -> materializedView.update(event));
+            var subscription = dcbSubscriptions.subscribeWithMetadata(id, dcbProjection.criteria(), startAt, (dcbMetadata, event) -> materializedView.update(dcbMetadata.eventMetadata(), event));
             if (shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                 subscription.waitUntilStarted();
             }
@@ -286,7 +286,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
             Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
             Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-                materializedView.update(event);
+                materializedView.update(metadata, event);
                 return Unit.INSTANCE;
             };
             boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;

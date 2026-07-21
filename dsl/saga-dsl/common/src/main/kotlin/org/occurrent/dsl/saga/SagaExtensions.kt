@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.saga
 
+import org.occurrent.dsl.subscription.EventMetadata
 import java.time.Duration
 import java.time.Instant
 import java.util.function.BiFunction
@@ -78,9 +79,19 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
         delegate.evolve(T::class.java, BiFunction { s, e -> fold(s, e) })
     }
 
+    /** Registers the metadata-carrying fold for event type [T]: the fold also receives the event's delivery [EventMetadata]. */
+    inline fun <reified T : E> evolve(noinline fold: (S, EventMetadata, T) -> S) {
+        delegate.evolve(T::class.java, Saga.EventEvolver<S, T> { s, m, e -> fold(s, m, e) })
+    }
+
     /** Registers the reaction for event type [T], given the post-evolve state. */
     inline fun <reified T : E> react(noinline react: SagaEffects<C>.(S, T) -> Unit) {
         delegate.react(T::class.java, BiFunction { s, e -> SagaEffects<C>().apply { react(s, e) }.build() })
+    }
+
+    /** Registers the metadata-carrying reaction for event type [T]: the reaction also receives the event's delivery [EventMetadata]. */
+    inline fun <reified T : E> react(noinline react: SagaEffects<C>.(S, EventMetadata, T) -> Unit) {
+        delegate.react(T::class.java, Saga.EventReactor<S, T, C> { s, m, e -> SagaEffects<C>().apply { react(s, m, e) }.build() })
     }
 
     /** Registers the fold for the timer named [timerName]. */
@@ -96,6 +107,14 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
     /** Effects to run once when a start event creates the instance. Can be set only once. */
     fun onStart(react: SagaEffects<C>.(S, E) -> Unit) {
         delegate.onStart(BiFunction { s, e -> SagaEffects<C>().apply { react(s, e) }.build() })
+    }
+
+    /**
+     * Effects to run once when a start event creates the instance, with the start event's delivery [EventMetadata]. Can be
+     * set only once.
+     */
+    fun onStart(react: SagaEffects<C>.(S, EventMetadata, E) -> Unit) {
+        delegate.onStart(Saga.EventReactor<S, E, C> { s, m, e -> SagaEffects<C>().apply { react(s, m, e) }.build() })
     }
 
     /** The terminal predicate. Can be set only once. */

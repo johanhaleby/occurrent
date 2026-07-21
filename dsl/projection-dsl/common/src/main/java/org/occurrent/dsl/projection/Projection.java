@@ -17,6 +17,7 @@
 package org.occurrent.dsl.projection;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.view.View;
 import org.occurrent.filter.Filter;
 
@@ -50,13 +51,13 @@ import static java.util.Objects.requireNonNull;
 public final class Projection<S extends @Nullable Object, E, ID> {
 
     private final View<S, E> view;
-    private final @Nullable Function<E, @Nullable ID> id;
+    private final @Nullable BiFunction<EventMetadata, E, @Nullable ID> id;
     private final Set<Class<? extends E>> eventTypes;
     private final @Nullable Filter filter;
 
     // Private on purpose: the only way to build a Projection is the builder/singletonBuilder/adapt factories, which fix
     // a single-instance projection's id type to String, so a non-String singleton cannot be constructed.
-    private Projection(View<S, E> view, @Nullable Function<E, @Nullable ID> id, Set<Class<? extends E>> eventTypes, @Nullable Filter filter) {
+    private Projection(View<S, E> view, @Nullable BiFunction<EventMetadata, E, @Nullable ID> id, Set<Class<? extends E>> eventTypes, @Nullable Filter filter) {
         this.view = requireNonNull(view, "view cannot be null");
         this.id = id;
         this.eventTypes = Set.copyOf(requireNonNull(eventTypes, "eventTypes cannot be null"));
@@ -74,8 +75,33 @@ public final class Projection<S extends @Nullable Object, E, ID> {
      * all players' events, so it has no per-event key and the framework supplies the single key. A keyed projection has
      * one instance per key, like a player profile keyed by player id, and its function may return {@code null} to skip
      * an event that maps to no instance.
+     * <p>
+     * This is the event-only view of the id function. A projection keyed on {@link EventMetadata} (for example the
+     * stream id) via {@link Builder#id(BiFunction)} still exposes an {@code id()} here, but it applies the underlying
+     * function with {@link EventMetadata#empty()}, so it is only meaningful for an event-only-keyed projection. Use
+     * {@link #idWithMetadata()} to key with metadata.
      */
     public @Nullable Function<E, @Nullable ID> id() {
+        BiFunction<EventMetadata, E, @Nullable ID> metadataId = this.id;
+        if (metadataId == null) {
+            return null;
+        }
+        return event -> {
+            try {
+                return metadataId.apply(EventMetadata.empty(), event);
+            } catch (RuntimeException e) {
+                throw new IllegalStateException("Could not resolve the view-instance id from the event alone. If this projection is keyed by event metadata (id(BiFunction)), it cannot be keyed on a metadata-less path such as the on-demand query fold. Use idWithMetadata() on a metadata-carrying path (a subscription runner).", e);
+            }
+        };
+    }
+
+    /**
+     * The function deriving which view instance an event updates, seeing the event's {@link EventMetadata} as well as the
+     * event, or {@code null} for a single-instance projection. This is the metadata-aware form of {@link #id()}: a
+     * runner keys with it so a projection can be keyed by metadata such as the stream id. On a metadata-less path (the
+     * on-demand query/replay), the metadata is {@link EventMetadata#empty()}.
+     */
+    public @Nullable BiFunction<EventMetadata, E, @Nullable ID> idWithMetadata() {
         return id;
     }
 
@@ -126,11 +152,11 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(eventType, "eventType cannot be null");
         View<S, SubE> subView = projection.view();
-        View<S, E> widenedView = View.create(subView.initialState(), (state, event) ->
-                eventType.isInstance(event) ? subView.evolve(state, eventType.cast(event)) : state);
-        @Nullable Function<SubE, @Nullable ID> subId = projection.id();
-        Function<E, @Nullable ID> widenedId = subId == null ? null
-                : event -> eventType.isInstance(event) ? subId.apply(eventType.cast(event)) : null;
+        View<S, E> widenedView = View.create(subView.initialState(), (View.Fold<S, E>) (state, metadata, event) ->
+                eventType.isInstance(event) ? subView.evolve(state, metadata, eventType.cast(event)) : state);
+        @Nullable BiFunction<EventMetadata, SubE, @Nullable ID> subId = projection.idWithMetadata();
+        BiFunction<EventMetadata, E, @Nullable ID> widenedId = subId == null ? null
+                : (metadata, event) -> eventType.isInstance(event) ? subId.apply(metadata, eventType.cast(event)) : null;
         Set<Class<? extends E>> widenedTypes = new LinkedHashSet<>(projection.eventTypes());
         return new Projection<>(widenedView, widenedId, widenedTypes, projection.filter());
     }
@@ -141,9 +167,9 @@ public final class Projection<S extends @Nullable Object, E, ID> {
      */
     public static final class Builder<S extends @Nullable Object, E, ID> {
         private final S initialState;
-        private final Map<Class<?>, BiFunction<S, E, S>> handlers = new LinkedHashMap<>();
+        private final Map<Class<?>, View.Fold<S, E>> handlers = new LinkedHashMap<>();
         private final Set<Class<? extends E>> eventTypes = new LinkedHashSet<>();
-        private @Nullable Function<E, @Nullable ID> id;
+        private @Nullable BiFunction<EventMetadata, E, @Nullable ID> id;
         private boolean singleton;
         private @Nullable Filter filter;
 
@@ -157,6 +183,19 @@ public final class Projection<S extends @Nullable Object, E, ID> {
          * required, and it can be set only once.
          */
         public Builder<S, E, ID> id(Function<E, @Nullable ID> id) {
+            requireNonNull(id, "id cannot be null");
+            return id((metadata, event) -> id.apply(event));
+        }
+
+        /**
+         * Sets the function deriving the view-instance id from the event's {@link EventMetadata} and the event, so a
+         * projection can be keyed by metadata such as the stream id ({@code (metadata, event) -> metadata.getStreamId()}).
+         * Return {@code null} for an event that maps to no instance and should be skipped. Mutually exclusive with
+         * {@link #singleton()}. Exactly one of the two is required, and it can be set only once. The metadata-less
+         * on-demand query/replay path folds with {@link EventMetadata#empty()}, so a metadata-keyed projection cannot be
+         * read that way.
+         */
+        public Builder<S, E, ID> id(BiFunction<EventMetadata, E, @Nullable ID> id) {
             if (this.id != null) {
                 throw new IllegalStateException("id(...) has already been set and can only be set once");
             }
@@ -203,7 +242,29 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         public <T extends E> Builder<S, E, ID> on(Class<T> type, BiFunction<S, ? super T, S> handler) {
             requireNonNull(type, "type cannot be null");
             requireNonNull(handler, "handler cannot be null");
-            handlers.put(type, (BiFunction<S, E, S>) handler);
+            BiFunction<S, ? super T, S> h = handler;
+            // The dispatch only invokes this fold for events of type T, so the cast is safe.
+            handlers.put(type, (state, metadata, event) -> h.apply(state, (T) event));
+            eventTypes.add(type);
+            return this;
+        }
+
+        /**
+         * Registers a metadata-aware fold for one event type: the fold sees the event's {@link EventMetadata} (stream id
+         * and version, global position, DCB tags, CloudEvent extensions) as well as the event. The metadata-less
+         * counterpart to {@link #on(Class, BiFunction)}; the same type-resolution and replacement rules apply, and the
+         * registered type joins {@link Projection#eventTypes()}. On the metadata-less query/replay path the fold sees
+         * {@link EventMetadata#empty()}.
+         *
+         * @param type    the event type this handler folds
+         * @param handler the fold: current state, the event's metadata, and the event, returning the new state
+         * @param <T>     the event subtype the handler accepts
+         */
+        @SuppressWarnings("unchecked")
+        public <T extends E> Builder<S, E, ID> on(Class<T> type, View.Fold<S, ? super T> handler) {
+            requireNonNull(type, "type cannot be null");
+            requireNonNull(handler, "handler cannot be null");
+            handlers.put(type, (View.Fold<S, E>) handler);
             eventTypes.add(type);
             return this;
         }
@@ -239,24 +300,24 @@ public final class Projection<S extends @Nullable Object, E, ID> {
      * falling back through superclasses and interfaces, and return the state unchanged when none is registered. Resolved
      * lookups are cached per concrete event class.
      */
-    private static final class HandlerDispatch<S extends @Nullable Object, E> implements BiFunction<S, E, S> {
-        private final Map<Class<?>, BiFunction<S, E, S>> handlers;
-        private final Map<Class<?>, BiFunction<S, E, S>> resolved = new ConcurrentHashMap<>();
-        private final BiFunction<S, E, S> noOp = (state, event) -> state;
+    private static final class HandlerDispatch<S extends @Nullable Object, E> implements View.Fold<S, E> {
+        private final Map<Class<?>, View.Fold<S, E>> handlers;
+        private final Map<Class<?>, View.Fold<S, E>> resolved = new ConcurrentHashMap<>();
+        private final View.Fold<S, E> noOp = (state, metadata, event) -> state;
 
-        private HandlerDispatch(Map<Class<?>, BiFunction<S, E, S>> handlers) {
+        private HandlerDispatch(Map<Class<?>, View.Fold<S, E>> handlers) {
             this.handlers = new LinkedHashMap<>(handlers);
         }
 
         @Override
-        public S apply(S state, E event) {
-            BiFunction<S, E, S> handler = resolved.computeIfAbsent(event.getClass(), this::resolve);
-            return handler.apply(state, event);
+        public S evolve(S state, EventMetadata metadata, E event) {
+            View.Fold<S, E> handler = resolved.computeIfAbsent(event.getClass(), this::resolve);
+            return handler.evolve(state, metadata, event);
         }
 
-        private BiFunction<S, E, S> resolve(Class<?> eventClass) {
+        private View.Fold<S, E> resolve(Class<?> eventClass) {
             for (Class<?> c = eventClass; c != null; c = c.getSuperclass()) {
-                BiFunction<S, E, S> handler = handlers.get(c);
+                View.Fold<S, E> handler = handlers.get(c);
                 if (handler != null) {
                     return handler;
                 }
@@ -271,7 +332,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
                 if (!visited.add(anInterface)) {
                     continue;
                 }
-                BiFunction<S, E, S> handler = handlers.get(anInterface);
+                View.Fold<S, E> handler = handlers.get(anInterface);
                 if (handler != null) {
                     return handler;
                 }

@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.projection
 
+import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.dsl.view.View
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.filter.Filter
@@ -109,6 +111,16 @@ class ProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal constructor
         delegate.id(Function { e -> fn(e) })
     }
 
+    /**
+     * Sets the function deriving the view-instance id from the event's [EventMetadata] and the event, so a projection
+     * can be keyed by metadata such as the stream id (`id { metadata, _ -> metadata.streamId }`). Return `null` to skip
+     * the event. Required unless [singleton]. The metadata-less on-demand query/replay path folds with
+     * [EventMetadata.empty], so a metadata-keyed projection cannot be read that way.
+     */
+    fun id(fn: (EventMetadata, E) -> ID?) {
+        delegate.id(BiFunction { metadata, e -> fn(metadata, e) })
+    }
+
     /** Internal: use the top-level [singletonProjection] builder, which fixes the id type to `String`. */
     internal fun singleton() {
         delegate.singleton()
@@ -117,6 +129,15 @@ class ProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal constructor
     /** Registers the fold for event type [T]. */
     inline fun <reified T : E> on(noinline handler: (S, T) -> S) {
         delegate.on(T::class.java, BiFunction { s, e -> handler(s, e) })
+    }
+
+    /**
+     * Registers a metadata-aware fold for event type [T]: the fold sees the event's [EventMetadata] (stream id and
+     * version, global position, DCB tags, CloudEvent extensions) as well as the event. On the metadata-less query/replay
+     * path the fold sees [EventMetadata.empty].
+     */
+    inline fun <reified T : E> on(noinline handler: (S, EventMetadata, T) -> S) {
+        delegate.on(T::class.java, View.Fold { s, metadata, e -> handler(s, metadata, e) })
     }
 
     /** Sets an explicit selector overriding the event-type-derived one. */
@@ -144,11 +165,24 @@ class DcbProjectionBuilder<S, E : Any, ID : Any> @PublishedApi internal construc
     /** Sets the function deriving the view-instance id from an event; return `null` to skip the event. Required unless [singleton]. */
     fun id(fn: (E) -> ID?) = projectionBuilder.id(fn)
 
+    /**
+     * Sets the metadata-aware function deriving the view-instance id from the event's [EventMetadata] and the event, so
+     * a projection can be keyed by metadata such as the stream id. Return `null` to skip the event. Required unless
+     * [singleton].
+     */
+    fun id(fn: (EventMetadata, E) -> ID?) = projectionBuilder.id(fn)
+
     /** Internal: use the top-level [dcbSingletonProjection] builder, which fixes the id type to `String`. */
     internal fun singleton() = projectionBuilder.singleton()
 
     /** Registers the fold for event type [T]. */
     inline fun <reified T : E> on(noinline handler: (S, T) -> S) = projectionBuilder.on<T>(handler)
+
+    /**
+     * Registers a metadata-aware fold for event type [T]: the fold sees the event's [EventMetadata] as well as the
+     * event.
+     */
+    inline fun <reified T : E> on(noinline handler: (S, EventMetadata, T) -> S) = projectionBuilder.on<T>(handler)
 
     /** Adds DCB tags to the read boundary, matched all-of. Each string is parsed with [Tag.parse]. */
     fun tags(vararg tag: String) {

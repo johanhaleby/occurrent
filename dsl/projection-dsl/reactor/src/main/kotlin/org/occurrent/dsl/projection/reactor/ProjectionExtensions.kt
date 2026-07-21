@@ -18,6 +18,7 @@ package org.occurrent.dsl.projection.reactor
 
 import org.occurrent.dsl.projection.Projection
 import org.occurrent.dsl.query.reactor.DomainEventQueries
+import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions
 import org.occurrent.dsl.subscription.reactor.Subscriptions
 import org.occurrent.dsl.view.MaterializedView
@@ -50,8 +51,8 @@ fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Proje
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
 fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription {
-    val update = Projections.reactiveUpdate(projection, repository, subscriptionId)
-    return project(subscriptionId, projection, { e -> update.apply(e) }, startAt)
+    val update = Projections.reactiveUpdateWithMetadata(projection, repository, subscriptionId)
+    return projectWithMetadata(subscriptionId, projection, { metadata, e -> update.apply(metadata, e) }, startAt)
 }
 
 /**
@@ -59,8 +60,21 @@ fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, proj
  * (scheduled on `boundedElastic`).
  */
 fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription {
-    val update = Projections.reactiveUpdate(materializedView)
-    return project(subscriptionId, projection, { e -> update.apply(e) }, startAt)
+    val update = Projections.reactiveUpdateWithMetadata(materializedView)
+    return projectWithMetadata(subscriptionId, projection, { metadata, e -> update.apply(metadata, e) }, startAt)
+}
+
+// Threads the delivered event's EventMetadata into the update, using the metadata-carrying subscribe overloads. The
+// public (E) -> Mono<Void> primitive project stays event-only, since a caller-supplied reactive update composes at the
+// domain-event level; the repository and MaterializedView overloads route here so a metadata-keyed projection folds
+// with real metadata.
+private fun <E : Any> Subscriptions<E>.projectWithMetadata(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt?): Subscription {
+    val explicitFilter = projection.filter()
+    return if (explicitFilter != null) {
+        subscribe(subscriptionId, AgnosticSubscriptionFilter.filter(explicitFilter), startAt) { metadata, e -> update(metadata, e) }
+    } else {
+        subscribe(subscriptionId, *projection.eventTypes().map { it.kotlin }.toTypedArray(), startAt = startAt) { metadata, e -> update(metadata, e) }
+    }
 }
 
 /**
@@ -80,8 +94,8 @@ fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection:
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
 fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription {
-    val update = Projections.reactiveUpdate(projection, repository, subscriptionId)
-    return project(subscriptionId, projection, { e -> update.apply(e) }, startAt)
+    val update = Projections.reactiveUpdateWithMetadata(projection, repository, subscriptionId)
+    return projectWithMetadata(subscriptionId, projection, { metadata, e -> update.apply(metadata, e) }, startAt)
 }
 
 /**
@@ -89,8 +103,18 @@ fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String
  * (scheduled on `boundedElastic`).
  */
 fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription {
-    val update = Projections.reactiveUpdate(materializedView)
-    return project(subscriptionId, projection, { e -> update.apply(e) }, startAt)
+    val update = Projections.reactiveUpdateWithMetadata(materializedView)
+    return projectWithMetadata(subscriptionId, projection, { metadata, e -> update.apply(metadata, e) }, startAt)
+}
+
+// See the agnostic projectWithMetadata above: threads EventMetadata into the update, stream-scoped.
+private fun <E : Any> StreamSubscriptions<E>.projectWithMetadata(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt?): Subscription {
+    val explicitFilter = projection.filter()
+    return if (explicitFilter != null) {
+        subscribe(subscriptionId, StreamSubscriptionFilter.filter(explicitFilter), startAt) { metadata, e -> update(metadata, e) }
+    } else {
+        subscribe(subscriptionId, *projection.eventTypes().map { it.kotlin }.toTypedArray(), startAt = startAt) { metadata, e -> update(metadata, e) }
+    }
 }
 
 /**

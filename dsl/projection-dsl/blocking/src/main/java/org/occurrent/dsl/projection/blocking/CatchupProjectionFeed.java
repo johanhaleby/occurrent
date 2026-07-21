@@ -23,6 +23,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.BoundedIdCache;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
@@ -210,7 +211,8 @@ public final class CatchupProjectionFeed<E> {
             try (Stream<CloudEvent> history = reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())) {
                 history.forEach(cloudEvent -> {
                     E event = converter.toDomainEvent(cloudEvent);
-                    view.update(event);
+                    // Replay decodes CloudEvents, so metadata is available here (unlike the live accept(E) path).
+                    view.update(EventMetadata.from(cloudEvent), event);
                     synchronized (lock) {
                         deliveredIds.add(eventKey(event));
                     }

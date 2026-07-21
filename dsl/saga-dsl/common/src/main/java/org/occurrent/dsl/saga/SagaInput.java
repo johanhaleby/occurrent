@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.saga;
 
+import org.occurrent.dsl.subscription.EventMetadata;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -27,10 +29,19 @@ import static java.util.Objects.requireNonNull;
  */
 public sealed interface SagaInput<E> {
 
-    /** A domain event delivered to the saga. */
-    record Event<E>(E event) implements SagaInput<E> {
+    // Metadata-less delivery marker for the event-only convenience factory. Its typed accessors have nothing to return,
+    // so a reaction that wants real metadata must be delivered through a runner that builds it from the CloudEvent.
+    EventMetadata NO_METADATA = EventMetadata.empty();
+
+    /**
+     * A domain event delivered to the saga, together with its delivery {@link EventMetadata} (stream id and version,
+     * global position, and any CloudEvent extensions). A runner that has a CloudEvent builds this with
+     * {@link EventMetadata#from}; the event-only {@link #event(Object)} factory carries {@link #NO_METADATA}.
+     */
+    record Event<E>(E event, EventMetadata metadata) implements SagaInput<E> {
         public Event {
             requireNonNull(event, "event cannot be null");
+            requireNonNull(metadata, "metadata cannot be null");
         }
     }
 
@@ -44,9 +55,14 @@ public sealed interface SagaInput<E> {
         }
     }
 
-    /** Wraps a domain event as a saga input. */
+    /** Wraps a domain event as a saga input, with no delivery metadata (see {@link #NO_METADATA}). */
     static <E> SagaInput<E> event(E event) {
-        return new Event<>(event);
+        return new Event<>(event, NO_METADATA);
+    }
+
+    /** Wraps a domain event and its delivery metadata as a saga input. */
+    static <E> SagaInput<E> event(E event, EventMetadata metadata) {
+        return new Event<>(event, metadata);
     }
 
     /** Wraps a fired timer as a saga input. */

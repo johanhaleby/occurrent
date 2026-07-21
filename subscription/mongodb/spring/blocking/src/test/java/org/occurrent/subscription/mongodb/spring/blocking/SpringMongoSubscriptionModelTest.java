@@ -109,6 +109,8 @@ public class SpringMongoSubscriptionModelTest {
     private SpringMongoSubscriptionModel subscriptionModel;
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
+    private String eventCollectionName;
+    private TimeRepresentation timeRepresentation;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -116,10 +118,11 @@ public class SpringMongoSubscriptionModelTest {
         MongoClient mongoClient = MongoClients.create(connectionString);
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-        TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
-        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).eventStoreCapabilities(STREAM, DCB).build();
+        this.eventCollectionName = connectionString.getCollection();
+        this.timeRepresentation = TimeRepresentation.RFC_3339_STRING;
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(eventCollectionName).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).eventStoreCapabilities(STREAM, DCB).build();
         mongoEventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-        subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
+        subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, eventCollectionName, timeRepresentation);
         objectMapper = new ObjectMapper();
     }
 
@@ -145,6 +148,30 @@ public class SpringMongoSubscriptionModelTest {
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void blocking_spring_subscription_delivers_events_when_max_await_time_is_configured() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        SpringMongoSubscriptionModel configuredSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventCollectionName, timeRepresentation).maxAwaitTime(Duration.ofMillis(500)));
+        try {
+            configuredSubscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+            // Then
+            await().atMost(5, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        } finally {
+            configuredSubscriptionModel.shutdown();
+        }
     }
 
     @Test

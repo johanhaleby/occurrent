@@ -99,15 +99,18 @@ public class NativeMongoSubscriptionModelTest {
     private ObjectMapper objectMapper;
     private MongoClient mongoClient;
     private ExecutorService subscriptionExecutor;
+    private MongoDatabase database;
+    private MongoCollection<Document> eventCollection;
+    private TimeRepresentation timeRepresentation;
 
     @BeforeEach
     void create_mongo_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         this.mongoClient = MongoClients.create(connectionString);
-        TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
+        this.timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         EventStoreConfig config = new EventStoreConfig(timeRepresentation);
-        MongoDatabase database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
-        MongoCollection<Document> eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
+        this.database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
+        this.eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
         subscriptionExecutor = Executors.newCachedThreadPool();
         subscriptionModel = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
@@ -152,6 +155,34 @@ public class NativeMongoSubscriptionModelTest {
 
         // Then
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void blocking_native_mongodb_subscription_delivers_events_when_batch_size_and_max_await_time_are_configured() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        ExecutorService executor = Executors.newCachedThreadPool();
+        NativeMongoSubscriptionModel configuredSubscriptionModel = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, executor,
+                NativeMongoSubscriptionModelConfig.withConfig().batchSize(500).maxAwaitTime(Duration.ofMillis(500)));
+        try {
+            configuredSubscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted();
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+            // Then
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        } finally {
+            configuredSubscriptionModel.shutdown();
+            executor.shutdown();
+            ExecutorShutdown.shutdownSafely(executor, 10, TimeUnit.SECONDS);
+        }
     }
 
     @Test
