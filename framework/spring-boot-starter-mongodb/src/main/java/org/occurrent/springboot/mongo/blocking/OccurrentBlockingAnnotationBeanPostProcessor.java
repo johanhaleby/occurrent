@@ -922,11 +922,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private <E> void processSubscribeAnnotation(Object bean, Method method, StreamSubscriptionDefinition subscription) {
         String id = subscription.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, subscription.eventTypes(), subscription.annotationName(), applicationContext.getBean(CloudEventConverter.class));
-        List<Class<?>> parameterTypes = resolved.parameterTypes();
+        List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
+            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -946,11 +946,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Subscription annotation) {
         String id = annotation.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@Subscription", applicationContext.getBean(CloudEventConverter.class));
-        List<Class<?>> parameterTypes = resolved.parameterTypes();
+        List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
+            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -972,7 +972,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private <E> void processSynchronousSubscribeAnnotation(String beanName, Object bean, Method method, SynchronousSubscription annotation) {
         String id = annotation.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@SynchronousSubscription", applicationContext.getBean(CloudEventConverter.class));
-        List<Class<?>> parameterTypes = resolved.parameterTypes();
+        List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
         // Resolve the handler from the ApplicationContext lazily, at dispatch time, rather than closing over the raw
@@ -982,7 +982,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // so a handler-side @Transactional is honored when the synchronous handler is invoked.
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
             Object target = applicationContext.getBean(beanName);
-            invoke(method, target, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
+            invoke(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -1043,11 +1043,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private <E> void processDcbSubscribeAnnotation(Object bean, Method method, DcbSubscription annotation) {
         String id = annotation.id();
         final DcbCriteria criteria;
-        final List<Class<?>> parameterTypes;
+        final List<SubscriptionAnnotations.HandlerParameter> parameters;
         if (method.getParameterCount() >= 1) {
             CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
-            parameterTypes = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isDcbMetadataParameter);
-            Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameterTypes, SubscriptionAnnotations::isDcbMetadataParameter);
+            parameters = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isDcbMetadataParameter, false);
+            Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameters);
             List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@DcbSubscription");
             List<String> cloudEventTypes = domainEventTypesToSubscribeTo.stream().map(cloudEventConverter::getCloudEventType).toList();
             List<Tag> tags = new ArrayList<>();
@@ -1064,8 +1064,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
 
         BiConsumer<DcbEventMetadata, E> consumer = (dcbMetadata, event) -> {
-            Object metadataArgument = parameterTypes.contains(DcbEventMetadata.class) ? dcbMetadata : dcbMetadata.eventMetadata();
-            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadataArgument, SubscriptionAnnotations::isDcbMetadataParameter));
+            boolean hasDcbEventMetadataParam = parameters.stream().anyMatch(p -> p.type() == DcbEventMetadata.class);
+            Object metadataArgument = hasDcbEventMetadataParam ? dcbMetadata : dcbMetadata.eventMetadata();
+            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
         };
 
         long startAtDcbPosition = annotation.startAtDcbPosition();

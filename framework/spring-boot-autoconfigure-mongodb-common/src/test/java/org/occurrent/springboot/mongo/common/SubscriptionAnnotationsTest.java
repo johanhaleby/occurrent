@@ -18,7 +18,17 @@
 package org.occurrent.springboot.mongo.common;
 
 import org.junit.jupiter.api.Test;
+import org.occurrent.annotation.StreamId;
+import org.occurrent.annotation.StreamVersion;
+import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.HandlerParameter;
+import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.HandlerParameterKind;
 
+import java.lang.reflect.Method;
+import java.util.List;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -84,5 +94,133 @@ class SubscriptionAnnotationsTest {
     void asynchronous_with_only_startAtGlobalPosition_is_allowed() {
         assertThatCode(() -> SubscriptionAnnotations.validateModeStartKnobs("@Projection", "orders", false, false, true, true, true))
                 .doesNotThrowAnyException();
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // analyzeParameters + bindArguments (the @StreamId / @StreamVersion handler-parameter support)
+    // ------------------------------------------------------------------------------------------------------
+
+    record TestEvent(String value) {
+    }
+
+    @SuppressWarnings("unused")
+    static class Handlers {
+        void eventOnly(TestEvent event) {
+        }
+
+        void eventAndMetadata(TestEvent event, EventMetadata metadata) {
+        }
+
+        void eventAndStreamId(TestEvent event, @StreamId String streamId) {
+        }
+
+        void eventAndStreamVersion(TestEvent event, @StreamVersion long streamVersion) {
+        }
+
+        void everything(@StreamVersion long streamVersion, EventMetadata metadata, @StreamId String streamId, TestEvent event) {
+        }
+
+        void streamVersionBoxed(TestEvent event, @StreamVersion Long streamVersion) {
+        }
+
+        void streamIdWrongType(TestEvent event, @StreamId long streamId) {
+        }
+
+        void streamVersionWrongType(TestEvent event, @StreamVersion String streamVersion) {
+        }
+
+        void duplicateStreamId(TestEvent event, @StreamId String a, @StreamId String b) {
+        }
+    }
+
+    private static Method handler(String name) {
+        for (Method method : Handlers.class.getDeclaredMethods()) {
+            if (method.getName().equals(name)) {
+                return method;
+            }
+        }
+        throw new IllegalStateException("No handler named " + name);
+    }
+
+    private static List<HandlerParameter> analyzeStream(String handlerName) {
+        return SubscriptionAnnotations.analyzeParameters(handler(handlerName), SubscriptionAnnotations::isStreamMetadataParameter, true);
+    }
+
+    // streamId "s-1" and streamVersion 42, keyed by the CloudEvent extension names EventMetadata reads.
+    private static final EventMetadata METADATA = new EventMetadata(Map.of("streamid", "s-1", "streamversion", 42L));
+
+    @Test
+    void classifies_an_event_only_handler() {
+        List<HandlerParameter> parameters = analyzeStream("eventOnly");
+        assertThat(parameters).extracting(HandlerParameter::kind).containsExactly(HandlerParameterKind.EVENT);
+    }
+
+    @Test
+    void classifies_event_and_metadata() {
+        List<HandlerParameter> parameters = analyzeStream("eventAndMetadata");
+        assertThat(parameters).extracting(HandlerParameter::kind)
+                .containsExactly(HandlerParameterKind.EVENT, HandlerParameterKind.METADATA);
+    }
+
+    @Test
+    void classifies_stream_id_and_version_in_any_order() {
+        List<HandlerParameter> parameters = analyzeStream("everything");
+        assertThat(parameters).extracting(HandlerParameter::kind).containsExactly(
+                HandlerParameterKind.STREAM_VERSION, HandlerParameterKind.METADATA, HandlerParameterKind.STREAM_ID, HandlerParameterKind.EVENT);
+    }
+
+    @Test
+    void binds_event_stream_id_and_version_by_kind() {
+        List<HandlerParameter> parameters = analyzeStream("everything");
+        TestEvent event = new TestEvent("x");
+        Object[] arguments = SubscriptionAnnotations.bindArguments(parameters, event, METADATA, METADATA);
+        assertThat(arguments).containsExactly(42L, METADATA, "s-1", event);
+    }
+
+    @Test
+    void binds_a_boxed_long_stream_version() {
+        List<HandlerParameter> parameters = analyzeStream("streamVersionBoxed");
+        TestEvent event = new TestEvent("x");
+        Object[] arguments = SubscriptionAnnotations.bindArguments(parameters, event, METADATA, METADATA);
+        assertThat(arguments).containsExactly(event, 42L);
+    }
+
+    @Test
+    void binds_only_the_event_when_that_is_the_only_parameter() {
+        List<HandlerParameter> parameters = analyzeStream("eventOnly");
+        TestEvent event = new TestEvent("x");
+        Object[] arguments = SubscriptionAnnotations.bindArguments(parameters, event, METADATA, METADATA);
+        assertThat(arguments).containsExactly(event);
+    }
+
+    @Test
+    void rejects_a_stream_id_that_is_not_a_string() {
+        assertThatThrownBy(() -> analyzeStream("streamIdWrongType"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("@StreamId")
+                .hasMessageContaining("String");
+    }
+
+    @Test
+    void rejects_a_stream_version_that_is_not_a_long() {
+        assertThatThrownBy(() -> analyzeStream("streamVersionWrongType"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("@StreamVersion")
+                .hasMessageContaining("long or Long");
+    }
+
+    @Test
+    void rejects_more_than_one_stream_id() {
+        assertThatThrownBy(() -> analyzeStream("duplicateStreamId"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at most one @StreamId");
+    }
+
+    @Test
+    void rejects_stream_accessors_when_not_supported() {
+        assertThatThrownBy(() -> SubscriptionAnnotations.analyzeParameters(handler("eventAndStreamId"), SubscriptionAnnotations::isDcbMetadataParameter, false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("@StreamId")
+                .hasMessageContaining("only supported on");
     }
 }
