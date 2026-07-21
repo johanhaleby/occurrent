@@ -17,6 +17,7 @@
 package org.occurrent.dsl.snapshot;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.view.View;
 import org.occurrent.filter.Filter;
 
@@ -103,8 +104,8 @@ public final class SnapshotView<S extends @Nullable Object, E> {
         requireNonNull(snapshotView, "snapshotView cannot be null");
         requireNonNull(eventType, "eventType cannot be null");
         View<S, SubE> subView = snapshotView.view();
-        View<S, E> widenedView = View.create(subView.initialState(), (state, event) ->
-                eventType.isInstance(event) ? subView.evolve(state, eventType.cast(event)) : state);
+        View<S, E> widenedView = View.create(subView.initialState(), (View.Fold<S, E>) (state, metadata, event) ->
+                eventType.isInstance(event) ? subView.evolve(state, metadata, eventType.cast(event)) : state);
         return new SnapshotView<>(widenedView, snapshotView.schemaVersion(), new LinkedHashSet<>(snapshotView.eventTypes()), snapshotView.filter());
     }
 
@@ -114,7 +115,7 @@ public final class SnapshotView<S extends @Nullable Object, E> {
      */
     public static final class Builder<S extends @Nullable Object, E> {
         private final S initialState;
-        private final Map<Class<?>, BiFunction<S, E, S>> handlers = new LinkedHashMap<>();
+        private final Map<Class<?>, View.Fold<S, E>> handlers = new LinkedHashMap<>();
         private final Set<Class<? extends E>> eventTypes = new LinkedHashSet<>();
         private int schemaVersion = 1;
         private @Nullable Filter filter;
@@ -136,7 +137,28 @@ public final class SnapshotView<S extends @Nullable Object, E> {
         public <T extends E> Builder<S, E> on(Class<T> type, BiFunction<S, ? super T, S> handler) {
             requireNonNull(type, "type cannot be null");
             requireNonNull(handler, "handler cannot be null");
-            handlers.put(type, (BiFunction<S, E, S>) handler);
+            BiFunction<S, ? super T, S> h = handler;
+            // The dispatch only invokes this fold for events of type T, so the cast is safe.
+            handlers.put(type, (state, metadata, event) -> h.apply(state, (T) event));
+            eventTypes.add(type);
+            return this;
+        }
+
+        /**
+         * Registers a metadata-aware fold for one event type: the fold sees the event's {@link EventMetadata} as well as
+         * the event. The metadata-less counterpart to {@link #on(Class, BiFunction)}; the same type-resolution and
+         * replacement rules apply, and the registered type joins {@link SnapshotView#eventTypes()}. Snapshot rebuilds
+         * that fold from a query/replay see {@link EventMetadata#empty()}.
+         *
+         * @param type    the event type this handler folds
+         * @param handler the fold: current state, the event's metadata, and the event, returning the new state
+         * @param <T>     the event subtype the handler accepts
+         */
+        @SuppressWarnings("unchecked")
+        public <T extends E> Builder<S, E> on(Class<T> type, View.Fold<S, ? super T> handler) {
+            requireNonNull(type, "type cannot be null");
+            requireNonNull(handler, "handler cannot be null");
+            handlers.put(type, (View.Fold<S, E>) handler);
             eventTypes.add(type);
             return this;
         }
@@ -179,24 +201,24 @@ public final class SnapshotView<S extends @Nullable Object, E> {
      * falling back through superclasses and interfaces, and return the state unchanged when none is registered. Resolved
      * lookups are cached per concrete event class.
      */
-    private static final class HandlerDispatch<S extends @Nullable Object, E> implements BiFunction<S, E, S> {
-        private final Map<Class<?>, BiFunction<S, E, S>> handlers;
-        private final Map<Class<?>, BiFunction<S, E, S>> resolved = new ConcurrentHashMap<>();
-        private final BiFunction<S, E, S> noOp = (state, event) -> state;
+    private static final class HandlerDispatch<S extends @Nullable Object, E> implements View.Fold<S, E> {
+        private final Map<Class<?>, View.Fold<S, E>> handlers;
+        private final Map<Class<?>, View.Fold<S, E>> resolved = new ConcurrentHashMap<>();
+        private final View.Fold<S, E> noOp = (state, metadata, event) -> state;
 
-        private HandlerDispatch(Map<Class<?>, BiFunction<S, E, S>> handlers) {
+        private HandlerDispatch(Map<Class<?>, View.Fold<S, E>> handlers) {
             this.handlers = new LinkedHashMap<>(handlers);
         }
 
         @Override
-        public S apply(S state, E event) {
-            BiFunction<S, E, S> handler = resolved.computeIfAbsent(event.getClass(), this::resolve);
-            return handler.apply(state, event);
+        public S evolve(S state, EventMetadata metadata, E event) {
+            View.Fold<S, E> handler = resolved.computeIfAbsent(event.getClass(), this::resolve);
+            return handler.evolve(state, metadata, event);
         }
 
-        private BiFunction<S, E, S> resolve(Class<?> eventClass) {
+        private View.Fold<S, E> resolve(Class<?> eventClass) {
             for (Class<?> c = eventClass; c != null; c = c.getSuperclass()) {
-                BiFunction<S, E, S> handler = handlers.get(c);
+                View.Fold<S, E> handler = handlers.get(c);
                 if (handler != null) {
                     return handler;
                 }
@@ -211,7 +233,7 @@ public final class SnapshotView<S extends @Nullable Object, E> {
                 if (!visited.add(anInterface)) {
                     continue;
                 }
-                BiFunction<S, E, S> handler = handlers.get(anInterface);
+                View.Fold<S, E> handler = handlers.get(anInterface);
                 if (handler != null) {
                     return handler;
                 }

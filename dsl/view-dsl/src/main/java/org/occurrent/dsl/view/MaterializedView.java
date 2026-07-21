@@ -18,8 +18,10 @@
 package org.occurrent.dsl.view;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.retry.RetryStrategy;
 
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -28,24 +30,65 @@ import java.util.function.Function;
 public interface MaterializedView<E> {
     void update(E event);
 
+    /**
+     * Update from an event together with its {@link EventMetadata} (stream id and version, global position, DCB tags,
+     * and any CloudEvent extensions), so the view can be keyed by metadata (for example the stream id) and fold with it.
+     * <p>
+     * The default ignores the metadata and delegates to {@link #update(Object)}, so a plain view transparently accepts a
+     * metadata-carrying feed. A metadata-aware view (built by {@link #create(BiFunction, View, ViewStateRepository)} or
+     * by the projection DSL) overrides this to key and fold with the metadata, and routes {@link #update(Object)} through
+     * it with {@link EventMetadata#empty()}. Metadata is only available where an event arrives as a CloudEvent; a live
+     * domain-event feed with no CloudEvent uses {@link #update(Object)} and thus {@link EventMetadata#empty()}.
+     */
+    default void update(EventMetadata metadata, E event) {
+        update(event);
+    }
+
     default <S extends @Nullable Object, ID> void updateFromRepository(ID id, E event, View<S, E> view, ViewStateRepository<S, ID> repository) {
-        updateFromRepository(id, event, view, repository, RetryStrategy.none());
+        updateFromRepository(id, EventMetadata.empty(), event, view, repository, RetryStrategy.none());
     }
 
     default <S extends @Nullable Object, ID> void updateFromRepository(ID id, E event, View<S, E> view, ViewStateRepository<S, ID> repository, RetryStrategy retryStrategy) {
+        updateFromRepository(id, EventMetadata.empty(), event, view, repository, retryStrategy);
+    }
+
+    /**
+     * As {@link #updateFromRepository(Object, Object, View, ViewStateRepository)}, folding the event with its
+     * {@link EventMetadata} through {@link View#evolve(Object, EventMetadata, Object)}.
+     */
+    default <S extends @Nullable Object, ID> void updateFromRepository(ID id, EventMetadata metadata, E event, View<S, E> view, ViewStateRepository<S, ID> repository) {
+        updateFromRepository(id, metadata, event, view, repository, RetryStrategy.none());
+    }
+
+    default <S extends @Nullable Object, ID> void updateFromRepository(ID id, EventMetadata metadata, E event, View<S, E> view, ViewStateRepository<S, ID> repository, RetryStrategy retryStrategy) {
         retryStrategy.execute(() -> {
             S currentState = repository.findById(id).orElse(view.initialState());
-            S updatedState = view.evolve(currentState, event);
+            S updatedState = view.evolve(currentState, metadata, event);
             repository.save(id, updatedState);
         });
     }
 
     static <S extends @Nullable Object, E, ID> MaterializedView<E> create(Function<E, ID> idMapper, View<S, E> view, ViewStateRepository<S, ID> repository) {
+        return create((metadata, event) -> idMapper.apply(event), view, repository);
+    }
+
+    /**
+     * As {@link #create(Function, View, ViewStateRepository)}, but the id mapper also sees the event's
+     * {@link EventMetadata}, so a view instance can be keyed by metadata such as the stream id. Both {@code update}
+     * overloads fold with metadata: {@link #update(EventMetadata, Object)} uses the delivered metadata, and
+     * {@link #update(Object)} uses {@link EventMetadata#empty()}.
+     */
+    static <S extends @Nullable Object, E, ID> MaterializedView<E> create(BiFunction<EventMetadata, E, ID> idMapper, View<S, E> view, ViewStateRepository<S, ID> repository) {
         return new MaterializedView<>() {
             @Override
             public void update(E event) {
-                ID id = idMapper.apply(event);
-                updateFromRepository(id, event, view, repository);
+                update(EventMetadata.empty(), event);
+            }
+
+            @Override
+            public void update(EventMetadata metadata, E event) {
+                ID id = idMapper.apply(metadata, event);
+                updateFromRepository(id, metadata, event, view, repository);
             }
         };
     }

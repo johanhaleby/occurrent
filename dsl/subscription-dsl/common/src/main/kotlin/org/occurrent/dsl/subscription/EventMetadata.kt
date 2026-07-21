@@ -78,5 +78,17 @@ data class EventMetadata(val data: Map<String, Any?>) {
         @JvmStatic
         fun from(cloudEvent: CloudEvent): EventMetadata =
             EventMetadata(cloudEvent.extensionNames.mapNotNull { name -> cloudEvent.getExtension(name)?.let { value -> name to value } }.toMap())
+
+        /**
+         * Empty metadata, carrying no extensions. Used on the metadata-less fold paths, where an event is folded without
+         * an originating [CloudEvent]: the query/replay path ([View.evolve] over a `Stream`/`List`/varargs, the on-demand
+         * `project`), and any live domain-event feed that hands the fold a bare event. Accessing a typed field such as
+         * [streamId] or [streamVersion] on empty metadata throws, since there is nothing to read; only optional reads
+         * ([position], [get]) are safe. A fold that keys on metadata must therefore not be run on a metadata-less path.
+         */
+        @JvmStatic
+        fun empty(): EventMetadata = EMPTY
+
+        private val EMPTY = EventMetadata(emptyMap())
     }
 }

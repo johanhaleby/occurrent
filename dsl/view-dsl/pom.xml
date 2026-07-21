@@ -35,6 +35,13 @@
             <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- EventMetadata is first-grade currency in View/MaterializedView, so this must be a non-optional (transitive)
+             dependency rather than relying on the optional subscription-dsl-blocking below. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-dsl-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-dsl-blocking</artifactId>

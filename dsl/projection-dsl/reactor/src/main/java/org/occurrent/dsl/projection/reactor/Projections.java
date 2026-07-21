@@ -22,6 +22,7 @@ import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
@@ -30,6 +31,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
@@ -63,18 +65,28 @@ public final class Projections {
      * {@link #reactiveUpdate(MaterializedView)}.
      */
     public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> reactiveUpdate(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+        BiFunction<EventMetadata, E, Mono<Void>> update = reactiveUpdateWithMetadata(projection, repository);
+        return event -> update.apply(EventMetadata.empty(), event);
+    }
+
+    /**
+     * The metadata-aware form of {@link #reactiveUpdate(Projection, ViewStateRepository)}: keys the view instance with
+     * the projection's {@link Projection#idWithMetadata() metadata-aware id} and folds through
+     * {@link View#evolve(Object, EventMetadata, Object)}, so a projection can be keyed by metadata such as the stream id.
+     */
+    public static <S extends @Nullable Object, E, ID> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
-        Function<E, @Nullable ID> id = projection.id();
-        requireNonNull(id, "projection is single-instance; use reactiveUpdate(projection, repository, singletonKey)");
+        BiFunction<EventMetadata, E, @Nullable ID> id = projection.idWithMetadata();
+        requireNonNull(id, "projection is single-instance; use reactiveUpdateWithMetadata(projection, repository, singletonKey)");
         View<S, E> view = projection.view();
-        return event -> Mono.<Void>fromRunnable(() -> {
-            @Nullable ID instanceId = id.apply(event);
+        return (metadata, event) -> Mono.<Void>fromRunnable(() -> {
+            @Nullable ID instanceId = id.apply(metadata, event);
             if (instanceId == null) {
                 return;
             }
             S currentState = repository.findById(instanceId).orElse(view.initialState());
-            repository.save(instanceId, view.evolve(currentState, event));
+            repository.save(instanceId, view.evolve(currentState, metadata, event));
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -82,19 +94,27 @@ public final class Projections {
      * A reactive update for a keyed or single-instance projection. A single-instance projection (no id function) updates
      * one slot keyed by {@code singletonKey}, the projection's runtime identity (the subscription id).
      */
-    @SuppressWarnings("unchecked")
     public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> reactiveUpdate(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
+        BiFunction<EventMetadata, E, Mono<Void>> update = reactiveUpdateWithMetadata(projection, repository, singletonKey);
+        return event -> update.apply(EventMetadata.empty(), event);
+    }
+
+    /**
+     * The metadata-aware form of {@link #reactiveUpdate(Projection, ViewStateRepository, String)}.
+     */
+    @SuppressWarnings("unchecked")
+    public static <S extends @Nullable Object, E, ID> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
         if (projection.id() != null) {
-            return reactiveUpdate(projection, repository);
+            return reactiveUpdateWithMetadata(projection, repository);
         }
         requireNonNull(singletonKey, "singletonKey cannot be null");
         View<S, E> view = projection.view();
         ID key = (ID) singletonKey; // a single-instance projection is Projection<S, E, String>
-        return event -> Mono.<Void>fromRunnable(() -> {
+        return (metadata, event) -> Mono.<Void>fromRunnable(() -> {
             S currentState = repository.findById(key).orElse(view.initialState());
-            repository.save(key, view.evolve(currentState, event));
+            repository.save(key, view.evolve(currentState, metadata, event));
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -104,8 +124,17 @@ public final class Projections {
      * view DSL's {@code materialized(...)} builds, with its own retry/locking policy) from a reactive pipeline.
      */
     public static <E> Function<E, Mono<Void>> reactiveUpdate(MaterializedView<E> materializedView) {
+        BiFunction<EventMetadata, E, Mono<Void>> update = reactiveUpdateWithMetadata(materializedView);
+        return event -> update.apply(EventMetadata.empty(), event);
+    }
+
+    /**
+     * The metadata-aware form of {@link #reactiveUpdate(MaterializedView)}: calls the blocking
+     * {@code materializedView.update(metadata, event)} on {@link Schedulers#boundedElastic()}.
+     */
+    public static <E> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(MaterializedView<E> materializedView) {
         requireNonNull(materializedView, "materializedView cannot be null");
-        return event -> Mono.<Void>fromRunnable(() -> materializedView.update(event)).subscribeOn(Schedulers.boundedElastic());
+        return (metadata, event) -> Mono.<Void>fromRunnable(() -> materializedView.update(metadata, event)).subscribeOn(Schedulers.boundedElastic());
     }
 
     /**
