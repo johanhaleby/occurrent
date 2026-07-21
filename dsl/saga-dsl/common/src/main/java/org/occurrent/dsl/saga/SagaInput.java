@@ -16,6 +16,10 @@
 
 package org.occurrent.dsl.saga;
 
+import org.occurrent.dsl.subscription.EventMetadata;
+
+import java.util.Map;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -27,10 +31,21 @@ import static java.util.Objects.requireNonNull;
  */
 public sealed interface SagaInput<E> {
 
-    /** A domain event delivered to the saga. */
-    record Event<E>(E event) implements SagaInput<E> {
+    // Metadata-less delivery marker, used by the event-only convenience factory. A metadata-less input carries an
+    // EventMetadata with no extensions, so its typed accessors have nothing to return; a reaction that wants metadata must
+    // be delivered through a runner that captures it. (The subscription DSL exposes EventMetadata.from(cloudEvent); there
+    // is no EventMetadata.empty() on this base commit, so we build an empty one directly.)
+    EventMetadata NO_METADATA = new EventMetadata(Map.of());
+
+    /**
+     * A domain event delivered to the saga, together with its delivery {@link EventMetadata} (stream id and version,
+     * global position, and any CloudEvent extensions). A runner that has a CloudEvent builds this with
+     * {@link EventMetadata#from}; the event-only {@link #event(Object)} factory carries {@link #NO_METADATA}.
+     */
+    record Event<E>(E event, EventMetadata metadata) implements SagaInput<E> {
         public Event {
             requireNonNull(event, "event cannot be null");
+            requireNonNull(metadata, "metadata cannot be null");
         }
     }
 
@@ -44,9 +59,14 @@ public sealed interface SagaInput<E> {
         }
     }
 
-    /** Wraps a domain event as a saga input. */
+    /** Wraps a domain event as a saga input, with no delivery metadata (see {@link #NO_METADATA}). */
     static <E> SagaInput<E> event(E event) {
-        return new Event<>(event);
+        return new Event<>(event, NO_METADATA);
+    }
+
+    /** Wraps a domain event and its delivery metadata as a saga input. */
+    static <E> SagaInput<E> event(E event, EventMetadata metadata) {
+        return new Event<>(event, metadata);
     }
 
     /** Wraps a fired timer as a saga input. */

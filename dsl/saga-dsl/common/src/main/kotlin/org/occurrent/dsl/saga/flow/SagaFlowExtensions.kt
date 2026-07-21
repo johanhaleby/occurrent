@@ -17,8 +17,10 @@
 package org.occurrent.dsl.saga.flow
 
 import org.occurrent.dsl.saga.Saga
+import org.occurrent.dsl.subscription.EventMetadata
 import java.time.Duration
 import java.time.Instant
+import java.util.function.BiFunction
 import java.util.function.BiPredicate
 import java.util.function.Function
 
@@ -108,6 +110,23 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
         noinline commands: FlowReactions<C>.(T) -> Unit
     ) {
         val commandFn = Function<T, List<C>> { event -> FlowReactions<C>().apply { commands(event) }.build() }
+        if (onlyIf == null) {
+            delegate.on(T::class.java, then, commandFn)
+        } else {
+            delegate.on(T::class.java, BiPredicate { e, received -> onlyIf(e, received) }, then, commandFn)
+        }
+    }
+
+    /**
+     * A branch whose commands also receive the triggering event's delivery [EventMetadata] (stream id and version, global
+     * position, CloudEvent extensions). The metadata-first sibling of [on].
+     */
+    inline fun <reified T : E> on(
+        then: Continuation,
+        noinline onlyIf: ((T, ReceivedEvents<E>) -> Boolean)? = null,
+        noinline commands: FlowReactions<C>.(EventMetadata, T) -> Unit
+    ) {
+        val commandFn = BiFunction<EventMetadata, T, List<C>> { metadata, event -> FlowReactions<C>().apply { commands(metadata, event) }.build() }
         if (onlyIf == null) {
             delegate.on(T::class.java, then, commandFn)
         } else {
