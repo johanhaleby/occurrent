@@ -131,6 +131,9 @@ class SubscriptionAnnotationsTest {
 
         void duplicateStreamId(TestEvent event, @StreamId String a, @StreamId String b) {
         }
+
+        void bothOnOneParameter(TestEvent event, @StreamId @StreamVersion String streamId) {
+        }
     }
 
     private static Method handler(String name) {
@@ -214,6 +217,13 @@ class SubscriptionAnnotationsTest {
         assertThatThrownBy(() -> analyzeStream("duplicateStreamId"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("at most one @StreamId");
+    }
+
+    @Test
+    void rejects_a_parameter_annotated_with_both_stream_id_and_stream_version() {
+        assertThatThrownBy(() -> analyzeStream("bothOnOneParameter"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("both @StreamId and @StreamVersion");
     }
 
     @Test

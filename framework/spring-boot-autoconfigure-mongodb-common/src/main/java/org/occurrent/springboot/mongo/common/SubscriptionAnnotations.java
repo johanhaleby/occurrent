@@ -111,8 +111,13 @@ public final class SubscriptionAnnotations {
         boolean hasStreamVersion = false;
         for (Parameter parameter : method.getParameters()) {
             Class<?> type = parameter.getType();
+            boolean streamIdAnnotated = parameter.isAnnotationPresent(StreamId.class);
+            boolean streamVersionAnnotated = parameter.isAnnotationPresent(StreamVersion.class);
+            if (streamIdAnnotated && streamVersionAnnotated) {
+                throw new IllegalArgumentException("A subscription parameter may not be annotated with both @StreamId and @StreamVersion, but %s#%s declares one that is.".formatted(method.getDeclaringClass().getName(), method.getName()));
+            }
             HandlerParameterKind kind;
-            if (parameter.isAnnotationPresent(StreamId.class)) {
+            if (streamIdAnnotated) {
                 if (!supportsStreamAccessors) {
                     throw new IllegalArgumentException("@StreamId is only supported on @Subscription, @StreamSubscription, and @SynchronousSubscription handlers, but %s#%s declares it.".formatted(method.getDeclaringClass().getName(), method.getName()));
                 }
@@ -124,7 +129,7 @@ public final class SubscriptionAnnotations {
                 }
                 hasStreamId = true;
                 kind = HandlerParameterKind.STREAM_ID;
-            } else if (parameter.isAnnotationPresent(StreamVersion.class)) {
+            } else if (streamVersionAnnotated) {
                 if (!supportsStreamAccessors) {
                     throw new IllegalArgumentException("@StreamVersion is only supported on @Subscription, @StreamSubscription, and @SynchronousSubscription handlers, but %s#%s declares it.".formatted(method.getDeclaringClass().getName(), method.getName()));
                 }
