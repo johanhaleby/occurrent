@@ -83,7 +83,16 @@ public final class Projection<S extends @Nullable Object, E, ID> {
      */
     public @Nullable Function<E, @Nullable ID> id() {
         BiFunction<EventMetadata, E, @Nullable ID> metadataId = this.id;
-        return metadataId == null ? null : event -> metadataId.apply(EventMetadata.empty(), event);
+        if (metadataId == null) {
+            return null;
+        }
+        return event -> {
+            try {
+                return metadataId.apply(EventMetadata.empty(), event);
+            } catch (RuntimeException e) {
+                throw new IllegalStateException("Could not resolve the view-instance id from the event alone. If this projection is keyed by event metadata (id(BiFunction)), it cannot be keyed on a metadata-less path such as the on-demand query fold. Use idWithMetadata() on a metadata-carrying path (a subscription runner).", e);
+            }
+        };
     }
 
     /**

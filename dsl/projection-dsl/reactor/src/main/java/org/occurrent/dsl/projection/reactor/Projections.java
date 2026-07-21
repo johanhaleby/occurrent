@@ -78,7 +78,7 @@ public final class Projections {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
         BiFunction<EventMetadata, E, @Nullable ID> id = projection.idWithMetadata();
-        requireNonNull(id, "projection is single-instance; use reactiveUpdateWithMetadata(projection, repository, singletonKey)");
+        requireNonNull(id, "projection is single-instance, pass a singletonKey: reactiveUpdate(projection, repository, singletonKey) or reactiveUpdateWithMetadata(projection, repository, singletonKey)");
         View<S, E> view = projection.view();
         return (metadata, event) -> Mono.<Void>fromRunnable(() -> {
             @Nullable ID instanceId = id.apply(metadata, event);
