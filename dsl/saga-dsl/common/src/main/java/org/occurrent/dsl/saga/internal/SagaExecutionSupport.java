@@ -23,6 +23,7 @@ import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -108,7 +109,10 @@ public final class SagaExecutionSupport {
 
         List<SagaEffect<C>> effects = new ArrayList<>();
         if (starting) {
-            effects.addAll(saga.onStart(nextState, startEvent));
+            // A start always arrives as an Event, so its delivery metadata rides on the input; fall back to metadata-less
+            // only defensively.
+            EventMetadata startMetadata = input instanceof SagaInput.Event<E> ev ? ev.metadata() : SagaInput.NO_METADATA;
+            effects.addAll(saga.onStart(nextState, startMetadata, startEvent));
         }
         effects.addAll(saga.react(nextState, input));
 
