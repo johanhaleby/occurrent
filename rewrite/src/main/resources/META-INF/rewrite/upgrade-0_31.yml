@@ -22,6 +22,8 @@ description: >-
   ResumeBehavior and StartupMode enums, which moved from being nested inside the Subscription, StreamSubscription,
   DcbSubscription, and Projection annotations to top-level types in org.occurrent.annotation. Also applies the
   Subscription.StartPosition and DcbSubscription.DcbStartPosition move to the shared top-level
-  org.occurrent.annotation.StartPosition.
+  org.occurrent.annotation.StartPosition. Also renames the four subscription checkpoint-storage artifacts
+  from their -position-storage coordinates to -checkpoint-storage.
 recipeList:
   - org.occurrent.MigrateOccurrentRenames_0_31
+  - org.occurrent.MigrateCoordinates_0_31

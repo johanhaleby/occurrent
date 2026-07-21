@@ -53,14 +53,16 @@ during the tail fold.
 **One higher-order `SnapshotPolicy` unifies technical and domain-driven triggers.** It exposes `everyNEvents(n)` (driven by
 the version delta since the last snapshot), `onEvent(type)`, `whenState(predicate)`, `always()`, `never()`, and `or(...)`.
 `whenTerminal(decider)` is `whenState(decider::isTerminal)` and is the "closing the books" trigger. There is no per-command
-flag and no mode attribute, so a snapshot is a property of the handler, not of the call site.
+flag and no mode attribute, so a snapshot is a property of the handler, not of the call site. Being decider-aware,
+`whenTerminal` lives with the decider-aware executors (`org.occurrent.dsl.snapshot.blocking`/`.reactor`), not in the
+common module, per the layering below.
 
 **Closing the books is a policy plus an archival pattern, not a separate module.** The recommended model is to emit a real
 domain event for the period boundary, carrying the closing balance that becomes the opening balance of the next period, so the
 snapshot itself stays a discardable optimization. When prior events are genuinely no longer needed, they can be archived with
-the existing `EventStoreOperations.deleteAllEvents`, which is irreversible and documented as such. `SnapshotStore.delete`
-defaults to failing loud rather than doing nothing, so a store that cannot delete does not let archival believe a snapshot is
-gone.
+the existing `EventStoreOperations.deleteEventStream(String)` for a single stream, or `delete(Filter)` for a broader delete,
+both irreversible and documented as such. `SnapshotStore.delete` defaults to failing loud rather than doing nothing, so a
+store that cannot delete does not let archival believe a snapshot is gone.
 
 **Storage is a small, storage-neutral `SnapshotStore<S>` capability** with `findLatest`, `save`, and `delete`, keyed by a
 `String`. On the stream path the key is the stream id. On the DCB path the key defaults to a canonical string form of the
@@ -89,6 +91,52 @@ a `ReactiveSnapshotStore` (a `ReactiveMongoOperations`-backed `ReactiveSpringMon
 because a reactive application has no blocking `MongoOperations`. The DSL executors remain the programmatic path for ad-hoc,
 non-annotated use. A DCB `@Snapshot` does not support `mode = SYNCHRONOUS` (that mode is stream only), so a DCB snapshot
 that must be current for read-your-writes is maintained through the DSL executor from a synchronous subscription instead.
+
+## Amendment (2026-07-20): a snapshot beyond the observed head is discarded, not trusted
+
+The original decision leaned on "a stale snapshot only makes the next replay longer" to argue the feature is safe by
+construction. That holds for a snapshot behind the true head. It does not hold for a snapshot *ahead* of the true head,
+which happens when a stream is reset (truncated) below a snapshot that was written against the longer stream. Resuming
+from such a snapshot folds onto state the stream no longer holds. This only affects the **stream** paths: a DCB "version"
+is a global, monotonic position that never resets, so a DCB snapshot can never be ahead of its head and no guard is needed
+there.
+
+Three changes make the stated safety guarantee true on the stream paths:
+
+- **A snapshot whose version exceeds the observed head is discarded, not trusted.** `SnapshotSupport.resolveBase` and
+  `isRedelivery` gain an `observedHead` argument: a loaded snapshot is used only when its version is at or below that head,
+  otherwise the base folds from the initial state and a delivery that looked like a redelivery is treated as a rebuild. The
+  original three-argument forms are preserved and delegate with an unbounded head, so a caller that already knows the
+  snapshot cannot be ahead keeps the exact prior behavior.
+- **The maintained `@Snapshot` stream path probes the head only in the ambiguous case.** When the delivered version is
+  beyond the snapshot (the happy path) nothing extra is read. Only when the delivered version is at or below the snapshot
+  version does the registrar probe the true head with a suffix read (`read(key, snapshotVersion, 1).version()`, which
+  returns the real stream version regardless of skip and limit) to tell a genuine redelivery from a reset. A head below the
+  snapshot version demotes to the initial state, and the existing range-fold rebuilds and self-heals by overwriting the
+  stale snapshot at the reset version. Without this, a reset froze the maintainer forever: every delivery looked like a
+  redelivery and was skipped. A per-stream cache of confirmed-good snapshot versions was tried to avoid re-probing every
+  delivery during a catch-up, and reverted: a cached confirmation cannot detect a reset that happens after it was cached,
+  which reintroduces the exact freeze this guard exists to prevent. The probe stays uncached and runs on every ambiguous
+  delivery.
+- **The DSL stream executor is fail-safe and self-healing.** After the write, when the snapshot base is ahead of
+  `WriteResult.oldStreamVersion()` (the true head before this write), the executor skips the save and deletes the stale
+  snapshot with `SnapshotStore.delete`, logging it, so the next command folds fresh. `oldStreamVersion()` is already
+  available post-write, so this needs no extra read and no change to the released `ApplicationService.execute` API.
+
+The `eventsSinceSnapshot` arithmetic (the `requireInt` narrowing of the version delta) now runs **inside** the best-effort
+boundary rather than at the call site. A negative or overflowing delta after a reset would otherwise throw from an
+already-committed command; building the `SnapshotDecision` lazily inside `maybeSaveBestEffort` keeps every step after the
+commit best-effort, consistent with the "a snapshot save never fails a committed command" rule stated below.
+
+**Operational best practice:** pair a stream reset with `SnapshotStore.delete` for that key. The head guard is the safety
+net for when that pairing is missed, not a substitute for it. On the executor path the accepted residual under that misuse
+is one loud, self-healing bad decision: the first post-reset command decides against stale state once, commits, logs, then
+deletes the snapshot so every command after it is correct.
+
+The head guard only detects a reset that leaves the head strictly below the snapshot version. A stream reset and rewritten
+back to the same or a higher version, without deleting the snapshot, is indistinguishable from an untouched stream by
+version alone, and the guard trusts it. Version comparison detects one specific shape of reset, it is not a general content
+check. The operational rule stands regardless of the guard: delete the snapshot on every reset.
 
 ## Consequences
 

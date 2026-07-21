@@ -33,7 +33,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-mongodb-spring-reactor-position-storage</artifactId>
+            <artifactId>occurrent-subscription-mongodb-spring-reactor-checkpoint-storage</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

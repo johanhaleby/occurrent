@@ -57,6 +57,7 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
@@ -64,11 +65,21 @@ import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.flow.FlowState;
+import org.occurrent.dsl.saga.blocking.CommandDispatcher;
+import org.occurrent.dsl.saga.blocking.SagaRunner;
+import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
+import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -86,6 +97,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Set;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -108,7 +120,7 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
  * Spring Boot. The stack-neutral reflection and event-type resolution is shared with the reactive processor through
  * {@link SubscriptionAnnotations}.
  */
-class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton {
+class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton, DisposableBean {
 
     /**
      * The bean name of the synchronous {@code Subscriptions} DSL declared by the auto-configuration. Resolved by name
@@ -121,6 +133,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private final Set<String> registeredIds = new HashSet<>();
     // Domain-push feeds collected during projection registration, caught up once after all are registered.
     private final Set<DomainEventFeed<?>> domainFeedsToCatchUp = Collections.newSetFromMap(new IdentityHashMap<>());
+    // Registered sagas own a timer poller each, stop them when the context is destroyed so no poller thread leaks.
+    private final List<SagaSubscription> sagaSubscriptions = new ArrayList<>();
 
     @Override
     public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
@@ -160,6 +174,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     public void afterSingletonsInstantiated() {
         List<Object[]> projectionMethods = new ArrayList<>();
         List<Object[]> snapshotMethods = new ArrayList<>();
+        List<Object[]> sagaMethods = new ArrayList<>();
         for (String beanName : applicationContext.getBeanDefinitionNames()) {
             Class<?> type;
             try {
@@ -180,6 +195,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 if (snapshot != null) {
                     snapshotMethods.add(new Object[]{beanName, method, snapshot});
                 }
+                org.occurrent.annotation.Saga saga = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Saga.class);
+                if (saga != null) {
+                    sagaMethods.add(new Object[]{beanName, method, saga});
+                }
             }
         }
         for (Object[] pm : projectionMethods) {
@@ -191,6 +210,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         for (Object[] sm : snapshotMethods) {
             processSnapshotAnnotation(applicationContext.getBean((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
+        }
+        for (Object[] gm : sagaMethods) {
+            processSagaAnnotation(applicationContext.getBean((String) gm[0]), (Method) gm[1], (org.occurrent.annotation.Saga) gm[2]);
         }
     }
 
@@ -495,10 +517,23 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             String key = metadata.getStreamId();
             long eventVersion = metadata.getStreamVersion();
             Optional<org.occurrent.dsl.snapshot.Snapshot<S>> loaded = store.findLatest(key);
-            if (SnapshotSupport.isRedelivery(loaded, schemaVersion, eventVersion)) {
-                return Unit.INSTANCE; // already folded (a redelivery), skip so folding stays idempotent
+            // A snapshot version at or beyond this delivery is normally a redelivery, but if the stream was reset below
+            // the snapshot the snapshot is stale and resuming from it would freeze the maintainer forever. Only in that
+            // ambiguous case do we probe the true head (a suffix read returns the real stream version regardless of
+            // skip/limit); the happy path (eventVersion beyond the snapshot) pays no extra read. A head below the
+            // snapshot version means a reset, so resolveBase demotes to initial and the range-fold below rebuilds and
+            // self-heals (the save overwrites the stale snapshot at the reset version). Caching this probe was tried and
+            // reverted: a cached confirmation cannot detect a reset that happens after it was cached, which reintroduces
+            // the exact freeze this guard exists to prevent, so every ambiguous delivery is probed fresh.
+            long observedHead = Long.MAX_VALUE;
+            if (loaded.isPresent() && loaded.get().schemaVersion() == schemaVersion && eventVersion <= loaded.get().version()) {
+                int snapshotVersion = SnapshotSupport.requireInt(loaded.get().version(), "the snapshot version used as the head-probe read offset");
+                observedHead = eventStore.read(key, snapshotVersion, 1).version();
             }
-            SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, snapshotView.view()::initialState);
+            if (SnapshotSupport.isRedelivery(loaded, schemaVersion, eventVersion, observedHead)) {
+                return Unit.INSTANCE; // already folded (a redelivery within the head), skip so folding stays idempotent
+            }
+            SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(loaded, schemaVersion, observedHead, snapshotView.view()::initialState);
             if (eventVersion - base.version() < everyNEvents) {
                 return Unit.INSTANCE; // throttle: too few new events since the last saved snapshot, fold them in on a later save
             }
@@ -555,6 +590,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, (dcbMetadata, event) -> {
             long position = dcbMetadata.eventMetadata().getPosition();
             Optional<org.occurrent.dsl.snapshot.Snapshot<S>> loaded = store.findLatest(key);
+            // DCB positions are global and monotonic, they never reset, so a snapshot can never be ahead of the true
+            // head: no head probe is needed and the 3-arg isRedelivery is correct (unlike the stream path above).
             if (SnapshotSupport.isRedelivery(loaded, schemaVersion, position)) {
                 return; // already folded (a redelivery), keep folding idempotent
             }
@@ -682,6 +719,203 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Failed to invoke @Projection factory %s#%s.".formatted(bean.getClass().getName(), method.getName()), e);
         }
+    }
+
+    // A @Saga factory returns a Saga descriptor: subscribe to its events, materialize per-instance state into a
+    // SagaStateStore, dispatch the commands it issues through a CommandDispatcher, and poll the store to fire timeouts.
+    // Registered after other subscriptions so a saga cannot reuse an id. Blocking-stack only.
+    @SuppressWarnings("unchecked")
+    private <E, S, C> void processSagaAnnotation(Object bean, Method method, org.occurrent.annotation.Saga annotation) {
+        String id = annotation.id();
+        if (!registeredIds.add(id)) {
+            throw new IllegalArgumentException("Duplicate subscription/projection/snapshot/saga id '%s' (used by @Saga on %s#%s), each id must be unique because it is the durable checkpoint key.".formatted(id, bean.getClass().getName(), method.getName()));
+        }
+        if (method.getParameterCount() != 0) {
+            throw new IllegalArgumentException("@Saga factory method %s#%s must take no parameters and return a Saga.".formatted(bean.getClass().getName(), method.getName()));
+        }
+        if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT && annotation.startAtGlobalPosition() >= 0) {
+            throw new IllegalArgumentException("Specify either startAt or startAtGlobalPosition for @Saga '%s', not both.".formatted(id));
+        }
+
+        Object descriptor = invokeSagaFactory(method, bean);
+        if (!(descriptor instanceof Saga<?, ?, ?>)) {
+            throw new IllegalArgumentException("@Saga '%s' method %s#%s must return a Saga, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));
+        }
+        Saga<E, S, C> saga = (Saga<E, S, C>) descriptor;
+
+        CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
+        Subscribable subscribable = applicationContext.getBean(Subscribable.class);
+        SagaStateStore<S> stateStore = resolveSagaStateStore(annotation, method, id);
+        CommandDispatcher<C> commandDispatcher = resolveCommandDispatcher(annotation, id);
+        StartAt startAt = generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+        SagaRunnerConfig config = SagaRunnerConfig.defaults().withTimerPollInterval(sagaTimerPollInterval());
+        boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
+        SagaRunner<E, C> runner = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
+        CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
+
+        applyStartupWorkarounds();
+        sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config, competingConsumerStrategy));
+    }
+
+    // Gate the saga timer poller on the shared competing-consumer lease so only one instance polls, mirroring the
+    // subscription model. On by default, opt out with occurrent.saga.competing-consumer.enabled=false. When disabled, or
+    // when no strategy bean exists (for example subscriptions disabled), the poller runs on every instance as before.
+    private CompetingConsumerStrategy resolveSagaCompetingConsumerStrategy() {
+        if (!occurrentProperties().getSaga().getCompetingConsumer().isEnabled()) {
+            return null;
+        }
+        return applicationContext.getBeanProvider(CompetingConsumerStrategy.class).getIfAvailable();
+    }
+
+    private OccurrentProperties occurrentProperties() {
+        return applicationContext.getBean(OccurrentProperties.class);
+    }
+
+    @Override
+    public void destroy() {
+        // Stop each saga's timer poller so no poller thread survives context shutdown.
+        sagaSubscriptions.forEach(SagaSubscription::close);
+        sagaSubscriptions.clear();
+    }
+
+    private static Object invokeSagaFactory(Method method, Object bean) {
+        try {
+            method.setAccessible(true);
+            Object result = method.invoke(bean);
+            if (result == null) {
+                throw new IllegalStateException("@Saga factory %s#%s returned null.".formatted(bean.getClass().getName(), method.getName()));
+            }
+            return result;
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to invoke @Saga factory %s#%s.".formatted(bean.getClass().getName(), method.getName()), e);
+        }
+    }
+
+    // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else a
+    // zero-config MongoDB store in a "saga-<id>" collection whose state type is read from the factory return type.
+    @SuppressWarnings("unchecked")
+    private <S> SagaStateStore<S> resolveSagaStateStore(org.occurrent.annotation.Saga annotation, Method factoryMethod, String id) {
+        Class<?> storeType = annotation.store();
+        String storeName = annotation.storeName();
+        boolean byType = storeType != Void.class;
+        boolean byName = !storeName.isBlank();
+        if (byType || byName) {
+            Object storeBean = resolveSagaStoreBeanByReference(storeType, storeName, byType, byName, id);
+            if (!(storeBean instanceof SagaStateStore<?>)) {
+                throw new IllegalArgumentException("@Saga '%s' store bean must be a SagaStateStore, but was %s.".formatted(id, storeBean.getClass().getName()));
+            }
+            return (SagaStateStore<S>) storeBean;
+        }
+        String[] names = applicationContext.getBeanNamesForType(SagaStateStore.class);
+        if (names.length == 1) {
+            return (SagaStateStore<S>) applicationContext.getBean(names[0]);
+        }
+        if (names.length > 1) {
+            throw new IllegalStateException("@Saga '%s' found %d SagaStateStore beans (%s) and cannot pick one. Name the store with storeName = \"beanName\".".formatted(id, names.length, String.join(", ", names)));
+        }
+        MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
+        Class<S> stateType = (Class<S>) reflectSagaStateType(factoryMethod, id);
+        if (stateType == FlowState.class) {
+            // A flow saga's FlowState holds domain events, serialize them as CloudEvents (stable types) so they can move packages.
+            CloudEventConverter<?> converter = applicationContext.getBean(CloudEventConverter.class);
+            return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + id, stateType, converter);
+        }
+        return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + id, stateType);
+    }
+
+    private Object resolveSagaStoreBeanByReference(Class<?> storeType, String storeName, boolean byType, boolean byName, String id) {
+        if (byType) {
+            if (byName) {
+                try {
+                    return applicationContext.getBean(storeName, storeType);
+                } catch (BeansException e) {
+                    throw new IllegalArgumentException("@Saga '%s' could not resolve a store bean named '%s' of type %s: %s".formatted(id, storeName, storeType.getName(), e.getMessage()), e);
+                }
+            }
+            String[] names = applicationContext.getBeanNamesForType(storeType);
+            if (names.length == 0) {
+                throw new IllegalStateException("@Saga '%s' found no bean of type %s. Declare one, or leave store unset to resolve by convention.".formatted(id, storeType.getName()));
+            }
+            if (names.length > 1) {
+                throw new IllegalStateException("@Saga '%s' found %d beans of type %s (%s) and cannot pick one. Disambiguate with storeName = \"beanName\".".formatted(id, names.length, storeType.getName(), String.join(", ", names)));
+            }
+            return applicationContext.getBean(names[0]);
+        }
+        try {
+            return applicationContext.getBean(storeName);
+        } catch (BeansException e) {
+            throw new IllegalArgumentException("@Saga '%s' could not resolve a store bean named '%s': %s".formatted(id, storeName, e.getMessage()), e);
+        }
+    }
+
+    // Resolve the CommandDispatcher: by commandDispatcher()/commandDispatcherName() reference, else the unique
+    // CommandDispatcher bean. There is no zero-config default, since commands are user types.
+    @SuppressWarnings("unchecked")
+    private <C> CommandDispatcher<C> resolveCommandDispatcher(org.occurrent.annotation.Saga annotation, String id) {
+        Class<?> type = annotation.commandDispatcher();
+        String name = annotation.commandDispatcherName();
+        boolean byType = type != Void.class;
+        boolean byName = !name.isBlank();
+        Object dispatcherBean;
+        if (byType && byName) {
+            try {
+                dispatcherBean = applicationContext.getBean(name, type);
+            } catch (BeansException e) {
+                throw new IllegalArgumentException("@Saga '%s' could not resolve a command dispatcher bean named '%s' of type %s: %s".formatted(id, name, type.getName(), e.getMessage()), e);
+            }
+        } else if (byType) {
+            String[] names = applicationContext.getBeanNamesForType(type);
+            if (names.length == 0) {
+                throw new IllegalStateException("@Saga '%s' found no bean of type %s.".formatted(id, type.getName()));
+            }
+            if (names.length > 1) {
+                throw new IllegalStateException("@Saga '%s' found %d beans of type %s (%s) and cannot pick one. Disambiguate with commandDispatcherName = \"beanName\".".formatted(id, names.length, type.getName(), String.join(", ", names)));
+            }
+            dispatcherBean = applicationContext.getBean(names[0]);
+        } else if (byName) {
+            try {
+                dispatcherBean = applicationContext.getBean(name);
+            } catch (BeansException e) {
+                throw new IllegalArgumentException("@Saga '%s' could not resolve a command dispatcher bean named '%s': %s".formatted(id, name, e.getMessage()), e);
+            }
+        } else {
+            String[] names = applicationContext.getBeanNamesForType(CommandDispatcher.class);
+            if (names.length == 0) {
+                throw new IllegalStateException(("@Saga '%s' needs a CommandDispatcher bean to run the commands it issues. Declare one, for example a lambda over your ApplicationService: " +
+                        "`CommandDispatcher<MyCommand> d = cmd -> applicationService.execute(cmd.streamId(), events -> handle(cmd));`, or wrap a decider with CommandDispatchers.decider(applicationService, decider, MyCommand::streamId).").formatted(id));
+            }
+            if (names.length > 1) {
+                throw new IllegalStateException("@Saga '%s' found %d CommandDispatcher beans (%s) and cannot pick one. Select one with commandDispatcher/commandDispatcherName.".formatted(id, names.length, String.join(", ", names)));
+            }
+            dispatcherBean = applicationContext.getBean(names[0]);
+        }
+        if (!(dispatcherBean instanceof CommandDispatcher<?>)) {
+            throw new IllegalArgumentException("@Saga '%s' command dispatcher bean must be a CommandDispatcher, but was %s.".formatted(id, dispatcherBean.getClass().getName()));
+        }
+        return (CommandDispatcher<C>) dispatcherBean;
+    }
+
+    private Duration sagaTimerPollInterval() {
+        return occurrentProperties().getSaga().getTimerPollInterval();
+    }
+
+    // The saga state type is the second type argument of the factory return type Saga<E, S, C>.
+    private static Class<?> reflectSagaStateType(Method factoryMethod, String id) {
+        Type returnType = factoryMethod.getGenericReturnType();
+        if (returnType instanceof ParameterizedType parameterizedType) {
+            Type[] arguments = parameterizedType.getActualTypeArguments();
+            if (arguments.length >= 2) {
+                Type stateArgument = arguments[1];
+                if (stateArgument instanceof Class<?> stateClass) {
+                    return stateClass;
+                }
+                if (stateArgument instanceof ParameterizedType stateParameterized && stateParameterized.getRawType() instanceof Class<?> rawState) {
+                    return rawState;
+                }
+            }
+        }
+        throw new IllegalArgumentException(("@Saga '%s' needs a state store: either name one with store/storeName (a SagaStateStore), " +
+                "or declare the factory return type with a concrete state type (for example Saga<MyEvent, MyState, MyCommand>) so the store can default to MongoDB.").formatted(id));
     }
 
     @SuppressWarnings("unchecked")

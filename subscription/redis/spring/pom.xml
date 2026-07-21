@@ -24,7 +24,7 @@
     <modelVersion>4.0.0</modelVersion>
     <packaging>pom</packaging>
     <modules>
-        <module>blocking-position-storage</module>
+        <module>blocking-checkpoint-storage</module>
     </modules>
 
     <artifactId>subscription-redis-spring</artifactId>

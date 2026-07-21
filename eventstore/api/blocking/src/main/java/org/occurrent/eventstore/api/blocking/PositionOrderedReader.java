@@ -28,8 +28,11 @@ import java.util.stream.Stream;
  * {@link PositionRange}, filtered by a {@link Filter}. Stream and DCB reads use the same {@link PositionRange}
  * window, so callers can replay either through one abstraction.
  * <p>
- * Only implemented by stores where {@code writesPosition()} is {@code true}. A store without position throws
- * {@link UnsupportedOperationException} instead of returning an empty or incorrect result.
+ * Whether a store actually carries a position is a runtime property, not just a matter of type. A STREAM-only store
+ * can be configured without one, so an instance may implement this interface and still report
+ * {@code writesPosition() == false}. Check {@code writesPosition()} before calling the read methods, since a store
+ * without a position throws {@link UnsupportedOperationException} rather than returning an empty or incorrect result.
+ * An {@code instanceof PositionOrderedReader} check alone does not tell you whether this instance writes a position.
  */
 @NullMarked
 public interface PositionOrderedReader {

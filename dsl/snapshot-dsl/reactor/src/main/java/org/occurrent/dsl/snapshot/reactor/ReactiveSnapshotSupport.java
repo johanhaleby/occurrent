@@ -58,10 +58,26 @@ final class ReactiveSnapshotSupport {
      */
     static <S extends @Nullable Object, E> Mono<Void> maybeSaveBestEffort(ReactiveSnapshotStore<S> store, String key, int schemaVersion,
                                                                           SnapshotPolicy<S, E> policy, SnapshotDecision<S, E> decision) {
-        if (!policy.shouldSnapshot(decision)) {
-            return Mono.empty();
-        }
-        return store.save(key, new Snapshot<>(decision.newState(), decision.newVersion(), schemaVersion))
+        return maybeSaveBestEffort(store, key, schemaVersion, policy, () -> decision);
+    }
+
+    /**
+     * Best-effort save that builds the {@link SnapshotDecision} inside the guarded reactive step, so the arithmetic that
+     * assembles it (for example narrowing {@code eventsSinceSnapshot}) is caught by the same {@code onErrorResume} as a
+     * failing save. The command's events have already committed by the time this runs, so nothing after the commit may
+     * surface as a command failure.
+     *
+     * @param decisionSupplier supplies the decision to save; evaluated at most once, inside the best-effort boundary
+     */
+    static <S extends @Nullable Object, E> Mono<Void> maybeSaveBestEffort(ReactiveSnapshotStore<S> store, String key, int schemaVersion,
+                                                                          SnapshotPolicy<S, E> policy, Supplier<? extends SnapshotDecision<S, E>> decisionSupplier) {
+        return Mono.defer(() -> {
+                    SnapshotDecision<S, E> decision = decisionSupplier.get();
+                    if (!policy.shouldSnapshot(decision)) {
+                        return Mono.<Void>empty();
+                    }
+                    return store.save(key, new Snapshot<>(decision.newState(), decision.newVersion(), schemaVersion));
+                })
                 .onErrorResume(e -> {
                     log.warn("Best-effort snapshot save failed for key '{}'. The write is committed, the snapshot will be rebuilt from events on the next replay.", key, e);
                     return Mono.empty();

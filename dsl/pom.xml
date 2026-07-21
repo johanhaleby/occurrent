@@ -36,6 +36,7 @@
         <module>view-dsl</module>
         <module>projection-dsl</module>
         <module>snapshot-dsl</module>
+        <module>saga-dsl</module>
     </modules>
 
     <dependencyManagement>

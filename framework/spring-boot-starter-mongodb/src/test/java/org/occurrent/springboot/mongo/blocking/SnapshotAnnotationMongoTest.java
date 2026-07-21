@@ -31,6 +31,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -102,6 +103,37 @@ class SnapshotAnnotationMongoTest {
                     assertThat(snapshot.version()).isEqualTo(1L);
                 });
             });
+        }
+    }
+
+    @Test
+    void a_reset_stream_rebuilds_the_snapshot_instead_of_freezing_the_maintainer() {
+        try (ConfigurableApplicationContext context = run(SnapshotApplication.class, "snapshot-reset")) {
+            @SuppressWarnings("unchecked")
+            CloudEventConverter<CounterEvent> converter = context.getBean(CloudEventConverter.class);
+            EventStore eventStore = context.getBean(EventStore.class);
+            EventStoreOperations eventStoreOperations = context.getBean(EventStoreOperations.class);
+            MongoOperations mongoOperations = context.getBean(MongoOperations.class);
+            SnapshotStore<Counter> store = new SpringMongoSnapshotStore<>(mongoOperations, Counter.class, "occurrent-snapshot-counter");
+
+            eventStore.write("counter-1", converter.toCloudEvents(List.of(new Incremented(1), new Incremented(2), new Incremented(3))));
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(store.findLatest("counter-1")).hasValueSatisfying(snapshot -> {
+                        assertThat(snapshot.version()).isEqualTo(3L);
+                        assertThat(snapshot.state().total()).isEqualTo(6);
+                    }));
+
+            // Reset the stream below the surviving snapshot (still at version 3) and rewrite it shorter. The maintainer
+            // must not freeze on the stale snapshot: the head probe sees head 1 < snapshot 3, demotes to initial, folds
+            // the reset stream fresh, and self-heals the snapshot down to the reset stream's state.
+            eventStoreOperations.deleteEventStream("counter-1");
+            eventStore.write("counter-1", converter.toCloudEvents(List.of(new Incremented(100))));
+
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(store.findLatest("counter-1")).hasValueSatisfying(snapshot -> {
+                        assertThat(snapshot.version()).isEqualTo(1L);
+                        assertThat(snapshot.state().total()).isEqualTo(100);
+                    }));
         }
     }
 

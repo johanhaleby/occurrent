@@ -28,6 +28,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 
@@ -45,6 +47,7 @@ public final class DomainEventFeed<E> {
     private final Function<E, String> eventId;
     private final @Nullable CheckpointStorage catchupMarker;
     private final CopyOnWriteArrayList<CatchupProjectionFeed<E>> feeds = new CopyOnWriteArrayList<>();
+    private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
 
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
                            Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker) {
@@ -63,9 +66,20 @@ public final class DomainEventFeed<E> {
      * (folded on {@code boundedElastic}).
      */
     public <S extends @Nullable Object, ID> void register(String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+        Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
+        // Fail fast on the common duplicate-id case before building a feed. registeredIds.add(id) after creation stays
+        // the authoritative, race-safe check: this is only an optimization, not a substitute for it.
+        if (registeredIds.contains(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
         CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, projection, repository, reader, converter, eventId, catchupMarker);
+        // Reserve the id only once the feed exists, so a failed registration (an invalid reader, for example) never
+        // permanently burns the id. Each id must be unique because it is the durable checkpoint key.
+        if (!registeredIds.add(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
         feeds.add(feed);
     }
 
@@ -75,7 +89,18 @@ public final class DomainEventFeed<E> {
      * reactor analog of the blocking {@code register(id, MaterializedView, Filter)}.
      */
     public void register(String id, Function<E, Mono<Void>> fold, Filter replayFilter) {
-        feeds.add(CatchupProjectionFeed.create(id, fold, replayFilter, reader, converter, eventId, catchupMarker));
+        Objects.requireNonNull(id, "id cannot be null");
+        // Fail fast on the common duplicate-id case before building a feed. registeredIds.add(id) after creation stays
+        // the authoritative, race-safe check: this is only an optimization, not a substitute for it.
+        if (registeredIds.contains(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
+        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, fold, replayFilter, reader, converter, eventId, catchupMarker);
+        // Reserve the id only once the feed exists, so a failed registration never permanently burns the id.
+        if (!registeredIds.add(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
+        feeds.add(feed);
     }
 
     /**

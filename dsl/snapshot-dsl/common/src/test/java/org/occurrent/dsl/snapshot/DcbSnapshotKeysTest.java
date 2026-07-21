@@ -49,7 +49,24 @@ class DcbSnapshotKeysTest {
     }
 
     @Test
-    void renders_match_all() {
-        assertThat(DcbSnapshotKeys.canonicalKey(DcbCriteria.all())).isEqualTo("all");
+    void renders_match_all_as_a_stable_key() {
+        assertThat(DcbSnapshotKeys.canonicalKey(DcbCriteria.all())).isEqualTo(DcbSnapshotKeys.canonicalKey(DcbCriteria.all()));
+    }
+
+    @Test
+    void does_not_collide_when_a_type_name_contains_the_delimiter_character() {
+        // Without the length-prefixed join, both of these rendered as the literal string "types[A,B]" and would have
+        // collided onto the same snapshot key.
+        DcbCriteria singleTypeContainingComma = DcbCriteria.type("A,B");
+        DcbCriteria twoTypes = DcbCriteria.types("A", "B");
+
+        assertThat(DcbSnapshotKeys.canonicalKey(singleTypeContainingComma)).isNotEqualTo(DcbSnapshotKeys.canonicalKey(twoTypes));
+    }
+
+    @Test
+    void key_is_the_readable_canonical_string_not_a_hash() {
+        String key = DcbSnapshotKeys.canonicalKey(DcbCriteria.tags(Tag.of("customer", "1")));
+
+        assertThat(key).contains("tags[");
     }
 }

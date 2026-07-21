@@ -61,7 +61,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-redis-spring-blocking-position-storage</artifactId>
+            <artifactId>occurrent-subscription-redis-spring-blocking-checkpoint-storage</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

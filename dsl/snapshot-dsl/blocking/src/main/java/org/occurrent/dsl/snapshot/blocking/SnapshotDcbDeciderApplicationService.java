@@ -48,6 +48,13 @@ import java.util.function.Function;
  * snapshot's version is the global DCB position the append landed at ({@link DcbAppendResult#lastSequencePosition()}), and
  * the resume read still captures the whole boundary's consistency token, so the append condition is unaffected and a stale
  * snapshot only lengthens the tail. It loads one snapshot per execute, and costs nothing when no snapshot is used.
+ * <p>
+ * Deliberate asymmetry with the stream executor: this executor only advances the base (calls
+ * {@code maybeSaveBestEffort}) when the decision actually appended events, since a no-op decision returns no
+ * {@link DcbAppendResult} to key the save on. {@link SnapshotDeciderApplicationService} instead saves unconditionally
+ * after every execute, because a stream write always has a {@code WriteResult} to advance the base from, whether or
+ * not new events were appended. Either way a missed save only costs a longer replay on the next execute; it is never
+ * a correctness issue.
  *
  * @param <S> the snapshot state type
  * @param <E> the event type
@@ -150,11 +157,14 @@ public final class SnapshotDcbDeciderApplicationService<S extends @Nullable Obje
                 });
 
         Decider.Decision<S, E> decision = Objects.requireNonNull(decisionRef.get(), "The decider produced no decision");
-        appendResult.ifPresent(result -> {
-            int eventsSinceSnapshot = tailSize.get() + decision.events().size();
-            SnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(),
-                    new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), eventsSinceSnapshot));
-        });
+        // DCB positions are global and monotonic, they never reset, so a snapshot can never be ahead of the head: no
+        // head guard or self-heal is needed here, and eventsSinceSnapshot (tail + events) cannot go negative. The
+        // Supplier-based best-effort is used only for symmetry with the stream executor.
+        appendResult.ifPresent(result ->
+                SnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(), () -> {
+                    int eventsSinceSnapshot = tailSize.get() + decision.events().size();
+                    return new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), eventsSinceSnapshot);
+                }));
         return new Executed<>(appendResult, decision);
     }
 

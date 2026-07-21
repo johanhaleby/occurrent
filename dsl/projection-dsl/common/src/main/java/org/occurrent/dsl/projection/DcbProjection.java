@@ -43,5 +43,9 @@ public record DcbProjection<S extends @Nullable Object, E, ID>(
     public DcbProjection {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(criteria, "criteria cannot be null");
+        if (projection.filter() != null) {
+            throw new IllegalArgumentException("projection has an explicit filter, but a DcbProjection is read through its DCB criteria, not the wrapped projection's filter; "
+                    + "the filter would silently be ignored, so build the projection without one");
+        }
     }
 }

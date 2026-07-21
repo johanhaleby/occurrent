@@ -78,7 +78,8 @@ import java.lang.annotation.*;
 @Documented
 public @interface Projection {
     /**
-     * The unique identifier of the projection (required, no default).
+     * The unique identifier of the projection (required, no default). It is the durable checkpoint key and the
+     * namespace for the zero-config store, and must be unique across all subscriptions, projections, and snapshots.
      */
     String id();
 
