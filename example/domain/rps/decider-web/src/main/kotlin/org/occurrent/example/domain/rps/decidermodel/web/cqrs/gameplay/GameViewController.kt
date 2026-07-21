@@ -19,7 +19,7 @@ package org.occurrent.example.domain.rps.decidermodel.web.cqrs.gameplay
 
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL
-import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions
 import org.occurrent.dsl.view.materialized
 import org.occurrent.dsl.view.updateView

@@ -1,10 +1,12 @@
 # Upgrading to Occurrent 0.31.0
 
-0.31.0 has two breaking changes. First, the `ResumeBehavior` and `StartupMode` enums move out of `@Subscription`,
+0.31.0 has three breaking changes. First, the `ResumeBehavior` and `StartupMode` enums move out of `@Subscription`,
 `@StreamSubscription`, `@DcbSubscription`, and `@Projection` and become shared top-level types. `Subscription.StartPosition`
 and `DcbSubscription.DcbStartPosition` move the same way, to a shared top-level `org.occurrent.annotation.StartPosition`
 (the constants are unchanged). Second, the four subscription checkpoint-storage modules are renamed from
-`-position-storage` to `-checkpoint-storage`. One OpenRewrite recipe handles both rewrites for you.
+`-position-storage` to `-checkpoint-storage`. Third, `EventMetadata` moves from `org.occurrent.dsl.subscription.EventMetadata`
+to `org.occurrent.cloudevents.EventMetadata` and is rewritten from a Kotlin `data class` to a plain Java class. One
+OpenRewrite recipe handles all three rewrites for you.
 
 ## 1. Run the recipe
 
@@ -43,7 +45,8 @@ a nested `ResumeBehavior`/`StartupMode`, for example `Subscription.ResumeBehavio
 `Subscription.StartPosition` and `DcbSubscription.DcbStartPosition` to the shared top-level
 `org.occurrent.annotation.StartPosition`. This covers a fully-qualified reference, an import, and a static import.
 It also composes `org.occurrent.MigrateCoordinates_0_31`, which renames the four checkpoint-storage dependency
-coordinates in your Maven and Gradle build files (see section 3). Safe to run and commit without review.
+coordinates in your Maven and Gradle build files (see section 3), and rewrites every reference, import, and static
+import of `EventMetadata` from its old package to the new one (see section 4). Safe to run and commit without review.
 
 ## 2. What changed
 
@@ -73,8 +76,19 @@ unified global or DCB position, so it stays nested and annotation-specific.
 | `occurrent-subscription-mongodb-spring-reactor-position-storage` | `occurrent-subscription-mongodb-spring-reactor-checkpoint-storage` |
 | `occurrent-subscription-redis-spring-blocking-position-storage` | `occurrent-subscription-redis-spring-blocking-checkpoint-storage` |
 
-## 4. If the recipe cannot reach a reference
+## 4. EventMetadata moves to cloudevents-extension
+
+`EventMetadata` moves from `org.occurrent.dsl.subscription.EventMetadata` (module `dsl/subscription-dsl/common`) to
+`org.occurrent.cloudevents.EventMetadata` (module `cloudevents-extension`). It is also rewritten from a Kotlin
+`data class` to a plain Java class, so the Kotlin-only surface (reified `get<T>`, operator `get`, `copy`) is dropped.
+The typed accessors you actually fold events with, `getStreamId()`, `getStreamVersion()`, `getPosition()`,
+`getData()`, the static `empty()`, and the static `from(CloudEvent)`, are unchanged in name and behavior, so this is
+otherwise a drop-in upgrade. `DcbEventMetadata` stays in `dsl/dcb-dsl/common` and only its import of `EventMetadata`
+changes. Rationale is in [ADR 67](../architecture/decisions/0067-relocate-eventmetadata-to-cloudevents-extension.md).
+
+## 5. If the recipe cannot reach a reference
 
 The recipe rewrites source references it can see. A reference produced only in a compiled `.class` from 0.30.0
 (a binary dependency, not source you can run the recipe over) needs a rebuild against 0.31.0 instead, since the
-nested types no longer exist to link against.
+nested types no longer exist to link against. A Javadoc `{@link org.occurrent.dsl.subscription.EventMetadata}`
+reference is also outside the recipe's reach and needs a manual fix to point at the new package.

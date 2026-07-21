@@ -16,7 +16,7 @@
 
 package org.occurrent.dsl.projection
 
-import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.view.View
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.Tag

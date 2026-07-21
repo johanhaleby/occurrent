@@ -61,7 +61,7 @@ import java.lang.annotation.*;
  *
  * <h4>Metadata</h4>
  * <p>
- * As with {@link Subscription}, the handler may declare a {@link org.occurrent.dsl.subscription.EventMetadata}
+ * As with {@link Subscription}, the handler may declare a {@link org.occurrent.cloudevents.EventMetadata}
  * parameter in addition to the event parameter to receive the metadata of the delivered event.
  * </p>
  */

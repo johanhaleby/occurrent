@@ -18,7 +18,7 @@
 package org.occurrent.dsl.view;
 
 import org.jspecify.annotations.Nullable;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.retry.RetryStrategy;
 
 import java.util.function.BiFunction;

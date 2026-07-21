@@ -19,7 +19,7 @@ package org.occurrent.dsl.view;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 
 import java.util.ArrayList;
 import java.util.Arrays;

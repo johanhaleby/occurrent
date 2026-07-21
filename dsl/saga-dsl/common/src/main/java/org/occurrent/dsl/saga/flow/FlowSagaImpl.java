@@ -22,7 +22,7 @@ import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.flow.FlowState.ActionKind;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 
 import java.time.Duration;
 import java.time.Instant;

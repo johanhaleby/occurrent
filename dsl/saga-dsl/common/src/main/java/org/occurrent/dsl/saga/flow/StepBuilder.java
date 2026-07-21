@@ -23,7 +23,7 @@ import org.occurrent.dsl.saga.flow.FlowSagaImpl.CompiledStep;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.JoinBody;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.StepBody;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.TimeoutSpec;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 
 import java.time.Duration;
 import java.time.Instant;

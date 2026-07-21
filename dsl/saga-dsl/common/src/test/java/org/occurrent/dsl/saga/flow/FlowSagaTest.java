@@ -26,7 +26,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaTimeout;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 
 import java.time.Duration;
 import java.util.ArrayList;

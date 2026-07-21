@@ -39,7 +39,7 @@ import org.occurrent.dsl.projection.blocking.ProjectionRunner;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;

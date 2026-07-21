@@ -64,3 +64,7 @@ recipeList:
       oldFullyQualifiedTypeName: org.occurrent.annotation.DcbSubscription$DcbStartPosition
       newFullyQualifiedTypeName: org.occurrent.annotation.StartPosition
       ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.dsl.subscription.EventMetadata
+      newFullyQualifiedTypeName: org.occurrent.cloudevents.EventMetadata
+      ignoreDefinition: true
