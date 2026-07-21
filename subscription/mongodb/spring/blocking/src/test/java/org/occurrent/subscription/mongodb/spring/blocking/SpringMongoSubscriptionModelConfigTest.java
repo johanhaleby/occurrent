@@ -22,15 +22,52 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SpringMongoSubscriptionModelConfigTest {
+
+    @Test
+    void max_await_time_is_unset_by_default() {
+        SpringMongoSubscriptionModelConfig config = withConfig("events", TimeRepresentation.DATE);
+
+        assertThat(config.maxAwaitTime).isNull();
+    }
+
+    @Test
+    void max_await_time_is_retained() {
+        SpringMongoSubscriptionModelConfig config = withConfig("events", TimeRepresentation.DATE).maxAwaitTime(Duration.ofMillis(500));
+
+        assertThat(config.maxAwaitTime).isEqualTo(Duration.ofMillis(500));
+    }
+
+    @Test
+    void max_await_time_throws_iae_when_zero() {
+        Throwable throwable = catchThrowable(() -> withConfig("events", TimeRepresentation.DATE).maxAwaitTime(Duration.ZERO));
+
+        assertThat(throwable).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("maxAwaitTime");
+    }
+
+    @Test
+    void max_await_time_throws_iae_when_it_truncates_to_zero_milliseconds() {
+        Throwable throwable = catchThrowable(() -> withConfig("events", TimeRepresentation.DATE).maxAwaitTime(Duration.ofNanos(1)));
+
+        assertThat(throwable).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("maxAwaitTime");
+    }
+
+    @Test
+    void max_await_time_throws_iae_when_negative() {
+        Throwable throwable = catchThrowable(() -> withConfig("events", TimeRepresentation.DATE).maxAwaitTime(Duration.ofMillis(-1)));
+
+        assertThat(throwable).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("maxAwaitTime");
+    }
 
     @Test
     void use_virtual_threads_runs_executor_tasks_on_virtual_threads() throws InterruptedException {

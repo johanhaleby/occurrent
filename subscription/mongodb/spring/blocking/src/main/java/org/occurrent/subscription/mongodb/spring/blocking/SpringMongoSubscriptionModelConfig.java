@@ -1,6 +1,7 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
@@ -22,6 +23,7 @@ public class SpringMongoSubscriptionModelConfig {
     final RetryStrategy retryStrategy;
     final boolean restartSubscriptionsOnChangeStreamHistoryLost;
     final Executor executor;
+    final @Nullable Duration maxAwaitTime;
 
     /**
      * Create a new instance of {@link SpringMongoSubscriptionModelConfig} with the given settings.
@@ -31,20 +33,24 @@ public class SpringMongoSubscriptionModelConfig {
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
     public SpringMongoSubscriptionModelConfig(String eventCollection, TimeRepresentation timeRepresentation) {
-        this(eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false, defaultExecutor());
+        this(eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false, defaultExecutor(), null);
     }
 
     private SpringMongoSubscriptionModelConfig(String eventCollection, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy, boolean restartSubscriptionsOnChangeStreamHistoryLost,
-                                               Executor executor) {
+                                               Executor executor, @Nullable Duration maxAwaitTime) {
         requireNonNull(eventCollection, "eventCollection cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         requireNonNull(executor, Executor.class.getSimpleName() + " cannot be null");
+        if (maxAwaitTime != null && maxAwaitTime.toMillis() <= 0) {
+            throw new IllegalArgumentException("maxAwaitTime must be at least 1 ms but was " + maxAwaitTime);
+        }
         this.eventCollection = eventCollection;
         this.timeRepresentation = timeRepresentation;
         this.retryStrategy = retryStrategy;
         this.restartSubscriptionsOnChangeStreamHistoryLost = restartSubscriptionsOnChangeStreamHistoryLost;
         this.executor = executor;
+        this.maxAwaitTime = maxAwaitTime;
     }
 
     /**
@@ -73,7 +79,7 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig restartSubscriptionsOnChangeStreamHistoryLost(boolean restartSubscriptionsOnChangeStreamHistoryLost) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime);
     }
 
     /**
@@ -83,7 +89,7 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig retryStrategy(RetryStrategy retryStrategy) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime);
     }
 
     /**
@@ -99,7 +105,31 @@ public class SpringMongoSubscriptionModelConfig {
      * @see ThreadPoolTaskExecutor
      */
     public SpringMongoSubscriptionModelConfig executor(Executor executor) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime);
+    }
+
+    /**
+     * Configure the maximum amount of time the server waits for new change-stream documents before returning a
+     * (possibly empty) batch. This maps to the {@code maxAwaitTime} of the underlying MongoDB change stream (set
+     * on Spring Data's {@code ChangeStreamRequestOptions}). A smaller value lowers delivery latency at the cost of
+     * more frequent {@code getMore} round-trips when the stream is idle; a larger value keeps an idle cursor
+     * waiting longer and reduces chatter.
+     * <p>
+     * If not configured, the MongoDB driver/server default is used (this is the behavior prior to this option
+     * existing). Values in the range 200 ms&ndash;1000 ms strike a reasonable balance between latency and resource
+     * usage for most workloads.
+     * <p>
+     * Note that, unlike the {@code NativeMongoSubscriptionModel}, this model does <em>not</em> expose a
+     * {@code batchSize} option. It reads the change stream through Spring Data's {@link DefaultMessageListenerContainer},
+     * whose {@code ChangeStreamRequest}/{@code ChangeStreamRequestOptions} API does not carry a batch size (Spring's
+     * {@code ChangeStreamTask} never applies one), so there is no supported way to set it on this path. Use the
+     * {@code NativeMongoSubscriptionModel} if you need to tune the batch size.
+     *
+     * @param maxAwaitTime The maximum wait time. Must be greater than {@code 0}.
+     * @return A new instance of {@code SpringMongoSubscriptionModelConfig}
+     */
+    public SpringMongoSubscriptionModelConfig maxAwaitTime(Duration maxAwaitTime) {
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, requireNonNull(maxAwaitTime, "maxAwaitTime cannot be null"));
     }
 
     /**
