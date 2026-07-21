@@ -17,6 +17,7 @@
 package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 
 import java.time.Duration;
@@ -31,19 +32,29 @@ public class NativeMongoSubscriptionModelConfig {
 
     final RetryStrategy retryStrategy;
     final boolean restartSubscriptionsOnChangeStreamHistoryLost;
+    final @Nullable Integer batchSize;
+    final @Nullable Duration maxAwaitTime;
 
     /**
      * Create a new instance of {@link NativeMongoSubscriptionModelConfig} with default settings.
      * It will by default use a {@link RetryStrategy} with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between each retry.
      */
     public NativeMongoSubscriptionModelConfig() {
-        this(RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false);
+        this(RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false, null, null);
     }
 
-    private NativeMongoSubscriptionModelConfig(RetryStrategy retryStrategy, boolean restartSubscriptionsOnChangeStreamHistoryLost) {
+    private NativeMongoSubscriptionModelConfig(RetryStrategy retryStrategy, boolean restartSubscriptionsOnChangeStreamHistoryLost, @Nullable Integer batchSize, @Nullable Duration maxAwaitTime) {
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+        if (batchSize != null && batchSize <= 0) {
+            throw new IllegalArgumentException("batchSize must be greater than 0 but was " + batchSize);
+        }
+        if (maxAwaitTime != null && (maxAwaitTime.isNegative() || maxAwaitTime.isZero())) {
+            throw new IllegalArgumentException("maxAwaitTime must be greater than 0 but was " + maxAwaitTime);
+        }
         this.retryStrategy = retryStrategy;
         this.restartSubscriptionsOnChangeStreamHistoryLost = restartSubscriptionsOnChangeStreamHistoryLost;
+        this.batchSize = batchSize;
+        this.maxAwaitTime = maxAwaitTime;
     }
 
     /**
@@ -70,7 +81,7 @@ public class NativeMongoSubscriptionModelConfig {
      * @return A new instance of {@code NativeMongoSubscriptionModelConfig}
      */
     public NativeMongoSubscriptionModelConfig restartSubscriptionsOnChangeStreamHistoryLost(boolean restartSubscriptionsOnChangeStreamHistoryLost) {
-        return new NativeMongoSubscriptionModelConfig(retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost);
+        return new NativeMongoSubscriptionModelConfig(retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, batchSize, maxAwaitTime);
     }
 
     /**
@@ -81,6 +92,40 @@ public class NativeMongoSubscriptionModelConfig {
      * @return A new instance of {@code NativeMongoSubscriptionModelConfig}
      */
     public NativeMongoSubscriptionModelConfig retryStrategy(RetryStrategy retryStrategy) {
-        return new NativeMongoSubscriptionModelConfig(retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost);
+        return new NativeMongoSubscriptionModelConfig(retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, batchSize, maxAwaitTime);
+    }
+
+    /**
+     * Configure the number of change-stream documents the server returns per batch (maps to the underlying
+     * {@link com.mongodb.client.ChangeStreamIterable#batchSize(int)}). A larger batch size reduces the number
+     * of round-trips to the server and can improve throughput for high-volume subscriptions such as an outbox,
+     * at the cost of a larger per-batch memory footprint.
+     * <p>
+     * If not configured, the MongoDB driver/server default is used (this is the behavior prior to this option
+     * existing). As a rule of thumb, values in the low hundreds (e.g. {@code 500}) work well for high-throughput
+     * scenarios, but the optimal value depends on your event size and load.
+     *
+     * @param batchSize The number of documents per batch. Must be greater than {@code 0}.
+     * @return A new instance of {@code NativeMongoSubscriptionModelConfig}
+     */
+    public NativeMongoSubscriptionModelConfig batchSize(int batchSize) {
+        return new NativeMongoSubscriptionModelConfig(retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, batchSize, maxAwaitTime);
+    }
+
+    /**
+     * Configure the maximum amount of time the server waits for new change-stream documents before returning an
+     * (possibly empty) batch (maps to the underlying {@link com.mongodb.client.ChangeStreamIterable#maxAwaitTime(long, java.util.concurrent.TimeUnit)}).
+     * A smaller value lowers delivery latency at the cost of more frequent {@code getMore} round-trips when the
+     * stream is idle; a larger value keeps an idle cursor waiting longer and reduces chatter.
+     * <p>
+     * If not configured, the MongoDB driver/server default is used (this is the behavior prior to this option
+     * existing). Values in the range 200 ms&ndash;1000 ms strike a reasonable balance between latency and resource
+     * usage for most workloads.
+     *
+     * @param maxAwaitTime The maximum wait time. Must be greater than {@code 0}.
+     * @return A new instance of {@code NativeMongoSubscriptionModelConfig}
+     */
+    public NativeMongoSubscriptionModelConfig maxAwaitTime(Duration maxAwaitTime) {
+        return new NativeMongoSubscriptionModelConfig(retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, batchSize, requireNonNull(maxAwaitTime, "maxAwaitTime cannot be null"));
     }
 }

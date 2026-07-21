@@ -89,6 +89,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     private final ExecutorService cloudEventDispatcher;
     private final RetryStrategy retryStrategy;
     private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
+    private final @Nullable Integer batchSize;
+    private final @Nullable Duration maxAwaitTime;
     private final MongoDatabase database;
 
     private volatile boolean shutdown = false;
@@ -171,6 +173,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         this.database = database;
         this.retryStrategy = config.retryStrategy;
         this.restartSubscriptionsOnChangeStreamHistoryLost = config.restartSubscriptionsOnChangeStreamHistoryLost;
+        this.batchSize = config.batchSize;
+        this.maxAwaitTime = config.maxAwaitTime;
         this.cloudEventDispatcher = subscriptionExecutor;
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
@@ -214,6 +218,12 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         try {
             List<Bson> pipeline = createPipeline(timeRepresentation, filter);
             ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
+            if (batchSize != null) {
+                changeStreamDocuments = changeStreamDocuments.batchSize(batchSize);
+            }
+            if (maxAwaitTime != null) {
+                changeStreamDocuments = changeStreamDocuments.maxAwaitTime(maxAwaitTime.toMillis(), MILLISECONDS);
+            }
             SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(NativeMongoSubscriptionModel.class);
             ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, currentStartAt.get().get(subscriptionModelContext), subscriptionModelContext);
             MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();

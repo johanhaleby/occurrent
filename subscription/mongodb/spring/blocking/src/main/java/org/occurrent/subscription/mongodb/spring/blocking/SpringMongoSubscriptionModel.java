@@ -54,6 +54,7 @@ import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerCon
 import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.concurrent.CompletableFuture;
@@ -91,6 +92,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final MongoOperations mongoOperations;
     private final RetryStrategy retryStrategy;
     private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
+    private final @Nullable Duration maxAwaitTime;
     // Shared executor for restart loops so a failing subscription backs off (via retryStrategy) instead of
     // spawning a thread per restart attempt. One virtual thread per currently-restarting subscription,
     // released on recovery, pause/cancel, or shutdown. Virtual threads matter because restartOnce() blocks
@@ -143,6 +145,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         this.pausedSubscriptions = new ConcurrentHashMap<>();
         this.retryStrategy = config.retryStrategy;
         this.restartSubscriptionsOnChangeStreamHistoryLost = config.restartSubscriptionsOnChangeStreamHistoryLost;
+        this.maxAwaitTime = config.maxAwaitTime;
         this.restartExecutor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("spring-mongo-subscription-restart-", 0).factory());
         this.activeRestartSignal = new ConcurrentHashMap<>();
         this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate, config.executor);
@@ -169,7 +172,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
             ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, overridingStartAt == null ? startAt : overridingStartAt, subscriptionModelContext);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
-            return new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
+            return maxAwaitTime == null
+                    ? new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions)
+                    : new ChangeStreamRequestOptions(null, eventCollection, maxAwaitTime, changeStreamOptions);
         };
 
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
