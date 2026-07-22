@@ -384,9 +384,31 @@ class SagaFlowExtensionsTest {
     data class Bar(val id: String) : ValidationEvent
 
     sealed interface ValidationCommand
+    data class RecordValidation(val id: String) : ValidationCommand
 
     @Nested
     inner class BuildValidation {
+
+        @Test
+        fun `a single-expectation join builds and fulfils on that one event`() {
+            val saga = saga<ValidationEvent, ValidationCommand> {
+                startsOn<Started>({ it.id })
+                correlate<Foo> { it.id }
+                step("await-foo") {
+                    join(expect<Foo>(), then = end) { r ->
+                        issue(RecordValidation(r.initiating<Started>().id))
+                    }
+                }
+            }
+
+            val started = start(saga, Started("v1"))
+            val afterFoo = saga.step(started.state(), SagaInput.event(Foo("v1")))
+
+            assertAll(
+                { assertThat(saga.isTerminal(afterFoo.state())).isTrue() },
+                { assertThat(afterFoo.effects()).containsExactly(SagaEffect.issue(RecordValidation("v1"))) }
+            )
+        }
 
         @Test
         fun `a goTo target that is not a declared step fails to build`() {

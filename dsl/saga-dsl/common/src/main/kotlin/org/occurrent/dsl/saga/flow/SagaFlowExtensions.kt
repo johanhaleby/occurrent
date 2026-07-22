@@ -134,8 +134,8 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     }
 
     /** A join: wait until all [expecting] are met (counted since the step was entered), then issue commands and follow [then]. */
-    fun join(vararg expecting: Expectation<E>, then: Continuation, whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
-        delegate.join(expecting.toList(), then) { received -> FlowReactions<C>().apply { whenFulfilled(received) }.build() }
+    fun join(expecting: Expectation<E>, vararg more: Expectation<E>, then: Continuation, whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
+        delegate.join(listOf(expecting, *more), then) { received -> FlowReactions<C>().apply { whenFulfilled(received) }.build() }
     }
 
     /** A relative timeout: if it fires before the step completes, issue commands and follow [then]. */
