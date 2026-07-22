@@ -55,7 +55,7 @@ public final class FlowSaga {
 
     /**
      * Assembles a flow saga. Not thread-safe, configure it and call {@link #build()} once. {@code build()} validates the
-     * whole step graph: {@code startsOn} is required, every step name is unique, every {@code goTo} target exists, and
+     * whole step graph: {@code startsOn} is required, every step name is unique, every {@code transitionTo} target exists, and
      * every referenced event type has a correlation.
      *
      * @param <E> the domain event type
@@ -158,7 +158,7 @@ public final class FlowSaga {
                 stepsByName.put(step.name(), step);
             }
 
-            validateGoToTargets(stepsByName.keySet());
+            validateTransitionToTargets(stepsByName.keySet());
             Set<Class<? extends E>> eventTypes = collectEventTypes();
             validateCorrelationCoverage(eventTypes);
 
@@ -166,11 +166,11 @@ public final class FlowSaga {
                     correlators, Set.of(startType), eventTypes, historyWindow);
         }
 
-        private void validateGoToTargets(Set<String> stepNamesInGraph) {
+        private void validateTransitionToTargets(Set<String> stepNamesInGraph) {
             for (CompiledStep<E, C> step : steps) {
                 for (Continuation continuation : continuationsOf(step)) {
-                    if (continuation instanceof Continuation.GoTo goTo && !stepNamesInGraph.contains(goTo.stepName())) {
-                        throw new IllegalStateException("step '" + step.name() + "' has goTo(\"" + goTo.stepName()
+                    if (continuation instanceof Continuation.TransitionTo transitionTo && !stepNamesInGraph.contains(transitionTo.stepName())) {
+                        throw new IllegalStateException("step '" + step.name() + "' has transitionTo(\"" + transitionTo.stepName()
                                 + "\") but no such step is defined");
                     }
                 }

@@ -210,7 +210,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                 }
                 yield new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
             }
-            case Continuation.GoTo goTo -> new FlowStateImpl<>(goTo.stepName(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
+            case Continuation.TransitionTo transitionTo -> new FlowStateImpl<>(transitionTo.stepName(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
             case Continuation.End ignored -> new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
         };
     }
