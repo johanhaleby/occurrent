@@ -25,6 +25,8 @@
     <modules>
         <module>service</module>
         <module>command-composition</module>
+        <module>command-dispatch</module>
+        <module>command-dispatch-annotation</module>
         <module>cloudevent-converter</module>
         <module>cloudevent-type-mapper</module>
     </modules>
