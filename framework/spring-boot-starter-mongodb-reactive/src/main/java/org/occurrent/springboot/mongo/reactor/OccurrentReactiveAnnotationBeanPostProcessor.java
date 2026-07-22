@@ -17,6 +17,7 @@
 
 package org.occurrent.springboot.mongo.reactor;
 
+import org.occurrent.dsl.snapshot.mongodb.spring.reactor.ReactiveSpringMongoSnapshotStore;
 import kotlin.jvm.functions.Function2;
 import org.jspecify.annotations.NonNull;
 import org.occurrent.annotation.DcbSubscription;

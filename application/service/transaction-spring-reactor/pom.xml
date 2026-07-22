@@ -18,19 +18,34 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>dsl</artifactId>
+        <artifactId>application-service</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
-    <packaging>pom</packaging>
 
-    <artifactId>snapshot-dsl</artifactId>
-    <modules>
-        <module>common</module>
-        <module>blocking</module>
-        <module>reactor</module>
-        <module>mongodb-spring-blocking</module>
-        <module>mongodb-spring-reactor</module>
-    </modules>
+    <artifactId>occurrent-application-service-transaction-spring-reactor</artifactId>
+
+    <name>${mavenProjectName}</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-application-service-reactor</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-tx</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
 </project>

@@ -16,6 +16,7 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
+import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;

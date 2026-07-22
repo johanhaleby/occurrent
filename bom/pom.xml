@@ -353,6 +353,16 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-application-service-transaction-spring</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-application-service-transaction-spring-reactor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-application-service-reactor</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -454,6 +464,11 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-saga-dsl-mongodb-spring</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-snapshot-dsl-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -465,6 +480,16 @@
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-snapshot-dsl-reactor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-snapshot-dsl-mongodb-spring-blocking</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-snapshot-dsl-mongodb-spring-reactor</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

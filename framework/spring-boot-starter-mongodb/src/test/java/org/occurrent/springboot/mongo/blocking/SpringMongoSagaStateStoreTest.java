@@ -16,6 +16,7 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
+import org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;

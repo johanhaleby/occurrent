@@ -148,6 +148,16 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-snapshot-dsl-mongodb-spring-reactor</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-application-service-transaction-spring-reactor</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-view-dsl</artifactId>
             <version>${project.version}</version>
         </dependency>
