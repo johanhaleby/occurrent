@@ -61,6 +61,15 @@ import java.lang.annotation.*;
  *   ..
  * }
  * </pre>
+ * <p>
+ * When you only need the stream id or stream version, annotate a parameter with {@link StreamId} or
+ * {@link StreamVersion} instead of taking the whole {@link org.occurrent.dsl.subscription.EventMetadata}:
+ * <pre lang="java">
+ * &#64;StreamSubscription(id = "mySubscription")
+ * void mySubscription(MyDomainEvent event, &#64;StreamId String streamId, &#64;StreamVersion long streamVersion) { .. }
+ * </pre>
+ * These may appear in any order alongside the event and an optional {@code EventMetadata} parameter.
+ * </p>
  */
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)

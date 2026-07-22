@@ -21,8 +21,10 @@ import org.jspecify.annotations.NonNull;
 import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
+import org.occurrent.annotation.StreamId;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
+import org.occurrent.annotation.StreamVersion;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
@@ -35,6 +37,7 @@ import org.springframework.context.ApplicationContext;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -42,7 +45,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.function.Predicate;
 
-import static java.util.function.Predicate.not;
 import static org.occurrent.filter.Filter.CompositionOperator.OR;
 
 /**
@@ -55,6 +57,22 @@ import static org.occurrent.filter.Filter.CompositionOperator.OR;
 public final class SubscriptionAnnotations {
 
     private SubscriptionAnnotations() {
+    }
+
+    /**
+     * What a subscription handler parameter binds to. An {@code EVENT} parameter receives the domain event, a
+     * {@code METADATA} parameter receives the {@link EventMetadata} (or {@link DcbEventMetadata} on the DCB path), and
+     * a {@code STREAM_ID}/{@code STREAM_VERSION} parameter receives the stream id/version pulled from the metadata
+     * (declared with the {@link StreamId}/{@link StreamVersion} annotations).
+     */
+    public enum HandlerParameterKind {
+        EVENT, METADATA, STREAM_ID, STREAM_VERSION
+    }
+
+    /**
+     * A classified subscription handler parameter: its declared type and what it binds to.
+     */
+    public record HandlerParameter(Class<?> type, HandlerParameterKind kind) {
     }
 
     /**
@@ -78,31 +96,71 @@ public final class SubscriptionAnnotations {
         return EventMetadata.class.isAssignableFrom(parameterType) || DcbEventMetadata.class.isAssignableFrom(parameterType);
     }
 
-    public static List<Class<?>> analyzeParameters(Method method, Predicate<Class<?>> isMetadataParameter) {
-        List<Class<?>> parameterTypes = new ArrayList<>();
-        for (Class<?> parameterType : method.getParameterTypes()) {
-            if (isMetadataParameter.test(parameterType)) {
-                if (parameterTypes.stream().anyMatch(isMetadataParameter)) {
+    /**
+     * Classify each parameter of a subscription handler by declared type and by the {@link StreamId}/{@link StreamVersion}
+     * annotations. A parameter is an event parameter unless it is a metadata parameter (per {@code isMetadataParameter})
+     * or carries {@code @StreamId}/{@code @StreamVersion}. At most one of each kind is allowed. When
+     * {@code supportsStreamAccessors} is {@code false} (the DCB path) a {@code @StreamId}/{@code @StreamVersion}
+     * parameter is rejected, because a DCB handler's stream id/version are internal partition values, not domain ones.
+     */
+    public static List<HandlerParameter> analyzeParameters(Method method, Predicate<Class<?>> isMetadataParameter, boolean supportsStreamAccessors) {
+        List<HandlerParameter> parameters = new ArrayList<>();
+        boolean hasEvent = false;
+        boolean hasMetadata = false;
+        boolean hasStreamId = false;
+        boolean hasStreamVersion = false;
+        for (Parameter parameter : method.getParameters()) {
+            Class<?> type = parameter.getType();
+            boolean streamIdAnnotated = parameter.isAnnotationPresent(StreamId.class);
+            boolean streamVersionAnnotated = parameter.isAnnotationPresent(StreamVersion.class);
+            if (streamIdAnnotated && streamVersionAnnotated) {
+                throw new IllegalArgumentException("A subscription parameter may not be annotated with both @StreamId and @StreamVersion, but %s#%s declares one that is.".formatted(method.getDeclaringClass().getName(), method.getName()));
+            }
+            HandlerParameterKind kind;
+            if (streamIdAnnotated) {
+                if (!supportsStreamAccessors) {
+                    throw new IllegalArgumentException("@StreamId is only supported on @Subscription, @StreamSubscription, and @SynchronousSubscription handlers, but %s#%s declares it.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                if (type != String.class) {
+                    throw new IllegalArgumentException("A @StreamId parameter must be of type String, but %s#%s declares it as %s.".formatted(method.getDeclaringClass().getName(), method.getName(), type.getName()));
+                }
+                if (hasStreamId) {
+                    throw new IllegalArgumentException("A subscription method may declare at most one @StreamId parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                hasStreamId = true;
+                kind = HandlerParameterKind.STREAM_ID;
+            } else if (streamVersionAnnotated) {
+                if (!supportsStreamAccessors) {
+                    throw new IllegalArgumentException("@StreamVersion is only supported on @Subscription, @StreamSubscription, and @SynchronousSubscription handlers, but %s#%s declares it.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                if (type != long.class && type != Long.class) {
+                    throw new IllegalArgumentException("A @StreamVersion parameter must be of type long or Long, but %s#%s declares it as %s.".formatted(method.getDeclaringClass().getName(), method.getName(), type.getName()));
+                }
+                if (hasStreamVersion) {
+                    throw new IllegalArgumentException("A subscription method may declare at most one @StreamVersion parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
+                }
+                hasStreamVersion = true;
+                kind = HandlerParameterKind.STREAM_VERSION;
+            } else if (isMetadataParameter.test(type)) {
+                if (hasMetadata) {
                     throw new IllegalArgumentException("A subscription method may declare at most one metadata parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
                 }
-                parameterTypes.add(parameterType);
+                hasMetadata = true;
+                kind = HandlerParameterKind.METADATA;
             } else {
-                if (parameterTypes.isEmpty()) {
-                    parameterTypes.add(parameterType);
-                } else if (parameterTypes.size() == 2) {
-                    throw new IllegalArgumentException("A subscription method may declare an event parameter and at most one metadata parameter, but %s#%s declares more.".formatted(method.getDeclaringClass().getName(), method.getName()));
-                } else if (parameterTypes.stream().anyMatch(isMetadataParameter)) {
-                    parameterTypes.add(parameterType);
-                } else {
+                if (hasEvent) {
                     throw new IllegalArgumentException("A subscription method may declare only one event parameter, but %s#%s declares more than one.".formatted(method.getDeclaringClass().getName(), method.getName()));
                 }
+                hasEvent = true;
+                kind = HandlerParameterKind.EVENT;
             }
+            parameters.add(new HandlerParameter(type, kind));
         }
-        return parameterTypes;
+        return parameters;
     }
 
-    public static Class<?> eventTypeOf(List<Class<?>> parameterTypes, Predicate<Class<?>> isMetadataParameter) {
-        return parameterTypes.stream().filter(not(isMetadataParameter)).findFirst()
+    public static Class<?> eventTypeOf(List<HandlerParameter> parameters) {
+        return parameters.stream().filter(p -> p.kind() == HandlerParameterKind.EVENT).map(HandlerParameter::type).findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("You need to declare an event type"));
     }
 
@@ -122,10 +180,10 @@ public final class SubscriptionAnnotations {
     }
 
     /**
-     * The event parameter types of a subscription handler plus the {@link Filter} that selects the events it
-     * subscribes to, resolved together from the annotated method.
+     * The parameters of a subscription handler plus the {@link Filter} that selects the events it subscribes to,
+     * resolved together from the annotated method.
      */
-    public record ResolvedTypeFilter(List<Class<?>> parameterTypes, Filter filter) {
+    public record ResolvedTypeFilter(List<HandlerParameter> parameters, Filter filter) {
     }
 
     /**
@@ -142,15 +200,15 @@ public final class SubscriptionAnnotations {
      * @param annotationName                the annotation name, for error messages
      * @param cloudEventConverter           resolves domain event types to cloud event types
      * @param <E>                           the domain event type
-     * @return the handler's parameter types and the type filter
+     * @return the handler's parameters and the type filter
      */
     public static <E> ResolvedTypeFilter resolveTypeFilter(String id, Object bean, Method method, Class<?>[] eventTypesSpecifiedInAnnotation, String annotationName, CloudEventConverter<E> cloudEventConverter) {
         if (method.getParameterCount() < 1) {
             throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }
-        List<Class<?>> parameterTypes = analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter);
+        List<HandlerParameter> parameters = analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter, true);
         @SuppressWarnings("unchecked")
-        Class<E> specifiedEventType = (Class<E>) eventTypeOf(parameterTypes, SubscriptionAnnotations::isStreamMetadataParameter);
+        Class<E> specifiedEventType = (Class<E>) eventTypeOf(parameters);
         List<Class<E>> domainEventTypes = resolveDomainEventTypes(id, bean, method, specifiedEventType, eventTypesSpecifiedInAnnotation, annotationName);
 
         Filter filter;
@@ -163,7 +221,7 @@ public final class SubscriptionAnnotations {
                     .toList();
             filter = new Filter.CompositionFilter(OR, typeFilters);
         }
-        return new ResolvedTypeFilter(parameterTypes, filter);
+        return new ResolvedTypeFilter(parameters, filter);
     }
 
     public static DcbCriteria buildDcbCriteria(List<String> cloudEventTypes, List<Tag> tags) {
@@ -180,16 +238,24 @@ public final class SubscriptionAnnotations {
         }
     }
 
-    public static Object[] bindArguments(List<Class<?>> parameterTypes, Object event, Object metadata, Predicate<Class<?>> isMetadataParameter) {
-        if (parameterTypes.size() == 1) {
-            return new Object[]{event};
+    /**
+     * Build the argument array for a subscription handler, one slot per {@link HandlerParameter} in declaration order.
+     * An event slot gets {@code event}, a metadata slot gets {@code metadataArgument} (an {@link EventMetadata} on the
+     * stream path, an {@link EventMetadata} or {@link DcbEventMetadata} on the DCB path), and a stream-id/version slot
+     * gets the value read from {@code eventMetadata}. A {@code long} stream-version slot binds the boxed {@code Long}
+     * through reflective unboxing.
+     */
+    public static Object[] bindArguments(List<HandlerParameter> parameters, Object event, Object metadataArgument, EventMetadata eventMetadata) {
+        Object[] arguments = new Object[parameters.size()];
+        for (int i = 0; i < parameters.size(); i++) {
+            arguments[i] = switch (parameters.get(i).kind()) {
+                case EVENT -> event;
+                case METADATA -> metadataArgument;
+                case STREAM_ID -> eventMetadata.getStreamId();
+                case STREAM_VERSION -> eventMetadata.getStreamVersion();
+            };
         }
-        // Place each argument by which declared parameter slot is the metadata type, not by runtime assignability. A
-        // broad event parameter (for example Object) is assignable from the metadata value too, so an isInstance check
-        // would misplace it, this keys off the declared types instead and honors a metadata-first parameter order.
-        Object first = isMetadataParameter.test(parameterTypes.get(0)) ? metadata : event;
-        Object second = first == metadata ? event : metadata;
-        return new Object[]{first, second};
+        return arguments;
     }
 
     /**
