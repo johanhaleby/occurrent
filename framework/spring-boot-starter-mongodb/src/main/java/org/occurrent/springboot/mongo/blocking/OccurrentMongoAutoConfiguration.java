@@ -32,6 +32,8 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.application.service.dcb.annotation.AnnotationTagGenerator;
+import org.occurrent.command.StreamIdResolver;
+import org.occurrent.command.annotation.AnnotationStreamIdResolver;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
@@ -392,6 +394,26 @@ public class OccurrentMongoAutoConfiguration<E> {
         @SuppressWarnings({"rawtypes", "unchecked"})
         TagGenerator occurrentAnnotationTagGenerator() {
             return new AnnotationTagGenerator<>();
+        }
+    }
+
+    /**
+     * Supplies a default {@link StreamIdResolver} that derives a command's target stream id from a {@code @TargetStream}
+     * annotated member, so a command producer can route by annotation without a hand-written {@code command -> streamId}
+     * function. A user {@link StreamIdResolver} bean overrides it. Same {@code @Fallback} and raw-type reasoning as
+     * {@link AnnotationTagGeneratorConfiguration}, and {@code @ConditionalOnClass} so the class loads only when the
+     * command-dispatch-annotation module is present.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(AnnotationStreamIdResolver.class)
+    static class StreamIdResolverConfiguration {
+
+        @Bean
+        @Lazy
+        @Fallback
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        StreamIdResolver occurrentAnnotationStreamIdResolver() {
+            return new AnnotationStreamIdResolver<>();
         }
     }
 }

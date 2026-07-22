@@ -29,7 +29,7 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.dsl.saga.SagaStateStore
-import org.occurrent.dsl.saga.blocking.CommandDispatcher
+import org.occurrent.command.CommandDispatcher
 import org.occurrent.dsl.saga.blocking.SagaRunner
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig
 import org.occurrent.dsl.saga.blocking.SagaSubscription

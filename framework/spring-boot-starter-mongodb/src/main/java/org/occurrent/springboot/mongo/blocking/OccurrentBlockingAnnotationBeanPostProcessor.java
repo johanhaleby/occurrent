@@ -72,7 +72,7 @@ import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.flow.FlowState;
-import org.occurrent.dsl.saga.blocking.CommandDispatcher;
+import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
