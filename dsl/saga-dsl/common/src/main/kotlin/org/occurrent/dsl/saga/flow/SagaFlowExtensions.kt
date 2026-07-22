@@ -36,9 +36,8 @@ annotation class SagaDsl
  *
  * ```
  * val orderFulfillment = saga<OrderEvent, OrderCommand> {
- *     startsOn<OrderPlaced>(correlatedBy = { it.orderId }) { order -> issue(ReservePayment(order.orderId, order.amount)) }
- *     correlate<PaymentReserved> { it.orderId }
- *     correlate<PaymentFailed> { it.orderId }
+ *     correlateAll { it.orderId }
+ *     startsOn<OrderPlaced> { order -> issue(ReservePayment(order.orderId, order.amount)) }
  *     step("awaiting-payment") {
  *         on<PaymentReserved>(then = end) { payment -> issue(ShipOrder(payment.orderId)) }
  *         on<PaymentFailed>(then = end) { failure -> issue(CancelOrder(failure.orderId)) }
@@ -63,11 +62,14 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     @PublishedApi
     internal val delegate: FlowSaga.Builder<E, C> = FlowSaga.builder()
 
-    /** Declares the event type [T] that starts an instance, how it correlates, and optional commands to issue on start. */
-    inline fun <reified T : E> startsOn(noinline correlatedBy: (T) -> String, noinline onStart: FlowReactions<C>.(T) -> Unit = {}) {
+    /**
+     * Declares the event type [T] that starts an instance, optionally how it correlates, and optional commands to issue
+     * on start. A null [correlatedBy] leaves the start event to be correlated by [correlateAll].
+     */
+    inline fun <reified T : E> startsOn(noinline correlatedBy: ((T) -> String)? = null, noinline onStart: FlowReactions<C>.(T) -> Unit = {}) {
         delegate.startsOn(
             T::class.java,
-            { correlatedBy(it) },
+            correlatedBy?.let { fn -> java.util.function.Function<T, String> { fn(it) } },
             { event -> FlowReactions<C>().apply { onStart(event) }.build() }
         )
     }
@@ -75,6 +77,14 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     /** Registers how to correlate an event of type [T] to a saga instance. */
     inline fun <reified T : E> correlate(noinline correlatedBy: (T) -> String) {
         delegate.correlate(T::class.java) { correlatedBy(it) }
+    }
+
+    /**
+     * Registers a fallback correlation for any event type without its own [correlate] or `startsOn` correlation. The
+     * common case is a sealed event hierarchy exposing a shared id, for example `correlateAll { it.orderId }`.
+     */
+    fun correlateAll(correlatedBy: (E) -> String) {
+        delegate.correlateAll { correlatedBy(it) }
     }
 
     /** Adds a step named [name]. */

@@ -65,6 +65,7 @@ public final class FlowSaga {
         private @Nullable Class<? extends E> startType;
         private Function<E, List<C>> onStartCommands = event -> List.of();
         private final Map<Class<?>, Function<E, @Nullable String>> correlators = new LinkedHashMap<>();
+        private @Nullable Function<E, @Nullable String> correlateAll;
         private final List<CompiledStep<E, C>> steps = new ArrayList<>();
         private final Set<String> stepNames = new LinkedHashSet<>();
         private int historyWindow = FlowSagaImpl.DEFAULT_HISTORY_WINDOW;
@@ -88,27 +89,36 @@ public final class FlowSaga {
             return this;
         }
 
+        /** Declares the event that starts an instance, correlated by {@link #correlateAll}. Required, can be set only once. */
+        public <T extends E> Builder<E, C> startsOn(Class<T> type) {
+            return startsOn(type, null, event -> List.of());
+        }
+
         /** Declares the event that starts an instance and how it correlates. Required, can be set only once. */
         public <T extends E> Builder<E, C> startsOn(Class<T> type, Function<T, String> correlatedBy) {
             return startsOn(type, correlatedBy, event -> List.of());
         }
 
-        /** As {@link #startsOn(Class, Function)}, plus commands to issue when the instance starts. */
+        /**
+         * As {@link #startsOn(Class, Function)}, plus commands to issue when the instance starts. A {@code null}
+         * {@code correlatedBy} leaves the start event to be correlated by {@link #correlateAll}.
+         */
         @SuppressWarnings("unchecked")
-        public <T extends E> Builder<E, C> startsOn(Class<T> type, Function<T, String> correlatedBy, Function<T, List<C>> onStart) {
+        public <T extends E> Builder<E, C> startsOn(Class<T> type, @Nullable Function<T, String> correlatedBy, Function<T, List<C>> onStart) {
             requireNonNull(type, "type cannot be null");
-            requireNonNull(correlatedBy, "correlatedBy cannot be null");
             requireNonNull(onStart, "onStart cannot be null");
             if (startType != null) {
                 throw new IllegalStateException("startsOn(...) has already been set and can only be set once");
             }
-            if (correlators.containsKey(type)) {
+            if (correlatedBy != null) {
                 // startsOn also registers the correlation for its type; a prior correlate(type, ...) would be silently
                 // overwritten here, so reject it the same way correlate(...) rejects a duplicate.
-                throw new IllegalStateException("correlate(...) has already been registered for " + type.getName());
+                if (correlators.containsKey(type)) {
+                    throw new IllegalStateException("correlate(...) has already been registered for " + type.getName());
+                }
+                correlators.put(type, (Function<E, @Nullable String>) correlatedBy);
             }
             startType = type;
-            correlators.put(type, (Function<E, @Nullable String>) correlatedBy);
             onStartCommands = (Function<E, List<C>>) onStart;
             return this;
         }
@@ -122,6 +132,19 @@ public final class FlowSaga {
                 throw new IllegalStateException("correlate(...) has already been registered for " + type.getName());
             }
             correlators.put(type, (Function<E, @Nullable String>) correlatedBy);
+            return this;
+        }
+
+        /**
+         * Registers a fallback correlation used for any event type without its own {@link #correlate} or {@code startsOn}
+         * correlation. The common case is a sealed event hierarchy exposing a shared id, for example
+         * {@code correlateAll(OrderEvent::orderId)}. Can be set only once.
+         */
+        public Builder<E, C> correlateAll(Function<E, String> correlatedBy) {
+            if (this.correlateAll != null) {
+                throw new IllegalStateException("correlateAll(...) has already been set and can only be set once");
+            }
+            this.correlateAll = requireNonNull(correlatedBy, "correlatedBy cannot be null");
             return this;
         }
 
@@ -163,7 +186,7 @@ public final class FlowSaga {
             validateCorrelationCoverage(eventTypes);
 
             return new FlowSagaImpl<>(startType, onStartCommands, List.copyOf(steps), stepIndex, stepsByName,
-                    correlators, Set.of(startType), eventTypes, historyWindow);
+                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow);
         }
 
         private void validateGoToTargets(Set<String> stepNamesInGraph) {
@@ -204,12 +227,16 @@ public final class FlowSaga {
         }
 
         private void validateCorrelationCoverage(Set<Class<? extends E>> eventTypes) {
+            if (correlateAll != null) {
+                // A single fallback correlates every event type, so per-type coverage is not required.
+                return;
+            }
             TypeDispatch<Function<E, @Nullable String>> coverage =
                     new TypeDispatch<>(correlators);
             for (Class<? extends E> type : eventTypes) {
                 if (coverage.resolve(type) == null) {
                     throw new IllegalStateException("event type " + type.getName() + " is used by a step but has no correlation; "
-                            + "register correlate(" + type.getSimpleName() + ".class, ...) or declare it via startsOn(...)");
+                            + "register correlate(" + type.getSimpleName() + ".class, ...), declare it via startsOn(...), or add a correlateAll(...) fallback");
                 }
             }
         }
