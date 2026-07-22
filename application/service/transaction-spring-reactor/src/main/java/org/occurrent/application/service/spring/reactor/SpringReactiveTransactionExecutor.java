@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.reactor;
+package org.occurrent.application.service.spring.reactor;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;

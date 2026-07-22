@@ -16,6 +16,7 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
+import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
 import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;

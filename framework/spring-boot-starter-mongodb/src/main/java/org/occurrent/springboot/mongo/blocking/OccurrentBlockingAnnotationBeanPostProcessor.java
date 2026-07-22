@@ -17,6 +17,8 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
+import org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore;
+import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
 import org.jspecify.annotations.NonNull;

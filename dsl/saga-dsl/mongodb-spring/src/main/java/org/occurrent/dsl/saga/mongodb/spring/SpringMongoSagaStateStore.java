@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.dsl.saga.mongodb.spring;
 
 import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;

@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.dsl.snapshot.mongodb.spring.blocking;
 
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;

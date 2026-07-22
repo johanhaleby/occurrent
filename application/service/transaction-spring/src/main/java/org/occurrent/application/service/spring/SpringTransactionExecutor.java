@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.application.service.spring;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.TransactionExecutor;

@@ -32,5 +32,7 @@
         <module>reactor</module>
         <module>dcb-annotation</module>
         <module>transaction-mongodb-native</module>
+        <module>transaction-spring</module>
+        <module>transaction-spring-reactor</module>
     </modules>
 </project>

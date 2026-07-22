@@ -30,5 +30,7 @@
         <module>common</module>
         <module>blocking</module>
         <module>reactor</module>
+        <module>mongodb-spring-blocking</module>
+        <module>mongodb-spring-reactor</module>
     </modules>
 </project>

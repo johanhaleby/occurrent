@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.reactor;
+package org.occurrent.dsl.snapshot.mongodb.spring.reactor;
 
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
