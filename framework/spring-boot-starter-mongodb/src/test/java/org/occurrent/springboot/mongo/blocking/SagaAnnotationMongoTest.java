@@ -29,7 +29,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.bson.Document;
 import org.occurrent.dsl.saga.SagaEffect;
-import org.occurrent.dsl.saga.blocking.CommandDispatcher;
+import org.occurrent.command.CommandDispatcher;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

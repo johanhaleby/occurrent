@@ -34,5 +34,7 @@
         <module>transaction-mongodb-native</module>
         <module>transaction-spring</module>
         <module>transaction-spring-reactor</module>
+        <module>command-dispatch</module>
+        <module>command-dispatch-annotation</module>
     </modules>
 </project>

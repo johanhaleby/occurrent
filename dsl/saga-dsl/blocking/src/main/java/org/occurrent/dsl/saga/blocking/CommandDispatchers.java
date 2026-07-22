@@ -16,10 +16,10 @@
 
 package org.occurrent.dsl.saga.blocking;
 
+import org.occurrent.command.CommandDispatcher;
+import org.occurrent.command.StreamIdResolver;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.decider.DeciderApplicationService;
-
-import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 
@@ -47,10 +47,10 @@ public final class CommandDispatchers {
      */
     public static <C, E> CommandDispatcher<C> decider(DeciderApplicationService<E> applicationService,
                                                       Decider<C, ?, E> decider,
-                                                      Function<C, String> streamIdOf) {
+                                                      StreamIdResolver<C> streamIdOf) {
         requireNonNull(applicationService, "applicationService cannot be null");
         requireNonNull(decider, "decider cannot be null");
         requireNonNull(streamIdOf, "streamIdOf cannot be null");
-        return command -> applicationService.execute(streamIdOf.apply(command), command, decider);
+        return command -> applicationService.execute(streamIdOf.streamId(command), command, decider);
     }
 }

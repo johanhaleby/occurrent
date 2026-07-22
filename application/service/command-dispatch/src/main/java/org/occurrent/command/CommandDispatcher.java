@@ -14,14 +14,17 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.saga.blocking;
+package org.occurrent.command;
 
 /**
- * How the executor issues a command a saga produced. The common case is a lambda over an {@code ApplicationService}, with
- * or without a decider, for example {@code cmd -> applicationService.execute(cmd.orderId(), events -> Order.cancel(events,
- * cmd))}, see {@link CommandDispatchers#decider} for a decider-backed convenience.
+ * The producer-facing port for issuing a command. A command producer, such as a saga or a policy, hands a command to a
+ * dispatcher and stays ignorant of the write mechanics. The dispatcher owns the routing, deciding which stream the
+ * command targets (see {@link StreamIdResolver}) and which decider or handler applies, and calls the write engine (an
+ * {@code ApplicationService}). It sits one layer above the application service, which takes an already-resolved stream
+ * id and a decider or function. The common case is a lambda over an {@code ApplicationService}, for example
+ * {@code cmd -> applicationService.execute(cmd.orderId(), events -> Order.cancel(events, cmd))}.
  * <p>
- * Command dispatch is at-least-once: the same command may be dispatched more than once (a crash between dispatch and the
+ * Command dispatch is at-least-once: the same command may be dispatched more than once (a crash between dispatch and a
  * state save, or a compare-and-set retry). A dispatcher should therefore be idempotent, which an
  * {@code ApplicationService}-backed one is by construction, since it re-folds the authoritative stream and the target's
  * invariants reject a stale or already-applied command.
