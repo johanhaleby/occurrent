@@ -215,6 +215,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (cloudEventConverter != null && state instanceof FlowStateImpl<?> flowState) {
             return flowStateToDocument(flowState);
         }
+        if (cloudEventConverter != null && state instanceof FlowState<?>) {
+            // A flow saga's state is always the executor's FlowStateImpl, which the read path (readState) reconstructs field
+            // by field. A different FlowState implementation would serialize generically here yet still be read back as a
+            // flow document, corrupting the round-trip, so reject it rather than mis-serialize it silently.
+            throw new IllegalArgumentException("a flow saga store can only persist the flow executor's FlowState (FlowStateImpl), got "
+                    + state.getClass().getName());
+        }
         return mongoOperations.getConverter().convertToMongoType(state);
     }
 

@@ -111,16 +111,28 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return state.completed();
     }
 
-    @SuppressWarnings({"NullableProblems", "unchecked"})
+    @SuppressWarnings("NullableProblems")
     @Override
     public FlowState<E> evolve(FlowState<E> state, SagaInput<E> input) {
-        // The executor only ever hands back a state this saga produced, so the concrete type is always FlowStateImpl. Cast
+        // The executor only ever hands back a state this saga produced, so the concrete type is always FlowStateImpl. Narrow
         // once at the boundary so the transition machinery below works against the full (bookkeeping-carrying) state.
-        FlowStateImpl<E> current = (FlowStateImpl<E>) state;
+        FlowStateImpl<E> current = impl(state);
         return switch (input) {
             case SagaInput.Event<E> ev -> evolveOnEvent(current, ev.event());
             case SagaInput.Timeout<E> to -> evolveOnTimeout(current, to.timeout().timerName());
         };
+    }
+
+    // A flow saga's state is only ever produced by this executor (initialState/evolve), so every state handed to evolve or
+    // react is a FlowStateImpl. Narrow it here rather than casting inline so that a caller passing a hand-rolled FlowState
+    // straight into the public evolve/react gets a clear message instead of a bare ClassCastException.
+    @SuppressWarnings("unchecked")
+    private FlowStateImpl<E> impl(FlowState<E> state) {
+        if (state instanceof FlowStateImpl<?> flowState) {
+            return (FlowStateImpl<E>) flowState;
+        }
+        throw new IllegalArgumentException("FlowState must be one produced by the flow saga executor (FlowStateImpl), got "
+                + (state == null ? "null" : state.getClass().getName()));
     }
 
     private FlowStateImpl<E> evolveOnEvent(FlowStateImpl<E> state, E event) {
@@ -239,11 +251,10 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return effects;
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public List<SagaEffect<C>> react(FlowState<E> state, SagaInput<E> input) {
         // As in evolve, the concrete type is always FlowStateImpl; react routes on the bookkeeping it carries.
-        FlowStateImpl<E> current = (FlowStateImpl<E>) state;
+        FlowStateImpl<E> current = impl(state);
         return switch (current.lastAction()) {
             case NONE -> List.of();
             case BRANCH -> reactToBranch(current, input);

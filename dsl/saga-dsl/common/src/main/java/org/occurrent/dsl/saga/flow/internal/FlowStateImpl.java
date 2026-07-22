@@ -21,6 +21,7 @@ import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.ReceivedEvents;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * The concrete state of a flow saga instance: the {@link FlowState} the executor evolves and the store persists. On top
@@ -64,6 +65,8 @@ public record FlowStateImpl<E>(@Nullable String currentStep,
     public enum ActionKind {NONE, BRANCH, JOIN, TIMEOUT}
 
     public FlowStateImpl {
+        Objects.requireNonNull(received, "received cannot be null");
+        Objects.requireNonNull(lastAction, "lastAction cannot be null");
         received = List.copyOf(received);
     }
 
