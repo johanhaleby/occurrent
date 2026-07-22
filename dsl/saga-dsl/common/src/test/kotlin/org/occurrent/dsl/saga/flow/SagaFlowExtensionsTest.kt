@@ -376,6 +376,77 @@ class SagaFlowExtensionsTest {
         }
     }
 
+    // --- Scenario D: a join whose whenFulfilled reads the joined events -----------------------------------------------
+
+    sealed interface ReviewEvent
+    data class ReviewRequested(val documentId: String) : ReviewEvent
+    data class Approved(val documentId: String, val reviewer: String) : ReviewEvent
+    data class BudgetAssigned(val documentId: String, val amount: Int) : ReviewEvent
+
+    sealed interface ReviewCommand
+    data class NotifyReviewer(val reviewer: String) : ReviewCommand
+    data class Publish(val documentId: String, val amount: Int) : ReviewCommand
+
+    /**
+     * The canonical `whenFulfilled` example: a join does not just fire, it hands the block every event it collected while
+     * waiting. Here two [Approved] and one [BudgetAssigned] must arrive; once they do, `whenFulfilled` reads each approving
+     * reviewer via [ReceivedEvents.all] and the assigned amount via [ReceivedEvents.first] to build commands from the actual
+     * joined payloads, not just the initiating event.
+     */
+    private fun documentReviewSaga(): Saga<ReviewEvent, FlowState<ReviewEvent>, ReviewCommand> =
+        saga {
+            startsOn<ReviewRequested>({ it.documentId })
+            correlate<Approved> { it.documentId }
+            correlate<BudgetAssigned> { it.documentId }
+            step("awaiting-approvals") {
+                join(expect<Approved>(2), expect<BudgetAssigned>(), then = end) { received ->
+                    received.all<Approved>().forEach { approval -> issue(NotifyReviewer(approval.reviewer)) }
+                    val budget = received.first<BudgetAssigned>()
+                    issue(Publish(received.initiating<ReviewRequested>().documentId, budget!!.amount))
+                }
+            }
+        }
+
+    @Nested
+    inner class DocumentReviewJoin {
+
+        private val saga = documentReviewSaga()
+
+        @Test
+        fun `the join stays open until every expected event has arrived`() {
+            val started = start(saga, ReviewRequested("d1"))
+            val afterFirstApproval = saga.step(started.state(), SagaInput.event(Approved("d1", "alice")))
+
+            val afterBudget = saga.step(afterFirstApproval.state(), SagaInput.event(BudgetAssigned("d1", 500)))
+
+            assertAll(
+                { assertThat(saga.isTerminal(afterBudget.state())).isFalse() },
+                { assertThat(afterBudget.state().currentStep()).isEqualTo("awaiting-approvals") },
+                { assertThat(afterBudget.effects()).isEmpty() }
+            )
+        }
+
+        @Test
+        fun `whenFulfilled reads every joined event to build its commands`() {
+            val started = start(saga, ReviewRequested("d1"))
+            val afterFirstApproval = saga.step(started.state(), SagaInput.event(Approved("d1", "alice")))
+            val afterBudget = saga.step(afterFirstApproval.state(), SagaInput.event(BudgetAssigned("d1", 500)))
+
+            val afterSecondApproval = saga.step(afterBudget.state(), SagaInput.event(Approved("d1", "bob")))
+
+            assertAll(
+                { assertThat(saga.isTerminal(afterSecondApproval.state())).isTrue() },
+                {
+                    assertThat(afterSecondApproval.effects()).containsExactly(
+                        SagaEffect.issue(NotifyReviewer("alice")),
+                        SagaEffect.issue(NotifyReviewer("bob")),
+                        SagaEffect.issue(Publish("d1", 500))
+                    )
+                }
+            )
+        }
+    }
+
     // --- Build-time validation ------------------------------------------------------------------------------------
 
     sealed interface ValidationEvent
