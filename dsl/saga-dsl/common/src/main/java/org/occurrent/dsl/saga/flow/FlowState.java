@@ -30,7 +30,7 @@ import java.util.List;
  * flow lowering keeps additional transition bookkeeping to drive {@code evolve} and {@code react}, but that is an internal
  * implementation detail (see {@code org.occurrent.dsl.saga.flow.internal.FlowStateImpl}) and is not exposed here.
  * <p>
- * A store persists whatever bookkeeping the concrete state carries and rounds-trips it without interpreting it; only the
+ * A store persists whatever bookkeeping the concrete state carries and round-trips it without interpreting it. Only the
  * three components above carry user-meaningful semantics.
  *
  * @param <E> the domain event type

@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga.flow.internal;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.saga.flow.FlowSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.ReceivedEvents;
 
@@ -30,8 +31,9 @@ import java.util.Objects;
  * {@link #stepEntryIndex()}, {@link #previousStep()}, {@link #lastAction()} and {@link #matchedBranchIndex()}), which is
  * part of the record only because {@code evolve} can communicate with {@code react} solely through the returned state.
  * <p>
- * This type is {@code public} only so that a {@code SagaStateStore} in another module can construct and read it; it is
- * not a user-facing API. Author flow sagas through {@link FlowState} and its builder instead.
+ * This type is {@code public} only so that a {@code SagaStateStore} in another module can construct and read it. It is
+ * not a user-facing API. Author flow sagas through {@link FlowSaga} (or the Kotlin {@code saga} block) and observe their
+ * state through {@link FlowState}.
  *
  * <h2>Bounded retention</h2>
  * {@link #received()} is <em>not</em> the full history. To keep a long-running instance from growing without bound (and to
