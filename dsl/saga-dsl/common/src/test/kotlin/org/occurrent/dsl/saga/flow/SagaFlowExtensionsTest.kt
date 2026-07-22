@@ -245,10 +245,12 @@ class SagaFlowExtensionsTest {
 
     // --- Scenario C: order-fulfillment with a retry loop --------------------------------------------------------------
 
-    sealed interface OrderEvent
-    data class OrderPlaced(val orderId: String, val amount: Int) : OrderEvent
-    data class PaymentReserved(val orderId: String) : OrderEvent
-    data class PaymentFailed(val orderId: String, val amount: Int) : OrderEvent
+    sealed interface OrderEvent {
+        val orderId: String
+    }
+    data class OrderPlaced(override val orderId: String, val amount: Int) : OrderEvent
+    data class PaymentReserved(override val orderId: String) : OrderEvent
+    data class PaymentFailed(override val orderId: String, val amount: Int) : OrderEvent
 
     sealed interface OrderCommand
     data class ReservePayment(val orderId: String, val amount: Int) : OrderCommand
@@ -257,9 +259,8 @@ class SagaFlowExtensionsTest {
 
     private fun orderFulfillmentSaga(): Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> =
         saga {
-            startsOn<OrderPlaced>({ it.orderId }) { o -> issue(ReservePayment(o.orderId, o.amount)) }
-            correlate<PaymentReserved> { it.orderId }
-            correlate<PaymentFailed> { it.orderId }
+            correlateAll { it.orderId }
+            startsOn<OrderPlaced> { o -> issue(ReservePayment(o.orderId, o.amount)) }
             step("awaiting-payment") {
                 on<PaymentReserved>(then = end) { p -> issue(ShipOrder(p.orderId)) }
                 on<PaymentFailed>(
@@ -272,6 +273,60 @@ class SagaFlowExtensionsTest {
                 }
             }
         }
+
+    @Nested
+    inner class CorrelateAll {
+
+        private fun minimalOrderSaga(configure: FlowSagaBuilder<OrderEvent, OrderCommand>.() -> Unit): Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> =
+            saga {
+                configure()
+                startsOn<OrderPlaced> { }
+                step("awaiting-payment") { on<PaymentReserved>(then = end) { } }
+            }
+
+        @Test
+        fun `correlateAll correlates every event type without a per-type correlate`() {
+            val saga = minimalOrderSaga { correlateAll { it.orderId } }
+
+            assertAll(
+                { assertThat(saga.sagaId(OrderPlaced("o1", 100))).isEqualTo("o1") },
+                { assertThat(saga.sagaId(PaymentReserved("o2"))).isEqualTo("o2") },
+                { assertThat(saga.sagaId(PaymentFailed("o3", 100))).isEqualTo("o3") }
+            )
+        }
+
+        @Test
+        fun `a per-type correlate overrides the correlateAll fallback for its type`() {
+            val saga = minimalOrderSaga {
+                correlateAll { it.orderId }
+                correlate<PaymentReserved> { "reserved-" + it.orderId }
+            }
+
+            assertAll(
+                { assertThat(saga.sagaId(PaymentReserved("o1"))).isEqualTo("reserved-o1") },
+                { assertThat(saga.sagaId(PaymentFailed("o2", 100))).isEqualTo("o2") },
+                { assertThat(saga.sagaId(OrderPlaced("o3", 100))).isEqualTo("o3") }
+            )
+        }
+
+        @Test
+        fun `correlateAll can only be set once`() {
+            assertThatThrownBy {
+                minimalOrderSaga {
+                    correlateAll { it.orderId }
+                    correlateAll { it.orderId }
+                }
+            }.isInstanceOf(IllegalStateException::class.java)
+                .hasMessageContaining("correlateAll")
+        }
+
+        @Test
+        fun `startsOn without an explicit correlatedBy is correlated by correlateAll`() {
+            val saga = minimalOrderSaga { correlateAll { it.orderId } }
+
+            assertThat(saga.sagaId(OrderPlaced("o1", 100))).isEqualTo("o1")
+        }
+    }
 
     @Nested
     inner class OrderFulfillmentRetryLoop {

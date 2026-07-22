@@ -37,11 +37,10 @@ import java.time.Duration
  */
 fun orderFulfillmentFlow(paymentTimeout: Duration): Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> =
     saga {
-        startsOn<OrderPlaced>(correlatedBy = { it.orderId }) { order ->
+        correlateAll { it.orderId }
+        startsOn<OrderPlaced> { order ->
             issue(ReservePayment(order.orderId, order.amount))
         }
-        correlate<PaymentReserved> { it.orderId }
-        correlate<PaymentFailed> { it.orderId }
         step("awaiting-payment") {
             on<PaymentReserved>(then = end) { payment -> issue(ShipOrder(payment.orderId)) }
             on<PaymentFailed>(then = end) { failure -> issue(CancelOrder(failure.orderId, failure.reason)) }

@@ -57,6 +57,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private final Map<String, Integer> stepIndex;
     private final Map<String, CompiledStep<E, C>> stepsByName;
     private final TypeDispatch<Function<E, @Nullable String>> correlators;
+    private final @Nullable Function<E, @Nullable String> correlateAll;
     private final Set<Class<? extends E>> startEventTypes;
     private final Set<Class<? extends E>> eventTypes;
     // Carry-over: how many received events before the current step's entry are retained (and so visible to guards and
@@ -69,6 +70,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                  Map<String, Integer> stepIndex,
                  Map<String, CompiledStep<E, C>> stepsByName,
                  Map<Class<?>, Function<E, @Nullable String>> correlators,
+                 @Nullable Function<E, @Nullable String> correlateAll,
                  Set<Class<? extends E>> startEventTypes,
                  Set<Class<? extends E>> eventTypes,
                  int historyWindow) {
@@ -78,6 +80,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         this.stepIndex = stepIndex;
         this.stepsByName = stepsByName;
         this.correlators = new TypeDispatch<>(correlators);
+        this.correlateAll = correlateAll;
         this.startEventTypes = startEventTypes;
         this.eventTypes = eventTypes;
         this.historyWindow = historyWindow;
@@ -91,7 +94,10 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     @Override
     public @Nullable String sagaId(E event) {
         Function<E, @Nullable String> correlator = correlators.resolve(event.getClass());
-        return correlator == null ? null : correlator.apply(event);
+        if (correlator != null) {
+            return correlator.apply(event);
+        }
+        return correlateAll == null ? null : correlateAll.apply(event);
     }
 
     @Override
