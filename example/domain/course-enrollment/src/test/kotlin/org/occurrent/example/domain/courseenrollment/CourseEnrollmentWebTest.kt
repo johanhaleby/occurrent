@@ -31,6 +31,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.http.MediaType
+import org.springframework.test.annotation.DirtiesContext
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
@@ -38,6 +39,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders
 import org.springframework.web.context.WebApplicationContext
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.testcontainers.mongodb.MongoDBContainer
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -52,6 +54,7 @@ import java.util.concurrent.TimeUnit
  */
 @SpringBootTest
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class CourseEnrollmentWebTest {
 
@@ -60,7 +63,7 @@ class CourseEnrollmentWebTest {
         @ServiceConnection
         @JvmStatic
         val mongoDBContainer: MongoDBContainer =
-            MongoDBContainer("mongo:" + (System.getProperty("test.mongo.version") ?: "7.0")).withReplicaSet()
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion()
     }
 
     @Autowired

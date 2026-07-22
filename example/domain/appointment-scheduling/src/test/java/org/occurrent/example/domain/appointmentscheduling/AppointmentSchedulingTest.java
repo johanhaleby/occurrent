@@ -44,6 +44,7 @@ import org.occurrent.example.domain.appointmentscheduling.model.Commands.DefineS
 import org.occurrent.example.domain.appointmentscheduling.model.Commands.RegisterClinician;
 import org.occurrent.example.domain.appointmentscheduling.model.Commands.RegisterPatient;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -77,7 +78,7 @@ class AppointmentSchedulingTest {
     private static final MongoDBContainer mongoDBContainer;
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version", "8.0")).withReplicaSet();
+        mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
     }
 
     private MongoClient mongoClient;
