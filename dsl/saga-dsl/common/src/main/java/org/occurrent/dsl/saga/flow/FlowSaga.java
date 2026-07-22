@@ -89,13 +89,17 @@ public final class FlowSaga {
             return this;
         }
 
-        /** Declares the event that starts an instance, correlated by {@link #correlateAll}. Required, can be set only once. */
+        /**
+         * Declares the event that starts an instance, leaving its correlation to {@link #correlateAll} or a separate
+         * {@link #correlate}. Required, can be set only once. {@code build()} fails if neither covers the start type.
+         */
         public <T extends E> Builder<E, C> startsOn(Class<T> type) {
             return startsOn(type, null, event -> List.of());
         }
 
         /** Declares the event that starts an instance and how it correlates. Required, can be set only once. */
         public <T extends E> Builder<E, C> startsOn(Class<T> type, Function<T, String> correlatedBy) {
+            requireNonNull(correlatedBy, "correlatedBy cannot be null");
             return startsOn(type, correlatedBy, event -> List.of());
         }
 
