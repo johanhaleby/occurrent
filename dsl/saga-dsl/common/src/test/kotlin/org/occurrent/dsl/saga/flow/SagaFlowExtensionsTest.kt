@@ -263,7 +263,7 @@ class SagaFlowExtensionsTest {
             step("awaiting-payment") {
                 on<PaymentReserved>(then = end) { p -> issue(ShipOrder(p.orderId)) }
                 on<PaymentFailed>(
-                    then = goTo("awaiting-payment"),
+                    then = transitionTo("awaiting-payment"),
                     onlyIf = { _, r -> r.count<PaymentFailed>() < 3 }
                 ) { f -> issue(ReservePayment(f.orderId, f.amount)) }
                 on<PaymentFailed>(then = end) { f -> issue(CancelOrder(f.orderId)) }
@@ -482,13 +482,13 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `a goTo target that is not a declared step fails to build`() {
+        fun `a transitionTo target that is not a declared step fails to build`() {
             assertThatThrownBy {
                 saga<ValidationEvent, ValidationCommand> {
                     startsOn<Started>({ it.id })
                     correlate<Foo> { it.id }
                     step("first") {
-                        on<Foo>(then = goTo("does-not-exist")) {}
+                        on<Foo>(then = transitionTo("does-not-exist")) {}
                     }
                 }
             }.isInstanceOf(IllegalStateException::class.java)
