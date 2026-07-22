@@ -18,7 +18,7 @@ package org.occurrent.dsl.projection.reactor
 
 import org.occurrent.dsl.projection.Projection
 import org.occurrent.dsl.query.reactor.DomainEventQueries
-import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions
 import org.occurrent.dsl.subscription.reactor.Subscriptions
 import org.occurrent.dsl.view.MaterializedView

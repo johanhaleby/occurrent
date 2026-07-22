@@ -17,7 +17,7 @@
 
 package org.occurrent.dsl.view
 
-import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.cloudevents.EventMetadata
 
 fun <S, E : Any> view(initialState: S, updateState: (S, E) -> S): View<S, E> = View.create(initialState, updateState)
 

@@ -20,7 +20,7 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForList
-import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted

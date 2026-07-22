@@ -23,7 +23,7 @@ import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

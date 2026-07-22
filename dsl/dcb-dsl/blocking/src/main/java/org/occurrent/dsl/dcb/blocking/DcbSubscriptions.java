@@ -22,7 +22,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.DcbCriteriaBuilder;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.subscription.DcbStartAt;

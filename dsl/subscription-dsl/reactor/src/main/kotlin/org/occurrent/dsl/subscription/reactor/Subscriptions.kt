@@ -19,7 +19,7 @@ package org.occurrent.dsl.subscription.reactor
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.get
-import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.subscription.agnosticSubscriptionFilterFromEventTypes
 import org.occurrent.dsl.subscription.subscriptionFilterFromEventTypes
 import org.occurrent.filter.Filter

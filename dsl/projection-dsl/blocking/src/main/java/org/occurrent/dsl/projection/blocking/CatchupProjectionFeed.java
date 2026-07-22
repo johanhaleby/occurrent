@@ -23,7 +23,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.BoundedIdCache;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;

@@ -39,7 +39,7 @@
              dependency rather than relying on the optional subscription-dsl-blocking below. -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-dsl-common</artifactId>
+            <artifactId>occurrent-cloudevents-extension</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

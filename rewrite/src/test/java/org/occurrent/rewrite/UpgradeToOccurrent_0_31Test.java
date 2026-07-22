@@ -83,6 +83,39 @@ class UpgradeToOccurrent_0_31Test implements RewriteTest {
     }
 
     @Test
+    void appliesTheEventMetadataPackageMoveFromItsSubRecipe() {
+        rewriteRun(
+                java(
+                        """
+                        package org.occurrent.dsl.subscription;
+                        public class EventMetadata {
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.subscription.EventMetadata;
+
+                        class Foo {
+                            EventMetadata metadata;
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.cloudevents.EventMetadata;
+
+                        class Foo {
+                            EventMetadata metadata;
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void appliesTheCheckpointStorageCoordinateRenameFromItsSubRecipe() {
         rewriteRun(
                 pomXml(

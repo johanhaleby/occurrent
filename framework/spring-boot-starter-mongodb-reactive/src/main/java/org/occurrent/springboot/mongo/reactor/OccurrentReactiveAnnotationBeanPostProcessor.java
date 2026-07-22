@@ -40,7 +40,7 @@ import org.occurrent.dsl.projection.reactor.ReactiveProjectionRunner;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.occurrent.subscription.push.reactor.CatchupThenPushSubscriptionModel;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;

@@ -61,7 +61,7 @@ import java.lang.annotation.*;
  * <h4>Metadata</h4>
  * <p>
  * The annotated method may take the metadata associated with the event as a second parameter, either the generic
- * {@link org.occurrent.dsl.subscription.EventMetadata} or the DCB specific
+ * {@link org.occurrent.cloudevents.EventMetadata} or the DCB specific
  * {@code org.occurrent.dsl.dcb.DcbEventMetadata}, which also exposes the DCB position and tags.
  * </p>
  */

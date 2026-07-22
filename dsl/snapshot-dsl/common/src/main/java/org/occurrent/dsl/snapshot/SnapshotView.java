@@ -17,7 +17,7 @@
 package org.occurrent.dsl.snapshot;
 
 import org.jspecify.annotations.Nullable;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.View;
 import org.occurrent.filter.Filter;
 

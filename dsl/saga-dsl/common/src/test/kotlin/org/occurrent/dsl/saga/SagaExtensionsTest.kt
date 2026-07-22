@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertAll
 import org.occurrent.cloudevents.OccurrentCloudEventExtension
-import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.cloudevents.EventMetadata
 import java.time.Duration
 
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)

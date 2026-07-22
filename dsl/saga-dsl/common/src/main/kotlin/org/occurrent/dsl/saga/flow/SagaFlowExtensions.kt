@@ -17,7 +17,7 @@
 package org.occurrent.dsl.saga.flow
 
 import org.occurrent.dsl.saga.Saga
-import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.cloudevents.EventMetadata
 import java.time.Duration
 import java.time.Instant
 import java.util.function.BiFunction

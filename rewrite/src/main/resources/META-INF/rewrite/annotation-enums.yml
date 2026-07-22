@@ -22,7 +22,8 @@ description: >-
   StartupMode enums, formerly nested inside each of the Subscription, StreamSubscription, DcbSubscription, and
   Projection annotations, are now top-level types in org.occurrent.annotation. Subscription.StartPosition and
   DcbSubscription.DcbStartPosition also move to the shared top-level org.occurrent.annotation.StartPosition (the
-  constants BEGINNING, NOW, and DEFAULT are unchanged).
+  constants BEGINNING, NOW, and DEFAULT are unchanged). EventMetadata also moves from
+  org.occurrent.dsl.subscription to org.occurrent.cloudevents.
 recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.annotation.Subscription$ResumeBehavior
@@ -63,4 +64,8 @@ recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.annotation.DcbSubscription$DcbStartPosition
       newFullyQualifiedTypeName: org.occurrent.annotation.StartPosition
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.dsl.subscription.EventMetadata
+      newFullyQualifiedTypeName: org.occurrent.cloudevents.EventMetadata
       ignoreDefinition: true

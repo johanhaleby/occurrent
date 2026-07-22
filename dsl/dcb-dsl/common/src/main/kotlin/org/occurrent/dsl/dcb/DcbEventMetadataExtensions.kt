@@ -16,7 +16,7 @@
 
 package org.occurrent.dsl.dcb
 
-import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.eventstore.api.dcb.Tag
 
 /**

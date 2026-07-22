@@ -16,7 +16,7 @@
 
 package org.occurrent.dsl.saga;
 
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 
 import static java.util.Objects.requireNonNull;
 

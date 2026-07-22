@@ -18,7 +18,7 @@ package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
