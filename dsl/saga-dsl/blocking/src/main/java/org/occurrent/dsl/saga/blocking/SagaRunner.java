@@ -43,41 +43,44 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Runs a {@link Saga} as an asynchronous, subscription-fed process manager: it subscribes to the saga's events, folds and
- * persists per-instance state, dispatches the commands each reaction issues, and polls the state store to fire timeouts.
- * The write-side mirror of the read-side {@code ProjectionRunner}.
+ * Runs a {@link Saga} as an asynchronous process manager fed by a subscription. It subscribes to the saga's events,
+ * builds and persists per-instance state, dispatches the commands each reaction issues, and polls the state store for
+ * due timers. It is the write-side counterpart of the read-side {@code ProjectionRunner}.
  * <p>
- * Pick the capability with the factory: {@link #agnostic(Subscribable, CloudEventConverter) agnostic} delivers both
- * stream-written and DCB-appended events, {@link #stream(Subscribable, CloudEventConverter) stream} only stream-written
- * ones. Timers are polled from the {@link SagaStateStore}, not scheduled through an external scheduler, so a run needs no
- * deadline infrastructure. The returned {@link SagaSubscription} owns the timer poller, close it to stop polling.
+ * Pick the capability with the factory. {@link #agnostic(Subscribable, CloudEventConverter) agnostic} delivers both
+ * stream-written and DCB-appended events, {@link #stream(Subscribable, CloudEventConverter) stream} delivers only the
+ * stream-written ones. So to receive DCB-appended events, use {@code agnostic}. There is no DCB-only factory, because
+ * DCB filtering is expressed as a {@code DcbCriteria} rather than the Occurrent {@link Filter} that a saga's handled
+ * event types produce. Timers are polled from the {@link SagaStateStore} rather than scheduled through an external
+ * scheduler, so a run needs no extra deadline infrastructure. The returned {@link SagaSubscription} owns the timer
+ * poller, so close it to stop polling.
  *
  * <h2>Multi-instance timer polling</h2>
- * The event path is already single-active across instances when the {@link Subscribable} is a competing-consumer model.
- * The timer poller is not: without coordination every instance polls the shared store on its own interval, multiplying the
- * query load. Pass a {@link CompetingConsumerStrategy} to
+ * When the {@link Subscribable} is a competing-consumer model, only one instance handles the event path at a time. The
+ * timer poller is not coordinated that way. Without help, every instance polls the shared store on its own interval and
+ * multiplies the query load. Pass a {@link CompetingConsumerStrategy} to
  * {@link #run(String, Saga, SagaStateStore, CommandDispatcher, StartAt, SagaRunnerConfig, CompetingConsumerStrategy) run}
- * and only the instance holding the saga's timer lease polls, the others wake and no-op without touching the store. The
- * lease is keyed by {@link #timerLeaseKey(String)}, distinct from the event subscription's own lease, and released on
- * {@link SagaSubscription#close()} so another instance takes over within roughly one lease period. Without a strategy the
- * poller runs on every instance as before (correct via compare-and-set, just not coordinated).
+ * and only the instance holding the saga's timer lease polls. The others wake on their interval and do nothing without
+ * touching the store. The lease uses its own key, separate from the event subscription's lease, and is released on
+ * {@link SagaSubscription#close()} so another instance takes over within roughly one lease period. Without a strategy
+ * the poller runs on every instance (still correct through compare-and-set, just not coordinated).
  *
  * <h2>Failure handling differs between the two input paths</h2>
- * The event path and the timer-poll path do not handle a failed input the same way, and the difference matters when a
- * reaction or a dispatch throws:
+ * A failed input is handled differently on the event path and the timer path, and the difference matters when a
+ * reaction or a dispatch throws.
  * <ul>
- *   <li><strong>Event path.</strong> An exception (including a {@link SagaConcurrencyException} after the retries are
- *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step. The event
- *       is not lost, but the subscription is a single ordered channel shared by every instance this saga handles, so an
- *       input that keeps failing blocks the events queued behind it (head-of-line blocking) until it succeeds or the
- *       subscription is intervened on. One poisoned instance can stall the others multiplexed onto the same subscription.</li>
+ *   <li><strong>Event path.</strong> An exception (including a {@link SagaConcurrencyException} once the retries are
+ *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step. The
+ *       event is not lost. But the subscription is a single ordered channel shared by every instance this saga handles,
+ *       so an input that keeps failing blocks the events queued behind it until it succeeds or someone intervenes. One
+ *       poisoned instance can stall the others on the same subscription.</li>
  *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so the next poll
- *       retries it while other instances keep progressing; a timeout failure does not block the poller. It also does not
- *       propagate anywhere else, so it is only ever retried by the poller, never by a subscription redelivery.</li>
+ *       retries it while the other instances keep going. A timeout failure does not block the poller and does not
+ *       propagate anywhere else, so only the poller ever retries it, never a subscription redelivery.</li>
  * </ul>
- * Because commands are dispatched before the save and a lost compare-and-set retries the step, a single input can
- * re-dispatch its whole command list several times (up to {@code maxCasAttempts}); receivers must be idempotent and
- * tolerate that multiplicity. See {@link SagaRunnerConfig} and {@link SagaConcurrencyException}.
+ * Commands are dispatched before the save, and a lost compare-and-set retries the step, so a single input can
+ * re-dispatch its whole command list several times (up to {@code maxCasAttempts}). Receivers must be idempotent and
+ * tolerate that. See {@link SagaRunnerConfig} and {@link SagaConcurrencyException}.
  *
  * @param <E> the domain event type
  * @param <C> the command type
@@ -119,8 +122,8 @@ public final class SagaRunner<E, C> {
     }
 
     /**
-     * Runs {@code saga}: subscribes with a filter derived from the saga's handled event types, materializes per-instance
-     * state into {@code stateStore}, dispatches issued commands through {@code commandDispatcher}, and starts a timer
+     * Runs {@code saga}. It subscribes with a filter derived from the saga's handled event types, builds per-instance
+     * state in {@code stateStore}, dispatches issued commands through {@code commandDispatcher}, and starts a timer
      * poller that runs on every instance. The returned {@link SagaSubscription} is already started.
      */
     public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
@@ -130,10 +133,10 @@ public final class SagaRunner<E, C> {
     }
 
     /**
-     * Runs {@code saga} with the timer poller gated by {@code competingConsumerStrategy}: only the instance that currently
-     * holds the saga's timer lease polls the store for due timers, the others wake on their interval and no-op without
-     * querying it. Pass {@code null} to poll on every instance (the behavior of the shorter overloads). The lease is keyed
-     * by {@link #timerLeaseKey(String)} and released on {@link SagaSubscription#close()}. Everything else matches
+     * Runs {@code saga} with the timer poller coordinated by {@code competingConsumerStrategy}. Only the instance that
+     * currently holds the saga's timer lease polls the store for due timers. The others wake on their interval and do
+     * nothing without querying it. Pass {@code null} to poll on every instance, which is what the shorter overloads do.
+     * The lease is released on {@link SagaSubscription#close()}. Everything else matches
      * {@link #run(String, Saga, SagaStateStore, CommandDispatcher, StartAt, SagaRunnerConfig)}.
      */
     public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
@@ -180,11 +183,11 @@ public final class SagaRunner<E, C> {
     }
 
     /**
-     * The competing-consumer lease key the timer poller uses for {@code subscriptionId}. Namespaced with a {@code saga-timer:}
-     * prefix so it never collides with the event subscription's own lease (keyed by the raw subscription id), which would
-     * otherwise make the poller lose that lock on every instance and never fire a timer.
+     * The competing-consumer lease key the timer poller uses for {@code subscriptionId}. The {@code saga-timer:} prefix
+     * keeps it separate from the event subscription's own lease, which uses the raw subscription id. Without the prefix
+     * the two would share a key, and the poller would lose the lock on every instance and never run.
      */
-    public static String timerLeaseKey(String subscriptionId) {
+    static String timerLeaseKey(String subscriptionId) {
         return "saga-timer:" + subscriptionId;
     }
 
