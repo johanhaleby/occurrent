@@ -198,6 +198,39 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
+        fun `a single PlayerJoined plus the first move does not fulfil the join because two joins are expected`() {
+            val started = start(saga, LobbyOpened("g1"))
+            val afterFirstJoin = saga.step(started.state(), SagaInput.event(PlayerJoined("g1")))
+
+            val afterMove = saga.step(afterFirstJoin.state(), SagaInput.event(FirstPlayerMadeMove("g1")))
+
+            assertAll(
+                { assertThat(afterMove.state().currentStep()).isEqualTo("awaiting-game-start") },
+                { assertThat(saga.isTerminal(afterMove.state())).isFalse() },
+                { assertThat(afterMove.effects()).isEmpty() }
+            )
+        }
+
+        @Test
+        fun `the second PlayerJoined is what tips the join over its expected count, regardless of arrival order`() {
+            val started = start(saga, LobbyOpened("g1"))
+            val afterFirstJoin = saga.step(started.state(), SagaInput.event(PlayerJoined("g1")))
+            val afterMove = saga.step(afterFirstJoin.state(), SagaInput.event(FirstPlayerMadeMove("g1")))
+
+            val afterSecondJoin = saga.step(afterMove.state(), SagaInput.event(PlayerJoined("g1")))
+
+            assertAll(
+                { assertThat(saga.isTerminal(afterSecondJoin.state())).isTrue() },
+                {
+                    assertThat(afterSecondJoin.effects()).containsExactly(
+                        SagaEffect.issue(SendStartEmail("g1")),
+                        SagaEffect.cancelTimeout("step:awaiting-game-start")
+                    )
+                }
+            )
+        }
+
+        @Test
         fun `the timeout firing before the join is fulfilled reminds the players and completes the saga`() {
             val started = start(saga, LobbyOpened("g1"))
 
@@ -212,10 +245,12 @@ class SagaFlowExtensionsTest {
 
     // --- Scenario C: order-fulfillment with a retry loop --------------------------------------------------------------
 
-    sealed interface OrderEvent
-    data class OrderPlaced(val orderId: String, val amount: Int) : OrderEvent
-    data class PaymentReserved(val orderId: String) : OrderEvent
-    data class PaymentFailed(val orderId: String, val amount: Int) : OrderEvent
+    sealed interface OrderEvent {
+        val orderId: String
+    }
+    data class OrderPlaced(override val orderId: String, val amount: Int) : OrderEvent
+    data class PaymentReserved(override val orderId: String) : OrderEvent
+    data class PaymentFailed(override val orderId: String, val amount: Int) : OrderEvent
 
     sealed interface OrderCommand
     data class ReservePayment(val orderId: String, val amount: Int) : OrderCommand
@@ -224,13 +259,12 @@ class SagaFlowExtensionsTest {
 
     private fun orderFulfillmentSaga(): Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> =
         saga {
-            startsOn<OrderPlaced>({ it.orderId }) { o -> issue(ReservePayment(o.orderId, o.amount)) }
-            correlate<PaymentReserved> { it.orderId }
-            correlate<PaymentFailed> { it.orderId }
+            correlateAll { it.orderId }
+            startsOn<OrderPlaced> { o -> issue(ReservePayment(o.orderId, o.amount)) }
             step("awaiting-payment") {
                 on<PaymentReserved>(then = end) { p -> issue(ShipOrder(p.orderId)) }
                 on<PaymentFailed>(
-                    then = goTo("awaiting-payment"),
+                    then = transitionTo("awaiting-payment"),
                     onlyIf = { _, r -> r.count<PaymentFailed>() < 3 }
                 ) { f -> issue(ReservePayment(f.orderId, f.amount)) }
                 on<PaymentFailed>(then = end) { f -> issue(CancelOrder(f.orderId)) }
@@ -239,6 +273,60 @@ class SagaFlowExtensionsTest {
                 }
             }
         }
+
+    @Nested
+    inner class CorrelateAll {
+
+        private fun minimalOrderSaga(configure: FlowSagaBuilder<OrderEvent, OrderCommand>.() -> Unit): Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> =
+            saga {
+                configure()
+                startsOn<OrderPlaced> { }
+                step("awaiting-payment") { on<PaymentReserved>(then = end) { } }
+            }
+
+        @Test
+        fun `correlateAll correlates every event type without a per-type correlate`() {
+            val saga = minimalOrderSaga { correlateAll { it.orderId } }
+
+            assertAll(
+                { assertThat(saga.sagaId(OrderPlaced("o1", 100))).isEqualTo("o1") },
+                { assertThat(saga.sagaId(PaymentReserved("o2"))).isEqualTo("o2") },
+                { assertThat(saga.sagaId(PaymentFailed("o3", 100))).isEqualTo("o3") }
+            )
+        }
+
+        @Test
+        fun `a per-type correlate overrides the correlateAll fallback for its type`() {
+            val saga = minimalOrderSaga {
+                correlateAll { it.orderId }
+                correlate<PaymentReserved> { "reserved-" + it.orderId }
+            }
+
+            assertAll(
+                { assertThat(saga.sagaId(PaymentReserved("o1"))).isEqualTo("reserved-o1") },
+                { assertThat(saga.sagaId(PaymentFailed("o2", 100))).isEqualTo("o2") },
+                { assertThat(saga.sagaId(OrderPlaced("o3", 100))).isEqualTo("o3") }
+            )
+        }
+
+        @Test
+        fun `correlateAll can only be set once`() {
+            assertThatThrownBy {
+                minimalOrderSaga {
+                    correlateAll { it.orderId }
+                    correlateAll { it.orderId }
+                }
+            }.isInstanceOf(IllegalStateException::class.java)
+                .hasMessageContaining("correlateAll")
+        }
+
+        @Test
+        fun `startsOn without an explicit correlatedBy is correlated by correlateAll`() {
+            val saga = minimalOrderSaga { correlateAll { it.orderId } }
+
+            assertThat(saga.sagaId(OrderPlaced("o1", 100))).isEqualTo("o1")
+        }
+    }
 
     @Nested
     inner class OrderFulfillmentRetryLoop {
@@ -343,6 +431,77 @@ class SagaFlowExtensionsTest {
         }
     }
 
+    // --- Scenario D: a join whose whenFulfilled reads the joined events -----------------------------------------------
+
+    sealed interface ReviewEvent
+    data class ReviewRequested(val documentId: String) : ReviewEvent
+    data class Approved(val documentId: String, val reviewer: String) : ReviewEvent
+    data class BudgetAssigned(val documentId: String, val amount: Int) : ReviewEvent
+
+    sealed interface ReviewCommand
+    data class NotifyReviewer(val reviewer: String) : ReviewCommand
+    data class Publish(val documentId: String, val amount: Int) : ReviewCommand
+
+    /**
+     * The canonical `whenFulfilled` example: a join does not just fire, it hands the block every event it collected while
+     * waiting. Here two [Approved] and one [BudgetAssigned] must arrive; once they do, `whenFulfilled` reads each approving
+     * reviewer via [ReceivedEvents.all] and the assigned amount via [ReceivedEvents.first] to build commands from the actual
+     * joined payloads, not just the initiating event.
+     */
+    private fun documentReviewSaga(): Saga<ReviewEvent, FlowState<ReviewEvent>, ReviewCommand> =
+        saga {
+            startsOn<ReviewRequested>({ it.documentId })
+            correlate<Approved> { it.documentId }
+            correlate<BudgetAssigned> { it.documentId }
+            step("awaiting-approvals") {
+                join(expect<Approved>(2), expect<BudgetAssigned>(), then = end) { received ->
+                    received.all<Approved>().forEach { approval -> issue(NotifyReviewer(approval.reviewer)) }
+                    val budget = received.first<BudgetAssigned>()
+                    issue(Publish(received.initiating<ReviewRequested>().documentId, budget!!.amount))
+                }
+            }
+        }
+
+    @Nested
+    inner class DocumentReviewJoin {
+
+        private val saga = documentReviewSaga()
+
+        @Test
+        fun `the join stays open until every expected event has arrived`() {
+            val started = start(saga, ReviewRequested("d1"))
+            val afterFirstApproval = saga.step(started.state(), SagaInput.event(Approved("d1", "alice")))
+
+            val afterBudget = saga.step(afterFirstApproval.state(), SagaInput.event(BudgetAssigned("d1", 500)))
+
+            assertAll(
+                { assertThat(saga.isTerminal(afterBudget.state())).isFalse() },
+                { assertThat(afterBudget.state().currentStep()).isEqualTo("awaiting-approvals") },
+                { assertThat(afterBudget.effects()).isEmpty() }
+            )
+        }
+
+        @Test
+        fun `whenFulfilled reads every joined event to build its commands`() {
+            val started = start(saga, ReviewRequested("d1"))
+            val afterFirstApproval = saga.step(started.state(), SagaInput.event(Approved("d1", "alice")))
+            val afterBudget = saga.step(afterFirstApproval.state(), SagaInput.event(BudgetAssigned("d1", 500)))
+
+            val afterSecondApproval = saga.step(afterBudget.state(), SagaInput.event(Approved("d1", "bob")))
+
+            assertAll(
+                { assertThat(saga.isTerminal(afterSecondApproval.state())).isTrue() },
+                {
+                    assertThat(afterSecondApproval.effects()).containsExactly(
+                        SagaEffect.issue(NotifyReviewer("alice")),
+                        SagaEffect.issue(NotifyReviewer("bob")),
+                        SagaEffect.issue(Publish("d1", 500))
+                    )
+                }
+            )
+        }
+    }
+
     // --- Build-time validation ------------------------------------------------------------------------------------
 
     sealed interface ValidationEvent
@@ -351,18 +510,40 @@ class SagaFlowExtensionsTest {
     data class Bar(val id: String) : ValidationEvent
 
     sealed interface ValidationCommand
+    data class RecordValidation(val id: String) : ValidationCommand
 
     @Nested
     inner class BuildValidation {
 
         @Test
-        fun `a goTo target that is not a declared step fails to build`() {
+        fun `a single-expectation join builds and fulfils on that one event`() {
+            val saga = saga<ValidationEvent, ValidationCommand> {
+                startsOn<Started>({ it.id })
+                correlate<Foo> { it.id }
+                step("await-foo") {
+                    join(expect<Foo>(), then = end) { r ->
+                        issue(RecordValidation(r.initiating<Started>().id))
+                    }
+                }
+            }
+
+            val started = start(saga, Started("v1"))
+            val afterFoo = saga.step(started.state(), SagaInput.event(Foo("v1")))
+
+            assertAll(
+                { assertThat(saga.isTerminal(afterFoo.state())).isTrue() },
+                { assertThat(afterFoo.effects()).containsExactly(SagaEffect.issue(RecordValidation("v1"))) }
+            )
+        }
+
+        @Test
+        fun `a transitionTo target that is not a declared step fails to build`() {
             assertThatThrownBy {
                 saga<ValidationEvent, ValidationCommand> {
                     startsOn<Started>({ it.id })
                     correlate<Foo> { it.id }
                     step("first") {
-                        on<Foo>(then = goTo("does-not-exist")) {}
+                        on<Foo>(then = transitionTo("does-not-exist")) {}
                     }
                 }
             }.isInstanceOf(IllegalStateException::class.java)

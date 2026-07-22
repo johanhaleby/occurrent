@@ -30,7 +30,8 @@ import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.flow.FlowState;
-import org.occurrent.dsl.saga.flow.FlowState.ActionKind;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
@@ -211,13 +212,20 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // own model) goes through convertToMongoType, exactly like the snapshot store: a scalar stays a scalar and a
     // POJO/record becomes a sub-document.
     private Object toStateValue(S state) {
-        if (cloudEventConverter != null && state instanceof FlowState<?> flowState) {
+        if (cloudEventConverter != null && state instanceof FlowStateImpl<?> flowState) {
             return flowStateToDocument(flowState);
+        }
+        if (cloudEventConverter != null && state instanceof FlowState<?>) {
+            // A flow saga's state is always the executor's FlowStateImpl, which the read path (readState) reconstructs field
+            // by field. A different FlowState implementation would serialize generically here yet still be read back as a
+            // flow document, corrupting the round-trip, so reject it rather than mis-serialize it silently.
+            throw new IllegalArgumentException("a flow saga store can only persist the flow executor's FlowState (FlowStateImpl), got "
+                    + state.getClass().getName());
         }
         return mongoOperations.getConverter().convertToMongoType(state);
     }
 
-    private Document flowStateToDocument(FlowState<?> flowState) {
+    private Document flowStateToDocument(FlowStateImpl<?> flowState) {
         Document document = new Document();
         if (flowState.currentStep() != null) {
             document.append(FLOW_CURRENT_STEP, flowState.currentStep());
@@ -278,16 +286,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return (S) converter.getConversionService().convert(stateField, stateType);
     }
 
-    private FlowState<Object> flowStateFromDocument(Document document) {
+    private FlowStateImpl<Object> flowStateFromDocument(Document document) {
         List<Object> received = new ArrayList<>();
         for (String json : document.getList(FLOW_RECEIVED, String.class, List.of())) {
             received.add(requireConverter().toDomainEvent(fromCloudEventJson(json)));
         }
-        return new FlowState<>(
+        return new FlowStateImpl<>(
                 document.getString(FLOW_CURRENT_STEP),
                 received,
                 // A document written before this field existed never dropped anything, so its tail always started right
-                // after the pinned initiating event, position 1, not 0 (0 only holds for a never-started FlowState.initial()).
+                // after the pinned initiating event, position 1, not 0 (0 only holds for a never-started FlowStateImpl.initial()).
                 document.getInteger(FLOW_WINDOW_START, 1),
                 document.getInteger(FLOW_STEP_ENTRY_INDEX, 0),
                 document.getBoolean(FLOW_COMPLETED, false),

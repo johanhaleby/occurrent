@@ -21,7 +21,8 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
-import org.occurrent.dsl.saga.flow.FlowState.ActionKind;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
 
 import java.time.Duration;
@@ -57,6 +58,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private final Map<String, Integer> stepIndex;
     private final Map<String, CompiledStep<E, C>> stepsByName;
     private final TypeDispatch<Function<E, @Nullable String>> correlators;
+    private final @Nullable Function<E, @Nullable String> correlateAll;
     private final Set<Class<? extends E>> startEventTypes;
     private final Set<Class<? extends E>> eventTypes;
     // Carry-over: how many received events before the current step's entry are retained (and so visible to guards and
@@ -69,6 +71,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                  Map<String, Integer> stepIndex,
                  Map<String, CompiledStep<E, C>> stepsByName,
                  Map<Class<?>, Function<E, @Nullable String>> correlators,
+                 @Nullable Function<E, @Nullable String> correlateAll,
                  Set<Class<? extends E>> startEventTypes,
                  Set<Class<? extends E>> eventTypes,
                  int historyWindow) {
@@ -78,6 +81,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         this.stepIndex = stepIndex;
         this.stepsByName = stepsByName;
         this.correlators = new TypeDispatch<>(correlators);
+        this.correlateAll = correlateAll;
         this.startEventTypes = startEventTypes;
         this.eventTypes = eventTypes;
         this.historyWindow = historyWindow;
@@ -85,13 +89,16 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     @Override
     public FlowState<E> initialState() {
-        return FlowState.initial();
+        return FlowStateImpl.initial();
     }
 
     @Override
     public @Nullable String sagaId(E event) {
         Function<E, @Nullable String> correlator = correlators.resolve(event.getClass());
-        return correlator == null ? null : correlator.apply(event);
+        if (correlator != null) {
+            return correlator.apply(event);
+        }
+        return correlateAll == null ? null : correlateAll.apply(event);
     }
 
     @Override
@@ -113,13 +120,28 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     @SuppressWarnings("NullableProblems")
     @Override
     public FlowState<E> evolve(FlowState<E> state, SagaInput<E> input) {
+        // The executor only ever hands back a state this saga produced, so the concrete type is always FlowStateImpl. Narrow
+        // once at the boundary so the transition machinery below works against the full (bookkeeping-carrying) state.
+        FlowStateImpl<E> current = impl(state);
         return switch (input) {
-            case SagaInput.Event<E> ev -> evolveOnEvent(state, ev.event());
-            case SagaInput.Timeout<E> to -> evolveOnTimeout(state, to.timeout().timerName());
+            case SagaInput.Event<E> ev -> evolveOnEvent(current, ev.event());
+            case SagaInput.Timeout<E> to -> evolveOnTimeout(current, to.timeout().timerName());
         };
     }
 
-    private FlowState<E> evolveOnEvent(FlowState<E> state, E event) {
+    // A flow saga's state is only ever produced by this executor (initialState/evolve), so every state handed to evolve or
+    // react is a FlowStateImpl. Narrow it here rather than casting inline so that a caller passing a hand-rolled FlowState
+    // straight into the public evolve/react gets a clear message instead of a bare ClassCastException.
+    @SuppressWarnings("unchecked")
+    private FlowStateImpl<E> impl(FlowState<E> state) {
+        if (state instanceof FlowStateImpl<?> flowState) {
+            return (FlowStateImpl<E>) flowState;
+        }
+        throw new IllegalArgumentException("FlowState must be one produced by the flow saga executor (FlowStateImpl), got "
+                + (state == null ? "null" : state.getClass().getName()));
+    }
+
+    private FlowStateImpl<E> evolveOnEvent(FlowStateImpl<E> state, E event) {
         if (!state.completed() && state.currentStep() == null) {
             // Instance creation: the start event enters the first step, its window opens after the start event itself. The
             // start event is received.get(0) and is always retained; the retained tail begins at absolute position 1.
@@ -128,7 +150,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
             }
             String first = steps.get(0).name();
             // No react on the start event itself: onStart carries the instance-creation effects.
-            return new FlowState<>(first, List.of(event), 1, 1, false, null, ActionKind.NONE, -1);
+            return new FlowStateImpl<>(first, List.of(event), 1, 1, false, null, ActionKind.NONE, -1);
         }
         if (state.completed() || state.currentStep() == null) {
             return state;
@@ -155,7 +177,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         };
     }
 
-    private FlowState<E> evolveOnTimeout(FlowState<E> state, String timerName) {
+    private FlowStateImpl<E> evolveOnTimeout(FlowStateImpl<E> state, String timerName) {
         if (state.completed() || state.currentStep() == null) {
             return withClearedBookkeeping(state, state.received());
         }
@@ -175,18 +197,18 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // both when an event matches no branch / does not fulfil a join, and on an ignored timeout. windowStart and
     // stepEntryIndex are preserved: no transition happened, so the current step's window is unchanged and its accumulating
     // events must not be dropped (a join counts over them).
-    private FlowState<E> withClearedBookkeeping(FlowState<E> state, List<E> received) {
-        return new FlowState<>(state.currentStep(), received, state.windowStart(), state.stepEntryIndex(), state.completed(),
+    private FlowStateImpl<E> withClearedBookkeeping(FlowStateImpl<E> state, List<E> received) {
+        return new FlowStateImpl<>(state.currentStep(), received, state.windowStart(), state.stepEntryIndex(), state.completed(),
                 state.currentStep(), ActionKind.NONE, -1);
     }
 
     // The relative index into the retained received list where the current step's join window begins. received.get(0) is
     // the pinned initiating event, so absolute position p maps to relative index p - windowStart + 1.
-    private static int joinWindowStart(FlowState<?> state) {
+    private static int joinWindowStart(FlowStateImpl<?> state) {
         return state.stepEntryIndex() - state.windowStart() + 1;
     }
 
-    private FlowState<E> applyTransition(FlowState<E> from, Continuation continuation, List<E> received, ActionKind kind, int branchIndex) {
+    private FlowStateImpl<E> applyTransition(FlowStateImpl<E> from, Continuation continuation, List<E> received, ActionKind kind, int branchIndex) {
         // The new step is entered after every event received so far, so its entry is the absolute event count. received holds
         // the initiating event (position 0) plus the tail starting at windowStart, so that count is windowStart plus the tail
         // length, i.e. windowStart + (received.size() - 1). When nothing has been dropped (windowStart == 1) this is exactly
@@ -202,12 +224,12 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
             case Continuation.Next ignored -> {
                 int next = stepIndex.get(fromStep) + 1;
                 if (next < steps.size()) {
-                    yield new FlowState<>(steps.get(next).name(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
+                    yield new FlowStateImpl<>(steps.get(next).name(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
                 }
-                yield new FlowState<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
+                yield new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
             }
-            case Continuation.GoTo goTo -> new FlowState<>(goTo.stepName(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
-            case Continuation.End ignored -> new FlowState<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
+            case Continuation.TransitionTo transitionTo -> new FlowStateImpl<>(transitionTo.stepName(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
+            case Continuation.End ignored -> new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
         };
     }
 
@@ -237,15 +259,17 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     @Override
     public List<SagaEffect<C>> react(FlowState<E> state, SagaInput<E> input) {
-        return switch (state.lastAction()) {
+        // As in evolve, the concrete type is always FlowStateImpl; react routes on the bookkeeping it carries.
+        FlowStateImpl<E> current = impl(state);
+        return switch (current.lastAction()) {
             case NONE -> List.of();
-            case BRANCH -> reactToBranch(state, input);
-            case JOIN -> reactToJoin(state);
-            case TIMEOUT -> reactToTimeout(state);
+            case BRANCH -> reactToBranch(current, input);
+            case JOIN -> reactToJoin(current);
+            case TIMEOUT -> reactToTimeout(current);
         };
     }
 
-    private List<SagaEffect<C>> reactToBranch(FlowState<E> state, SagaInput<E> input) {
+    private List<SagaEffect<C>> reactToBranch(FlowStateImpl<E> state, SagaInput<E> input) {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         ChoiceBody<E, C> choice = (ChoiceBody<E, C>) from.body();
         Branch<E, C> branch = choice.branches().get(state.matchedBranchIndex());
@@ -255,7 +279,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return effects;
     }
 
-    private List<SagaEffect<C>> reactToJoin(FlowState<E> state) {
+    private List<SagaEffect<C>> reactToJoin(FlowStateImpl<E> state) {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         JoinBody<E, C> join = (JoinBody<E, C>) from.body();
         List<SagaEffect<C>> effects = issueAll(join.whenFulfilled().apply(ReceivedEvents.of(state.received())));
@@ -263,7 +287,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return effects;
     }
 
-    private List<SagaEffect<C>> reactToTimeout(FlowState<E> state) {
+    private List<SagaEffect<C>> reactToTimeout(FlowStateImpl<E> state) {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         TimeoutSpec<E, C> timeout = from.timeout();
         List<SagaEffect<C>> effects = issueAll(timeout.onExpiry().apply(ReceivedEvents.of(state.received())));
@@ -276,7 +300,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
      * executor already consumed it and re-cancelling would only add a redundant no-op to the effect list), and arm the
      * timer of the step we entered. A self-loop cancels then re-arms the same timer, which the executor applies in order.
      */
-    private void retargetTimers(List<SagaEffect<C>> effects, FlowState<E> state, boolean firedFromTimer) {
+    private void retargetTimers(List<SagaEffect<C>> effects, FlowStateImpl<E> state, boolean firedFromTimer) {
         String fromStep = state.previousStep();
         if (!firedFromTimer && fromStep != null) {
             CompiledStep<E, C> from = stepsByName.get(fromStep);

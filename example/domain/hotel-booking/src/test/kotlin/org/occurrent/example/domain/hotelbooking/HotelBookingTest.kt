@@ -34,8 +34,10 @@ import org.occurrent.example.domain.hotelbooking.features.roommanagement.usecase
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
+import org.springframework.test.annotation.DirtiesContext
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.testcontainers.mongodb.MongoDBContainer
 import reactor.core.publisher.Mono
 import java.time.LocalDate
@@ -50,6 +52,7 @@ import java.util.*
  */
 @SpringBootTest
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class HotelBookingTest {
 
@@ -57,7 +60,7 @@ class HotelBookingTest {
         @Container
         @ServiceConnection
         @JvmStatic
-        val mongoDBContainer: MongoDBContainer = MongoDBContainer("mongo:" + (System.getProperty("test.mongo.version") ?: "7.0")).withReplicaSet()
+        val mongoDBContainer: MongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion()
     }
 
     @Autowired

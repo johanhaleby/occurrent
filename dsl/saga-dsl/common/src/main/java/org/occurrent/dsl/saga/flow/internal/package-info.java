@@ -13,18 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb
 
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection
-import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
-import org.springframework.context.annotation.Bean
-import org.testcontainers.mongodb.MongoDBContainer
+/**
+ * Internal implementation types for the flow saga layer. These are {@code public} only because a state store lives in a
+ * separate module and must construct and read them; they are not part of the public API and may change or be removed at
+ * any time. End users author flow sagas through {@code org.occurrent.dsl.saga.flow} and never reference this package.
+ */
+@NullMarked
+package org.occurrent.dsl.saga.flow.internal;
 
-@TestConfiguration(proxyBeanMethods = false)
-class TestBootstrap {
-
-    @Bean
-    @ServiceConnection
-    fun mongoDbContainer(): MongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion()
-}
+import org.jspecify.annotations.NullMarked;

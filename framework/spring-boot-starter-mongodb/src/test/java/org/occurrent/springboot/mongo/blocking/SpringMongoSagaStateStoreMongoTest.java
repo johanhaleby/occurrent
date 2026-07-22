@@ -36,6 +36,7 @@ import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.flow.Continuation;
 import org.occurrent.dsl.saga.flow.FlowSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -206,8 +207,11 @@ class SpringMongoSagaStateStoreMongoTest {
             assertThat(e.state().currentStep()).isEqualTo(finalState.currentStep());
             assertThat(e.state().completed()).isEqualTo(finalState.completed());
             assertThat(e.state().received()).containsExactly(startEvent, continuedEvent);
-            assertThat(e.state().windowStart()).as("the bounded-window offset round-trips").isEqualTo(finalState.windowStart());
-            assertThat(e.state().stepEntryIndex()).as("the absolute step-entry index round-trips").isEqualTo(finalState.stepEntryIndex());
+            // The bookkeeping the store must round-trip lives on the internal FlowStateImpl, not the public FlowState surface.
+            FlowStateImpl<FlowEvent> reloaded = (FlowStateImpl<FlowEvent>) e.state();
+            FlowStateImpl<FlowEvent> expected = (FlowStateImpl<FlowEvent>) finalState;
+            assertThat(reloaded.windowStart()).as("the bounded-window offset round-trips").isEqualTo(expected.windowStart());
+            assertThat(reloaded.stepEntryIndex()).as("the absolute step-entry index round-trips").isEqualTo(expected.stepEntryIndex());
         });
 
         // The received events are stored as CloudEvents keyed by the stable simple type name, not the Java FQN.

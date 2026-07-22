@@ -16,6 +16,7 @@
 
 package org.occurrent.example.domain.appointmentscheduling;
 
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 /**
@@ -27,7 +28,7 @@ public final class LocalLauncher {
     }
 
     public static void main(String[] args) {
-        MongoDBContainer mongo = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version", "8.0")).withReplicaSet();
+        MongoDBContainer mongo = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
         mongo.start();
         Bootstrap application = Bootstrap.bootstrap(mongo.getReplicaSetUrl(), 7000);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

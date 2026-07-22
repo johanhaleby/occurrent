@@ -25,4 +25,12 @@ package org.occurrent.example.saga.orderfulfillment;
  */
 public sealed interface OrderEvent permits OrderPlaced, PaymentReserved, PaymentFailed, PaymentReservationRequested, OrderShipped, OrderCancelled {
     String orderId();
+
+    /**
+     * A JavaBean getter delegating to {@link #orderId()}, so Kotlin reads the id as a property
+     * ({@code event.orderId}) on the interface type, matching the record-component access on the concrete events.
+     */
+    default String getOrderId() {
+        return orderId();
+    }
 }

@@ -20,7 +20,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Where a flow saga goes after a branch, join, or timeout fires. It is data, not a value returned from a user lambda, so
- * the builder can validate the whole step graph (every {@link GoTo} target exists) and the graph can be rendered.
+ * the builder can validate the whole step graph (every {@link TransitionTo} target exists) and the graph can be rendered.
  */
 public sealed interface Continuation {
 
@@ -29,8 +29,8 @@ public sealed interface Continuation {
     }
 
     /** Jump to the named step. A back-edge (including to the current step) models a loop or a retry. */
-    record GoTo(String stepName) implements Continuation {
-        public GoTo {
+    record TransitionTo(String stepName) implements Continuation {
+        public TransitionTo {
             requireNonNull(stepName, "stepName cannot be null");
         }
     }
@@ -45,8 +45,8 @@ public sealed interface Continuation {
     }
 
     /** Jump to the named step. */
-    static Continuation goTo(String stepName) {
-        return new GoTo(stepName);
+    static Continuation transitionTo(String stepName) {
+        return new TransitionTo(stepName);
     }
 
     /** Complete the saga. */

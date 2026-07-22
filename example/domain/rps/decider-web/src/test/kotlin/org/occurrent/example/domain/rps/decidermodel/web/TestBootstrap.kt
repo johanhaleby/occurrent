@@ -23,6 +23,7 @@ import org.springframework.boot.fromApplication
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.boot.with
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.context.annotation.Bean
 import org.testcontainers.mongodb.MongoDBContainer
 
@@ -34,7 +35,7 @@ class TestBootstrap {
     @Bean
     @ServiceConnection
     @RestartScope
-    fun mongoDbContainer(): MongoDBContainer = MongoDBContainer("mongo:4.2.8").withReplicaSet().apply {
+    fun mongoDbContainer(): MongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().apply {
         portBindings = listOf("27017:27017")
     }
 }

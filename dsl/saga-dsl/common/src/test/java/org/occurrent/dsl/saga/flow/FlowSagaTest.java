@@ -83,7 +83,7 @@ class FlowSagaTest {
                         .on(PaymentReserved.class, Continuation.end(), p -> List.of(new ShipOrder(p.orderId())))
                         .on(PaymentFailed.class,
                                 (f, received) -> received.count(PaymentFailed.class) < 3,
-                                Continuation.goTo("awaiting-payment"),
+                                Continuation.transitionTo("awaiting-payment"),
                                 f -> List.of(new ReservePayment(f.orderId(), f.amount())))
                         .on(PaymentFailed.class, Continuation.end(), f -> List.of(new CancelOrder(f.orderId())))
                         .timeout(Duration.ofMinutes(30), Continuation.end(),
@@ -277,8 +277,8 @@ class FlowSagaTest {
                     .historyWindow(historyWindow)
                     .startsOn(Begin.class, Begin::id)
                     .correlate(Tick.class, Tick::id)
-                    .step("a", step -> step.on(Tick.class, Continuation.goTo("b"), t -> List.of()))
-                    .step("b", step -> step.on(Tick.class, Continuation.goTo("a"), t -> List.of()))
+                    .step("a", step -> step.on(Tick.class, Continuation.transitionTo("b"), t -> List.of()))
+                    .step("b", step -> step.on(Tick.class, Continuation.transitionTo("a"), t -> List.of()))
                     .build();
         }
 
