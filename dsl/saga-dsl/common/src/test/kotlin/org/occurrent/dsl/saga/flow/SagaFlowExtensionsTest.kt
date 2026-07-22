@@ -198,6 +198,39 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
+        fun `a single PlayerJoined plus the first move does not fulfil the join because two joins are expected`() {
+            val started = start(saga, LobbyOpened("g1"))
+            val afterFirstJoin = saga.step(started.state(), SagaInput.event(PlayerJoined("g1")))
+
+            val afterMove = saga.step(afterFirstJoin.state(), SagaInput.event(FirstPlayerMadeMove("g1")))
+
+            assertAll(
+                { assertThat(afterMove.state().currentStep()).isEqualTo("awaiting-game-start") },
+                { assertThat(saga.isTerminal(afterMove.state())).isFalse() },
+                { assertThat(afterMove.effects()).isEmpty() }
+            )
+        }
+
+        @Test
+        fun `the second PlayerJoined is what tips the join over its expected count, regardless of arrival order`() {
+            val started = start(saga, LobbyOpened("g1"))
+            val afterFirstJoin = saga.step(started.state(), SagaInput.event(PlayerJoined("g1")))
+            val afterMove = saga.step(afterFirstJoin.state(), SagaInput.event(FirstPlayerMadeMove("g1")))
+
+            val afterSecondJoin = saga.step(afterMove.state(), SagaInput.event(PlayerJoined("g1")))
+
+            assertAll(
+                { assertThat(saga.isTerminal(afterSecondJoin.state())).isTrue() },
+                {
+                    assertThat(afterSecondJoin.effects()).containsExactly(
+                        SagaEffect.issue(SendStartEmail("g1")),
+                        SagaEffect.cancelTimeout("step:awaiting-game-start")
+                    )
+                }
+            )
+        }
+
+        @Test
         fun `the timeout firing before the join is fulfilled reminds the players and completes the saga`() {
             val started = start(saga, LobbyOpened("g1"))
 
