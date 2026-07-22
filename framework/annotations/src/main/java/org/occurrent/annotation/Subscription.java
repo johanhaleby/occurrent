@@ -77,7 +77,7 @@ import java.lang.annotation.*;
  * </pre>
  * <p>
  * When you only need the stream id or stream version, annotate a parameter with {@link StreamId} or
- * {@link StreamVersion} instead of taking the whole {@link org.occurrent.dsl.subscription.EventMetadata}:
+ * {@link StreamVersion} instead of taking the whole {@link org.occurrent.cloudevents.EventMetadata}:
  * <pre lang="java">
  * &#64;Subscription(id = "mySubscription")
  * void mySubscription(MyDomainEvent event, &#64;StreamId String streamId, &#64;StreamVersion long streamVersion) { .. }

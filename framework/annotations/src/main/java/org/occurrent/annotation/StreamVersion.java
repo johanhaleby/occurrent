@@ -21,7 +21,7 @@ import java.lang.annotation.*;
 
 /**
  * Injects the stream version of the delivered event into a subscription handler parameter, so a handler does not have
- * to declare an {@link org.occurrent.dsl.subscription.EventMetadata} parameter and call {@code getStreamVersion()}. For
+ * to declare an {@link org.occurrent.cloudevents.EventMetadata} parameter and call {@code getStreamVersion()}. For
  * example:
  *
  * <pre lang="java">
@@ -31,7 +31,7 @@ import java.lang.annotation.*;
  *
  * <p>
  * The annotated parameter must be of type {@code long} or {@link Long}. It may be combined with a {@link StreamId}
- * parameter and an {@link org.occurrent.dsl.subscription.EventMetadata} parameter, in any order.
+ * parameter and an {@link org.occurrent.cloudevents.EventMetadata} parameter, in any order.
  * </p>
  * <p>
  * Usable on {@link Subscription}, {@link StreamSubscription}, and {@code @SynchronousSubscription} handlers. On a
@@ -42,7 +42,7 @@ import java.lang.annotation.*;
  * Note that on the capability-agnostic {@link Subscription}, an event that was DCB-appended carries the internal
  * per-partition counter rather than a domain stream version. The value is always present, it is just an internal
  * counter for a DCB-sourced event, which is the same semantics
- * {@link org.occurrent.dsl.subscription.EventMetadata#getStreamVersion()} has there.
+ * {@link org.occurrent.cloudevents.EventMetadata#getStreamVersion()} has there.
  * </p>
  */
 @Target({ElementType.PARAMETER})

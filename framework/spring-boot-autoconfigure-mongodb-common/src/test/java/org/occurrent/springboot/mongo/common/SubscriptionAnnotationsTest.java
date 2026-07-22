@@ -20,7 +20,7 @@ package org.occurrent.springboot.mongo.common;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StreamId;
 import org.occurrent.annotation.StreamVersion;
-import org.occurrent.dsl.subscription.EventMetadata;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.HandlerParameter;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.HandlerParameterKind;
 

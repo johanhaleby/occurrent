@@ -21,7 +21,7 @@ import java.lang.annotation.*;
 
 /**
  * Injects the stream id of the delivered event into a subscription handler parameter, so a handler does not have to
- * declare an {@link org.occurrent.dsl.subscription.EventMetadata} parameter and call {@code getStreamId()}. For example:
+ * declare an {@link org.occurrent.cloudevents.EventMetadata} parameter and call {@code getStreamId()}. For example:
  *
  * <pre lang="java">
  * &#64;StreamSubscription(id = "mySubscription")
@@ -30,7 +30,7 @@ import java.lang.annotation.*;
  *
  * <p>
  * The annotated parameter must be of type {@link String}. It may be combined with a {@link StreamVersion} parameter and
- * an {@link org.occurrent.dsl.subscription.EventMetadata} parameter, in any order.
+ * an {@link org.occurrent.cloudevents.EventMetadata} parameter, in any order.
  * </p>
  * <p>
  * Usable on {@link Subscription}, {@link StreamSubscription}, and {@code @SynchronousSubscription} handlers. On a
@@ -41,7 +41,7 @@ import java.lang.annotation.*;
  * Note that on the capability-agnostic {@link Subscription}, an event that was DCB-appended carries the internal
  * generated partition id (for example {@code dcb:partition:37}) rather than a domain stream id. The value is always
  * present, it is just an internal id for a DCB-sourced event, which is the same semantics
- * {@link org.occurrent.dsl.subscription.EventMetadata#getStreamId()} has there.
+ * {@link org.occurrent.cloudevents.EventMetadata#getStreamId()} has there.
  * </p>
  */
 @Target({ElementType.PARAMETER})
