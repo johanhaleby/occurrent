@@ -17,12 +17,12 @@
 package org.occurrent.dsl.saga.flow;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.flow.FlowState.ActionKind;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
-import org.occurrent.cloudevents.EventMetadata;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -104,11 +104,13 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return eventTypes;
     }
 
+    @SuppressWarnings("NullableProblems")
     @Override
     public boolean isTerminal(FlowState<E> state) {
         return state.completed();
     }
 
+    @SuppressWarnings("NullableProblems")
     @Override
     public FlowState<E> evolve(FlowState<E> state, SagaInput<E> input) {
         return switch (input) {
