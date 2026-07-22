@@ -21,9 +21,9 @@ import org.occurrent.cloudevents.EventMetadata;
 import static java.util.Objects.requireNonNull;
 
 /**
- * What a {@link Saga} reacts to: either a domain event, or one of the saga's own timers firing. A saga folds both kinds
- * through the same {@link Saga#evolve(Object, SagaInput)} and {@link Saga#react(Object, SagaInput)}, so a fired timer is
- * not delivered through a separate path.
+ * What a {@link Saga} reacts to: either a domain event, or one of the saga's own timers firing. Both go to the same
+ * {@link Saga#evolve(Object, SagaInput)} and {@link Saga#react(Object, SagaInput)}. There is no separate method for
+ * timers.
  * <p>
  * Most sagas never touch this type directly. The {@code Saga} builder and the flow DSL let you handle events by type and
  * declare timeouts, and dispatch this union for you. You meet {@code SagaInput} directly only in the low-level
