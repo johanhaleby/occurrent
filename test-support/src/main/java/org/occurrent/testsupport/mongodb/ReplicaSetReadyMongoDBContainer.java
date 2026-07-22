@@ -97,7 +97,8 @@ public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
         return MongoClientSettings.builder()
                 .applyConnectionString(new ConnectionString(getReplicaSetUrl()))
                 .applyToClusterSettings(b -> b.serverSelectionTimeout(probeMillis, TimeUnit.MILLISECONDS))
-                .applyToSocketSettings(b -> b.connectTimeout((int) probeMillis, TimeUnit.MILLISECONDS))
+                .applyToSocketSettings(b -> b.connectTimeout((int) probeMillis, TimeUnit.MILLISECONDS)
+                        .readTimeout((int) probeMillis, TimeUnit.MILLISECONDS))
                 .build();
     }
 
