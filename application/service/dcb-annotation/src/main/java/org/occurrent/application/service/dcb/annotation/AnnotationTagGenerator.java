@@ -19,21 +19,16 @@ package org.occurrent.application.service.dcb.annotation;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.DcbTag;
+import org.occurrent.annotationsupport.internal.AnnotatedMemberScanException;
+import org.occurrent.annotationsupport.internal.AnnotatedMemberScanner;
+import org.occurrent.annotationsupport.internal.ScannedMember;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.eventstore.api.dcb.Tag;
 
-import java.beans.Introspector;
 import java.lang.annotation.Annotation;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.lang.reflect.RecordComponent;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -78,6 +73,7 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
 
     private final Class<? extends Annotation> annotationType;
     private final Function<Annotation, @Nullable String> keyResolver;
+    private final AnnotatedMemberScanner scanner;
     private final ConcurrentMap<Class<?>, List<TagExtractor>> cache = new ConcurrentHashMap<>();
 
     /**
@@ -108,7 +104,8 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
      * @param annotationType The annotation type to scan for
      */
     public AnnotationTagGenerator(Class<? extends Annotation> annotationType) {
-        this.annotationType = validateAnnotationType(annotationType);
+        this.scanner = new AnnotatedMemberScanner(annotationType);
+        this.annotationType = scanner.annotationType();
         this.keyResolver = defaultKeyResolver(this.annotationType);
     }
 
@@ -122,7 +119,8 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
      * @param <A> The annotation type
      */
     public <A extends Annotation> AnnotationTagGenerator(Class<A> annotationType, Function<? super A, @Nullable String> keyResolver) {
-        this.annotationType = validateAnnotationType(annotationType);
+        this.scanner = new AnnotatedMemberScanner(annotationType);
+        this.annotationType = scanner.annotationType();
         requireNonNull(keyResolver, "Key resolver cannot be null");
         this.keyResolver = annotation -> keyResolver.apply(annotationType.cast(annotation));
     }
@@ -130,7 +128,7 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
     @Override
     public Set<Tag> tags(E event) {
         requireNonNull(event);
-        List<TagExtractor> extractors = this.cache.computeIfAbsent(event.getClass(), this::scan);
+        List<TagExtractor> extractors = this.cache.computeIfAbsent(event.getClass(), this::buildExtractors);
         if (extractors.isEmpty()) {
             return Set.of();
         }
@@ -156,6 +154,23 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
         return Collections.unmodifiableSet(tags);
     }
 
+    // Turn the scanner's members into tag extractors, resolving each member's key and letting the getter win
+    // when a property is annotated on both its getter and its backing field.
+    private List<TagExtractor> buildExtractors(Class<?> clazz) {
+        List<ScannedMember> members;
+        try {
+            members = scanner.scan(clazz);
+        } catch (AnnotatedMemberScanException e) {
+            throw new AnnotationTagGeneratorException(e.getMessage(), e);
+        }
+        Map<String, TagExtractor> extractorsByKey = new LinkedHashMap<>();
+        for (ScannedMember member : members) {
+            String key = resolveKey(member.annotation(), member.propertyName());
+            extractorsByKey.putIfAbsent(key, new TagExtractor(key, member.accessor()));
+        }
+        return List.copyOf(extractorsByKey.values());
+    }
+
     private Object invoke(MethodHandle accessor, Object event) {
         try {
             return accessor.invoke(event);
@@ -164,127 +179,9 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
         }
     }
 
-    private List<TagExtractor> scan(Class<?> clazz) {
-        if (clazz.isRecord()) {
-            List<TagExtractor> extractors = new ArrayList<>();
-            for (RecordComponent rc : clazz.getRecordComponents()) {
-                Annotation annotation = rc.getAnnotation(annotationType);
-                if (annotation == null) {
-                    continue;
-                }
-                extractors.add(new TagExtractor(resolveKey(annotation, rc.getName()), unreflect(rc.getAccessor())));
-            }
-            return List.copyOf(extractors);
-        }
-
-        // Methods are scanned before fields so that when a property is annotated on both its getter and its
-        // backing field (the Kotlin case) the getter wins and the property yields a single tag.
-        Map<String, TagExtractor> extractorsByKey = new LinkedHashMap<>();
-        for (Class<?> current = clazz; current != null && current != Object.class; current = current.getSuperclass()) {
-            scanMethods(current, extractorsByKey);
-            scanFields(current, clazz, extractorsByKey);
-        }
-        return List.copyOf(extractorsByKey.values());
-    }
-
-    private void scanMethods(Class<?> clazz, Map<String, TagExtractor> extractorsByKey) {
-        for (Method method : clazz.getDeclaredMethods()) {
-            Annotation annotation = method.getAnnotation(annotationType);
-            if (annotation == null || method.getParameterCount() != 0 || method.isSynthetic()
-                    || Modifier.isStatic(method.getModifiers()) || method.getReturnType() == void.class) {
-                continue;
-            }
-            String key = resolveKey(annotation, propertyNameFromGetter(method));
-            extractorsByKey.putIfAbsent(key, new TagExtractor(key, unreflect(method)));
-        }
-    }
-
-    private void scanFields(Class<?> declaringClass, Class<?> concreteClass, Map<String, TagExtractor> extractorsByKey) {
-        for (Field field : declaringClass.getDeclaredFields()) {
-            Annotation annotation = field.getAnnotation(annotationType);
-            if (annotation == null || field.isSynthetic() || Modifier.isStatic(field.getModifiers())) {
-                continue;
-            }
-            String key = resolveKey(annotation, field.getName());
-            if (extractorsByKey.containsKey(key)) {
-                continue;
-            }
-            // Prefer reading through the getter (Kotlin generates a public getter for every val); fall back to the
-            // field itself only when a field is annotated with no matching accessor. The getter is looked up on the
-            // concrete class so a getter declared or overridden only on a subclass is still found.
-            Method getter = findGetter(concreteClass, field.getName());
-            extractorsByKey.put(key, new TagExtractor(key, getter != null ? unreflect(getter) : unreflectField(field)));
-        }
-    }
-
-    private static @Nullable Method findGetter(Class<?> clazz, String fieldName) {
-        String capitalized = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
-        Set<String> candidateNames = Set.of("get" + capitalized, "is" + capitalized, fieldName);
-        // Walk the hierarchy from the concrete class up (so a subclass getter wins) and use getDeclaredMethods, which
-        // also sees a non-public getter; it is made accessible when bound. getMethod would miss non-public accessors.
-        for (Class<?> current = clazz; current != null && current != Object.class; current = current.getSuperclass()) {
-            for (Method method : current.getDeclaredMethods()) {
-                if (method.getParameterCount() == 0 && !method.isSynthetic() && !Modifier.isStatic(method.getModifiers())
-                        && method.getReturnType() != void.class && candidateNames.contains(method.getName())) {
-                    return method;
-                }
-            }
-        }
-        return null;
-    }
-
-    // Bind an accessor to a MethodHandle, making it accessible first so the event class need not be public.
-    // Under the module system this requires the declaring package to be open for reflection.
-    private MethodHandle unreflect(Method accessor) {
-        try {
-            accessor.setAccessible(true);
-            return MethodHandles.lookup().unreflect(accessor);
-        } catch (IllegalAccessException | RuntimeException e) {
-            throw accessError(accessor.getDeclaringClass(), accessor.toString(), e);
-        }
-    }
-
-    private MethodHandle unreflectField(Field field) {
-        try {
-            field.setAccessible(true);
-            return MethodHandles.lookup().unreflectGetter(field);
-        } catch (IllegalAccessException | RuntimeException e) {
-            throw accessError(field.getDeclaringClass(), field.toString(), e);
-        }
-    }
-
-    private AnnotationTagGeneratorException accessError(Class<?> owner, String member, Throwable cause) {
-        return new AnnotationTagGeneratorException(
-                "Cannot access @" + annotationType.getSimpleName() + " member " + member + " on " + owner.getName()
-                        + ". Under the Java module system the declaring package must be open for reflection.", cause);
-    }
-
-    private static String propertyNameFromGetter(Method method) {
-        String name = method.getName();
-        if (name.startsWith("get") && name.length() > 3) {
-            return Introspector.decapitalize(name.substring(3));
-        }
-        if (name.startsWith("is") && name.length() > 2) {
-            return Introspector.decapitalize(name.substring(2));
-        }
-        return name;
-    }
-
     private String resolveKey(Annotation annotation, String defaultName) {
         @Nullable String key = keyResolver.apply(annotation);
         return key == null || key.isBlank() ? defaultName : key;
-    }
-
-    private static <A extends Annotation> Class<A> validateAnnotationType(Class<A> annotationType) {
-        requireNonNull(annotationType, "Annotation type cannot be null");
-        if (!annotationType.isAnnotation()) {
-            throw new IllegalArgumentException("Annotation type must be an annotation");
-        }
-        Retention retention = annotationType.getAnnotation(Retention.class);
-        if (retention == null || retention.value() != RetentionPolicy.RUNTIME) {
-            throw new IllegalArgumentException("Annotation type must be annotated with @Retention(RUNTIME)");
-        }
-        return annotationType;
     }
 
     private static Function<Annotation, @Nullable String> defaultKeyResolver(Class<? extends Annotation> annotationType) {
