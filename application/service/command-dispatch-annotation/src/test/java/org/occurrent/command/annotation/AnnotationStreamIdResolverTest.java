@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.command.StreamIdResolver;
-import org.occurrent.command.TargetStream;
+import org.occurrent.annotation.TargetStream;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

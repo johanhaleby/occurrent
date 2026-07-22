@@ -19,7 +19,7 @@ package org.occurrent.command.annotation;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.command.StreamIdResolver;
-import org.occurrent.command.TargetStream;
+import org.occurrent.annotation.TargetStream;
 
 import java.beans.Introspector;
 import java.lang.annotation.Annotation;
@@ -47,9 +47,8 @@ import static java.util.Objects.requireNonNull;
  * {@link TargetStream}, but a custom annotation type can be supplied when constructing the resolver. It is the
  * command, write-side mirror of the DCB {@code AnnotationTagGenerator}.
  * <p>
- * Exactly one property of a command must carry the annotation, with a getter and its backing field counting as one.
- * Its runtime value, converted with {@code toString()}, is the stream id. A command with no annotated property, or
- * more than one, cannot be routed, and a {@code null} or blank value is likewise an error.
+ * It enforces the exactly-one-property contract documented on {@link TargetStream}: a command with no annotated
+ * property, or more than one, cannot be routed, and a {@code null} or blank value is likewise an error.
  * <p>
  * For a Java record, the annotation is placed on the record component. For any other class, including a Kotlin data
  * class, it is placed on a no-arg getter method, or on a field using the Kotlin {@code @get:...} / {@code @field:...}

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.command;
+package org.occurrent.annotation;
 
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
@@ -24,7 +24,7 @@ import java.lang.annotation.Target;
 
 /**
  * Marks the command member (a record component, field, or no-arg getter) whose value is the target stream id, so a
- * reflection-based {@link StreamIdResolver} can route the command without a hand-written {@code command -> streamId}
+ * reflection-based {@code StreamIdResolver} can route the command without a hand-written {@code command -> streamId}
  * function. Exactly one property of a command must carry this annotation, with a getter and its backing field counting
  * as one. Its runtime value, converted with {@code toString()}, is the stream id (a {@code null} or blank value is an
  * error, since the command cannot be routed).
