@@ -20,8 +20,6 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.dcb.DcbDecider;
 import org.occurrent.dsl.dcb.blocking.DcbDeciderApplicationService;
 
-import java.util.List;
-
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -49,6 +47,6 @@ public final class DcbCommandDispatchers {
                                                       DcbDecider<C, ?, E> dcbDecider) {
         requireNonNull(applicationService, "applicationService cannot be null");
         requireNonNull(dcbDecider, "dcbDecider cannot be null");
-        return command -> applicationService.execute(List.of(command), dcbDecider);
+        return command -> applicationService.execute(command, dcbDecider);
     }
 }
