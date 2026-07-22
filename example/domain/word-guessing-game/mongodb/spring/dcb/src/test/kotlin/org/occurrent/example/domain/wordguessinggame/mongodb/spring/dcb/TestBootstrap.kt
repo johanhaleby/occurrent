@@ -17,6 +17,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb
 
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.context.annotation.Bean
 import org.testcontainers.mongodb.MongoDBContainer
 
@@ -25,5 +26,5 @@ class TestBootstrap {
 
     @Bean
     @ServiceConnection
-    fun mongoDbContainer(): MongoDBContainer = MongoDBContainer("mongo:4.2.8").withReplicaSet()
+    fun mongoDbContainer(): MongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion()
 }

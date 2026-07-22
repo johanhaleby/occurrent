@@ -32,8 +32,10 @@ import org.occurrent.example.domain.courseenrollment.features.studentmanagement.
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
+import org.springframework.test.annotation.DirtiesContext
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.testcontainers.mongodb.MongoDBContainer
 import java.util.*
 import java.util.concurrent.Callable
@@ -49,6 +51,7 @@ import java.util.concurrent.Executors
  */
 @SpringBootTest
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class CourseEnrollmentTest {
 
@@ -56,7 +59,7 @@ class CourseEnrollmentTest {
         @Container
         @ServiceConnection
         @JvmStatic
-        val mongoDBContainer: MongoDBContainer = MongoDBContainer("mongo:" + (System.getProperty("test.mongo.version") ?: "7.0")).withReplicaSet()
+        val mongoDBContainer: MongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion()
     }
 
     @Autowired

@@ -21,6 +21,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.devtools.restart.RestartScope;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.context.annotation.Bean;
 import org.testcontainers.mongodb.MongoDBContainer;
 
@@ -31,7 +32,7 @@ public class TestBootstrap {
     @Bean
     @ServiceConnection
     public static MongoDBContainer mongoDBContainer() {
-        return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+        return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
     }
 
     public static void main(String[] args) {
