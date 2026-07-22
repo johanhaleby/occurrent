@@ -32,20 +32,11 @@ import java.util.function.Predicate;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A saga (more precisely an event-driven <em>process manager</em>) described as pure data and pure functions: the
- * command-issuing mirror of {@code org.occurrent.dsl.decider.Decider}. A decider turns commands into events. A saga turns
- * events, and its own timeouts, into commands. Nothing here performs I/O. An executor feeds a saga inputs, folds and
- * persists its state, and interprets the {@link SagaEffect}s it returns.
+ * A saga, more precisely an event-driven <em>process manager</em>, is pure data and pure functions: it reacts to domain
+ * events, and to its own timeouts, by issuing commands while holding per-instance state. Nothing here performs I/O. An
+ * executor feeds the saga its inputs, folds and persists its state, and interprets the {@link SagaEffect}s it returns.
  * <p>
- * The duality is exact in the type parameters, mirrored (not just described) end to end:
- * <pre>{@code
- * Decider<C, S, E>   // C command  -> S state -> E event(s)
- * Saga   <E, S, C>   // E event    -> S state -> C command(s)
- * }</pre>
- * A decider consumes a command and its own state and produces events; a saga consumes an event (or one of its own
- * timeouts) and its own state and produces commands. Same three type variables, same roles, the arrows reversed.
- * <p>
- * A saga is <em>not</em> a substitute for a Dynamic Consistency Boundary: when two rules must hold atomically in one
+ * A saga is <em>not</em> a substitute for a Dynamic Consistency Boundary. When two rules must hold atomically in one
  * append, use DCB. A saga is for genuinely cross-boundary, time-involving, eventually-consistent processes, such as
  * "cancel the order if payment is not reserved within 30 minutes".
  *
@@ -61,6 +52,17 @@ import static java.util.Objects.requireNonNull;
  *       all of the instance's outstanding timers when a state first becomes terminal.</li>
  *   <li>Timeouts never start an instance and are ignored by a terminal instance.</li>
  * </ul>
+ *
+ * <h4>If you already know Decider</h4>
+ * <p>
+ * A saga is the command-issuing mirror of {@code org.occurrent.dsl.decider.Decider}, so skip this section if you have
+ * not met that type. A decider turns commands into events. A saga turns events, and its own timeouts, into commands. The
+ * duality is exact in the type parameters, not merely described:
+ * <pre>{@code
+ * Decider<C, S, E>   // C command  -> S state -> E event(s)
+ * Saga   <E, S, C>   // E event    -> S state -> C command(s)
+ * }</pre>
+ * Same three type variables, same roles, the arrows reversed.
  *
  * @param <E> the domain event type the saga reacts to
  * @param <S> the saga instance state
