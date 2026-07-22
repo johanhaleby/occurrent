@@ -82,9 +82,11 @@ public final class AnnotatedMemberScanner {
     }
 
     /**
-     * Find every member of {@code type} annotated with this scanner's annotation, in declaration order
-     * (record components, then getters before fields up the class hierarchy). The result is cached per
-     * {@link Class}.
+     * Find every member of {@code type} annotated with this scanner's annotation. Record components are
+     * returned in declaration order. For any other class, getters are scanned before fields, walking from
+     * the concrete class up its superclasses, and a property annotated on both is returned once. The order
+     * among a single class's own methods or fields is whatever reflection reports, not source order. The
+     * result is cached per {@link Class}.
      *
      * @param type the class to scan
      * @return the annotated members, empty when none are annotated
