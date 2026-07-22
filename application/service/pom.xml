@@ -36,5 +36,6 @@
         <module>transaction-spring-reactor</module>
         <module>command-dispatch</module>
         <module>command-dispatch-annotation</module>
+        <module>command-dispatch-dcb</module>
     </modules>
 </project>

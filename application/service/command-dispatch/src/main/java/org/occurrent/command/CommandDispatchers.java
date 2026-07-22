@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.saga.blocking;
+package org.occurrent.command;
 
-import org.occurrent.command.CommandDispatcher;
-import org.occurrent.command.StreamIdResolver;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.decider.DeciderApplicationService;
 

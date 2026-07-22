@@ -24,26 +24,20 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>occurrent-command-dispatch</artifactId>
+    <artifactId>occurrent-command-dispatch-dcb</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
-        <!-- Optional: the CommandDispatchers.decider(...) convenience adapter over a decider-backed application service;
-             interface-only consumers (CommandDispatcher, StreamIdResolver) are unaffected -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-decider</artifactId>
+            <artifactId>occurrent-command-dispatch</artifactId>
             <version>${project.version}</version>
-            <optional>true</optional>
         </dependency>
-        <!-- Optional: occurrent-decider declares this transitively as optional too (so it isn't inherited), but
-             DeciderApplicationService#execute returns WriteResult, which CommandDispatchers.decider(...) needs to compile against -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-api-common</artifactId>
+            <artifactId>occurrent-dcb-dsl-blocking</artifactId>
             <version>${project.version}</version>
-            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
@@ -55,12 +49,6 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-inmemory</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-application-service-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

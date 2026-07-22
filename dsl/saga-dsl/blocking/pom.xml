@@ -68,13 +68,6 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>
-        <!-- Optional: the CommandDispatchers.decider(...) convenience adapter over a decider-backed application service -->
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-decider</artifactId>
-            <version>${project.version}</version>
-            <optional>true</optional>
-        </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib</artifactId>
@@ -87,6 +80,13 @@
         </dependency>
 
         <!-- Test -->
+        <!-- SagaRunnerTest still exercises CommandDispatchers.decider(...) -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-decider</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-inmemory</artifactId>
