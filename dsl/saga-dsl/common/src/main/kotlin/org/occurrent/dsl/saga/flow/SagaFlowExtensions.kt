@@ -16,12 +16,11 @@
 
 package org.occurrent.dsl.saga.flow
 
-import org.occurrent.dsl.saga.Saga
 import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.dsl.saga.Saga
 import java.time.Duration
 import java.time.Instant
 import java.util.function.BiFunction
-import java.util.function.BiPredicate
 import java.util.function.Function
 
 /**
@@ -68,19 +67,19 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     inline fun <reified T : E> startsOn(noinline correlatedBy: (T) -> String, noinline onStart: FlowReactions<C>.(T) -> Unit = {}) {
         delegate.startsOn(
             T::class.java,
-            Function { correlatedBy(it) },
-            Function { event -> FlowReactions<C>().apply { onStart(event) }.build() }
+            { correlatedBy(it) },
+            { event -> FlowReactions<C>().apply { onStart(event) }.build() }
         )
     }
 
     /** Registers how to correlate an event of type [T] to a saga instance. */
     inline fun <reified T : E> correlate(noinline correlatedBy: (T) -> String) {
-        delegate.correlate(T::class.java, Function { correlatedBy(it) })
+        delegate.correlate(T::class.java) { correlatedBy(it) }
     }
 
     /** Adds a step named [name]. */
     fun step(name: String, block: StepScope<E, C>.() -> Unit) {
-        delegate.step(name) { stepBuilder -> StepScope<E, C>(stepBuilder).block() }
+        delegate.step(name) { stepBuilder -> StepScope(stepBuilder).block() }
     }
 
     @PublishedApi
@@ -113,7 +112,7 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
         if (onlyIf == null) {
             delegate.on(T::class.java, then, commandFn)
         } else {
-            delegate.on(T::class.java, BiPredicate { e, received -> onlyIf(e, received) }, then, commandFn)
+            delegate.on(T::class.java, { e, received -> onlyIf(e, received) }, then, commandFn)
         }
     }
 
@@ -130,23 +129,23 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
         if (onlyIf == null) {
             delegate.on(T::class.java, then, commandFn)
         } else {
-            delegate.on(T::class.java, BiPredicate { e, received -> onlyIf(e, received) }, then, commandFn)
+            delegate.on(T::class.java, { e, received -> onlyIf(e, received) }, then, commandFn)
         }
     }
 
     /** A join: wait until all [expecting] are met (counted since the step was entered), then issue commands and follow [then]. */
     fun join(vararg expecting: Expectation<E>, then: Continuation, whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
-        delegate.join(expecting.toList(), then, Function { received -> FlowReactions<C>().apply { whenFulfilled(received) }.build() })
+        delegate.join(expecting.toList(), then) { received -> FlowReactions<C>().apply { whenFulfilled(received) }.build() }
     }
 
     /** A relative timeout: if it fires before the step completes, issue commands and follow [then]. */
     fun timeout(after: Duration, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
-        delegate.timeout(after, then, Function { received -> FlowReactions<C>().apply { onExpiry(received) }.build() })
+        delegate.timeout(after, then) { received -> FlowReactions<C>().apply { onExpiry(received) }.build() }
     }
 
     /** An absolute, data-derived timeout: [at] is computed from the events received when the step is entered. */
     fun timeout(at: (ReceivedEvents<E>) -> Instant, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
-        delegate.timeout(Function { received -> at(received) }, then, Function { received -> FlowReactions<C>().apply { onExpiry(received) }.build() })
+        delegate.timeout({ received -> at(received) }, then, { received -> FlowReactions<C>().apply { onExpiry(received) }.build() })
     }
 }
 
