@@ -186,8 +186,14 @@ every step" wildcard matching. A process that needs any of those drops down to t
   real workload ever needs it, but no current one does, so it is not built. To keep the join-matching window
   reconstructable after the prefix is dropped, `FlowState` carries an absolute `windowStart` offset and keeps
   `stepEntryIndex` absolute.
-- `FlowState`'s bookkeeping fields (`stepEntryIndex`, `windowStart`, `previousStep`, `lastAction`,
+- `FlowState` is a narrow public interface exposing only the user-meaningful surface (`currentStep`, `received`,
+  `completed`, and the `receivedEvents` view). The concrete state is the record `FlowStateImpl` in the
+  `org.occurrent.dsl.saga.flow.internal` package; it carries the flow lowering's transition bookkeeping and is `public`
+  only so a `SagaStateStore` in another module can construct and read it. This keeps the bookkeeping off the type a user
+  holds while still letting the store round-trip it. The executor and the store cast `FlowState` to `FlowStateImpl` at
+  their boundaries, which is safe because the executor is the only producer of the state.
+- `FlowStateImpl`'s bookkeeping fields (`stepEntryIndex`, `windowStart`, `previousStep`, `lastAction`,
   `matchedBranchIndex`) are an implementation detail of the flow lowering, not a stable wire format: their meaning can
-  change between versions. A store that persists `FlowState` (the `instanceof FlowState` serialization branch in a
-  `SagaStateStore`) must round-trip whatever it wrote without interpreting them. Only `currentStep`, `received`, and
+  change between versions. A store that persists a flow saga's state (the `instanceof FlowStateImpl` serialization branch
+  in a `SagaStateStore`) must round-trip whatever it wrote without interpreting them. Only `currentStep`, `received`, and
   `completed` carry user-meaningful semantics.
