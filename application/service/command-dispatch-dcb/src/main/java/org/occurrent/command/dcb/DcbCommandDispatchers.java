@@ -35,9 +35,10 @@ public final class DcbCommandDispatchers {
     }
 
     /**
-     * A dispatcher that runs each command through {@code dcbDecider} via {@code applicationService}. Because the
-     * decider re-reads the boundary it derives from the command before deciding, a duplicated or stale command is
-     * rejected by the decider's own rules, which is what makes the executor's at-least-once dispatch safe.
+     * A dispatcher that runs each command through {@code dcbDecider} via {@code applicationService}. The decider
+     * re-reads the boundary it derives from the command before deciding, so a decider whose rules are idempotent
+     * turns a duplicated or stale command into no new events. At-least-once dispatch is therefore safe only to the
+     * extent the decider's own rules make it so.
      *
      * @param applicationService the DCB decider-backed application service to execute against
      * @param dcbDecider         the decider handling the commands, including its read boundary and tags

@@ -32,7 +32,6 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.net.URI;
 import java.util.List;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
