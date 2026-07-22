@@ -21,11 +21,16 @@ import org.occurrent.cloudevents.EventMetadata;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The closed input alphabet of a {@link Saga}: either a domain event, or one of the saga's own timers firing. A saga is a
- * single state machine over this union, so it has exactly one {@link Saga#evolve(Object, SagaInput)} and one
- * {@link Saga#react(Object, SagaInput)}, rather than a separate channel for timeouts.
+ * What a {@link Saga} reacts to: either a domain event, or one of the saga's own timers firing. A saga folds both kinds
+ * through the same {@link Saga#evolve(Object, SagaInput)} and {@link Saga#react(Object, SagaInput)}, so a fired timer is
+ * not delivered through a separate path.
+ * <p>
+ * Most sagas never touch this type directly. The {@code Saga} builder and the flow DSL let you handle events by type and
+ * declare timeouts, and dispatch this union for you. You meet {@code SagaInput} directly only in the low-level
+ * {@link Saga#create} form, where your own {@code evolve}/{@code react} handle the union, or when feeding a saga its
+ * inputs in a test.
  *
- * @param <E> the domain event type
+ * @param <E> the domain event type carried by the {@link Event} variant
  */
 public sealed interface SagaInput<E> {
 
