@@ -398,7 +398,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     }
 
     /**
-     * Supplies a default {@link StreamIdResolver} that derives a command's target stream id from a {@code @TargetStream}
+     * Supplies a default {@link StreamIdResolver} that derives a command's target stream id from a {@code @TargetStreamId}
      * annotated member, so a command producer can route by annotation without a hand-written {@code command -> streamId}
      * function. A user {@link StreamIdResolver} bean overrides it. Same {@code @Fallback} and raw-type reasoning as
      * {@link AnnotationTagGeneratorConfiguration}, and {@code @ConditionalOnClass} so the class loads only when the

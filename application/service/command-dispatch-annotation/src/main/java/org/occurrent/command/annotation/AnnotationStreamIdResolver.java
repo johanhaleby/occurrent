@@ -19,7 +19,7 @@ package org.occurrent.command.annotation;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.command.StreamIdResolver;
-import org.occurrent.annotation.TargetStream;
+import org.occurrent.annotation.TargetStreamId;
 
 import java.beans.Introspector;
 import java.lang.annotation.Annotation;
@@ -44,10 +44,10 @@ import static java.util.Objects.requireNonNull;
 /**
  * A {@link StreamIdResolver} that derives the target stream id from an annotated member of the command, the
  * annotation-driven counterpart to a hand-written {@code command -> streamId} function. By default it scans for
- * {@link TargetStream}, but a custom annotation type can be supplied when constructing the resolver. It is the
+ * {@link TargetStreamId}, but a custom annotation type can be supplied when constructing the resolver. It is the
  * command, write-side mirror of the DCB {@code AnnotationTagGenerator}.
  * <p>
- * It enforces the exactly-one-property contract documented on {@link TargetStream}: a command with no annotated
+ * It enforces the exactly-one-property contract documented on {@link TargetStreamId}: a command with no annotated
  * property, or more than one, cannot be routed, and a {@code null} or blank value is likewise an error.
  * <p>
  * For a Java record, the annotation is placed on the record component. For any other class, including a Kotlin data
@@ -72,10 +72,10 @@ public final class AnnotationStreamIdResolver<C> implements StreamIdResolver<C> 
     private final ConcurrentMap<Class<?>, List<MethodHandle>> cache = new ConcurrentHashMap<>();
 
     /**
-     * Create a resolver that scans for Occurrent's {@link TargetStream} annotation.
+     * Create a resolver that scans for Occurrent's {@link TargetStreamId} annotation.
      */
     public AnnotationStreamIdResolver() {
-        this(TargetStream.class);
+        this(TargetStreamId.class);
     }
 
     /**

@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.command.StreamIdResolver;
-import org.occurrent.annotation.TargetStream;
+import org.occurrent.annotation.TargetStreamId;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -63,7 +63,7 @@ class AnnotationStreamIdResolverTest {
     void throws_when_no_member_is_annotated() {
         assertThatThrownBy(() -> resolver.streamId(new Unannotated("x")))
                 .isInstanceOf(AnnotationStreamIdResolver.AnnotationStreamIdResolverException.class)
-                .hasMessageContaining("No @TargetStream member");
+                .hasMessageContaining("No @TargetStreamId member");
     }
 
     @Test
@@ -102,16 +102,16 @@ class AnnotationStreamIdResolverTest {
 
     // --- fixtures ---
 
-    record PlaceOrder(@TargetStream String orderId) {
+    record PlaceOrder(@TargetStreamId String orderId) {
     }
 
-    record UuidCommand(@TargetStream UUID orderId) {
+    record UuidCommand(@TargetStreamId UUID orderId) {
     }
 
     record Unannotated(String orderId) {
     }
 
-    record TwoTargets(@TargetStream String a, @TargetStream String b) {
+    record TwoTargets(@TargetStreamId String a, @TargetStreamId String b) {
     }
 
     static final class GetterCommand {
@@ -121,7 +121,7 @@ class AnnotationStreamIdResolverTest {
             this.orderId = orderId;
         }
 
-        @TargetStream
+        @TargetStreamId
         String orderId() {
             return orderId;
         }
