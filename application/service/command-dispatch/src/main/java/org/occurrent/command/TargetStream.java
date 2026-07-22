@@ -23,10 +23,11 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks the member of a command whose value is the target stream id, so a reflection-based {@link StreamIdResolver} can
- * route the command without a hand-written {@code command -> streamId} function. Exactly one member of a command must
- * carry this annotation; its runtime value, converted with {@code toString()}, is the stream id (a {@code null} or
- * blank value is an error, since the command cannot be routed).
+ * Marks the command member (a record component, field, or no-arg getter) whose value is the target stream id, so a
+ * reflection-based {@link StreamIdResolver} can route the command without a hand-written {@code command -> streamId}
+ * function. Exactly one property of a command must carry this annotation, with a getter and its backing field counting
+ * as one. Its runtime value, converted with {@code toString()}, is the stream id (a {@code null} or blank value is an
+ * error, since the command cannot be routed).
  * <p>
  * It may be placed on a record component, a field, or a no-arg getter method. On a Kotlin data class, use the
  * {@code @field} or {@code @get} use-site targets to apply it to the backing field or the generated getter.
