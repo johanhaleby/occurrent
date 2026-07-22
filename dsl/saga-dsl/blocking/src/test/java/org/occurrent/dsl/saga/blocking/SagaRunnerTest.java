@@ -18,13 +18,9 @@ package org.occurrent.dsl.saga.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.DisplayNameGeneration;
+import org.jspecify.annotations.NonNull;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
@@ -202,12 +198,12 @@ class SagaRunnerTest {
             }
 
             @Override
-            public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
+            public Optional<SagaEnvelope<OrderState>> find(@NonNull String sagaId) {
                 return Optional.empty();
             }
 
             @Override
-            public boolean compareAndSave(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            public boolean compareAndSave(@NonNull String sagaId, @NonNull SagaEnvelope<OrderState> envelope, long expectedVersion) {
                 saveAttempts++;
                 if (failWith != null) {
                     throw failWith;
@@ -216,12 +212,12 @@ class SagaRunnerTest {
             }
 
             @Override
-            public List<SagaEnvelope<OrderState>> findWithDueTimers(Instant now, int limit) {
+            public List<SagaEnvelope<OrderState>> findWithDueTimers(@NonNull Instant now, int limit) {
                 return List.of();
             }
 
             @Override
-            public void delete(String sagaId) {
+            public void delete(@NonNull String sagaId) {
             }
         }
 
@@ -495,23 +491,23 @@ class SagaRunnerTest {
             private final AtomicInteger dueTimerQueries = new AtomicInteger();
 
             @Override
-            public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
+            public Optional<SagaEnvelope<OrderState>> find(@NonNull String sagaId) {
                 return delegate.find(sagaId);
             }
 
             @Override
-            public boolean compareAndSave(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            public boolean compareAndSave(@NonNull String sagaId, @NonNull SagaEnvelope<OrderState> envelope, long expectedVersion) {
                 return delegate.compareAndSave(sagaId, envelope, expectedVersion);
             }
 
             @Override
-            public List<SagaEnvelope<OrderState>> findWithDueTimers(Instant now, int limit) {
+            public List<SagaEnvelope<OrderState>> findWithDueTimers(@NonNull Instant now, int limit) {
                 dueTimerQueries.incrementAndGet();
                 return delegate.findWithDueTimers(now, limit);
             }
 
             @Override
-            public void delete(String sagaId) {
+            public void delete(@NonNull String sagaId) {
                 delegate.delete(sagaId);
             }
         }
