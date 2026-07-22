@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga.blocking;
 
 import org.occurrent.command.CommandDispatcher;
+import org.occurrent.command.CommandDispatchers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NonNull;

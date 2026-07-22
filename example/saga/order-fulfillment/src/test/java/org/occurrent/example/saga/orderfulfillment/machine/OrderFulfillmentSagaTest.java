@@ -35,7 +35,7 @@ import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.command.CommandDispatcher;
-import org.occurrent.dsl.saga.blocking.CommandDispatchers;
+import org.occurrent.command.CommandDispatchers;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;

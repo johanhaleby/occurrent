@@ -388,6 +388,11 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-command-dispatch-dcb</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-cloudevent-converter-xstream</artifactId>
                 <version>${project.version}</version>
             </dependency>
