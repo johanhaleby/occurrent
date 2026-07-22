@@ -97,7 +97,7 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     val end: Continuation get() = Continuation.end()
 
     /** Continuation: jump to the named step (a back-edge models a loop or retry). */
-    fun goTo(step: String): Continuation = Continuation.goTo(step)
+    fun transitionTo(step: String): Continuation = Continuation.transitionTo(step)
 
     /** An expectation of [count] events of type [T], for a [join]. */
     inline fun <reified T : E> expect(count: Int = 1): Expectation<E> = Expectation(T::class.java, count)
