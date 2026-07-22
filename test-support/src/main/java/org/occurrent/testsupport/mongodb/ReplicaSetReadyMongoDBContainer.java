@@ -17,6 +17,8 @@
 package org.occurrent.testsupport.mongodb;
 
 import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -25,6 +27,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 /**
  * A {@link MongoDBContainer} that does not report itself started until a writable primary is reachable
@@ -42,6 +45,7 @@ public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
 
     private static final Duration READINESS_TIMEOUT = Duration.ofSeconds(60);
     private static final Duration POLL_INTERVAL = Duration.ofMillis(250);
+    private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(2);
 
     /**
      * Create a container for the given {@code mongo:...} image, running as a single-node replica set.
@@ -67,12 +71,14 @@ public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
     }
 
     // A write from the host is the honest readiness signal. It proves a primary has been elected and is
-    // reachable through the mapped port, which is exactly what the app does next.
+    // reachable through the mapped port, which is exactly what the app does next. The probe client uses short
+    // server-selection and connect timeouts so a not-yet-ready attempt fails within PROBE_TIMEOUT rather than
+    // the driver's 30 second default, which keeps the loop honest about READINESS_TIMEOUT.
     private void awaitWritablePrimary() {
         long deadline = System.nanoTime() + READINESS_TIMEOUT.toNanos();
         RuntimeException lastFailure = null;
         while (System.nanoTime() < deadline) {
-            try (MongoClient client = MongoClients.create(getReplicaSetUrl())) {
+            try (MongoClient client = MongoClients.create(probeSettings())) {
                 MongoDatabase probe = client.getDatabase("occurrent-readiness-probe");
                 probe.getCollection("ping").insertOne(new Document("ok", 1));
                 probe.drop();
@@ -84,6 +90,15 @@ public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
         }
         throw new IllegalStateException("MongoDB replica set did not accept a write within " + READINESS_TIMEOUT
                 + " of container start", lastFailure);
+    }
+
+    private MongoClientSettings probeSettings() {
+        long probeMillis = PROBE_TIMEOUT.toMillis();
+        return MongoClientSettings.builder()
+                .applyConnectionString(new ConnectionString(getReplicaSetUrl()))
+                .applyToClusterSettings(b -> b.serverSelectionTimeout(probeMillis, TimeUnit.MILLISECONDS))
+                .applyToSocketSettings(b -> b.connectTimeout((int) probeMillis, TimeUnit.MILLISECONDS))
+                .build();
     }
 
     private static void sleep() {
