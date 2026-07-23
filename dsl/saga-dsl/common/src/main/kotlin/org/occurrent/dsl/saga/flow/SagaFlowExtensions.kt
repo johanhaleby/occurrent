@@ -25,7 +25,7 @@ import java.util.function.Function
 
 /**
  * Marks the flow-saga builder receivers so that, inside a nested `step { }` block, a member of an outer scope (such as
- * `correlate`) does not resolve implicitly. This is a deliberate deviation from the non-nesting projection/machine DSLs,
+ * `correlate`) does not resolve implicitly. This is a deliberate deviation from the non-nesting projection/core DSLs,
  * which do not use a `@DslMarker`.
  */
 @DslMarker

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.example.saga.orderfulfillment.machine;
+package org.occurrent.example.saga.orderfulfillment.core;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -67,7 +67,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * Runs {@link OrderFulfillmentSaga} through {@link SagaRunner}, showing the decider-free dispatch path first (a plain
  * lambda over an {@code ApplicationService}) and the decider adapter as an alternative.
  */
-@DisplayName("Machine-core order-fulfillment saga")
+@DisplayName("Core order-fulfillment saga")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class OrderFulfillmentSagaTest {
 

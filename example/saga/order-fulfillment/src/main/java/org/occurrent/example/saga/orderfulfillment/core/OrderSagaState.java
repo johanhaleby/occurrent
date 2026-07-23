@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-package org.occurrent.example.saga.orderfulfillment.machine;
+package org.occurrent.example.saga.orderfulfillment.core;
 
 /**
- * The machine-core saga instance state: an order awaiting payment, shipped, or cancelled. The initial state (before
+ * The core saga instance state: an order awaiting payment, shipped, or cancelled. The initial state (before
  * {@code OrderPlaced} is applied) is plain {@code null}, as in {@code Saga.builder(null)}.
  */
 public sealed interface OrderSagaState permits AwaitingPayment, Completed, Cancelled {

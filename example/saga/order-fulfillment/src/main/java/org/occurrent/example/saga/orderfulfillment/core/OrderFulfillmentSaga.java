@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.example.saga.orderfulfillment.machine;
+package org.occurrent.example.saga.orderfulfillment.core;
 
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
@@ -31,7 +31,7 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * The order-fulfillment process expressed with the machine-core {@link Saga} builder: an explicit, per-event-type fold
+ * The order-fulfillment process expressed with the core {@link Saga} builder: an explicit, per-event-type fold
  * and reaction over {@link OrderSagaState}. See {@code org.occurrent.example.saga.orderfulfillment.flow} for the same
  * process expressed with the declarative flow DSL instead.
  * <p>
