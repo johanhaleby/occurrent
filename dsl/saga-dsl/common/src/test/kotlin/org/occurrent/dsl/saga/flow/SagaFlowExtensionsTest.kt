@@ -30,7 +30,7 @@ import org.occurrent.dsl.saga.SagaTimeout
 import java.time.Duration
 
 /**
- * Proves that the flow DSL lowers to the machine-core [Saga] contract correctly: every assertion here goes through
+ * Proves that the flow DSL lowers to the core [Saga] contract correctly: every assertion here goes through
  * [Saga.step], [Saga.onStart], [Saga.react] and [Saga.isTerminal], never through some parallel notion of "what the flow
  * should do". [Saga.step] folds [Saga.evolve] and [Saga.react] but deliberately excludes [Saga.onStart] (see its
  * kdoc), so the effects of a start event are computed here as `onStart(s1, e) + react(s1, e)`, exactly as an executor

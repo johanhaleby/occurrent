@@ -31,7 +31,7 @@ import org.occurrent.example.saga.orderfulfillment.ShipOrder
 import java.time.Duration
 
 /**
- * The same order-fulfillment process as [org.occurrent.example.saga.orderfulfillment.machine.OrderFulfillmentSaga],
+ * The same order-fulfillment process as [org.occurrent.example.saga.orderfulfillment.core.OrderFulfillmentSaga],
  * expressed instead with the declarative Kotlin flow `saga { }` block: one step, two branches and a timeout, rather than
  * an explicit per-event-type fold and reaction.
  */

@@ -36,7 +36,7 @@ import java.util.function.BiPredicate;
 import java.util.function.Function;
 
 /**
- * Compiles a flow definition (steps, branches, joins, timeouts) down to the machine-core {@link Saga} the executor runs.
+ * Compiles a flow definition (steps, branches, joins, timeouts) down to the core {@link Saga} the executor runs.
  * The step name is the persisted position, a timer is named {@code "step:" + stepName}, and because a timer lives only in
  * the saga's own state envelope (there is exactly one per name), a re-armed timer replaces the previous one and no
  * separate fencing is needed here.

@@ -37,7 +37,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Builds a flow saga: a linear, declarative process of steps, branches, joins and timeouts, which compiles down to the
- * machine-core {@code Saga<E, FlowState<E>, C>} the executor runs. Use it for the common case where a process moves
+ * core {@code Saga<E, FlowState<E>, C>} the executor runs. Use it for the common case where a process moves
  * through a small number of named steps. Drop to {@code Saga.builder(...)} for anything the flow model cannot express
  * (dynamic joins, accumulators, an event valid in every step).
  * <p>

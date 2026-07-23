@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 /**
  * Covers the Java {@link FlowSaga} builder surface with the same order-fulfillment retry-loop scenario the Kotlin
  * {@code SagaFlowExtensionsTest} covers via the {@code saga { }} DSL, proving the lowering is correct through the
- * machine-core {@link Saga} contract regardless of which surface built it.
+ * core {@link Saga} contract regardless of which surface built it.
  */
 @DisplayName("FlowSaga")
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)

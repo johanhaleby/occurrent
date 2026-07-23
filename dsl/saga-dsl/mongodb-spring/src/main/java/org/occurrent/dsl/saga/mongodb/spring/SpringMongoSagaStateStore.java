@@ -54,12 +54,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * and the dedup watermarks. A top-level indexed {@code nextTimerFiresAt} (the earliest pending timer) makes
  * {@link #findWithDueTimers(Instant, int)} an indexed query.
  * <p>
- * State serialization: a machine-core saga's state is written with the application's {@code MongoConverter}, like the
+ * State serialization: a core saga's state is written with the application's {@code MongoConverter}, like the
  * snapshot store. A flow saga's state ({@code FlowState}) is written field by field, with its received domain events
  * serialized as CloudEvents through the supplied {@link CloudEventConverter} so they round-trip by their stable
  * {@code CloudEventTypeMapper} type rather than a Java class name. A domain event can therefore move to a different
  * package without breaking in-flight flow-saga state. Pass the converter (via the four-argument constructor) for a flow
- * saga, leave it out for a machine-core saga.
+ * saga, leave it out for a core saga.
  * <p>
  * {@link #compareAndSave} is atomic: a new instance is inserted (a duplicate {@code _id} loses), and an update replaces
  * the document only when its stored {@code version} still equals the expected one, via a single {@code findAndReplace}.
@@ -103,7 +103,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private final @Nullable CloudEventConverter<Object> cloudEventConverter;
 
     /**
-     * Creates a store for a machine-core saga, whose state serializes with the application's {@code MongoConverter}.
+     * Creates a store for a core saga, whose state serializes with the application's {@code MongoConverter}.
      *
      * @param mongoOperations the {@link MongoOperations} used to read and write instance documents
      * @param collectionName  the collection the instances are stored in
@@ -116,7 +116,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     /**
      * Creates a store that, when {@code cloudEventConverter} is supplied, serializes a flow saga's {@code FlowState}
      * received events as CloudEvents so they round-trip by their stable CloudEvent type. Pass {@code null} for a
-     * machine-core saga.
+     * core saga.
      *
      * @param mongoOperations     the {@link MongoOperations} used to read and write instance documents
      * @param collectionName      the collection the instances are stored in
@@ -208,7 +208,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     // Serialize the state. A flow saga's FlowState is written field by field with its received events as CloudEvents (see
-    // flowStateToDocument), so events round-trip by their stable CloudEvent type. Any other state (a machine-core saga's
+    // flowStateToDocument), so events round-trip by their stable CloudEvent type. Any other state (a core saga's
     // own model) goes through convertToMongoType, exactly like the snapshot store: a scalar stays a scalar and a
     // POJO/record becomes a sub-document.
     private Object toStateValue(S state) {
