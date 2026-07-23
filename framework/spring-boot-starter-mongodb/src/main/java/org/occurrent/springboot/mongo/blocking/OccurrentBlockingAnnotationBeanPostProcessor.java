@@ -754,9 +754,12 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         SagaRunner<E, C> runner = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
         CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
+        if (competingConsumerStrategy != null) {
+            runner = runner.competingConsumerStrategy(competingConsumerStrategy);
+        }
 
         applyStartupWorkarounds();
-        sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config, competingConsumerStrategy));
+        sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config));
     }
 
     // Gate the saga timer poller on the shared competing-consumer lease so only one instance polls, mirroring the
