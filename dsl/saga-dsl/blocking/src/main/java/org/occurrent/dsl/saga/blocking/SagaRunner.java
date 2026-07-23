@@ -92,21 +92,35 @@ public final class SagaRunner<E, C> {
     private final Subscribable subscriptionModel;
     private final CloudEventConverter<E> cloudEventConverter;
     private final Function<Filter, SubscriptionFilter> toSubscriptionFilter;
+    private final @Nullable CompetingConsumerStrategy competingConsumerStrategy;
 
-    private SagaRunner(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter, Function<Filter, SubscriptionFilter> toSubscriptionFilter) {
+    private SagaRunner(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter, Function<Filter, SubscriptionFilter> toSubscriptionFilter,
+                       @Nullable CompetingConsumerStrategy competingConsumerStrategy) {
         this.subscriptionModel = requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.cloudEventConverter = requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null");
         this.toSubscriptionFilter = requireNonNull(toSubscriptionFilter, "toSubscriptionFilter cannot be null");
+        this.competingConsumerStrategy = competingConsumerStrategy;
     }
 
     /** A runner whose subscription is capability-agnostic: it delivers both stream-written and DCB-appended events. */
     public static <E, C> SagaRunner<E, C> agnostic(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
-        return new SagaRunner<>(subscriptionModel, cloudEventConverter, AgnosticSubscriptionFilter::filter);
+        return new SagaRunner<>(subscriptionModel, cloudEventConverter, AgnosticSubscriptionFilter::filter, null);
     }
 
     /** A runner whose subscription is scoped to the {@code STREAM} capability, excluding DCB-appended events. */
     public static <E, C> SagaRunner<E, C> stream(Subscribable subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
-        return new SagaRunner<>(subscriptionModel, cloudEventConverter, StreamSubscriptionFilter::filter);
+        return new SagaRunner<>(subscriptionModel, cloudEventConverter, StreamSubscriptionFilter::filter, null);
+    }
+
+    /**
+     * Returns a copy of this runner whose saga timer poller is coordinated by {@code strategy}. Only the instance that
+     * currently holds the saga's timer lease polls the store for due timers, the others wake on their interval and do
+     * nothing without querying it. Without a strategy (the default) every instance polls. The lease is released on
+     * {@link SagaSubscription#close()}.
+     */
+    public SagaRunner<E, C> competingConsumerStrategy(CompetingConsumerStrategy strategy) {
+        return new SagaRunner<>(subscriptionModel, cloudEventConverter, toSubscriptionFilter,
+                requireNonNull(strategy, "competingConsumerStrategy cannot be null"));
     }
 
     /** Runs {@code saga} with the default configuration, starting at the subscription model's default position. */
@@ -125,25 +139,13 @@ public final class SagaRunner<E, C> {
     /**
      * Runs {@code saga}. It subscribes with a filter derived from the saga's handled event types, builds per-instance
      * state in {@code stateStore}, dispatches issued commands through {@code commandDispatcher}, and starts a timer
-     * poller that runs on every instance. The returned {@link SagaSubscription} is already started.
+     * poller. If a {@link #competingConsumerStrategy(CompetingConsumerStrategy) competing-consumer strategy} was set on
+     * this runner, only the instance holding the saga's timer lease polls the store, otherwise every instance polls.
+     * The returned {@link SagaSubscription} is already started, and releases the lease on {@link SagaSubscription#close()}.
      */
     public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
                                                              SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
                                                              @Nullable StartAt startAt, SagaRunnerConfig config) {
-        return run(subscriptionId, saga, stateStore, commandDispatcher, startAt, config, null);
-    }
-
-    /**
-     * Runs {@code saga} with the timer poller coordinated by {@code competingConsumerStrategy}. Only the instance that
-     * currently holds the saga's timer lease polls the store for due timers. The others wake on their interval and do
-     * nothing without querying it. Pass {@code null} to poll on every instance, which is what the shorter overloads do.
-     * The lease is released on {@link SagaSubscription#close()}. Everything else matches
-     * {@link #run(String, Saga, SagaStateStore, CommandDispatcher, StartAt, SagaRunnerConfig)}.
-     */
-    public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
-                                                             SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
-                                                             @Nullable StartAt startAt, SagaRunnerConfig config,
-                                                             @Nullable CompetingConsumerStrategy competingConsumerStrategy) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(stateStore, "stateStore cannot be null");
@@ -159,18 +161,21 @@ public final class SagaRunner<E, C> {
 
         // Register the poller as a competing consumer under its own lease key, then poll only while this instance holds it.
         // hasLock is an in-memory check the strategy's background refresh maintains, so a standby instance costs no query.
-        final String leaseKey;
-        final String holderId;
+        final @Nullable CompetingConsumerStrategy strategy = competingConsumerStrategy;
+        final @Nullable String leaseKey;
+        final @Nullable String holderId;
         final Runnable pollTask;
-        if (competingConsumerStrategy != null) {
-            leaseKey = timerLeaseKey(subscriptionId);
-            holderId = UUID.randomUUID().toString();
-            competingConsumerStrategy.registerCompetingConsumer(leaseKey, holderId);
+        if (strategy != null) {
+            String key = timerLeaseKey(subscriptionId);
+            String holder = UUID.randomUUID().toString();
+            strategy.registerCompetingConsumer(key, holder);
             pollTask = () -> {
-                if (competingConsumerStrategy.hasLock(leaseKey, holderId)) {
+                if (strategy.hasLock(key, holder)) {
                     execution.pollTimers();
                 }
             };
+            leaseKey = key;
+            holderId = holder;
         } else {
             leaseKey = null;
             holderId = null;
@@ -180,7 +185,7 @@ public final class SagaRunner<E, C> {
         ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-saga-timer-" + subscriptionId));
         long intervalMillis = config.timerPollInterval().toMillis();
         poller.scheduleWithFixedDelay(pollTask, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
-        return new SagaSubscription(subscription, poller, competingConsumerStrategy, leaseKey, holderId);
+        return new SagaSubscription(subscription, poller, strategy, leaseKey, holderId);
     }
 
     /**

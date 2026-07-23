@@ -516,10 +516,26 @@ class SagaRunnerTest {
 
         private SagaSubscription run(String subscriptionId, SagaStateStore<OrderState> stateStore,
                                     CommandDispatcher<OrderCommand> dispatcher, CompetingConsumerStrategy strategy) {
-            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.agnostic(subscriptionModel, converter);
-            SagaSubscription subscription = runner.run(subscriptionId, orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, null, FAST, strategy);
+            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.<OrderEvent, OrderCommand>agnostic(subscriptionModel, converter)
+                    .competingConsumerStrategy(strategy);
+            SagaSubscription subscription = runner.run(subscriptionId, orderFulfillment(LONG_PAYMENT_TIMEOUT), stateStore, dispatcher, null, FAST);
             subscriptionsToClose.add(subscription);
             return subscription;
+        }
+
+        @Test
+        void competingConsumerStrategy_returns_a_distinct_runner_without_mutating_the_original() {
+            SagaRunner<OrderEvent, OrderCommand> base = SagaRunner.agnostic(subscriptionModel, converter);
+            SagaRunner<OrderEvent, OrderCommand> gated = base.competingConsumerStrategy(new StubStrategy(true));
+            assertThat(gated).isNotSameAs(base);
+        }
+
+        @Test
+        void competingConsumerStrategy_rejects_a_null_strategy() {
+            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.agnostic(subscriptionModel, converter);
+            assertThatThrownBy(() -> runner.competingConsumerStrategy(null))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("competingConsumerStrategy");
         }
 
         @Test
