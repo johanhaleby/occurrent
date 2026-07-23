@@ -161,19 +161,21 @@ public final class SagaRunner<E, C> {
 
         // Register the poller as a competing consumer under its own lease key, then poll only while this instance holds it.
         // hasLock is an in-memory check the strategy's background refresh maintains, so a standby instance costs no query.
-        final CompetingConsumerStrategy strategy = competingConsumerStrategy;
-        final String leaseKey;
-        final String holderId;
+        final @Nullable CompetingConsumerStrategy strategy = competingConsumerStrategy;
+        final @Nullable String leaseKey;
+        final @Nullable String holderId;
         final Runnable pollTask;
         if (strategy != null) {
-            leaseKey = timerLeaseKey(subscriptionId);
-            holderId = UUID.randomUUID().toString();
-            strategy.registerCompetingConsumer(leaseKey, holderId);
+            String key = timerLeaseKey(subscriptionId);
+            String holder = UUID.randomUUID().toString();
+            strategy.registerCompetingConsumer(key, holder);
             pollTask = () -> {
-                if (strategy.hasLock(leaseKey, holderId)) {
+                if (strategy.hasLock(key, holder)) {
                     execution.pollTimers();
                 }
             };
+            leaseKey = key;
+            holderId = holder;
         } else {
             leaseKey = null;
             holderId = null;
