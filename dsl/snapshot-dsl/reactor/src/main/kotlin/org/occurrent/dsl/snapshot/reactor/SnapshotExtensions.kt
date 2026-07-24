@@ -16,17 +16,13 @@
 
 package org.occurrent.dsl.snapshot.reactor
 
-import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.reactor.ApplicationService
 import org.occurrent.application.service.reactor.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.DcbDecider
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys
 import org.occurrent.dsl.snapshot.SnapshotOptions
-import org.occurrent.dsl.snapshot.SnapshotPolicy
-import org.occurrent.dsl.snapshot.SnapshotView
 import org.occurrent.eventstore.api.WriteResult
-import org.occurrent.eventstore.api.reactor.EventStore
 import org.occurrent.eventstore.api.dcb.DcbAppendResult
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import reactor.core.publisher.Mono
@@ -56,10 +52,3 @@ fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(command: C, dcbDecide
  */
 fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(commands: List<C>, dcbDecider: DcbDecider<C, S, E>, store: ReactiveSnapshotStore<S>, options: SnapshotOptions<S, E>, keyFunction: (DcbCriteria) -> String = DcbSnapshotKeys::canonicalKey): Mono<DcbAppendResult> =
     ReactiveSnapshotDcbDeciderApplicationService<S, E>(this, store, options, keyFunction).execute(commands, dcbDecider)
-
-/**
- * Read the current state of [snapshotView] for [streamId] on demand, folding only the events after the stored snapshot.
- * See [ReactiveSnapshotViews].
- */
-fun <S : Any, E : Any> EventStore.readSnapshotState(converter: CloudEventConverter<E>, streamId: String, snapshotView: SnapshotView<S, E>, store: ReactiveSnapshotStore<S>, policy: SnapshotPolicy<S, E>): Mono<S> =
-    ReactiveSnapshotViews.readState(this, converter, streamId, snapshotView, store, policy)

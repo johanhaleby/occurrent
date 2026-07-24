@@ -17,66 +17,76 @@
 package org.occurrent.dsl.snapshot.reactor;
 
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.dsl.snapshot.SnapshotDecision;
-import org.occurrent.dsl.snapshot.SnapshotPolicy;
+import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import reactor.core.publisher.Mono;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
+import static java.util.Objects.requireNonNull;
 
 /**
- * Reads the current state of a {@link SnapshotView} on demand, folding only the events written after the stored snapshot.
- * This is the deciders-free, read-side counterpart to {@link ReactiveSnapshotDeciderApplicationService}: there is no
- * command and nothing is appended, the view state is simply rebuilt from the snapshot plus the tail and returned, and a
- * fresh snapshot is written when the policy fires.
+ * On-demand, deciders-free access to a {@link SnapshotView}'s state, backed by a {@link ReactiveSnapshotStore}. Build
+ * one over the event store, the cloud event converter, and a store, then reuse it. It is the read-side counterpart to
+ * {@link ReactiveSnapshotDeciderApplicationService}: there is no command and nothing is appended. The state is bound to
+ * a non-null type because a {@link Mono} cannot carry a null value.
+ * <p>
+ * {@link #readState(String, SnapshotView)} is a plain read: it resumes the view from the stored snapshot, folds the
+ * events written since, and returns the current state, without writing anything. {@link #refresh(String, SnapshotView)}
+ * is the explicit maintenance write: it folds to the current head and persists a fresh snapshot. Snapshotting therefore
+ * never happens as a hidden side effect of a read, and there is no {@code SnapshotPolicy} on this path.
  */
 @NullMarked
-public final class ReactiveSnapshotViews {
+public final class ReactiveSnapshotViews<S, E> {
 
-    private ReactiveSnapshotViews() {
+    private final EventStore eventStore;
+    private final CloudEventConverter<E> converter;
+    private final ReactiveSnapshotStore<S> store;
+
+    private ReactiveSnapshotViews(EventStore eventStore, CloudEventConverter<E> converter, ReactiveSnapshotStore<S> store) {
+        this.eventStore = requireNonNull(eventStore, "eventStore cannot be null");
+        this.converter = requireNonNull(converter, "converter cannot be null");
+        this.store = requireNonNull(store, "store cannot be null");
+    }
+
+    /** Creates a reader/refresher over {@code eventStore}, {@code converter}, and the snapshot {@code store}. */
+    public static <S, E> ReactiveSnapshotViews<S, E> create(EventStore eventStore, CloudEventConverter<E> converter, ReactiveSnapshotStore<S> store) {
+        return new ReactiveSnapshotViews<>(eventStore, converter, store);
     }
 
     /**
-     * Read the current state for {@code streamId} by resuming {@code snapshotView} from the snapshot in {@code store} and
-     * folding the events written after it. Writes a refreshed snapshot when {@code policy} fires. A loaded snapshot whose
-     * schema version does not match the view is ignored and the state is rebuilt from the whole stream. The state is
-     * bound to a non-null type because a {@link Mono} cannot carry a null value.
+     * Returns the current state for {@code streamId}, resuming {@code snapshotView} from the snapshot in the store and
+     * folding the events written after it. This is a pure read, it never writes a snapshot. A loaded snapshot whose
+     * schema version does not match the view is ignored and the state is rebuilt from the whole stream.
      */
-    public static <S, E> Mono<S> readState(EventStore eventStore, CloudEventConverter<E> converter, String streamId,
-                                                                    SnapshotView<S, E> snapshotView, ReactiveSnapshotStore<S> store,
-                                                                    SnapshotPolicy<S, E> policy) {
-        Objects.requireNonNull(eventStore, "eventStore cannot be null");
-        Objects.requireNonNull(converter, "converter cannot be null");
-        Objects.requireNonNull(streamId, "streamId cannot be null");
-        Objects.requireNonNull(snapshotView, "snapshotView cannot be null");
-        Objects.requireNonNull(store, "store cannot be null");
-        Objects.requireNonNull(policy, "policy cannot be null");
+    public Mono<S> readState(String streamId, SnapshotView<S, E> snapshotView) {
+        requireNonNull(streamId, "streamId cannot be null");
+        requireNonNull(snapshotView, "snapshotView cannot be null");
+        return foldToHead(streamId, snapshotView).map(Folded::state);
+    }
 
+    /**
+     * Folds {@code streamId} to its current head and persists a fresh snapshot for {@code snapshotView}. This is an
+     * explicit maintenance call, so it always writes and lets a store failure surface, unlike the best-effort save on
+     * the write path where there is a committed command to protect.
+     */
+    public Mono<Void> refresh(String streamId, SnapshotView<S, E> snapshotView) {
+        requireNonNull(streamId, "streamId cannot be null");
+        requireNonNull(snapshotView, "snapshotView cannot be null");
+        return foldToHead(streamId, snapshotView)
+                .flatMap(folded -> store.save(streamId, new Snapshot<>(folded.state(), folded.version(), snapshotView.schemaVersion())));
+    }
+
+    private Mono<Folded<S>> foldToHead(String streamId, SnapshotView<S, E> snapshotView) {
         return Mono.defer(() -> ReactiveSnapshotSupport.resolveBase(store, streamId, snapshotView.schemaVersion(), snapshotView.view()::initialState).flatMap(base ->
-                eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE).flatMap(eventStream -> {
-                    // The tail is folded incrementally straight off the event flux with reduce, instead of collecting it
-                    // to a list first. The events are captured into a list as a side effect of that same pass since the
-                    // policy below needs them (for example onEvent inspects the tail's event types), so the events are
-                    // never held in memory twice.
-                    List<E> tail = new ArrayList<>();
-                    return eventStream.events()
-                            .map(converter::toDomainEvent)
-                            .doOnNext(tail::add)
-                            .reduce(base.state(), (state, event) -> snapshotView.view().evolve(state, event))
-                            .flatMap(current -> {
-                                long version = eventStream.version();
-                                // On the read side the policy sees the tail it folded as the "new events", so always()/onEvent(...)
-                                // stay meaningful and everyNEvents rides the version delta.
-                                return ReactiveSnapshotSupport.maybeSaveBestEffort(store, streamId, snapshotView.schemaVersion(), policy,
-                                                new SnapshotDecision<>(current, tail, version, SnapshotSupport.requireInt(version - base.version(), "the number of events since the snapshot")))
-                                        .thenReturn(current);
-                            });
-                })));
+                eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE).flatMap(eventStream ->
+                        eventStream.events()
+                                .map(converter::toDomainEvent)
+                                .reduce(base.state(), (state, event) -> snapshotView.view().evolve(state, event))
+                                .map(current -> new Folded<>(current, eventStream.version())))));
+    }
+
+    private record Folded<S>(S state, long version) {
     }
 }
