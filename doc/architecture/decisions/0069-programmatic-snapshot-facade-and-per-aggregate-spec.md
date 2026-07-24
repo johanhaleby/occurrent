@@ -70,7 +70,9 @@ views.refresh(accountId, accountSource);                                        
 - `SnapshotDcbDecider<C,S,E>` bundles a `DcbDecider` with its `SnapshotStore`, `SnapshotOptions`, and the function that
   turns the resolved `DcbCriteria` into a snapshot key. `from(dcbDecider, store, options)` defaults the key function to
   `DcbSnapshotKeys::canonicalKey`; a four-argument `from` overload takes an explicit one. The key function moved off the
-  executor constructor and onto the spec, since it is per-aggregate.
+  executor constructor and onto the spec, since it is per-aggregate. Its input stays the `DcbCriteria`, not the decider;
+  the 2026-07-24 amendment to [ADR 0061](0061-first-class-snapshot-support.md) records why (per-instance identity and
+  boundary-change invalidation both live in the criteria).
 - `SnapshotViewSource<S,E>` bundles a `SnapshotView` with its `SnapshotStore`. It is named to stay distinct from
   `SnapshotView` (the fold) and `SnapshotViews` (the facade).
 

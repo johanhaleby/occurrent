@@ -37,6 +37,10 @@ import java.util.function.Function;
  * canonical, order-insensitive rendering of the {@link DcbCriteria} ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)});
  * use {@link #from(DcbDecider, SnapshotStore, SnapshotOptions, Function)} to override it.
  * <p>
+ * The key is a function of the {@link DcbCriteria}, not of the decider. The criteria carries the per-instance identity
+ * (the decider is a per-type constant reused across instances), and a change to it is the signal to rebuild a stale
+ * snapshot, so a custom key function should stay keyed on the criteria. See ADR 0061 for the full rationale.
+ * <p>
  * Like {@link SnapshotDecider}, this is not a pure value: it holds the {@link SnapshotStore}. The spec stays inert and
  * the {@link SnapshotDcbDeciderApplicationService} performs all I/O.
  *

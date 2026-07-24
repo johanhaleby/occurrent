@@ -37,6 +37,10 @@ import static java.util.stream.Collectors.joining;
  * encoding injective, so two structurally distinct criteria always produce different keys instead of colliding on one
  * snapshot (for example a single type named {@code "A,B"} and the two types {@code "A"} and {@code "B"}, which would
  * both render as {@code types[A,B]} without the length prefix).
+ * <p>
+ * The DCB snapshot is keyed by the criteria (rather than by the decider) on purpose: the criteria carries the
+ * per-instance identity, and a change to the boundary is what should invalidate and rebuild a stale snapshot. See ADR
+ * 0061 for the full rationale.
  */
 public final class DcbSnapshotKeys {
 
