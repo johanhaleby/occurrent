@@ -42,6 +42,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
@@ -70,6 +71,20 @@ class SnapshotViewsTest {
                 .build();
     }
 
+    @Test
+    void from_throws_NullPointerException_when_the_view_is_null() {
+        assertThatThrownBy(() -> SnapshotViewSource.from(null, store))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("view");
+    }
+
+    @Test
+    void from_throws_NullPointerException_when_the_store_is_null() {
+        assertThatThrownBy(() -> SnapshotViewSource.from(snapshotView, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("store");
+    }
+
     @Nested
     @DisplayName("readState")
     class ReadState {
@@ -79,9 +94,9 @@ class SnapshotViewsTest {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane")));
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet")));
-            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, store);
+            SnapshotViews<DomainEvent> views = SnapshotViews.create(eventStore, converter);
 
-            String state = views.readState(streamId, snapshotView);
+            String state = views.readState(streamId, SnapshotViewSource.from(snapshotView, store));
 
             assertThat(state).isEqualTo("Janet");
         }
@@ -92,9 +107,9 @@ class SnapshotViewsTest {
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane")));
             store.save(streamId, new Snapshot<>("Jane", 1L, snapshotView.schemaVersion()));
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet")));
-            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, store);
+            SnapshotViews<DomainEvent> views = SnapshotViews.create(eventStore, converter);
 
-            String state = views.readState(streamId, snapshotView);
+            String state = views.readState(streamId, SnapshotViewSource.from(snapshotView, store));
 
             assertThat(state).isEqualTo("Janet");
         }
@@ -105,9 +120,9 @@ class SnapshotViewsTest {
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane")));
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet")));
             store.save(streamId, new Snapshot<>("some-stale-shape", 1L, snapshotView.schemaVersion() + 1));
-            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, store);
+            SnapshotViews<DomainEvent> views = SnapshotViews.create(eventStore, converter);
 
-            String state = views.readState(streamId, snapshotView);
+            String state = views.readState(streamId, SnapshotViewSource.from(snapshotView, store));
 
             assertThat(state).isEqualTo("Janet");
         }
@@ -116,9 +131,9 @@ class SnapshotViewsTest {
         void does_not_write_a_snapshot_when_none_existed() {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane")));
-            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, store);
+            SnapshotViews<DomainEvent> views = SnapshotViews.create(eventStore, converter);
 
-            views.readState(streamId, snapshotView);
+            views.readState(streamId, SnapshotViewSource.from(snapshotView, store));
 
             assertThat(store.findLatest(streamId)).isEmpty();
         }
@@ -130,9 +145,9 @@ class SnapshotViewsTest {
             Snapshot<String> existing = new Snapshot<>("Jane", 1L, snapshotView.schemaVersion());
             store.save(streamId, existing);
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet")));
-            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, store);
+            SnapshotViews<DomainEvent> views = SnapshotViews.create(eventStore, converter);
 
-            views.readState(streamId, snapshotView);
+            views.readState(streamId, SnapshotViewSource.from(snapshotView, store));
 
             assertThat(store.findLatest(streamId)).contains(existing);
         }
@@ -147,9 +162,9 @@ class SnapshotViewsTest {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane")));
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet")));
-            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, store);
+            SnapshotViews<DomainEvent> views = SnapshotViews.create(eventStore, converter);
 
-            views.refresh(streamId, snapshotView);
+            views.refresh(streamId, SnapshotViewSource.from(snapshotView, store));
 
             assertAll(
                     () -> assertThat(store.findLatest(streamId)).isPresent(),
@@ -164,11 +179,12 @@ class SnapshotViewsTest {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane")));
             CountingSnapshotStore<String> countingStore = new CountingSnapshotStore<>(SnapshotStore.inMemory());
-            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, countingStore);
-            views.refresh(streamId, snapshotView);
+            SnapshotViews<DomainEvent> views = SnapshotViews.create(eventStore, converter);
+            var source = SnapshotViewSource.from(snapshotView, countingStore);
+            views.refresh(streamId, source);
             Snapshot<String> firstSnapshot = countingStore.findLatest(streamId).orElseThrow();
 
-            views.refresh(streamId, snapshotView);
+            views.refresh(streamId, source);
 
             assertAll(
                     () -> assertThat(countingStore.saveCount()).isEqualTo(2),
@@ -180,23 +196,11 @@ class SnapshotViewsTest {
         void throws_RuntimeException_when_the_store_save_fails() {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane")));
-            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, new ThrowingSnapshotStore<>());
+            SnapshotViews<DomainEvent> views = SnapshotViews.create(eventStore, converter);
 
-            Throwable thrown = catchThrowable(() -> views.refresh(streamId, snapshotView));
+            Throwable thrown = catchThrowable(() -> views.refresh(streamId, SnapshotViewSource.from(snapshotView, new ThrowingSnapshotStore<>())));
 
             assertThat(thrown).isInstanceOf(RuntimeException.class);
-        }
-    }
-
-    private static class ThrowingSnapshotStore<S> implements SnapshotStore<S> {
-        @Override
-        public Optional<Snapshot<S>> findLatest(String key) {
-            return Optional.empty();
-        }
-
-        @Override
-        public void save(String key, Snapshot<S> snapshot) {
-            throw new RuntimeException("save failed");
         }
     }
 

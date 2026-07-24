@@ -28,57 +28,61 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * On-demand, deciders-free access to a {@link SnapshotView}'s state, backed by a {@link ReactiveSnapshotStore}. Build
- * one over the event store, the cloud event converter, and a store, then reuse it. It is the read-side counterpart to
- * {@link ReactiveSnapshotDeciderApplicationService}: there is no command and nothing is appended. The state is bound to
- * a non-null type because a {@link Mono} cannot carry a null value.
+ * one over the event store and the cloud event converter, then reuse it for every view, passing a
+ * {@link ReactiveSnapshotViewSource} (the per-aggregate spec that bundles the view with its store) per call. It is the
+ * read-side counterpart to {@link ReactiveSnapshotDeciderApplicationService}: there is no command and nothing is
+ * appended. The state is bound to a non-null type because a {@link Mono} cannot carry a null value.
  * <p>
- * {@link #readState(String, SnapshotView)} is a plain read: it resumes the view from the stored snapshot, folds the
- * events written since, and returns the current state, without writing anything. {@link #refresh(String, SnapshotView)}
- * is the explicit maintenance write: it folds to the current head and persists a fresh snapshot. Snapshotting therefore
- * never happens as a hidden side effect of a read, and there is no {@code SnapshotPolicy} on this path.
+ * {@link #readState(String, ReactiveSnapshotViewSource)} is a plain read: it resumes the view from the stored snapshot,
+ * folds the events written since, and returns the current state, without writing anything.
+ * {@link #refresh(String, ReactiveSnapshotViewSource)} is the explicit maintenance write: it folds to the current head
+ * and persists a fresh snapshot. Snapshotting therefore never happens as a hidden side effect of a read, and there is no
+ * {@code SnapshotPolicy} on this path.
+ *
+ * @param <E> the event type
  */
 @NullMarked
-public final class ReactiveSnapshotViews<S, E> {
+public final class ReactiveSnapshotViews<E> {
 
     private final EventStore eventStore;
     private final CloudEventConverter<E> converter;
-    private final ReactiveSnapshotStore<S> store;
 
-    private ReactiveSnapshotViews(EventStore eventStore, CloudEventConverter<E> converter, ReactiveSnapshotStore<S> store) {
+    private ReactiveSnapshotViews(EventStore eventStore, CloudEventConverter<E> converter) {
         this.eventStore = requireNonNull(eventStore, "eventStore cannot be null");
         this.converter = requireNonNull(converter, "converter cannot be null");
-        this.store = requireNonNull(store, "store cannot be null");
     }
 
-    /** Creates a reader/refresher over {@code eventStore}, {@code converter}, and the snapshot {@code store}. */
-    public static <S, E> ReactiveSnapshotViews<S, E> create(EventStore eventStore, CloudEventConverter<E> converter, ReactiveSnapshotStore<S> store) {
-        return new ReactiveSnapshotViews<>(eventStore, converter, store);
+    /** Creates a reader/refresher over {@code eventStore} and {@code converter}. */
+    public static <E> ReactiveSnapshotViews<E> create(EventStore eventStore, CloudEventConverter<E> converter) {
+        return new ReactiveSnapshotViews<>(eventStore, converter);
     }
 
     /**
-     * Returns the current state for {@code streamId}, resuming {@code snapshotView} from the snapshot in the store and
+     * Returns the current state for {@code streamId}, resuming {@code source}'s view from the snapshot in its store and
      * folding the events written after it. This is a pure read, it never writes a snapshot. A loaded snapshot whose
      * schema version does not match the view is ignored and the state is rebuilt from the whole stream.
      */
-    public Mono<S> readState(String streamId, SnapshotView<S, E> snapshotView) {
+    public <S> Mono<S> readState(String streamId, ReactiveSnapshotViewSource<S, E> source) {
         requireNonNull(streamId, "streamId cannot be null");
-        requireNonNull(snapshotView, "snapshotView cannot be null");
-        return foldToHead(streamId, snapshotView).map(Folded::state);
+        requireNonNull(source, "source cannot be null");
+        return foldToHead(streamId, source).map(Folded::state);
     }
 
     /**
-     * Folds {@code streamId} to its current head and persists a fresh snapshot for {@code snapshotView}. This is an
+     * Folds {@code streamId} to its current head and persists a fresh snapshot for {@code source}'s view. This is an
      * explicit maintenance call, so it always writes and lets a store failure surface, unlike the best-effort save on
      * the write path where there is a committed command to protect.
      */
-    public Mono<Void> refresh(String streamId, SnapshotView<S, E> snapshotView) {
+    public <S> Mono<Void> refresh(String streamId, ReactiveSnapshotViewSource<S, E> source) {
         requireNonNull(streamId, "streamId cannot be null");
-        requireNonNull(snapshotView, "snapshotView cannot be null");
-        return foldToHead(streamId, snapshotView)
-                .flatMap(folded -> store.save(streamId, new Snapshot<>(folded.state(), folded.version(), snapshotView.schemaVersion())));
+        requireNonNull(source, "source cannot be null");
+        return foldToHead(streamId, source)
+                .flatMap(folded -> source.store().save(streamId, new Snapshot<>(folded.state(), folded.version(), source.view().schemaVersion())));
     }
 
-    private Mono<Folded<S>> foldToHead(String streamId, SnapshotView<S, E> snapshotView) {
+    private <S> Mono<Folded<S>> foldToHead(String streamId, ReactiveSnapshotViewSource<S, E> source) {
+        ReactiveSnapshotStore<S> store = source.store();
+        SnapshotView<S, E> snapshotView = source.view();
         return Mono.defer(() -> ReactiveSnapshotSupport.resolveBase(store, streamId, snapshotView.schemaVersion(), snapshotView.view()::initialState).flatMap(base ->
                 eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE).flatMap(eventStream ->
                         eventStream.events()

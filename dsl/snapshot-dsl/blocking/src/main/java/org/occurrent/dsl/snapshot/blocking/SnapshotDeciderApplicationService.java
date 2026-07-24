@@ -38,18 +38,19 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * A blocking {@link ApplicationService} facade that runs a {@link Decider} but resumes from a snapshot instead of
  * replaying the whole stream, the snapshot counterpart to {@link org.occurrent.dsl.decider.DeciderApplicationService}.
- * Construct it once around an application service together with the {@link SnapshotStore} and {@link SnapshotOptions}
- * for the state it snapshots, then call it with a stream id, command(s), and a decider, the same call shape as the
- * plain facade.
+ * Construct it once around an application service and reuse it for every aggregate, exactly like the plain facade. Each
+ * execute takes a {@link SnapshotDecider}, the per-aggregate spec that bundles the decider with its {@link SnapshotStore}
+ * and {@link SnapshotOptions}.
  * <p>
  * On each execute it loads the latest {@link Snapshot} for the stream, reads only the events written after it (via
  * {@link ExecuteOptions#fromStreamVersion(long)}), folds those onto the snapshot state with {@link Decider#evolve(Object, List)},
  * decides, writes, and then writes a fresh snapshot when the {@link org.occurrent.dsl.snapshot.SnapshotPolicy} in the
- * {@link SnapshotOptions} fires. The optimistic write still happens at the stream's true current version, so concurrency
- * control is unchanged and a stale snapshot only means a longer tail to fold, never a wrong result. It loads one snapshot
- * and reads only the events after it per execute, and a plain application service without a snapshot store pays nothing.
+ * spec's {@link SnapshotOptions} fires. The optimistic write still happens at the stream's true current version, so
+ * concurrency control is unchanged and a stale snapshot only means a longer tail to fold, never a wrong result. It loads
+ * one snapshot and reads only the events after it per execute, and a plain application service without a snapshot store
+ * pays nothing.
  * <p>
- * Snapshots are a discardable optimization: a loaded snapshot whose schema version does not match the one in
+ * Snapshots are a discardable optimization: a loaded snapshot whose schema version does not match the one in the spec's
  * {@link SnapshotOptions} is ignored and the state is rebuilt from scratch. The snapshot write is best-effort: it happens
  * after the command's events commit and a save failure is logged rather than failing the committed command. For a snapshot
  * kept consistent on the write path, maintain it with {@code @Snapshot(mode = SYNCHRONOUS)} or a synchronous subscription.
@@ -57,140 +58,139 @@ import java.util.concurrent.atomic.AtomicReference;
  * The decider's event type must equal the application service's event type {@code E}. Widen a narrower decider with
  * {@link Decider#adapt(Decider, Class, Class)} first.
  *
- * @param <S> the snapshot state type
  * @param <E> the event type
  */
 @NullMarked
-public final class SnapshotDeciderApplicationService<S extends @Nullable Object, E> {
+public final class SnapshotDeciderApplicationService<E> {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotDeciderApplicationService.class);
 
     private final ApplicationService<E> applicationService;
-    private final SnapshotStore<S> store;
-    private final SnapshotOptions<S, E> options;
 
-    public SnapshotDeciderApplicationService(ApplicationService<E> applicationService, SnapshotStore<S> store, SnapshotOptions<S, E> options) {
+    public SnapshotDeciderApplicationService(ApplicationService<E> applicationService) {
         this.applicationService = Objects.requireNonNull(applicationService, "applicationService cannot be null");
-        this.store = Objects.requireNonNull(store, "store cannot be null");
-        this.options = Objects.requireNonNull(options, "options cannot be null");
     }
 
     /**
      * Execute a single command against {@code streamId}, resuming from the snapshot.
      */
-    public <C> WriteResult execute(String streamId, C command, Decider<C, S, E> decider) {
-        return execute(streamId, List.of(command), decider);
+    public <C, S extends @Nullable Object> WriteResult execute(String streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
+        return execute(streamId, List.of(command), snapshotDecider);
     }
 
     /**
      * Execute a single command against {@code streamId}, resuming from the snapshot.
      */
-    public <C> WriteResult execute(UUID streamId, C command, Decider<C, S, E> decider) {
-        return execute(streamId.toString(), command, decider);
+    public <C, S extends @Nullable Object> WriteResult execute(UUID streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
+        return execute(streamId.toString(), command, snapshotDecider);
     }
 
     /**
      * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot.
      */
-    public <C> WriteResult execute(String streamId, List<C> commands, Decider<C, S, E> decider) {
-        return doExecute(streamId, commands, decider).writeResult();
+    public <C, S extends @Nullable Object> WriteResult execute(String streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
+        return doExecute(streamId, commands, snapshotDecider).writeResult();
     }
 
     /**
      * Execute {@code commands} in order against {@code streamId}, resuming from the snapshot.
      */
-    public <C> WriteResult execute(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
-        return execute(streamId.toString(), commands, decider);
+    public <C, S extends @Nullable Object> WriteResult execute(UUID streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
+        return execute(streamId.toString(), commands, snapshotDecider);
     }
 
     /**
      * Execute a single command and return the folded state plus the events that were decided.
      */
-    public <C> Decider.Decision<S, E> executeAndReturnDecision(String streamId, C command, Decider<C, S, E> decider) {
-        return doExecute(streamId, List.of(command), decider).decision();
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(String streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
+        return doExecute(streamId, List.of(command), snapshotDecider).decision();
     }
 
     /**
      * Execute a single command and return the folded state plus the events that were decided.
      */
-    public <C> Decider.Decision<S, E> executeAndReturnDecision(UUID streamId, C command, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId.toString(), command, decider);
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(UUID streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId.toString(), command, snapshotDecider);
     }
 
     /**
      * Execute {@code commands} and return the folded state plus the events that were decided.
      */
-    public <C> Decider.Decision<S, E> executeAndReturnDecision(String streamId, List<C> commands, Decider<C, S, E> decider) {
-        return doExecute(streamId, commands, decider).decision();
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(String streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
+        return doExecute(streamId, commands, snapshotDecider).decision();
     }
 
     /**
      * Execute {@code commands} and return the folded state plus the events that were decided.
      */
-    public <C> Decider.Decision<S, E> executeAndReturnDecision(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId.toString(), commands, decider);
+    public <C, S extends @Nullable Object> Decider.Decision<S, E> executeAndReturnDecision(UUID streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId.toString(), commands, snapshotDecider);
     }
 
     /**
      * Execute a single command and return the folded state after the decision.
      */
-    public <C> S executeAndReturnState(String streamId, C command, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId, command, decider).state();
+    public <C, S extends @Nullable Object> S executeAndReturnState(String streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId, command, snapshotDecider).state();
     }
 
     /**
      * Execute a single command and return the folded state after the decision.
      */
-    public <C> S executeAndReturnState(UUID streamId, C command, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId, command, decider).state();
+    public <C, S extends @Nullable Object> S executeAndReturnState(UUID streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId, command, snapshotDecider).state();
     }
 
     /**
      * Execute {@code commands} and return the folded state after the decision.
      */
-    public <C> S executeAndReturnState(String streamId, List<C> commands, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId, commands, decider).state();
+    public <C, S extends @Nullable Object> S executeAndReturnState(String streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId, commands, snapshotDecider).state();
     }
 
     /**
      * Execute {@code commands} and return the folded state after the decision.
      */
-    public <C> S executeAndReturnState(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId, commands, decider).state();
+    public <C, S extends @Nullable Object> S executeAndReturnState(UUID streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId, commands, snapshotDecider).state();
     }
 
     /**
      * Execute a single command and return the new events that were decided.
      */
-    public <C> List<E> executeAndReturnEvents(String streamId, C command, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId, command, decider).events();
+    public <C, S extends @Nullable Object> List<E> executeAndReturnEvents(String streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId, command, snapshotDecider).events();
     }
 
     /**
      * Execute a single command and return the new events that were decided.
      */
-    public <C> List<E> executeAndReturnEvents(UUID streamId, C command, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId, command, decider).events();
+    public <C, S extends @Nullable Object> List<E> executeAndReturnEvents(UUID streamId, C command, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId, command, snapshotDecider).events();
     }
 
     /**
      * Execute {@code commands} and return the new events that were decided.
      */
-    public <C> List<E> executeAndReturnEvents(String streamId, List<C> commands, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId, commands, decider).events();
+    public <C, S extends @Nullable Object> List<E> executeAndReturnEvents(String streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId, commands, snapshotDecider).events();
     }
 
     /**
      * Execute {@code commands} and return the new events that were decided.
      */
-    public <C> List<E> executeAndReturnEvents(UUID streamId, List<C> commands, Decider<C, S, E> decider) {
-        return executeAndReturnDecision(streamId, commands, decider).events();
+    public <C, S extends @Nullable Object> List<E> executeAndReturnEvents(UUID streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
+        return executeAndReturnDecision(streamId, commands, snapshotDecider).events();
     }
 
-    private <C> Executed<S, E> doExecute(String streamId, List<C> commands, Decider<C, S, E> decider) {
+    private <C, S extends @Nullable Object> Executed<S, E> doExecute(String streamId, List<C> commands, SnapshotDecider<C, S, E> snapshotDecider) {
         Objects.requireNonNull(streamId, "streamId cannot be null");
         Objects.requireNonNull(commands, "commands cannot be null");
-        Objects.requireNonNull(decider, "decider cannot be null");
+        Objects.requireNonNull(snapshotDecider, "snapshotDecider cannot be null");
+
+        Decider<C, S, E> decider = snapshotDecider.decider();
+        SnapshotStore<S> store = snapshotDecider.store();
+        SnapshotOptions<S, E> options = snapshotDecider.options();
 
         // Load once, outside the app service's optimistic-retry loop: the snapshot base does not change between attempts,
         // a conflict just re-reads a longer tail and folds it onto the same base again.
