@@ -52,6 +52,7 @@ import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -198,13 +199,17 @@ class ReactiveSnapshotViewsTest {
         void overwrites_an_existing_snapshot_even_when_it_is_already_up_to_date() {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
-            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, store);
+            CountingReactiveSnapshotStore<String> countingStore = new CountingReactiveSnapshotStore<>(ReactiveSnapshotStore.inMemory());
+            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, countingStore);
             views.refresh(streamId, snapshotView).block();
-            Snapshot<String> firstSnapshot = store.findLatest(streamId).blockOptional().orElseThrow();
+            Snapshot<String> firstSnapshot = countingStore.findLatest(streamId).blockOptional().orElseThrow();
 
             views.refresh(streamId, snapshotView).block();
 
-            assertThat(store.findLatest(streamId).blockOptional()).contains(firstSnapshot);
+            assertAll(
+                    () -> assertThat(countingStore.saveCount()).isEqualTo(2),
+                    () -> assertThat(countingStore.findLatest(streamId).blockOptional()).contains(firstSnapshot)
+            );
         }
 
         @Test
@@ -228,6 +233,32 @@ class ReactiveSnapshotViewsTest {
         @Override
         public Mono<Void> save(String key, Snapshot<S> snapshot) {
             return Mono.error(new RuntimeException("save failed"));
+        }
+    }
+
+    private static class CountingReactiveSnapshotStore<S> implements ReactiveSnapshotStore<S> {
+        private final ReactiveSnapshotStore<S> delegate;
+        private final AtomicInteger saveCount = new AtomicInteger();
+
+        private CountingReactiveSnapshotStore(ReactiveSnapshotStore<S> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Mono<Snapshot<S>> findLatest(String key) {
+            return delegate.findLatest(key);
+        }
+
+        @Override
+        public Mono<Void> save(String key, Snapshot<S> snapshot) {
+            return Mono.defer(() -> {
+                saveCount.incrementAndGet();
+                return delegate.save(key, snapshot);
+            });
+        }
+
+        int saveCount() {
+            return saveCount.get();
         }
     }
 }

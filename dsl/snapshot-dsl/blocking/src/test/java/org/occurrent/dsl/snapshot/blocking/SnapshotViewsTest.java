@@ -163,13 +163,17 @@ class SnapshotViewsTest {
         void overwrites_an_existing_snapshot_even_when_it_is_already_up_to_date() {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane")));
-            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, store);
+            CountingSnapshotStore<String> countingStore = new CountingSnapshotStore<>(SnapshotStore.inMemory());
+            SnapshotViews<String, DomainEvent> views = SnapshotViews.create(eventStore, converter, countingStore);
             views.refresh(streamId, snapshotView);
-            Snapshot<String> firstSnapshot = store.findLatest(streamId).orElseThrow();
+            Snapshot<String> firstSnapshot = countingStore.findLatest(streamId).orElseThrow();
 
             views.refresh(streamId, snapshotView);
 
-            assertThat(store.findLatest(streamId)).contains(firstSnapshot);
+            assertAll(
+                    () -> assertThat(countingStore.saveCount()).isEqualTo(2),
+                    () -> assertThat(countingStore.findLatest(streamId)).contains(firstSnapshot)
+            );
         }
 
         @Test
@@ -193,6 +197,30 @@ class SnapshotViewsTest {
         @Override
         public void save(String key, Snapshot<S> snapshot) {
             throw new RuntimeException("save failed");
+        }
+    }
+
+    private static class CountingSnapshotStore<S> implements SnapshotStore<S> {
+        private final SnapshotStore<S> delegate;
+        private int saveCount = 0;
+
+        private CountingSnapshotStore(SnapshotStore<S> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Optional<Snapshot<S>> findLatest(String key) {
+            return delegate.findLatest(key);
+        }
+
+        @Override
+        public void save(String key, Snapshot<S> snapshot) {
+            saveCount++;
+            delegate.save(key, snapshot);
+        }
+
+        int saveCount() {
+            return saveCount;
         }
     }
 }
