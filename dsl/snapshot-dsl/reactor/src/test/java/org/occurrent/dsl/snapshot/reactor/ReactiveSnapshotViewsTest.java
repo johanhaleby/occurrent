@@ -121,6 +121,21 @@ class ReactiveSnapshotViewsTest {
                 .hasMessageContaining("store");
     }
 
+    @Test
+    void fails_fast_with_guidance_when_the_view_folds_to_a_null_state() {
+        String streamId = UUID.randomUUID().toString();
+        applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
+        SnapshotView<String, DomainEvent> foldsToNull = SnapshotView.<String, DomainEvent>builder("")
+                .on(NameDefined.class, (state, event) -> null)
+                .schemaVersion(1)
+                .build();
+        ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
+
+        assertThatThrownBy(() -> views.readState(streamId, ReactiveSnapshotViewSource.from(foldsToNull, store)).block())
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Mono cannot carry null");
+    }
+
     @Nested
     @DisplayName("readState")
     class ReadState {

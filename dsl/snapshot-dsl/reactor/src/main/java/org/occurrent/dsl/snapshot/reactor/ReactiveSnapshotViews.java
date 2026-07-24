@@ -87,8 +87,15 @@ public final class ReactiveSnapshotViews<E> {
                 eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE).flatMap(eventStream ->
                         eventStream.events()
                                 .map(converter::toDomainEvent)
-                                .reduce(base.state(), (state, event) -> snapshotView.view().evolve(state, event))
+                                .reduce(requireNonNullState(base.state()), (state, event) -> requireNonNullState(snapshotView.view().evolve(state, event)))
                                 .map(current -> new Folded<>(current, eventStream.version())))));
+    }
+
+    // A Mono cannot carry null, so a view whose initial state is null or that evolves to a null state fails fast with
+    // guidance instead of Reactor's bare "reducer returned a null value" NPE. Use the blocking SnapshotViews for a
+    // nullable state.
+    private static <S> S requireNonNullState(S state) {
+        return requireNonNull(state, "The snapshot view folded to a null state, but a Mono cannot carry null. Use the blocking SnapshotViews for a nullable state.");
     }
 
     private record Folded<S>(S state, long version) {
