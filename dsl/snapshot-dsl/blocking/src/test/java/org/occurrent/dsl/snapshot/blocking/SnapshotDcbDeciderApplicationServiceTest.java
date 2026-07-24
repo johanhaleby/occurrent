@@ -49,6 +49,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayName("SnapshotDcbDeciderApplicationService")
@@ -60,6 +61,7 @@ class SnapshotDcbDeciderApplicationServiceTest {
     private InMemoryEventStore eventStore;
     private CloudEventConverter<DomainEvent> converter;
     private DcbApplicationService<DomainEvent> applicationService;
+    private SnapshotDcbDeciderApplicationService<DomainEvent> service;
     private SnapshotStore<String> store;
     private AtomicInteger evolveCount;
     private DcbDecider<Cmd, String, DomainEvent> dcbDecider;
@@ -72,6 +74,7 @@ class SnapshotDcbDeciderApplicationServiceTest {
         eventStore = new InMemoryEventStore();
         converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         applicationService = new GenericDcbApplicationService<>(eventStore, converter, (DomainEvent event) -> Set.of(tag()), GenericDcbApplicationService.defaultRetryStrategy());
+        service = new SnapshotDcbDeciderApplicationService<>(applicationService);
         store = SnapshotStore.inMemory();
         evolveCount = new AtomicInteger();
         Decider<Cmd, String, DomainEvent> decider = countingDecider(evolveCount, time);
@@ -82,16 +85,17 @@ class SnapshotDcbDeciderApplicationServiceTest {
     @Test
     void executeAndReturnState_returns_the_folded_state() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
-        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Define("A"), dcbDecider);
+        var account = SnapshotDcbDecider.from(dcbDecider, store, options);
+        service.execute(new Define("A"), account);
 
-        String state = new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).executeAndReturnState(new Change("B"), dcbDecider);
+        String state = service.executeAndReturnState(new Change("B"), account);
 
         assertThat(state).isEqualTo("B");
     }
 
     @Test
     void executeAndReturnDecision_returns_state_and_events() {
-        Decider.Decision<String, DomainEvent> decision = new SnapshotDcbDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(1, SnapshotPolicy.always())).executeAndReturnDecision(new Define("A"), dcbDecider);
+        Decider.Decision<String, DomainEvent> decision = service.executeAndReturnDecision(new Define("A"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always())));
 
         assertAll(
                 () -> assertThat(decision.state()).isEqualTo("A"),
@@ -101,7 +105,7 @@ class SnapshotDcbDeciderApplicationServiceTest {
 
     @Test
     void first_execute_appends_and_saves_a_snapshot_keyed_by_criteria() {
-        new SnapshotDcbDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(1, SnapshotPolicy.always())).execute(new Define("A"), dcbDecider);
+        service.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always())));
 
         assertAll(
                 () -> assertThat(store.findLatest(key)).isPresent(),
@@ -110,12 +114,23 @@ class SnapshotDcbDeciderApplicationServiceTest {
     }
 
     @Test
+    void first_execute_with_the_default_key_function_resolves_the_canonical_criteria_key() {
+        // The 3-arg from(...) defaults keyFunction to DcbSnapshotKeys::canonicalKey; observe the same key as an explicit one.
+        var account = SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always()));
+
+        service.execute(new Define("A"), account);
+
+        assertThat(store.findLatest(DcbSnapshotKeys.canonicalKey(criteria()))).hasValueSatisfying(s -> assertThat(s.state()).isEqualTo("A"));
+    }
+
+    @Test
     void second_execute_resumes_from_the_snapshot_and_folds_only_the_tail() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
-        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Define("A"), dcbDecider);
+        var account = SnapshotDcbDecider.from(dcbDecider, store, options);
+        service.execute(new Define("A"), account);
 
         evolveCount.set(0);
-        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Change("B"), dcbDecider);
+        service.execute(new Change("B"), account);
 
         assertAll(
                 // Empty tail after the snapshot, so only the produced event is folded (1), not a full replay.
@@ -127,13 +142,14 @@ class SnapshotDcbDeciderApplicationServiceTest {
     @Test
     void the_resume_read_folds_events_appended_after_the_snapshot_by_another_writer() {
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
-        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Define("A"), dcbDecider);
+        var account = SnapshotDcbDecider.from(dcbDecider, store, options);
+        service.execute(new Define("A"), account);
 
         // An event lands in the same boundary out-of-band, so the snapshot is now behind the boundary head.
         appendOutOfBand(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "X"));
 
         evolveCount.set(0);
-        new SnapshotDcbDeciderApplicationService<>(applicationService, store, options).execute(new Change("B"), dcbDecider);
+        service.execute(new Change("B"), account);
 
         assertAll(
                 // The out-of-band X and the produced B are both folded (2), proving the tail after the snapshot was read.
@@ -144,10 +160,10 @@ class SnapshotDcbDeciderApplicationServiceTest {
 
     @Test
     void a_schema_version_bump_ignores_the_old_snapshot() {
-        new SnapshotDcbDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(1, SnapshotPolicy.always())).execute(new Define("A"), dcbDecider);
+        service.execute(new Define("A"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(1, SnapshotPolicy.always())));
 
         evolveCount.set(0);
-        new SnapshotDcbDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(2, SnapshotPolicy.always())).execute(new Change("B"), dcbDecider);
+        service.execute(new Change("B"), SnapshotDcbDecider.from(dcbDecider, store, SnapshotOptions.of(2, SnapshotPolicy.always())));
 
         assertAll(
                 // Old schema-1 snapshot ignored, whole boundary replayed: A (1) plus produced B (1) = 2.
@@ -155,6 +171,37 @@ class SnapshotDcbDeciderApplicationServiceTest {
                 () -> assertThat(store.findLatest(key).orElseThrow().schemaVersion()).isEqualTo(2),
                 () -> assertThat(store.findLatest(key).orElseThrow().state()).isEqualTo("B")
         );
+    }
+
+    @Test
+    void from_throws_NullPointerException_when_the_dcbDecider_is_null() {
+        SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        assertThatThrownBy(() -> SnapshotDcbDecider.from(null, store, options))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("dcbDecider");
+    }
+
+    @Test
+    void from_throws_NullPointerException_when_the_store_is_null() {
+        SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        assertThatThrownBy(() -> SnapshotDcbDecider.from(dcbDecider, null, options))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("store");
+    }
+
+    @Test
+    void from_throws_NullPointerException_when_the_options_are_null() {
+        assertThatThrownBy(() -> SnapshotDcbDecider.from(dcbDecider, store, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("options");
+    }
+
+    @Test
+    void from_throws_NullPointerException_when_the_keyFunction_is_null() {
+        SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        assertThatThrownBy(() -> SnapshotDcbDecider.from(dcbDecider, store, options, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("keyFunction");
     }
 
     private void appendOutOfBand(DomainEvent event) {

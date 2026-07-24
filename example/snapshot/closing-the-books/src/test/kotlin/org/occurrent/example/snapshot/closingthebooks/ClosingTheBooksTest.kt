@@ -28,6 +28,7 @@ import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.snapshot.SnapshotOptions
 import org.occurrent.dsl.snapshot.SnapshotPolicy
 import org.occurrent.dsl.snapshot.SnapshotStore
+import org.occurrent.dsl.snapshot.blocking.SnapshotDecider
 import org.occurrent.dsl.snapshot.blocking.SnapshotDeciderApplicationService
 import org.occurrent.dsl.snapshot.blocking.SnapshotPolicies
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
@@ -54,10 +55,10 @@ class ClosingTheBooksTest {
 
     @Test
     fun `technical snapshot is taken every N events and a later command resumes from it`() {
-        val options = SnapshotOptions.everyNEvents<LedgerState, LedgerEvent>(1, 100)
-        val snapshots = SnapshotDeciderApplicationService(applicationService, store, options)
+        val snapshots = SnapshotDeciderApplicationService(applicationService)
+        val account = SnapshotDecider.from(decider, store, SnapshotOptions.everyNEvents<LedgerState, LedgerEvent>(1, 100))
 
-        repeat(250) { snapshots.execute("account-1", Deposit(1), decider) }
+        repeat(250) { snapshots.execute("account-1", Deposit(1), account) }
 
         // The most recent snapshot sits at the last version the every-100 policy crossed, not at the head.
         val snapshot = store.findLatest("account-1")
@@ -66,19 +67,19 @@ class ClosingTheBooksTest {
         assertThat(snapshot.get().state()).isEqualTo(LedgerState(balance = 200, closed = false))
 
         // The next command loads the snapshot at version 200 and folds only the 50-event tail before deciding.
-        val state = snapshots.executeAndReturnState("account-1", Deposit(5), decider)
+        val state = snapshots.executeAndReturnState("account-1", Deposit(5), account)
         assertThat(state).isEqualTo(LedgerState(balance = 255, closed = false))
     }
 
     @Test
     fun `closing the books snapshots the terminal state and carries the balance into the next period`() {
         val policy = SnapshotPolicies.whenTerminal(decider).or(SnapshotPolicy.everyNEvents<LedgerState, LedgerEvent>(100))
-        val options = SnapshotOptions.of(1, policy)
-        val snapshots = SnapshotDeciderApplicationService(applicationService, store, options)
+        val snapshots = SnapshotDeciderApplicationService(applicationService)
+        val account = SnapshotDecider.from(decider, store, SnapshotOptions.of(1, policy))
 
-        snapshots.execute("period-2026-Q1", Deposit(100), decider)
-        snapshots.execute("period-2026-Q1", Withdraw(30), decider)
-        snapshots.execute("period-2026-Q1", CloseBooks("2026-Q1"), decider)
+        snapshots.execute("period-2026-Q1", Deposit(100), account)
+        snapshots.execute("period-2026-Q1", Withdraw(30), account)
+        snapshots.execute("period-2026-Q1", CloseBooks("2026-Q1"), account)
 
         // whenTerminal fired on CloseBooks, so the snapshot holds the closing balance at the terminal state.
         val closed = store.findLatest("period-2026-Q1")
@@ -87,7 +88,7 @@ class ClosingTheBooksTest {
 
         // The closing balance becomes the opening balance of the next period, recorded as a real event in a new stream.
         val closingBalance = closed.get().state().balance
-        val openingState = snapshots.executeAndReturnState("period-2026-Q2", SetOpeningBalance(closingBalance), decider)
+        val openingState = snapshots.executeAndReturnState("period-2026-Q2", SetOpeningBalance(closingBalance), account)
         assertThat(openingState).isEqualTo(LedgerState(balance = 70, closed = false))
 
         // The closed period's detailed events can now be archived. The snapshot is a discardable optimization, and the
@@ -96,7 +97,7 @@ class ClosingTheBooksTest {
         assertThat(eventStore.read("period-2026-Q1").version()).isZero()
 
         // The next period is unaffected by archiving the previous one.
-        val afterDeposit = snapshots.executeAndReturnState("period-2026-Q2", Deposit(10), decider)
+        val afterDeposit = snapshots.executeAndReturnState("period-2026-Q2", Deposit(10), account)
         assertThat(afterDeposit).isEqualTo(LedgerState(balance = 80, closed = false))
     }
 }

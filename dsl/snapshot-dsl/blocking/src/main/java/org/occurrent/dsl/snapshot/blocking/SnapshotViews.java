@@ -31,57 +31,60 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * On-demand, deciders-free access to a {@link SnapshotView}'s state, backed by a {@link SnapshotStore}. Build one over
- * the event store, the cloud event converter, and a store, then reuse it. It is the read-side counterpart to
+ * the event store and the cloud event converter, then reuse it for every view, passing a {@link SnapshotViewSource} (the
+ * per-aggregate spec that bundles the view with its store) per call. It is the read-side counterpart to
  * {@link SnapshotDeciderApplicationService}: there is no command and nothing is appended.
  * <p>
- * {@link #readState(String, SnapshotView)} is a plain read: it resumes the view from the stored snapshot, folds the
- * events written since, and returns the current state, without writing anything. {@link #refresh(String, SnapshotView)}
+ * {@link #readState(String, SnapshotViewSource)} is a plain read: it resumes the view from the stored snapshot, folds the
+ * events written since, and returns the current state, without writing anything. {@link #refresh(String, SnapshotViewSource)}
  * is the explicit maintenance write: it folds to the current head and persists a fresh snapshot. Snapshotting therefore
  * never happens as a hidden side effect of a read, and there is no {@code SnapshotPolicy} on this path (a policy is the
  * automatic write trigger used by {@code @Snapshot} and the decider executors).
+ *
+ * @param <E> the event type
  */
 @NullMarked
-public final class SnapshotViews<S extends @Nullable Object, E> {
+public final class SnapshotViews<E> {
 
     private final EventStore eventStore;
     private final CloudEventConverter<E> converter;
-    private final SnapshotStore<S> store;
 
-    private SnapshotViews(EventStore eventStore, CloudEventConverter<E> converter, SnapshotStore<S> store) {
+    private SnapshotViews(EventStore eventStore, CloudEventConverter<E> converter) {
         this.eventStore = requireNonNull(eventStore, "eventStore cannot be null");
         this.converter = requireNonNull(converter, "converter cannot be null");
-        this.store = requireNonNull(store, "store cannot be null");
     }
 
-    /** Creates a reader/refresher over {@code eventStore}, {@code converter}, and the snapshot {@code store}. */
-    public static <S extends @Nullable Object, E> SnapshotViews<S, E> create(EventStore eventStore, CloudEventConverter<E> converter, SnapshotStore<S> store) {
-        return new SnapshotViews<>(eventStore, converter, store);
+    /** Creates a reader/refresher over {@code eventStore} and {@code converter}. */
+    public static <E> SnapshotViews<E> create(EventStore eventStore, CloudEventConverter<E> converter) {
+        return new SnapshotViews<>(eventStore, converter);
     }
 
     /**
-     * Returns the current state for {@code streamId}, resuming {@code snapshotView} from the snapshot in the store and
+     * Returns the current state for {@code streamId}, resuming {@code source}'s view from the snapshot in its store and
      * folding the events written after it. This is a pure read, it never writes a snapshot. A loaded snapshot whose
      * schema version does not match the view is ignored and the state is rebuilt from the whole stream.
      */
-    public S readState(String streamId, SnapshotView<S, E> snapshotView) {
+    public <S extends @Nullable Object> S readState(String streamId, SnapshotViewSource<S, E> source) {
         requireNonNull(streamId, "streamId cannot be null");
-        requireNonNull(snapshotView, "snapshotView cannot be null");
-        return foldToHead(streamId, snapshotView).state();
+        requireNonNull(source, "source cannot be null");
+        return foldToHead(streamId, source).state();
     }
 
     /**
-     * Folds {@code streamId} to its current head and persists a fresh snapshot for {@code snapshotView}. This is an
+     * Folds {@code streamId} to its current head and persists a fresh snapshot for {@code source}'s view. This is an
      * explicit maintenance call, so it always writes and lets a store failure surface, unlike the best-effort save on
      * the write path where there is a committed command to protect.
      */
-    public void refresh(String streamId, SnapshotView<S, E> snapshotView) {
+    public <S extends @Nullable Object> void refresh(String streamId, SnapshotViewSource<S, E> source) {
         requireNonNull(streamId, "streamId cannot be null");
-        requireNonNull(snapshotView, "snapshotView cannot be null");
-        Folded<S> folded = foldToHead(streamId, snapshotView);
-        store.save(streamId, new Snapshot<>(folded.state(), folded.version(), snapshotView.schemaVersion()));
+        requireNonNull(source, "source cannot be null");
+        Folded<S> folded = foldToHead(streamId, source);
+        source.store().save(streamId, new Snapshot<>(folded.state(), folded.version(), source.view().schemaVersion()));
     }
 
-    private Folded<S> foldToHead(String streamId, SnapshotView<S, E> snapshotView) {
+    private <S extends @Nullable Object> Folded<S> foldToHead(String streamId, SnapshotViewSource<S, E> source) {
+        SnapshotStore<S> store = source.store();
+        SnapshotView<S, E> snapshotView = source.view();
         SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(store.findLatest(streamId), snapshotView.schemaVersion(), snapshotView.view()::initialState);
         EventStream<CloudEvent> eventStream = eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE);
         S current = snapshotView.view().evolve(base.state(), converter.toDomainEvents(eventStream.events()));
