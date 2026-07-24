@@ -138,6 +138,45 @@ back to the same or a higher version, without deleting the snapshot, is indistin
 version alone, and the guard trusts it. Version comparison detects one specific shape of reset, it is not a general content
 check. The operational rule stands regardless of the guard: delete the snapshot on every reset.
 
+## Amendment (2026-07-24): the DCB snapshot key is derived from the criteria, not the decider
+
+The original decision stated that the DCB snapshot key defaults to a canonical form of the command's `DcbCriteria`,
+with an override hook, but it did not record why the key is a function of the criteria rather than of the decider.
+This amendment records that reasoning, because keying by the decider is a tempting change that would be a correctness
+regression, not an ergonomic win.
+
+**The decider carries no per-instance identity; the criteria does.** A `DcbDecider` (and the `SnapshotDcbDecider`
+spec that wraps it) is a per-type constant, constructed once and reused for every instance through the one shared
+executor. Per-instance identity enters only through the command, and `DcbDecider.criteriaFor(command)` turns it into a
+per-instance boundary, for example `DcbCriteria.tagsAnyOf(course(command.courseId), student(command.studentId))`. Two
+instances of the same decider resolve to different criteria, hence different canonical keys, hence separate snapshots.
+A key function that received the decider would get the same object for every instance, so it could only produce a
+per-type name, collapsing all instances into one snapshot slot. One instance's folded state would overwrite another's,
+and a resume would load the wrong instance's state. That is silent cross-instance corruption.
+
+**A criteria change is a boundary change, and invalidating the snapshot is the safety behavior, not a flaw.** The
+snapshot is the fold of criteria-matching events up to a stored global position, and a resume reads only the events
+after that position that match the same criteria and folds them onto the snapshot state. If the boundary definition
+changes (a DCB business-rule change), the set of events that fold into the state changes, so the stored fold is over a
+different set. Resuming from it would combine an old-criteria fold up to the stored position with new-criteria events
+after it, producing a silently wrong state. Because the key is derived from the criteria (its types, tags, and excluded
+types), a boundary change yields a new key, the old snapshot is not found, and the state rebuilds from scratch, which
+is correct. A key that stayed stable across a boundary change, such as a decider name or a value taken only from the
+command, would defeat this and resume over the wrong event set. `schemaVersion` does not cover this case: it guards the
+state shape, not which events were folded, so the criteria-derived key is the only automatic guard for a boundary
+change.
+
+**Order-insensitivity keeps this from over-invalidating.** `DcbSnapshotKeys.canonicalKey` sorts every part of the
+criteria, so a cosmetic refactor that resolves to the same tags and types produces the same key and does not rebuild.
+Only a semantically different boundary changes the key.
+
+**Readable keys without losing the guarantee.** The override hook stays a `Function<DcbCriteria, String>`. Because the
+spec is built per type, a caller that wants a human-readable key already knows the type name and can prepend it while
+keeping the full criteria, for example
+`SnapshotDcbDecider.from(decider, store, options, criteria -> "enrollment:" + DcbSnapshotKeys.canonicalKey(criteria))`.
+A custom key that drops the boundary detail for brevity is allowed, but it trades away the automatic boundary-change
+invalidation, so it must be paired with a manual key or `schemaVersion` change when the boundary changes.
+
 ## Consequences
 
 - Snapshots are entirely opt-in. An application that does not use them pays nothing, because `fromStreamVersion` and
