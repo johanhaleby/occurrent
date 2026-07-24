@@ -285,12 +285,11 @@ class StartPositionSupport {
                     // Attempt to parse as OffsetDateTime directly which will fail if timezone is missing
                     return OffsetDateTime.parse(iso8601.trim(), DateTimeFormatter.ISO_OFFSET_DATE_TIME);
                 } catch (DateTimeParseException e) {
-                    // Parsing failed, parse as LocalDateTime and convert to OffsetDateTime with default zone
-                    LocalDateTime localDateTime = LocalDateTime.parse(iso8601.trim(), ISO_LOCAL_DATE_TIME);
+                    // No timezone, parse as a LocalDateTime and apply UTC
                     try {
-                        return localDateTime.atOffset(ZoneOffset.UTC);
+                        return LocalDateTime.parse(iso8601.trim(), ISO_LOCAL_DATE_TIME).atOffset(ZoneOffset.UTC);
                     } catch (DateTimeParseException ex) {
-                        throw new IllegalArgumentException("Invalid ISO8601 format: '" + iso8601 + "'", e);
+                        throw new IllegalArgumentException("Invalid ISO8601 format: '" + iso8601 + "'", ex);
                     }
                 }
             }
