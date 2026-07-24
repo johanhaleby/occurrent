@@ -198,6 +198,21 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     @Test
+    void ignores_a_false_position_property_when_dcb_is_enabled_so_the_context_still_loads() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues(
+                        "occurrent.event-store.capabilities=stream,dcb",
+                        "occurrent.event-store.stream.position=false")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
+
+                    // withoutStreamPosition() is rejected with DCB, so a false property is skipped and the default stands.
+                    assertThat(eventStoreConfig.streamPositionEnabled).isTrue();
+                });
+    }
+
+    @Test
     void binds_dcb_only_event_store_capability() {
         contextRunner.withPropertyValues("occurrent.event-store.capabilities=dcb").run(context -> {
             OccurrentProperties properties = context.getBean(OccurrentProperties.class);
