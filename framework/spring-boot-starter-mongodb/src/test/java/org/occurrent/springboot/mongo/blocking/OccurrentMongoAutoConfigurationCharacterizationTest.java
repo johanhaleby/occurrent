@@ -165,6 +165,39 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     @Test
+    void leaves_stream_position_at_its_default_when_the_position_property_is_unset() {
+        eventStoreConfigContextRunner().run(context -> {
+            EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
+
+            assertThat(eventStoreConfig.streamPositionEnabled).isTrue();
+            assertThat(eventStoreConfig.streamPositionExplicitlyEnabled).isFalse();
+        });
+    }
+
+    @Test
+    void enables_stream_position_explicitly_when_the_position_property_is_true() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.event-store.stream.position=true")
+                .run(context -> {
+                    EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
+
+                    assertThat(eventStoreConfig.streamPositionEnabled).isTrue();
+                    assertThat(eventStoreConfig.streamPositionExplicitlyEnabled).isTrue();
+                });
+    }
+
+    @Test
+    void opts_a_stream_store_out_of_position_when_the_position_property_is_false() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.event-store.stream.position=false")
+                .run(context -> {
+                    EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
+
+                    assertThat(eventStoreConfig.streamPositionEnabled).isFalse();
+                });
+    }
+
+    @Test
     void binds_dcb_only_event_store_capability() {
         contextRunner.withPropertyValues("occurrent.event-store.capabilities=dcb").run(context -> {
             OccurrentProperties properties = context.getBean(OccurrentProperties.class);
