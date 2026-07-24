@@ -22,6 +22,7 @@ import org.occurrent.application.service.blocking.generic.GenericApplicationServ
 import org.occurrent.dsl.snapshot.SnapshotOptions
 import org.occurrent.dsl.snapshot.SnapshotPolicy
 import org.occurrent.dsl.snapshot.SnapshotStore
+import org.occurrent.dsl.snapshot.blocking.SnapshotDecider
 import org.occurrent.dsl.snapshot.blocking.SnapshotDeciderApplicationService
 import org.occurrent.dsl.snapshot.blocking.SnapshotPolicies
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
@@ -41,25 +42,26 @@ fun main() {
     val decider = ledgerDecider()
     val store = SnapshotStore.inMemory<LedgerState>()
 
+    // One facade, reused for every aggregate. Each use case brings its own SnapshotDecider spec.
+    val snapshots = SnapshotDeciderApplicationService(applicationService)
+
     // 1. Technical snapshot: take one every 100 events so a long-lived account does not replay its whole history.
-    val everyHundred = SnapshotOptions.everyNEvents<LedgerState, LedgerEvent>(1, 100)
-    val technicalSnapshots = SnapshotDeciderApplicationService(applicationService, store, everyHundred)
-    repeat(250) { technicalSnapshots.execute("account-1", Deposit(1), decider) }
-    val technical = store.findLatest("account-1").orElseThrow()
-    println("Technical snapshot for account-1 sits at version ${technical.version()} with balance ${technical.state().balance}")
-    val resumed = technicalSnapshots.executeAndReturnState("account-1", Deposit(5), decider)
+    val technical = SnapshotDecider.from(decider, store, SnapshotOptions.everyNEvents<LedgerState, LedgerEvent>(1, 100))
+    repeat(250) { snapshots.execute("account-1", Deposit(1), technical) }
+    val technicalSnapshot = store.findLatest("account-1").orElseThrow()
+    println("Technical snapshot for account-1 sits at version ${technicalSnapshot.version()} with balance ${technicalSnapshot.state().balance}")
+    val resumed = snapshots.executeAndReturnState("account-1", Deposit(5), technical)
     println("Next command resumed from the snapshot and only folded the tail, new balance ${resumed.balance}")
 
     // 2. Closing the books: snapshot the terminal state, carry the closing balance forward, then archive the old events.
-    val onClose = SnapshotOptions.of(1, SnapshotPolicies.whenTerminal(decider).or(SnapshotPolicy.everyNEvents<LedgerState, LedgerEvent>(100)))
-    val closingSnapshots = SnapshotDeciderApplicationService(applicationService, store, onClose)
-    closingSnapshots.execute("period-2026-Q1", Deposit(100), decider)
-    closingSnapshots.execute("period-2026-Q1", Withdraw(30), decider)
-    closingSnapshots.execute("period-2026-Q1", CloseBooks("2026-Q1"), decider)
+    val onClose = SnapshotDecider.from(decider, store, SnapshotOptions.of(1, SnapshotPolicies.whenTerminal(decider).or(SnapshotPolicy.everyNEvents<LedgerState, LedgerEvent>(100))))
+    snapshots.execute("period-2026-Q1", Deposit(100), onClose)
+    snapshots.execute("period-2026-Q1", Withdraw(30), onClose)
+    snapshots.execute("period-2026-Q1", CloseBooks("2026-Q1"), onClose)
     val closingBalance = store.findLatest("period-2026-Q1").orElseThrow().state().balance
     println("Closed 2026-Q1 with a closing balance of $closingBalance")
 
-    val opening = closingSnapshots.executeAndReturnState("period-2026-Q2", SetOpeningBalance(closingBalance), decider)
+    val opening = snapshots.executeAndReturnState("period-2026-Q2", SetOpeningBalance(closingBalance), onClose)
     println("Opened 2026-Q2 carrying the balance forward, opening balance ${opening.balance}")
 
     eventStore.deleteEventStream("period-2026-Q1")

@@ -56,6 +56,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -106,6 +107,35 @@ class ReactiveSnapshotViewsTest {
                 .build();
     }
 
+    @Test
+    void from_throws_NullPointerException_when_the_view_is_null() {
+        assertThatThrownBy(() -> ReactiveSnapshotViewSource.from(null, store))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("view");
+    }
+
+    @Test
+    void from_throws_NullPointerException_when_the_store_is_null() {
+        assertThatThrownBy(() -> ReactiveSnapshotViewSource.from(snapshotView, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("store");
+    }
+
+    @Test
+    void fails_fast_with_guidance_when_the_view_folds_to_a_null_state() {
+        String streamId = UUID.randomUUID().toString();
+        applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
+        SnapshotView<String, DomainEvent> foldsToNull = SnapshotView.<String, DomainEvent>builder("")
+                .on(NameDefined.class, (state, event) -> null)
+                .schemaVersion(1)
+                .build();
+        ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
+
+        assertThatThrownBy(() -> views.readState(streamId, ReactiveSnapshotViewSource.from(foldsToNull, store)).block())
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("Mono cannot carry null");
+    }
+
     @Nested
     @DisplayName("readState")
     class ReadState {
@@ -115,9 +145,9 @@ class ReactiveSnapshotViewsTest {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet"))).block();
-            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, store);
+            ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
 
-            String state = views.readState(streamId, snapshotView).block();
+            String state = views.readState(streamId, ReactiveSnapshotViewSource.from(snapshotView, store)).block();
 
             assertThat(state).isEqualTo("Janet");
         }
@@ -128,9 +158,9 @@ class ReactiveSnapshotViewsTest {
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
             store.save(streamId, new Snapshot<>("Jane", 1L, snapshotView.schemaVersion())).block();
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet"))).block();
-            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, store);
+            ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
 
-            String state = views.readState(streamId, snapshotView).block();
+            String state = views.readState(streamId, ReactiveSnapshotViewSource.from(snapshotView, store)).block();
 
             assertThat(state).isEqualTo("Janet");
         }
@@ -141,9 +171,9 @@ class ReactiveSnapshotViewsTest {
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet"))).block();
             store.save(streamId, new Snapshot<>("some-stale-shape", 1L, snapshotView.schemaVersion() + 1)).block();
-            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, store);
+            ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
 
-            String state = views.readState(streamId, snapshotView).block();
+            String state = views.readState(streamId, ReactiveSnapshotViewSource.from(snapshotView, store)).block();
 
             assertThat(state).isEqualTo("Janet");
         }
@@ -152,9 +182,9 @@ class ReactiveSnapshotViewsTest {
         void does_not_write_a_snapshot_when_none_existed() {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
-            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, store);
+            ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
 
-            views.readState(streamId, snapshotView).block();
+            views.readState(streamId, ReactiveSnapshotViewSource.from(snapshotView, store)).block();
 
             assertThat(store.findLatest(streamId).blockOptional()).isEmpty();
         }
@@ -166,9 +196,9 @@ class ReactiveSnapshotViewsTest {
             Snapshot<String> existing = new Snapshot<>("Jane", 1L, snapshotView.schemaVersion());
             store.save(streamId, existing).block();
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet"))).block();
-            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, store);
+            ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
 
-            views.readState(streamId, snapshotView).block();
+            views.readState(streamId, ReactiveSnapshotViewSource.from(snapshotView, store)).block();
 
             assertThat(store.findLatest(streamId).blockOptional()).contains(existing);
         }
@@ -183,9 +213,9 @@ class ReactiveSnapshotViewsTest {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
             applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet"))).block();
-            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, store);
+            ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
 
-            views.refresh(streamId, snapshotView).block();
+            views.refresh(streamId, ReactiveSnapshotViewSource.from(snapshotView, store)).block();
 
             assertAll(
                     () -> assertThat(store.findLatest(streamId).blockOptional()).isPresent(),
@@ -200,11 +230,12 @@ class ReactiveSnapshotViewsTest {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
             CountingReactiveSnapshotStore<String> countingStore = new CountingReactiveSnapshotStore<>(ReactiveSnapshotStore.inMemory());
-            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, countingStore);
-            views.refresh(streamId, snapshotView).block();
+            ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
+            var source = ReactiveSnapshotViewSource.from(snapshotView, countingStore);
+            views.refresh(streamId, source).block();
             Snapshot<String> firstSnapshot = countingStore.findLatest(streamId).blockOptional().orElseThrow();
 
-            views.refresh(streamId, snapshotView).block();
+            views.refresh(streamId, source).block();
 
             assertAll(
                     () -> assertThat(countingStore.saveCount()).isEqualTo(2),
@@ -216,23 +247,11 @@ class ReactiveSnapshotViewsTest {
         void throws_RuntimeException_when_the_store_save_fails() {
             String streamId = UUID.randomUUID().toString();
             applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane"))).block();
-            ReactiveSnapshotViews<String, DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter, new ThrowingReactiveSnapshotStore<>());
+            ReactiveSnapshotViews<DomainEvent> views = ReactiveSnapshotViews.create(eventStore, converter);
 
-            Throwable thrown = catchThrowable(() -> views.refresh(streamId, snapshotView).block());
+            Throwable thrown = catchThrowable(() -> views.refresh(streamId, ReactiveSnapshotViewSource.from(snapshotView, new ThrowingReactiveSnapshotStore<>())).block());
 
             assertThat(thrown).isInstanceOf(RuntimeException.class);
-        }
-    }
-
-    private static class ThrowingReactiveSnapshotStore<S> implements ReactiveSnapshotStore<S> {
-        @Override
-        public Mono<Snapshot<S>> findLatest(String key) {
-            return Mono.empty();
-        }
-
-        @Override
-        public Mono<Void> save(String key, Snapshot<S> snapshot) {
-            return Mono.error(new RuntimeException("save failed"));
         }
     }
 

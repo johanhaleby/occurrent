@@ -48,7 +48,6 @@ import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
-import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
@@ -60,6 +59,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -79,6 +79,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivesnapshotdecider"));
 
     private ApplicationService<DomainEvent> applicationService;
+    private ReactiveSnapshotDeciderApplicationService<DomainEvent> service;
     private ReactorMongoEventStore eventStore;
     private ReactiveSnapshotStore<String> store;
     private AtomicInteger evolveCount;
@@ -100,6 +101,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
         eventStore = new ReactorMongoEventStore(mongoTemplate, config);
         CloudEventConverter<DomainEvent> converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         applicationService = new GenericApplicationService<>(eventStore, converter);
+        service = new ReactiveSnapshotDeciderApplicationService<>(applicationService);
         store = ReactiveSnapshotStore.inMemory();
         evolveCount = new AtomicInteger();
         decider = countingDecider(evolveCount, time = LocalDateTime.now());
@@ -109,7 +111,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     void first_execute_folds_from_initial_and_saves_a_snapshot_when_the_policy_fires() {
         String streamId = UUID.randomUUID().toString();
 
-        StepVerifier.create(new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(1, SnapshotPolicy.always())).execute(streamId, new Define("Jane"), decider))
+        StepVerifier.create(service.execute(streamId, new Define("Jane"), ReactiveSnapshotDecider.from(decider, store, SnapshotOptions.of(1, SnapshotPolicy.always()))))
                 .assertNext(writeResult -> assertThat(writeResult.newStreamVersion()).isEqualTo(1L))
                 .verifyComplete();
 
@@ -125,19 +127,9 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     @Test
     void a_failing_snapshot_save_does_not_error_the_mono_and_the_write_is_committed() {
         String streamId = UUID.randomUUID().toString();
-        ReactiveSnapshotStore<String> failingStore = new ReactiveSnapshotStore<>() {
-            @Override
-            public Mono<Snapshot<String>> findLatest(String key) {
-                return Mono.empty();
-            }
+        ReactiveSnapshotStore<String> failingStore = new ThrowingReactiveSnapshotStore<>();
 
-            @Override
-            public Mono<Void> save(String key, Snapshot<String> snapshot) {
-                return Mono.error(new RuntimeException("snapshot store is down"));
-            }
-        };
-
-        StepVerifier.create(new ReactiveSnapshotDeciderApplicationService<>(applicationService, failingStore, SnapshotOptions.of(1, SnapshotPolicy.always())).execute(streamId, new Define("Jane"), decider))
+        StepVerifier.create(service.execute(streamId, new Define("Jane"), ReactiveSnapshotDecider.from(decider, failingStore, SnapshotOptions.of(1, SnapshotPolicy.always()))))
                 .assertNext(writeResult -> assertThat(writeResult.newStreamVersion()).isEqualTo(1L))
                 .verifyComplete();
     }
@@ -146,11 +138,12 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     void second_execute_resumes_from_the_snapshot_and_folds_only_the_tail() {
         String streamId = UUID.randomUUID().toString();
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
-        new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, options).execute(streamId, new Define("A"), decider).block();
-        new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, options).execute(streamId, new Change("B"), decider).block();
+        var account = ReactiveSnapshotDecider.from(decider, store, options);
+        service.execute(streamId, new Define("A"), account).block();
+        service.execute(streamId, new Change("B"), account).block();
 
         evolveCount.set(0);
-        String state = new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, options).executeAndReturnState(streamId, new Change("C"), decider).block();
+        String state = service.executeAndReturnState(streamId, new Change("C"), account).block();
 
         assertAll(
                 // Only the produced event is folded (1). A full replay of the two history events plus the produced one would be 3.
@@ -165,16 +158,16 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     void a_reset_stream_with_a_surviving_snapshot_does_not_error_and_folds_from_initial() {
         String streamId = UUID.randomUUID().toString();
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
-        ReactiveSnapshotDeciderApplicationService<String, DomainEvent> service = new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, options);
-        service.execute(streamId, new Define("A"), decider).block();
-        service.execute(streamId, new Change("B"), decider).block();
+        var account = ReactiveSnapshotDecider.from(decider, store, options);
+        service.execute(streamId, new Define("A"), account).block();
+        service.execute(streamId, new Change("B"), account).block();
         assertThat(store.findLatest(streamId).blockOptional().orElseThrow().version()).as("snapshot ahead of the reset stream").isEqualTo(2L);
 
         // Reset the stream below the surviving snapshot without deleting the snapshot: the misuse the head guard covers.
         eventStore.deleteEventStream(streamId).block();
 
         // The first post-reset command must not error even though the snapshot's version (2) is ahead of the empty stream.
-        StepVerifier.create(service.execute(streamId, new Define("C"), decider))
+        StepVerifier.create(service.execute(streamId, new Define("C"), account))
                 .assertNext(reset -> assertAll(
                         () -> assertThat(reset.oldStreamVersion()).as("wrote against the reset (empty) head").isEqualTo(0L),
                         () -> assertThat(reset.newStreamVersion()).isEqualTo(1L)
@@ -184,7 +177,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
         assertThat(store.findLatest(streamId).blockOptional()).as("stale snapshot deleted").isEmpty();
 
         // The next command reads the reset stream fresh, folds from initial, and stays consistent.
-        String state = service.executeAndReturnState(streamId, new Change("D"), decider).block();
+        String state = service.executeAndReturnState(streamId, new Change("D"), account).block();
         assertAll(
                 () -> assertThat(state).isEqualTo("D"),
                 () -> assertThat(store.findLatest(streamId).blockOptional().orElseThrow().version()).isEqualTo(2L)
@@ -195,11 +188,12 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     void everyNEvents_saves_only_when_the_version_delta_crosses_the_threshold() {
         String streamId = UUID.randomUUID().toString();
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.everyNEvents(1, 2);
+        var account = ReactiveSnapshotDecider.from(decider, store, options);
 
-        new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, options).execute(streamId, new Define("A"), decider).block();
+        service.execute(streamId, new Define("A"), account).block();
         assertThat(store.findLatest(streamId).blockOptional()).as("delta 1 < 2, no snapshot").isEmpty();
 
-        new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, options).execute(streamId, new Change("B"), decider).block();
+        service.execute(streamId, new Change("B"), account).block();
         assertThat(store.findLatest(streamId).blockOptional()).as("delta 2 >= 2, snapshot").hasValueSatisfying(s -> {
             assertThat(s.version()).isEqualTo(2L);
             assertThat(s.state()).isEqualTo("B");
@@ -209,7 +203,7 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     @Test
     void never_policy_never_saves() {
         String streamId = UUID.randomUUID().toString();
-        new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(1, SnapshotPolicy.never())).execute(streamId, new Define("A"), decider).block();
+        service.execute(streamId, new Define("A"), ReactiveSnapshotDecider.from(decider, store, SnapshotOptions.of(1, SnapshotPolicy.never()))).block();
         assertThat(store.findLatest(streamId).blockOptional()).isEmpty();
     }
 
@@ -217,22 +211,23 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
     void when_terminal_saves_at_the_closing_state() {
         String streamId = UUID.randomUUID().toString();
         SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicies.whenTerminal(decider));
+        var account = ReactiveSnapshotDecider.from(decider, store, options);
 
-        new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, options).execute(streamId, new Define("A"), decider).block();
+        service.execute(streamId, new Define("A"), account).block();
         assertThat(store.findLatest(streamId).blockOptional()).as("not terminal, no snapshot").isEmpty();
 
-        new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, options).execute(streamId, new Close(), decider).block();
+        service.execute(streamId, new Close(), account).block();
         assertThat(store.findLatest(streamId).blockOptional()).as("terminal, snapshot").hasValueSatisfying(s -> assertThat(s.state()).isEqualTo("CLOSED"));
     }
 
     @Test
     void a_schema_version_bump_ignores_the_old_snapshot_and_replays_the_whole_stream() {
         String streamId = UUID.randomUUID().toString();
-        new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(1, SnapshotPolicy.always())).execute(streamId, new Define("A"), decider).block();
+        service.execute(streamId, new Define("A"), ReactiveSnapshotDecider.from(decider, store, SnapshotOptions.of(1, SnapshotPolicy.always()))).block();
 
         evolveCount.set(0);
         // Schema 2 does not match the stored schema 1, so the snapshot is ignored and the state is rebuilt from scratch.
-        String state = new ReactiveSnapshotDeciderApplicationService<>(applicationService, store, SnapshotOptions.of(2, SnapshotPolicy.always())).executeAndReturnState(streamId, new Change("B"), decider).block();
+        String state = service.executeAndReturnState(streamId, new Change("B"), ReactiveSnapshotDecider.from(decider, store, SnapshotOptions.of(2, SnapshotPolicy.always()))).block();
 
         assertAll(
                 () -> assertThat(state).isEqualTo("B"),
@@ -240,6 +235,29 @@ class ReactiveSnapshotDeciderApplicationServiceTest {
                 () -> assertThat(evolveCount.get()).isEqualTo(2),
                 () -> assertThat(store.findLatest(streamId).blockOptional().orElseThrow().schemaVersion()).isEqualTo(2)
         );
+    }
+
+    @Test
+    void from_throws_NullPointerException_when_the_decider_is_null() {
+        SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        assertThatThrownBy(() -> ReactiveSnapshotDecider.from(null, store, options))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("decider");
+    }
+
+    @Test
+    void from_throws_NullPointerException_when_the_store_is_null() {
+        SnapshotOptions<String, DomainEvent> options = SnapshotOptions.of(1, SnapshotPolicy.always());
+        assertThatThrownBy(() -> ReactiveSnapshotDecider.from(decider, null, options))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("store");
+    }
+
+    @Test
+    void from_throws_NullPointerException_when_the_options_are_null() {
+        assertThatThrownBy(() -> ReactiveSnapshotDecider.from(decider, store, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("options");
     }
 
     private sealed interface Cmd {

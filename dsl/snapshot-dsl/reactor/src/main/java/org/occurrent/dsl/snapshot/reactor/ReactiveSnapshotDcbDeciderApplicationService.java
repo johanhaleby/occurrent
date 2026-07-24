@@ -39,14 +39,14 @@ import java.util.function.Function;
 /**
  * The DCB counterpart to {@link ReactiveSnapshotDeciderApplicationService}: runs a {@link DcbDecider} but resumes from a
  * snapshot instead of folding the whole DCB boundary. Construct it once around a reactive {@link DcbApplicationService}
- * together with the {@link ReactiveSnapshotStore} and {@link SnapshotOptions} for the state it snapshots, then call it with
- * command(s) and a decider.
+ * and reuse it for every aggregate. Each execute takes a {@link ReactiveSnapshotDcbDecider}, the per-aggregate spec that
+ * bundles the decider with its {@link ReactiveSnapshotStore}, {@link SnapshotOptions}, and snapshot-key function.
  * <p>
  * Because DCB has no stream id, the snapshot is keyed by the decider's read boundary. By default the key is a canonical,
  * order-insensitive rendering of the {@link DcbCriteria} that {@link DcbDecider#criteriaFor(List)} resolves for the
- * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}); pass a key function to the constructor to override it. The
- * snapshot's version is the global DCB position the append landed at ({@link DcbAppendResult#lastSequencePosition()}), and
- * the resume read still captures the whole boundary's consistency token, so the append condition is unaffected and a stale
+ * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}); the spec's key function overrides it. The snapshot's
+ * version is the global DCB position the append landed at ({@link DcbAppendResult#lastSequencePosition()}), and the
+ * resume read still captures the whole boundary's consistency token, so the append condition is unaffected and a stale
  * snapshot only lengthens the tail. It loads one snapshot per execute, and costs nothing when no snapshot is used.
  * <p>
  * An empty result Mono from {@link #execute} means the domain function produced no new events, so nothing is appended and
@@ -59,54 +59,43 @@ import java.util.function.Function;
  * stream write always has a {@code WriteResult} to advance the base from, whether or not new events were appended.
  * Either way a missed save only costs a longer replay on the next execute; it is never a correctness issue.
  *
- * @param <S> the snapshot state type
  * @param <E> the event type
  */
 @NullMarked
-public final class ReactiveSnapshotDcbDeciderApplicationService<S extends @Nullable Object, E> {
+public final class ReactiveSnapshotDcbDeciderApplicationService<E> {
 
     private final DcbApplicationService<E> applicationService;
-    private final ReactiveSnapshotStore<S> store;
-    private final SnapshotOptions<S, E> options;
-    private final Function<DcbCriteria, String> keyFunction;
 
-    public ReactiveSnapshotDcbDeciderApplicationService(DcbApplicationService<E> applicationService, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options) {
-        this(applicationService, store, options, DcbSnapshotKeys::canonicalKey);
-    }
-
-    public ReactiveSnapshotDcbDeciderApplicationService(DcbApplicationService<E> applicationService, ReactiveSnapshotStore<S> store, SnapshotOptions<S, E> options, Function<DcbCriteria, String> keyFunction) {
+    public ReactiveSnapshotDcbDeciderApplicationService(DcbApplicationService<E> applicationService) {
         this.applicationService = Objects.requireNonNull(applicationService, "applicationService cannot be null");
-        this.store = Objects.requireNonNull(store, "store cannot be null");
-        this.options = Objects.requireNonNull(options, "options cannot be null");
-        this.keyFunction = Objects.requireNonNull(keyFunction, "keyFunction cannot be null");
     }
 
     /**
      * Execute a single command, resuming from the snapshot keyed by the decider's criteria.
      */
-    public <C> Mono<DcbAppendResult> execute(C command, DcbDecider<C, S, E> dcbDecider) {
-        return execute(List.of(command), dcbDecider);
+    public <C, S extends @Nullable Object> Mono<DcbAppendResult> execute(C command, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return execute(List.of(command), snapshotDcbDecider);
     }
 
     /**
      * Execute {@code commands} in order, resuming from the snapshot keyed by the decider's criteria.
      */
-    public <C> Mono<DcbAppendResult> execute(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
-        return doExecute(commands, dcbDecider).flatMap(executed -> Mono.justOrEmpty(executed.appendResult()));
+    public <C, S extends @Nullable Object> Mono<DcbAppendResult> execute(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return doExecute(commands, snapshotDcbDecider).flatMap(executed -> Mono.justOrEmpty(executed.appendResult()));
     }
 
     /**
      * Execute a single command and emit the folded state plus the events that were decided (even when nothing was appended).
      */
-    public <C> Mono<Decider.Decision<S, E>> executeAndReturnDecision(C command, DcbDecider<C, S, E> dcbDecider) {
-        return executeAndReturnDecision(List.of(command), dcbDecider);
+    public <C, S extends @Nullable Object> Mono<Decider.Decision<S, E>> executeAndReturnDecision(C command, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return executeAndReturnDecision(List.of(command), snapshotDcbDecider);
     }
 
     /**
      * Execute {@code commands} and emit the folded state plus the events that were decided (even when nothing was appended).
      */
-    public <C> Mono<Decider.Decision<S, E>> executeAndReturnDecision(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
-        return doExecute(commands, dcbDecider).map(Executed::decision);
+    public <C, S extends @Nullable Object> Mono<Decider.Decision<S, E>> executeAndReturnDecision(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return doExecute(commands, snapshotDcbDecider).map(Executed::decision);
     }
 
     /**
@@ -114,15 +103,15 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<S extends @Nulla
      * cannot carry a null value, so the snapshot state {@code S} must be non-null here, use
      * {@link #executeAndReturnDecision} for a nullable state.
      */
-    public <C> Mono<S> executeAndReturnState(C command, DcbDecider<C, S, E> dcbDecider) {
-        return executeAndReturnDecision(command, dcbDecider).map(ReactiveSnapshotDcbDeciderApplicationService::requireNonNullState);
+    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(C command, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return executeAndReturnDecision(command, snapshotDcbDecider).map(ReactiveSnapshotDcbDeciderApplicationService::requireNonNullState);
     }
 
     /**
      * Execute {@code commands} and emit the folded state after the decision (even when nothing was appended).
      */
-    public <C> Mono<S> executeAndReturnState(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
-        return executeAndReturnDecision(commands, dcbDecider).map(ReactiveSnapshotDcbDeciderApplicationService::requireNonNullState);
+    public <C, S extends @Nullable Object> Mono<S> executeAndReturnState(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return executeAndReturnDecision(commands, snapshotDcbDecider).map(ReactiveSnapshotDcbDeciderApplicationService::requireNonNullState);
     }
 
     // A Mono cannot carry null, so a null folded state fails fast with guidance instead of a bare NPE from Reactor.
@@ -133,22 +122,27 @@ public final class ReactiveSnapshotDcbDeciderApplicationService<S extends @Nulla
     /**
      * Execute a single command and emit the new events that were decided.
      */
-    public <C> Mono<List<E>> executeAndReturnEvents(C command, DcbDecider<C, S, E> dcbDecider) {
-        return executeAndReturnDecision(command, dcbDecider).map(Decider.Decision::events);
+    public <C, S extends @Nullable Object> Mono<List<E>> executeAndReturnEvents(C command, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return executeAndReturnDecision(command, snapshotDcbDecider).map(Decider.Decision::events);
     }
 
     /**
      * Execute {@code commands} and emit the new events that were decided.
      */
-    public <C> Mono<List<E>> executeAndReturnEvents(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
-        return executeAndReturnDecision(commands, dcbDecider).map(Decider.Decision::events);
+    public <C, S extends @Nullable Object> Mono<List<E>> executeAndReturnEvents(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
+        return executeAndReturnDecision(commands, snapshotDcbDecider).map(Decider.Decision::events);
     }
 
-    private <C> Mono<Executed<S, E>> doExecute(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+    private <C, S extends @Nullable Object> Mono<Executed<S, E>> doExecute(List<C> commands, ReactiveSnapshotDcbDecider<C, S, E> snapshotDcbDecider) {
         Objects.requireNonNull(commands, "commands cannot be null");
-        Objects.requireNonNull(dcbDecider, "dcbDecider cannot be null");
+        Objects.requireNonNull(snapshotDcbDecider, "snapshotDcbDecider cannot be null");
 
         return Mono.defer(() -> {
+            DcbDecider<C, S, E> dcbDecider = snapshotDcbDecider.dcbDecider();
+            ReactiveSnapshotStore<S> store = snapshotDcbDecider.store();
+            SnapshotOptions<S, E> options = snapshotDcbDecider.options();
+            Function<DcbCriteria, String> keyFunction = snapshotDcbDecider.keyFunction();
+
             DcbCriteria criteria = dcbDecider.criteriaFor(commands);
             String key = Objects.requireNonNull(keyFunction.apply(criteria), "snapshot key cannot be null");
             Decider<C, S, E> decider = dcbDecider.decider();
