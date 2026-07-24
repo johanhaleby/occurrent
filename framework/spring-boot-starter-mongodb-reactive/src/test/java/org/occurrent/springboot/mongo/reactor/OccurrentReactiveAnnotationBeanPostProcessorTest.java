@@ -21,23 +21,23 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StartupMode;
-
-import java.lang.reflect.Method;
+import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * The reactive bean post-processor's start-up wait decision is the stack-neutral
+ * {@link SubscriptionAnnotations#shouldWaitUntilStarted(boolean, StartupMode)} (shared verbatim with the blocking
+ * stack), rather than a private copy on this class.
+ */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class OccurrentReactiveAnnotationBeanPostProcessorTest {
 
     @Test
-    void stream_replay_defaults_to_background_only_when_history_is_replayed() throws Exception {
-        Method shouldWaitUntilStarted = OccurrentReactiveAnnotationBeanPostProcessor.class
-                .getDeclaredMethod("shouldWaitUntilStarted", boolean.class, StartupMode.class);
-        shouldWaitUntilStarted.setAccessible(true);
-
-        assertThat((boolean) shouldWaitUntilStarted.invoke(null, true, StartupMode.DEFAULT)).isFalse();
-        assertThat((boolean) shouldWaitUntilStarted.invoke(null, false, StartupMode.DEFAULT)).isTrue();
-        assertThat((boolean) shouldWaitUntilStarted.invoke(null, true, StartupMode.WAIT_UNTIL_STARTED)).isTrue();
-        assertThat((boolean) shouldWaitUntilStarted.invoke(null, true, StartupMode.BACKGROUND)).isFalse();
+    void stream_replay_defaults_to_background_only_when_history_is_replayed() {
+        assertThat(SubscriptionAnnotations.shouldWaitUntilStarted(true, StartupMode.DEFAULT)).isFalse();
+        assertThat(SubscriptionAnnotations.shouldWaitUntilStarted(false, StartupMode.DEFAULT)).isTrue();
+        assertThat(SubscriptionAnnotations.shouldWaitUntilStarted(true, StartupMode.WAIT_UNTIL_STARTED)).isTrue();
+        assertThat(SubscriptionAnnotations.shouldWaitUntilStarted(true, StartupMode.BACKGROUND)).isFalse();
     }
 }

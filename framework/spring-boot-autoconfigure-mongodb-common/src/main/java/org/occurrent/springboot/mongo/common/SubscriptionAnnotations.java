@@ -341,4 +341,18 @@ public final class SubscriptionAnnotations {
         }
         return domainEventTypesToSubscribeTo;
     }
+
+    /**
+     * Decide whether a subscription should block until it has started, given whether it replays history and its
+     * configured {@link StartupMode}. Shared verbatim by the blocking and reactive annotation processors, whose
+     * start-position handling otherwise diverges.
+     */
+    public static boolean shouldWaitUntilStarted(boolean replaysHistory, StartupMode startupMode) {
+        return switch (startupMode) {
+            // A subscription that replays history may have a lot to read, so by default it starts in the background.
+            case DEFAULT -> !replaysHistory;
+            case WAIT_UNTIL_STARTED -> true;
+            case BACKGROUND -> false;
+        };
+    }
 }
