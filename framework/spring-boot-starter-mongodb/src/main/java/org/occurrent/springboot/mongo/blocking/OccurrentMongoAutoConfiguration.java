@@ -118,9 +118,9 @@ public class OccurrentMongoAutoConfiguration<E> {
         // The property is only applied when set. true enables position explicitly (kept on even for an unpositioned
         // store), false opts a STREAM-only store out. withoutStreamPosition() is rejected with DCB, so skip it then.
         Boolean streamPosition = eventStoreProperties.getStream().getPosition();
-        if (streamPosition) {
+        if (Boolean.TRUE.equals(streamPosition)) {
             builder.withStreamPosition();
-        } else if (!eventStoreProperties.getCapabilities().contains(EventStoreCapability.DCB)) {
+        } else if (Boolean.FALSE.equals(streamPosition) && !eventStoreProperties.getCapabilities().contains(EventStoreCapability.DCB)) {
             builder.withoutStreamPosition();
         }
         return builder.build();
