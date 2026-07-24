@@ -17,7 +17,6 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
-import org.occurrent.application.service.spring.SpringTransactionExecutor;
 import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
@@ -30,11 +29,12 @@ import org.occurrent.application.service.TransactionExecutor;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
+import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.application.service.dcb.annotation.AnnotationTagGenerator;
+import org.occurrent.application.service.spring.SpringTransactionExecutor;
 import org.occurrent.command.StreamIdResolver;
 import org.occurrent.command.annotation.AnnotationStreamIdResolver;
-import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
@@ -43,47 +43,34 @@ import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.springboot.mongo.common.Jackson3CloudEventConverterConfiguration;
-import org.occurrent.springboot.mongo.common.OccurrentProperties;
+import org.occurrent.springboot.mongo.common.*;
 import org.occurrent.springboot.mongo.common.OccurrentProperties.EventStoreProperties;
-import org.occurrent.springboot.mongo.common.OnDcbEventStoreCapabilityCondition;
-import org.occurrent.springboot.mongo.common.OnDomainEventQueriesCapabilityCondition;
-import org.occurrent.springboot.mongo.common.OnMissingCloudEventConverterAndCloudEventTypeMapperCondition;
-import org.occurrent.springboot.mongo.common.OnStreamEventStoreCapabilityCondition;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
 import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.mongodb.autoconfigure.MongoAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Conditional;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Fallback;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.context.annotation.Primary;
+import org.springframework.boot.mongodb.autoconfigure.MongoAutoConfiguration;
+import org.springframework.context.annotation.*;
 import org.springframework.core.env.Environment;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -104,8 +91,6 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @EnableConfigurationProperties(OccurrentProperties.class)
 @Import(Jackson3CloudEventConverterConfiguration.class)
 public class OccurrentMongoAutoConfiguration<E> {
-
-    private static final Logger log = LoggerFactory.getLogger(OccurrentMongoAutoConfiguration.class);
 
     @Bean
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
@@ -133,9 +118,9 @@ public class OccurrentMongoAutoConfiguration<E> {
         // The property is only applied when set. true enables position explicitly (kept on even for an unpositioned
         // store), false opts a STREAM-only store out. withoutStreamPosition() is rejected with DCB, so skip it then.
         Boolean streamPosition = eventStoreProperties.getStream().getPosition();
-        if (Boolean.TRUE.equals(streamPosition)) {
+        if (streamPosition) {
             builder.withStreamPosition();
-        } else if (Boolean.FALSE.equals(streamPosition) && !eventStoreProperties.getCapabilities().contains(EventStoreCapability.DCB)) {
+        } else if (!eventStoreProperties.getCapabilities().contains(EventStoreCapability.DCB)) {
             builder.withoutStreamPosition();
         }
         return builder.build();
@@ -391,7 +376,7 @@ public class OccurrentMongoAutoConfiguration<E> {
         @Bean
         @Lazy
         @Fallback
-        @SuppressWarnings({"rawtypes", "unchecked"})
+        @SuppressWarnings({"rawtypes"})
         TagGenerator occurrentAnnotationTagGenerator() {
             return new AnnotationTagGenerator<>();
         }
@@ -411,7 +396,7 @@ public class OccurrentMongoAutoConfiguration<E> {
         @Bean
         @Lazy
         @Fallback
-        @SuppressWarnings({"rawtypes", "unchecked"})
+        @SuppressWarnings({"rawtypes"})
         StreamIdResolver occurrentAnnotationStreamIdResolver() {
             return new AnnotationStreamIdResolver<>();
         }
