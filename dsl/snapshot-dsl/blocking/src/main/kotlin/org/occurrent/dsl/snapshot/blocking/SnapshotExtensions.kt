@@ -16,19 +16,14 @@
 
 package org.occurrent.dsl.snapshot.blocking
 
-import io.cloudevents.CloudEvent
-import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.DcbDecider
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.snapshot.SnapshotOptions
-import org.occurrent.dsl.snapshot.SnapshotPolicy
 import org.occurrent.dsl.snapshot.SnapshotStore
-import org.occurrent.dsl.snapshot.SnapshotView
 import org.occurrent.eventstore.api.WriteResult
-import org.occurrent.eventstore.api.blocking.EventStore
 import org.occurrent.eventstore.api.dcb.DcbAppendResult
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 
@@ -59,10 +54,3 @@ fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(command: C, dcbDecide
  */
 fun <C : Any, S, E : Any> DcbApplicationService<E>.execute(commands: List<C>, dcbDecider: DcbDecider<C, S, E>, store: SnapshotStore<S>, options: SnapshotOptions<S, E>, keyFunction: (DcbCriteria) -> String = DcbSnapshotKeys::canonicalKey): DcbAppendResult? =
     SnapshotDcbDeciderApplicationService(this, store, options, keyFunction).execute(commands, dcbDecider).orElse(null)
-
-/**
- * Read the current state of [snapshotView] for [streamId] on demand, folding only the events after the stored snapshot.
- * See [SnapshotViews].
- */
-fun <S, E : Any> EventStore.readSnapshotState(converter: CloudEventConverter<E>, streamId: String, snapshotView: SnapshotView<S, E>, store: SnapshotStore<S>, policy: SnapshotPolicy<S, E>): S =
-    SnapshotViews.readState(this, converter, streamId, snapshotView, store, policy)
