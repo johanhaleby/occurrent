@@ -35,7 +35,7 @@ import static java.util.Objects.requireNonNull;
  *
  * @param <S> the user state type
  */
-public final class InMemorySagaStateStore<S extends @Nullable Object> implements SagaStateStore<S> {
+public final class InMemorySagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S> {
 
     private final ConcurrentMap<String, SagaEnvelope<S>> store = new ConcurrentHashMap<>();
 

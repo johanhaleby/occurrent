@@ -28,6 +28,10 @@ import java.util.Optional;
  * one instance concurrently, so the executor detects a lost update and retries rather than silently overwriting. The
  * store is also queried for instances with a due timer, since timers live in the envelope rather than an external
  * scheduler.
+ * <p>
+ * This is the minimal contract the executor needs. Observing instances is an optional capability layered on top: a store
+ * that also implements {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a
+ * stuck-instance sweep needs. A store that does not is still perfectly usable for running sagas.
  *
  * @param <S> the user state type
  */
@@ -48,43 +52,6 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * executor's timer poller uses this to fire timeouts. A returned instance may have several due timers.
      */
     List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit);
-
-    /**
-     * Instances with {@code status} whose {@link SagaEnvelope#updatedAt()} is strictly before {@code updatedBefore},
-     * least recently updated first, at most {@code limit} of them. This is what {@link SagaInstances} enumerates over,
-     * so every store must agree on the contract:
-     * <ul>
-     *   <li>{@code updatedBefore} is <em>exclusive</em>. Pass the current time to mean "every instance in this status",
-     *       or {@code now} minus a threshold to mean "every instance that has gone quiet for longer than that". The
-     *       <em>resolution</em> of that comparison is store-dependent and at best milliseconds: a store that persists
-     *       {@code updatedAt} as epoch millis compares truncated values, while the executor stamps a possibly
-     *       sub-millisecond {@code Instant}. An instance updated within the same millisecond as {@code updatedBefore}
-     *       may therefore be excluded. A store may not be more <em>inclusive</em> than the exclusive boundary, so no
-     *       instance at or after it is ever returned.</li>
-     *   <li>The order is ascending by {@code updatedAt}, so the stalest instance comes first. That is the useful end
-     *       for finding a stuck instance: the worst offenders arrive before {@code limit} truncates.</li>
-     *   <li>{@code limit} is a <em>bound, not a page</em>. There is no cursor: {@code updatedAt} persists at
-     *       millisecond precision, so instances saved in one executor tick tie, and resuming from the last row's
-     *       timestamp would silently drop the rest of a tie group. A caller that needs to walk everything should
-     *       raise {@code limit}, and one that needs true paging needs an ordering this method does not offer.</li>
-     *   <li>An instance whose {@code updatedAt} is {@code null} is never returned. The executor always stamps it, so
-     *       this only excludes a hand-built envelope, and it keeps a store whose query engine skips a missing field
-     *       from disagreeing with one that could have treated {@code null} as matching.</li>
-     * </ul>
-     * Unlike {@link #findWithDueTimers(Instant, int)} this reads whole instances, state included, because
-     * {@link SagaInstance#currentStep()} cannot be answered without it. Enumerating flow-saga instances therefore
-     * decodes their received logs, which is why {@code limit} is required rather than optional.
-     * <p>
-     * Because this is the observation path, an instance whose state can no longer be decoded must be <em>reported
-     * without its state</em> rather than making the whole enumeration fail. One instance holding, say, a received event
-     * whose class was renamed away would otherwise take down the progress view for every caller, at the exact moment
-     * someone is looking into what went wrong. Such a row still answers every {@link SagaInstance} member except
-     * {@link SagaInstance#currentStep()}. This is the opposite of {@link #find(String)}, which must keep failing loudly,
-     * because the executor loads an instance in order to fold and save it.
-     *
-     * @throws IllegalArgumentException if {@code limit} is not positive
-     */
-    List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit);
 
     /**
      * Remove the instance, for retention tooling. Most deployments keep completed instances (with a TTL) instead, and that

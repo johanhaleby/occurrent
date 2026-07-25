@@ -61,7 +61,12 @@ public final class SagaInstances {
      * <p>
      * Pass {@code Instant.now()} to list everything in a status, or {@code Instant.now().minus(threshold)} to find the
      * instances that have gone quiet for longer than {@code threshold}. The full contract, including why {@code limit}
-     * is a bound rather than a page, is on {@link SagaStateStore#findByStatus(SagaStatus, Instant, int)}.
+     * is a bound rather than a page, is on {@link SagaStateStoreQueries#findByStatus(SagaStatus, Instant, int)}.
+     * <p>
+     * Enumeration is an optional store capability, so this throws when the underlying store does not implement
+     * {@link SagaStateStoreQueries}. {@link #find(String)} works on any store.
+     *
+     * @throws UnsupportedOperationException if the store cannot enumerate instances
      * <p>
      * <strong>This is not a cheap call for a flow saga, so do not poll it at subscription frequency.</strong> Instances
      * come back whole because {@link SagaInstance#currentStep()} is read off the state, and a flow saga's state carries
@@ -72,7 +77,12 @@ public final class SagaInstances {
     public List<SagaInstance> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
         requireNonNull(status, "status cannot be null");
         requireNonNull(updatedBefore, "updatedBefore cannot be null");
-        return stateStore.findByStatus(status, updatedBefore, limit).stream()
+        if (!(stateStore instanceof SagaStateStoreQueries<?> queries)) {
+            // Checked here rather than in the constructor on purpose: a store that cannot enumerate can still answer a
+            // by-id lookup, and refusing to build the facade at all would deny it that.
+            throw new UnsupportedOperationException("The provided SagaStateStore implementation does not support enumerating instances. %s must implement SagaStateStoreQueries in order to use findByStatus. find(sagaId) works on any store.".formatted(stateStore.getClass().getName()));
+        }
+        return queries.findByStatus(status, updatedBefore, limit).stream()
                 .map(SagaInstances::asInstance)
                 .toList();
     }

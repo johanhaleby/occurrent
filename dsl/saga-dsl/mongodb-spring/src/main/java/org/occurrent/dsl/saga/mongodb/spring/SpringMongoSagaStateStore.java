@@ -28,6 +28,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreQueries;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
@@ -70,7 +71,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * @param <S> the user state type
  */
 @NullMarked
-public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S> {
+public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S> {
 
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 
