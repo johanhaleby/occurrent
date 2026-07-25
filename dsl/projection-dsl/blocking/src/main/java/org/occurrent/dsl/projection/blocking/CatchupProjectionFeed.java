@@ -194,7 +194,7 @@ public final class CatchupProjectionFeed<E> {
     // rather than the metadata one carrying EventMetadata.empty(). A replayed delivery always has metadata, so it always
     // takes the metadata route.
     private void deliver(Delivered<E> delivered) {
-        EventMetadata metadata = delivered.metadata();
+        @Nullable EventMetadata metadata = delivered.metadata();
         if (metadata == null) {
             view.update(delivered.event());
         } else {
