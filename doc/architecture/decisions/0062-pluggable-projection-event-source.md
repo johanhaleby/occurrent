@@ -229,3 +229,48 @@ catch-up-complete marker before the buffered live events are folded, whereas the
 drain. Each is self-consistent with its own acknowledgement model: a blocking `accept` returns before the fold, so the
 marker must wait for the drain to keep the store the backstop, while a reactor ack completes only after its fold. The
 engines state this explicitly rather than leaving it to be inferred from the pipeline shape.
+
+## Amendment (2026-07-26): a domain-event feed carries metadata on the live path too
+
+The "Domain-event feeds" section above says `Projections.domainEventFeed(...)` returns a `Consumer<E>` (blocking) or a
+`Function<E, Mono<Void>>` (reactor). It now returns a `MaterializedView<E>` and a
+`BiFunction<EventMetadata, E, Mono<Void>>` respectively, and `CatchupProjectionFeed` and `DomainEventFeed` gained
+`accept(EventMetadata, E)` beside `accept(E)` on both stacks. The reactor `DomainEventFeed` also gained a
+`register(id, BiFunction<EventMetadata, E, Mono<Void>>, Filter)` overload, and the reactor `CatchupProjectionFeed`
+factory taking a metadata-aware fold is now public.
+
+**Why.** A projection keyed through `Projection.idWithMetadata()` caught up correctly and then broke on every live
+event. The replay reads the event store, so it has CloudEvents and real metadata, but a live domain event has none. The
+loud half of that was already visible (`EventMetadata.getStreamId()` throws on empty metadata). The quiet half was
+worse: `getPosition()` and `get(key)` return `null` on empty metadata, a `null` id is a documented instruction to skip
+the event, so a position-keyed projection dropped every live event with no error anywhere.
+
+Occurrent cannot derive the metadata. Stream id, version and position are properties of the stored CloudEvent, and a
+domain-event feed exists precisely so a listener that already converted the message avoids the round trip back through
+one. So the application supplies it, since it is the only party that has it, and the one-argument forms stay for the
+common case where the broker gives nothing to supply.
+
+**Two live delivery routes, not one.** `accept(E)` still routes to `MaterializedView.update(E)` and
+`accept(EventMetadata, E)` to `update(EventMetadata, E)`. Routing everything through the metadata overload with
+`EventMetadata.empty()` would be shorter but not behaviour-preserving, because those are separate interface methods a
+caller's view may implement differently. The reactor stack needs no such split: its fold is a single `BiFunction`.
+
+**A guard at delivery, not at registration.** `Projection` gained `metadataKeyed()`, set only by
+`Builder.id(BiFunction)`
+and carried across `adapt(...)`. Where a `null` id used to mean "skip", the materializers now fail when the projection
+is metadata-keyed *and* the metadata it was handed is empty.
+
+Registration-time rejection was considered and is wrong twice over. It would forbid the very capability being added,
+since whether a listener supplies metadata is a runtime property of that listener, unknowable when the projection is
+registered. And the flag is an unsound signal for "is metadata-keyed": a caller writing
+`id((metadata, event) -> event.orderId())` uses the metadata overload while ignoring it, which is a legitimate and
+tested pattern, so rejecting on the flag alone would break working code. The conjunction avoids that, because such a
+projection still returns a real id and never reaches the branch.
+
+**What this supersedes in the 2026-07-25 amendment.** That amendment argued for keeping the handover engines' `L` and
+`R` type parameters distinct partly because "a live domain event has none". That premise is now gone. The
+parameters are still distinct, and the second reason given there still holds: the blocking stack keeps two live delivery
+routes, so its live payload carries a nullable metadata while a replayed payload always has one. Collapsing them is
+tracked as separate follow-up work rather than folded in here, so a behaviour change to what a split-overload view
+observes cannot hide inside a feature change. The claim there that `Projections.domainEventFeed(...)` and
+`DomainEventFeed` are "unchanged" was true of that extraction and is not true of this one.

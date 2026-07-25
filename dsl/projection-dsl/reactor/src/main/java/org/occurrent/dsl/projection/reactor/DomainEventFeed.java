@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
@@ -32,6 +33,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
+import java.util.function.BiFunction;
 
 /**
  * The reactor counterpart of the blocking {@code DomainEventFeed}: a register-only sink the application owns and feeds
@@ -104,6 +106,27 @@ public final class DomainEventFeed<E> {
     }
 
     /**
+     * Register a projection driving a metadata-aware reactive {@code fold}, the form that can key or fold on the event's
+     * {@link EventMetadata}. The replay always supplies the metadata it decoded from the CloudEvent, and the live path
+     * supplies whatever the source passed to {@link #accept(EventMetadata, Object)}.
+     */
+    public void register(String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter) {
+        Objects.requireNonNull(id, "id cannot be null");
+        // Fail fast on the common duplicate-id case before building a feed. registeredIds.add(id) after creation stays
+        // the authoritative, race-safe check: this is only an optimization, not a substitute for it.
+        if (registeredIds.contains(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
+        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, fold, replayFilter, reader, converter, eventId, catchupMarker,
+                CatchupProjectionFeed.DEFAULT_DEDUP_CACHE_SIZE, CatchupProjectionFeed.DEFAULT_MAX_BUFFERED_EVENTS);
+        // Reserve the id only once the feed exists, so a failed registration never permanently burns the id.
+        if (!registeredIds.add(id)) {
+            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        }
+        feeds.add(feed);
+    }
+
+    /**
      * Feed a live domain event to every registered projection, sequentially. The returned {@link Mono} completes once
      * every projection has handled it, so the listener can acknowledge after processing.
      */
@@ -114,6 +137,22 @@ public final class DomainEventFeed<E> {
             case 0 -> Mono.empty();
             case 1 -> feeds.get(0).accept(event);
             default -> Flux.fromIterable(feeds).concatMap(feed -> feed.accept(event)).then();
+        };
+    }
+
+    /**
+     * Feed a live domain event to every registered projection together with the {@link EventMetadata} the source knows
+     * about it, so a projection keyed on the stream id, version or position works on the live path and not only during
+     * the catch-up replay. Use this when the broker message carries those values and your listener can read them.
+     * Otherwise call {@link #accept(Object)}, which folds with {@link EventMetadata#empty()}.
+     */
+    public Mono<Void> accept(EventMetadata metadata, E event) {
+        Objects.requireNonNull(metadata, "metadata cannot be null");
+        Objects.requireNonNull(event, "event cannot be null");
+        return switch (feeds.size()) {
+            case 0 -> Mono.empty();
+            case 1 -> feeds.get(0).accept(metadata, event);
+            default -> Flux.fromIterable(feeds).concatMap(feed -> feed.accept(metadata, event)).then();
         };
     }
 

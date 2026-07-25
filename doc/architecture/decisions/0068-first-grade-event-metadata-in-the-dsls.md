@@ -77,3 +77,26 @@ bundled here.
   genuine addition to an existing API.
 - Version-gated projection reads remain unbuilt. The metadata primitive is the prerequisite that makes them
   implementable next.
+
+## Amendment (2026-07-26): a domain-event feed can be given metadata, so it is no longer metadata-less by construction
+
+The Decision above says metadata "is present only where an event arrives as a CloudEvent", and groups a live
+domain-event feed with the on-demand query-replay path as having "no metadata to give", calling that "a documented
+property of those paths, not a gap to paper over". That is now half right, and the half that was wrong caused a bug.
+
+It remains true that Occurrent cannot *derive* metadata for a live domain event: stream id, version and position are
+properties of the stored CloudEvent, and there is no CloudEvent on that path. What was wrong was concluding that the
+metadata therefore does not exist. The application often has it, from broker message headers, and had no way to pass it
+in. So `CatchupProjectionFeed` and `DomainEventFeed` now take `accept(EventMetadata, E)` beside `accept(E)`, and the
+application supplies what it has. See the 2026-07-26 amendment to ADR 62 for the shape and the reasoning.
+
+The distinction that survives is between *cannot* and *was not given*. The on-demand query-replay path genuinely has no
+metadata: it folds stored state through a query with no delivery behind it, so `EventMetadata.empty()` there is still a
+property rather than a gap, and the Consequences entry about that path stands. A live domain-event feed is different: it
+has a delivery, and whether that delivery carries metadata is now the application's choice.
+
+That distinction matters because the empty case was not merely uninformative, it was dangerous. `getStreamId()` and
+`getStreamVersion()` throw on empty metadata, but `getPosition()` and `get(key)` return `null`, and a `null`
+view-instance
+id is a documented instruction to skip the event. A projection keyed on the position therefore dropped every live event
+with no error. Empty metadata is now rejected where a key needed it, rather than silently skipping.

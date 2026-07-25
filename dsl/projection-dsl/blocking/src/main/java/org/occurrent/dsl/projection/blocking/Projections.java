@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.projection.internal.ProjectionKeys;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
@@ -29,7 +30,6 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.filter.Filter;
 
 import java.util.function.BiFunction;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -75,6 +75,7 @@ public final class Projections {
             public void update(EventMetadata metadata, E event) {
                 @Nullable ID instanceId = id.apply(metadata, event);
                 if (instanceId == null) {
+                    ProjectionKeys.failIfKeyNeededMetadata(projection.metadataKeyed(), metadata);
                     return;
                 }
                 S currentState = repository.findById(instanceId).orElse(view.initialState());
@@ -114,24 +115,29 @@ public final class Projections {
     }
 
     /**
-     * A {@link Consumer} that folds a <strong>domain event</strong> straight into {@code repository} for a keyed
-     * projection, with no CloudEvent conversion. Use it to drive a projection from a source that already hands you
-     * domain events (a RabbitMQ or Kafka listener with its own message converter), so a live event is folded directly
-     * rather than round-tripped through {@code toCloudEvent}/{@code toDomainEvent}. An event whose id resolves to
-     * {@code null} is skipped, and the fold no-ops on an event type the projection does not handle. This is the live-tail
-     * feed only, with no catch-up: backfill a new or rebuilt projection from the event store first.
+     * A sink that folds a <strong>domain event</strong> straight into {@code repository} for a keyed projection, with no
+     * CloudEvent conversion. Use it to drive a projection from a source that already hands you domain events (a RabbitMQ
+     * or Kafka listener with its own message converter), so a live event is folded directly rather than round-tripped
+     * through {@code toCloudEvent}/{@code toDomainEvent}. An event whose id resolves to {@code null} is skipped, and the
+     * fold no-ops on an event type the projection does not handle. This is the live-tail feed only, with no catch-up:
+     * backfill a new or rebuilt projection from the event store first.
+     * <p>
+     * Returns the {@link MaterializedView} rather than a bare {@code Consumer<E>} so the metadata channel survives. Call
+     * {@link MaterializedView#update(Object)} when the source gives you only the event, and
+     * {@link MaterializedView#update(EventMetadata, Object)} when it also gives you the stream id, version or position,
+     * which is what a projection keyed on metadata needs to work on the live path.
      */
-    public static <S extends @Nullable Object, E, ID> Consumer<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
-        return materializedView(projection, repository)::update;
+    public static <S extends @Nullable Object, E, ID> MaterializedView<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+        return materializedView(projection, repository);
     }
 
     /**
-     * A {@link Consumer} domain-event feed for a keyed or single-instance projection, folding directly into
-     * {@code repository} with no CloudEvent conversion. A single-instance projection (no id function) updates one slot
-     * keyed by {@code singletonKey}. See {@link #domainEventFeed(Projection, ViewStateRepository)}.
+     * A domain-event feed for a keyed or single-instance projection, folding directly into {@code repository} with no
+     * CloudEvent conversion. A single-instance projection (no id function) updates one slot keyed by
+     * {@code singletonKey}. See {@link #domainEventFeed(Projection, ViewStateRepository)}.
      */
-    public static <S extends @Nullable Object, E, ID> Consumer<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
-        return materializedView(projection, repository, singletonKey)::update;
+    public static <S extends @Nullable Object, E, ID> MaterializedView<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
+        return materializedView(projection, repository, singletonKey);
     }
 
     /**

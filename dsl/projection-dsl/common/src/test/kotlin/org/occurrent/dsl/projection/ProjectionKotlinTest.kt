@@ -77,6 +77,39 @@ class ProjectionKotlinTest {
     }
 
     @Nested
+    inner class MetadataKeyedFlag {
+
+        @Test
+        fun `is true after a metadata aware id block`() {
+            val projection = projection<Long, AccountEvent, String>(initialState = 0L) {
+                id { metadata, _ -> metadata.streamId }
+                on<AccountRegistered> { _, metadata, _ -> metadata.position ?: 0L }
+            }
+
+            assertThat(projection.metadataKeyed()).isTrue()
+        }
+
+        @Test
+        fun `is false after an event only id block even though it delegates to a BiFunction internally`() {
+            val projection = projection<Boolean, AccountEvent, String>(initialState = false) {
+                id { it.accountId }
+                on<AccountRegistered> { _, _ -> true }
+            }
+
+            assertThat(projection.metadataKeyed()).isFalse()
+        }
+
+        @Test
+        fun `is false for a singleton projection`() {
+            val projection = singletonProjection<Boolean, AccountEvent>(initialState = false) {
+                on<AccountRegistered> { _, _ -> true }
+            }
+
+            assertThat(projection.metadataKeyed()).isFalse()
+        }
+    }
+
+    @Nested
     inner class DcbProjectionDsl {
 
         private fun isUsernameClaimed(username: String) =

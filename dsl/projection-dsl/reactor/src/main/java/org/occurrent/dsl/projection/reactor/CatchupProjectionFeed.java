@@ -78,7 +78,7 @@ public final class CatchupProjectionFeed<E> {
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
 
-    private final ReactiveHandover<E, ReplayedEvent<E>> handover;
+    private final ReactiveHandover<DeliveredEvent<E>, DeliveredEvent<E>> handover;
 
     private CatchupProjectionFeed(String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -94,8 +94,8 @@ public final class CatchupProjectionFeed<E> {
         this.eventId = eventId;
         this.catchupMarker = catchupMarker;
         this.handover = ReactiveHandover.create(
-                event -> fold.apply(EventMetadata.empty(), event), this::eventKey,
-                replayed -> fold.apply(replayed.metadata(), replayed.event()), replayed -> eventKey(replayed.event()),
+                delivered -> fold.apply(delivered.metadata(), delivered.event()), delivered -> eventKey(delivered.event()),
+                delivered -> fold.apply(delivered.metadata(), delivered.event()), delivered -> eventKey(delivered.event()),
                 options);
     }
 
@@ -155,7 +155,14 @@ public final class CatchupProjectionFeed<E> {
         return create(id, (metadata, event) -> fold.apply(event), replayFilter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
     }
 
-    private static <E> CatchupProjectionFeed<E> create(
+    /**
+     * Create a feed driving a metadata-aware {@code fold}, the form that can key or fold on the event's
+     * {@link EventMetadata}. Prefer this over
+     * {@link #create(String, Function, Filter, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage, int, int)}
+     * when the fold reads metadata: the replay always supplies the metadata it decoded from the CloudEvent, and the live
+     * path supplies whatever the source passed to {@link #accept(EventMetadata, Object)}.
+     */
+    public static <E> CatchupProjectionFeed<E> create(
             String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
             @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
@@ -179,7 +186,23 @@ public final class CatchupProjectionFeed<E> {
      */
     public Mono<Void> accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        return handover.accept(event);
+        return handover.accept(new DeliveredEvent<>(EventMetadata.empty(), event));
+    }
+
+    /**
+     * Feed a live domain event together with the {@link EventMetadata} the source knows about it, so a projection keyed on
+     * the stream id, version or position works on the live path and not only during the catch-up replay. Use this when the
+     * broker message carries those values (as headers, say) and your listener can read them. Otherwise call
+     * {@link #accept(Object)}, which folds with {@link EventMetadata#empty()}.
+     *
+     * @param metadata The metadata the source has for this event.
+     * @param event    The domain event received from the external source.
+     * @return A {@link Mono} that completes when the event has been handled.
+     */
+    public Mono<Void> accept(EventMetadata metadata, E event) {
+        Objects.requireNonNull(metadata, "metadata cannot be null");
+        Objects.requireNonNull(event, "event cannot be null");
+        return handover.accept(new DeliveredEvent<>(metadata, event));
     }
 
     /**
@@ -197,7 +220,7 @@ public final class CatchupProjectionFeed<E> {
             }
 
             @Override
-            public Flux<ReplayedEvent<E>> replay() {
+            public Flux<DeliveredEvent<E>> replay() {
                 return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
                         .map(CatchupProjectionFeed.this::replayedItem);
             }
@@ -227,12 +250,13 @@ public final class CatchupProjectionFeed<E> {
                 .then();
     }
 
-    private ReplayedEvent<E> replayedItem(CloudEvent cloudEvent) {
-        return new ReplayedEvent<>(EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent));
+    private DeliveredEvent<E> replayedItem(CloudEvent cloudEvent) {
+        return new DeliveredEvent<>(EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent));
     }
 
-    // A replayed event carries the metadata decoded from its CloudEvent; a live event (delivered via accept(E)) has
-    // none, so the two deliveries fold through the same BiFunction with EventMetadata.empty() for the live case.
-    private record ReplayedEvent<E>(EventMetadata metadata, E event) {
+    // Carries whatever metadata the delivery had: decoded from the CloudEvent on the replay, supplied by the source
+    // on the live path, or empty when the source gave none. Live and replay share this because the reactor fold is a
+    // single BiFunction, unlike the blocking stack where MaterializedView has two separate update overloads.
+    private record DeliveredEvent<E>(EventMetadata metadata, E event) {
     }
 }

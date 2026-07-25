@@ -21,12 +21,12 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.blocking.Projections;
+import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.example.projection.dsl.streamjava.OrderStatusProjection.OrderStatusView;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.example.projection.dsl.streamjava.OrderStatusProjection.orderStatusProjection;
@@ -36,8 +36,10 @@ import static org.occurrent.example.projection.dsl.streamjava.OrderStatusProject
  * run a projection when your broker listener already deserializes domain events (its own message converter), so the live
  * path never round-trips through {@code toCloudEvent}/{@code toDomainEvent}.
  * <p>
- * {@code Projections.domainEventFeed(...)} returns the plain {@link Consumer} the listener calls. This is the live-tail
- * form; for a new or rebuilt projection that also needs catch-up, use {@code CatchupProjectionFeed} instead.
+ * {@code Projections.domainEventFeed(...)} returns the sink the listener calls. Call {@code update(event)} when the
+ * message carries only the event, or {@code update(metadata, event)} when it also carries the stream id, version or
+ * position, which is what a projection keyed on metadata needs. This is the live-tail form; for a new or rebuilt
+ * projection that also needs catch-up, use {@code CatchupProjectionFeed} instead.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DomainEventFedOrderStatusProjectionTest {
@@ -49,11 +51,11 @@ class DomainEventFedOrderStatusProjectionTest {
 
         Projection<OrderStatusView, OrderEvent, String> projection = orderStatusProjection();
 
-        // The higher-order function the broker listener calls with each already-decoded domain event.
-        Consumer<OrderEvent> feed = Projections.domainEventFeed(projection, repository);
+        // The sink the broker listener calls with each already-decoded domain event.
+        MaterializedView<OrderEvent> feed = Projections.domainEventFeed(projection, repository);
 
         for (OrderEvent event : List.of(new OrderPlaced("order-1", "The Pragmatic Programmer"), new OrderShipped("order-1"))) {
-            feed.accept(event); // folded straight into the read model, no CloudEvent involved
+            feed.update(event); // folded straight into the read model, no CloudEvent involved
         }
 
         assertThat(store.get("order-1")).isEqualTo(new OrderStatusView("order-1", "The Pragmatic Programmer", "SHIPPED"));

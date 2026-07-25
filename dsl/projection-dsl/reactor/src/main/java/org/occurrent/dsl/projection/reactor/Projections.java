@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.projection.internal.ProjectionKeys;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
@@ -83,6 +84,7 @@ public final class Projections {
         return (metadata, event) -> Mono.<Void>fromRunnable(() -> {
             @Nullable ID instanceId = id.apply(metadata, event);
             if (instanceId == null) {
+                ProjectionKeys.failIfKeyNeededMetadata(projection.metadataKeyed(), metadata);
                 return;
             }
             S currentState = repository.findById(instanceId).orElse(view.initialState());
@@ -138,24 +140,26 @@ public final class Projections {
     }
 
     /**
-     * A reactive {@code (E) -> Mono<Void>} feed that folds a <strong>domain event</strong> straight into the blocking
-     * {@code repository} for a keyed projection (on {@link Schedulers#boundedElastic()}), with no CloudEvent conversion.
-     * Use it to drive a projection from a source that already hands you domain events (a RabbitMQ or Kafka listener with
-     * its own message converter), so a live event is folded directly rather than round-tripped through
-     * {@code toCloudEvent}/{@code toDomainEvent}. The reactor counterpart of the blocking
-     * {@code Projections.domainEventFeed(...)}, and the same shape as {@link #reactiveUpdate(Projection, ViewStateRepository)}.
-     * This is the live-tail feed only, with no catch-up.
+     * A reactive {@code (EventMetadata, E) -> Mono<Void>} feed that folds a <strong>domain event</strong> straight into
+     * the blocking {@code repository} for a keyed projection (on {@link Schedulers#boundedElastic()}), with no CloudEvent
+     * conversion. Use it to drive a projection from a source that already hands you domain events (a RabbitMQ or Kafka
+     * listener with its own message converter), so a live event is folded directly rather than round-tripped through
+     * {@code toCloudEvent}/{@code toDomainEvent}. This is the live-tail feed only, with no catch-up.
+     * <p>
+     * Metadata-carrying on purpose, so a projection keyed on the stream id or position works on the live path too. Pass
+     * {@link EventMetadata#empty()} when the source gives you only the event. The same shape as
+     * {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository)}.
      */
-    public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
-        return reactiveUpdate(projection, repository);
+    public static <S extends @Nullable Object, E, ID> BiFunction<EventMetadata, E, Mono<Void>> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+        return reactiveUpdateWithMetadata(projection, repository);
     }
 
     /**
      * A reactive domain-event feed for a keyed or single-instance projection, folding directly into {@code repository}
      * with no CloudEvent conversion. See {@link #domainEventFeed(Projection, ViewStateRepository)}.
      */
-    public static <S extends @Nullable Object, E, ID> Function<E, Mono<Void>> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
-        return reactiveUpdate(projection, repository, singletonKey);
+    public static <S extends @Nullable Object, E, ID> BiFunction<EventMetadata, E, Mono<Void>> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
+        return reactiveUpdateWithMetadata(projection, repository, singletonKey);
     }
 
     /**

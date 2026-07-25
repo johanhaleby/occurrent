@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
@@ -114,6 +115,20 @@ public final class DomainEventFeed<E> {
         Objects.requireNonNull(event, "event cannot be null");
         for (CatchupProjectionFeed<E> feed : feeds) {
             feed.accept(event);
+        }
+    }
+
+    /**
+     * Feed a live domain event to every registered projection together with the {@link EventMetadata} the source knows
+     * about it, so a projection keyed on the stream id, version or position works on the live path and not only during
+     * the catch-up replay. Use this when the broker message carries those values and your listener can read them.
+     * Otherwise call {@link #accept(Object)}, which folds with no metadata.
+     */
+    public void accept(EventMetadata metadata, E event) {
+        Objects.requireNonNull(metadata, "metadata cannot be null");
+        Objects.requireNonNull(event, "event cannot be null");
+        for (CatchupProjectionFeed<E> feed : feeds) {
+            feed.accept(metadata, event);
         }
     }
 
