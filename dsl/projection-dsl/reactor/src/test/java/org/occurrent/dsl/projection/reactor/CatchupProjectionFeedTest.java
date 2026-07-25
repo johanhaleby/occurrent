@@ -80,9 +80,33 @@ class CatchupProjectionFeedTest {
 
         feed.catchUp().block();
 
-        // The instance is keyed under the stream id "s" (from metadata) and holds a real, non-null position.
-        assertThat(repo).containsKey("s");
-        assertThat(repo.get("s")).isNotNull();
+        // Keyed under the stream id "s" from the metadata, folded to the last replayed event's position (2), not to the
+        // 0 that an empty-metadata fold would leave behind.
+        assertThat(repo).containsOnlyKeys("s");
+        assertThat(repo.get("s")).isEqualTo(2L);
+    }
+
+    @Test
+    void a_live_domain_event_is_folded_with_empty_metadata_so_a_metadata_keyed_projection_fails_loud() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        Projection<Long, Counted, String> projection = Projection.<Long, Counted, String>builder(0L)
+                .id((metadata, event) -> metadata.getStreamId())
+                .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
+                .build();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "positions", projection, repository, metadataReader("1", "2"), converter, Counted::eventId, null);
+        feed.catchUp().block();
+
+        // Metadata exists only where an event arrives as a CloudEvent. A live domain event has none, so it folds with
+        // EventMetadata.empty() and a projection keyed off metadata fails loud here rather than writing a wrong key.
+        // Pinned deliberately: driving a metadata-keyed projection from a domain-event feed is not supported live, and
+        // the blocking feed behaves identically. Change this test only alongside a decision to support it.
+        StepVerifier.create(feed.accept(new Counted("3")))
+                .verifyErrorSatisfies(e -> assertThat(e)
+                        .isInstanceOf(NullPointerException.class)
+                        .hasMessageContaining("streamId extension is absent"));
     }
 
     @Test

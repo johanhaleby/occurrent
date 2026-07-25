@@ -22,6 +22,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
@@ -41,6 +42,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -84,9 +86,37 @@ class CatchupProjectionFeedTest {
 
         feed.catchUp();
 
-        // The instance is keyed under the stream id "s" (from metadata) and holds a real, non-null position.
-        assertThat(repo).containsKey("s");
-        assertThat(repo.get("s")).isNotNull();
+        // Keyed under the stream id "s" from the metadata, folded to the last replayed event's position rather than to
+        // the 0 that an empty-metadata fold would leave behind.
+        long lastPosition = store.read("s").eventList().stream()
+                .mapToLong(cloudEvent -> EventMetadata.from(cloudEvent).getPosition()).max().orElseThrow();
+        assertThat(repo).containsOnlyKeys("s");
+        assertThat(repo.get("s")).isEqualTo(lastPosition);
+    }
+
+    @Test
+    void a_live_domain_event_is_folded_with_empty_metadata_so_a_metadata_keyed_projection_fails_loud() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        Projection<Long, Counted, String> projection = Projection.<Long, Counted, String>builder(0L)
+                .id((metadata, event) -> metadata.getStreamId())
+                .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
+                .build();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "positions", projection, repository, store, converter, Counted::eventId, null);
+        feed.catchUp();
+
+        // Metadata exists only where an event arrives as a CloudEvent. A live domain event has none, so it folds with
+        // EventMetadata.empty() and a projection keyed off metadata fails loud here rather than writing a wrong key.
+        // Pinned deliberately: driving a metadata-keyed projection from a domain-event feed is not supported live, and
+        // the reactor feed behaves identically. Change this test only alongside a decision to support it.
+        assertThatThrownBy(() -> feed.accept(new Counted("3")))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("streamId extension is absent");
     }
 
     @Test
