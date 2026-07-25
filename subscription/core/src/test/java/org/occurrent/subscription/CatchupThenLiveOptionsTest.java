@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.internal;
+package org.occurrent.subscription;
 
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -24,32 +24,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class HandoverOptionsTest {
+class CatchupThenLiveOptionsTest {
 
     @Test
     void defaults_use_the_documented_dedup_cache_size_and_max_buffered_events() {
-        HandoverOptions options = HandoverOptions.defaults();
+        CatchupThenLiveOptions options = CatchupThenLiveOptions.defaults();
 
-        assertThat(options.dedupCacheSize()).isEqualTo(HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE);
-        assertThat(options.maxBufferedEvents()).isEqualTo(HandoverOptions.DEFAULT_MAX_BUFFERED_EVENTS);
+        assertThat(options.dedupCacheSize()).isEqualTo(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE);
+        assertThat(options.maxBufferedEvents()).isEqualTo(CatchupThenLiveOptions.DEFAULT_MAX_BUFFERED_EVENTS);
     }
 
     @Test
     void a_non_positive_dedup_cache_size_is_rejected() {
-        assertThatThrownBy(() -> new HandoverOptions(0, 10))
+        assertThatThrownBy(() -> new CatchupThenLiveOptions(0, 10))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("dedupCacheSize must be greater than zero");
-        assertThatThrownBy(() -> new HandoverOptions(-1, 10))
+        assertThatThrownBy(() -> new CatchupThenLiveOptions(-1, 10))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("dedupCacheSize must be greater than zero");
     }
 
     @Test
     void a_non_positive_max_buffered_events_is_rejected() {
-        assertThatThrownBy(() -> new HandoverOptions(10, 0))
+        assertThatThrownBy(() -> new CatchupThenLiveOptions(10, 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("maxBufferedEvents must be greater than zero");
-        assertThatThrownBy(() -> new HandoverOptions(10, -1))
+        assertThatThrownBy(() -> new CatchupThenLiveOptions(10, -1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("maxBufferedEvents must be greater than zero");
     }

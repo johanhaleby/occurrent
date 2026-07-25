@@ -117,8 +117,7 @@ public final class DomainEventFeed<E> {
         if (registeredIds.contains(id)) {
             throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
         }
-        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, fold, replayFilter, reader, converter, eventId, catchupMarker,
-                CatchupProjectionFeed.DEFAULT_DEDUP_CACHE_SIZE, CatchupProjectionFeed.DEFAULT_MAX_BUFFERED_EVENTS);
+        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, fold, replayFilter, reader, converter, eventId, catchupMarker);
         // Reserve the id only once the feed exists, so a failed registration never permanently burns the id.
         if (!registeredIds.add(id)) {
             throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");

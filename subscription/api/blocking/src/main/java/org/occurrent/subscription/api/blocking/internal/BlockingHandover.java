@@ -20,7 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.util.ArrayDeque;
 import java.util.Objects;
@@ -35,9 +35,11 @@ import java.util.stream.Stream;
  * mirrors exactly) the blocking projection feed and the blocking push subscription model, which each supply their
  * own delivery, de-dup key, and {@link Source} of history and completion-marker.
  * <p>
- * {@code L} is the live payload type and {@code R} is the replay payload type. They are kept separate rather than
- * folded into one type because a replayed event typically carries decoded metadata (for example {@code EventMetadata})
- * that a live event does not, and the two deliveries can be distinct fold overloads on the caller's read model.
+ * {@code T} is the payload type, one for both phases. The caller decides what a payload carries, so where a replayed
+ * payload has metadata a live one may not, that difference lives in the payload rather than in this engine's signature.
+ * <p>
+ * The supplied {@code deliver} is invoked on <em>both</em> sides of this engine's monitor: outside it for the replay
+ * fold, and while holding it for the drain and for a live {@link #accept(Object)}. It must tolerate both.
  * <p>
  * Note the semantic contract this engine keeps: {@link #accept(Object)} buffers a live payload and returns
  * <em>before</em> it is folded while the catch-up is running, so a caller that acknowledges after {@code accept}
@@ -46,18 +48,18 @@ import java.util.stream.Stream;
  * whole replay from the source, the backstop for any live payload acknowledged but not yet folded.
  */
 @NullMarked
-public final class BlockingHandover<L, R> {
+public final class BlockingHandover<T> {
 
     /**
      * The replay side of a handover: whether the catch-up already ran, the position-ordered replay stream, and how to
      * record that the catch-up completed.
      */
-    public interface Source<R> {
+    public interface Source<T> {
         /** Whether a prior catch-up already completed, so this one should skip straight to going live. */
         boolean isAlreadyCaughtUp();
 
         /** The history to replay, in position order, from the beginning. Closed by the engine after use. */
-        Stream<R> replay();
+        Stream<T> replay();
 
         /**
          * Record that the catch-up completed. Called after the replay has been consumed and the live buffer has been
@@ -66,51 +68,40 @@ public final class BlockingHandover<L, R> {
         void markCaughtUp();
     }
 
-    private final Consumer<L> deliverLive;
-    private final Function<L, String> liveDedupId;
-    private final Consumer<R> deliverReplayed;
-    private final Function<R, String> replayDedupId;
+    private final Consumer<T> deliver;
+    private final Function<T, String> dedupId;
     private final int maxBufferedEvents;
     private final String noun;
 
     private final Object lock = new Object();
-    private final Queue<L> buffer = new ArrayDeque<>();
+    private final Queue<T> buffer = new ArrayDeque<>();
     private final BoundedIdCache deliveredIds;
     private boolean live = false;
     private @Nullable Throwable catchUpFailure = null;
 
-    private BlockingHandover(Consumer<L> deliverLive, Function<L, String> liveDedupId,
-                              Consumer<R> deliverReplayed, Function<R, String> replayDedupId,
-                              HandoverOptions options, String noun) {
-        this.deliverLive = deliverLive;
-        this.liveDedupId = liveDedupId;
-        this.deliverReplayed = deliverReplayed;
-        this.replayDedupId = replayDedupId;
+    private BlockingHandover(Consumer<T> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
+        this.deliver = deliver;
+        this.dedupId = dedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
         this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
         this.noun = noun;
     }
 
     /**
-     * @param deliverLive     Folds a live payload (outside the catch-up window, or the buffered overlap once drained).
-     * @param liveDedupId     Extracts the replay-to-live de-dup key from a live payload.
-     * @param deliverReplayed Folds a replayed payload during the catch-up.
-     * @param replayDedupId   Extracts the replay-to-live de-dup key from a replayed payload.
-     * @param options         De-dup cache size and live-buffer cap.
-     * @param noun            The caller's noun for {@link HandoverMessages#catchUpFailed(String)}, e.g.
-     *                        {@code "projection feed"} or {@code "subscription"}.
+     * @param deliver Folds a payload, replayed or live. Called outside this engine's monitor for the replay and while
+     *                holding it for the drain and for a live {@link #accept(Object)}, so it must tolerate both.
+     * @param dedupId Extracts the replay-to-live de-dup key from a payload.
+     * @param options De-dup cache size and live-buffer cap.
+     * @param noun    The caller's noun for {@link HandoverMessages#catchUpFailed(String)}, e.g.
+     *                {@code "projection feed"} or {@code "subscription"}.
      */
-    public static <L, R> BlockingHandover<L, R> create(
-            Consumer<L> deliverLive, Function<L, String> liveDedupId,
-            Consumer<R> deliverReplayed, Function<R, String> replayDedupId,
-            HandoverOptions options, String noun) {
-        Objects.requireNonNull(deliverLive, "deliverLive cannot be null");
-        Objects.requireNonNull(liveDedupId, "liveDedupId cannot be null");
-        Objects.requireNonNull(deliverReplayed, "deliverReplayed cannot be null");
-        Objects.requireNonNull(replayDedupId, "replayDedupId cannot be null");
+    public static <T> BlockingHandover<T> create(
+            Consumer<T> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
+        Objects.requireNonNull(deliver, "deliver cannot be null");
+        Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");
         Objects.requireNonNull(noun, "noun cannot be null");
-        return new BlockingHandover<>(deliverLive, liveDedupId, deliverReplayed, replayDedupId, options, noun);
+        return new BlockingHandover<>(deliver, dedupId, options, noun);
     }
 
     /**
@@ -119,7 +110,7 @@ public final class BlockingHandover<L, R> {
      * @throws IllegalStateException if a prior {@link #catchUp(Source)} has failed, or if the live buffer overflows
      *                                during the catch-up.
      */
-    public void accept(L payload) {
+    public void accept(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
         synchronized (lock) {
             if (catchUpFailure != null) {
@@ -140,18 +131,21 @@ public final class BlockingHandover<L, R> {
      * Run the one-time catch-up: replay the source's history (unless already caught up), then drain the buffered live
      * payloads and go live, then mark the catch-up complete.
      */
-    public void catchUp(Source<R> source) {
+    public void catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
         try {
             if (source.isAlreadyCaughtUp()) {
                 drainBufferAndGoLive();
                 return;
             }
-            try (Stream<R> history = source.replay()) {
+            try (Stream<T> history = source.replay()) {
                 history.forEach(replayed -> {
-                    deliverReplayed.accept(replayed);
+                    // Outside the monitor on purpose: only the cache write needs it, neither the caller's fold nor its
+                    // key function.
+                    String key = dedupKey(replayed);
+                    deliver.accept(replayed);
                     synchronized (lock) {
-                        deliveredIds.add(replayDedupId.apply(replayed));
+                        deliveredIds.add(key);
                     }
                 });
             }
@@ -169,7 +163,7 @@ public final class BlockingHandover<L, R> {
 
     private void drainBufferAndGoLive() {
         synchronized (lock) {
-            for (L buffered : buffer) {
+            for (T buffered : buffer) {
                 deliverLive(buffered);
             }
             buffer.clear();
@@ -177,13 +171,22 @@ public final class BlockingHandover<L, R> {
         }
     }
 
+    @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.
+    private String dedupKey(T payload) {
+        String key = dedupId.apply(payload);
+        if (key == null) {
+            throw new IllegalStateException(HandoverMessages.dedupKeyRequired());
+        }
+        return key;
+    }
+
     // Must be called holding lock. Folds unless the payload was already folded by the replay or an earlier live copy.
-    private void deliverLive(L payload) {
-        String key = liveDedupId.apply(payload);
+    private void deliverLive(T payload) {
+        String key = dedupKey(payload);
         if (deliveredIds.contains(key)) {
             return;
         }
-        deliverLive.accept(payload);
+        deliver.accept(payload);
         deliveredIds.add(key);
     }
 }

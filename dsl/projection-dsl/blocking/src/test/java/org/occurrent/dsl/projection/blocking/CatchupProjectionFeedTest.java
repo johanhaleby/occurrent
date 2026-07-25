@@ -33,6 +33,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.net.URI;
 import java.util.HashMap;
@@ -196,20 +197,7 @@ class CatchupProjectionFeedTest {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         List<String> callsReceived = new CopyOnWriteArrayList<>();
-        // Implements both MaterializedView overloads differently, to pin that accept(event) and accept(metadata, event)
-        // are two separate routes rather than accept(event) being rewritten into the metadata overload with an empty
-        // metadata.
-        MaterializedView<Counted> view = new MaterializedView<>() {
-            @Override
-            public void update(Counted event) {
-                callsReceived.add("event-only:" + event.eventId());
-            }
-
-            @Override
-            public void update(EventMetadata metadata, Counted event) {
-                callsReceived.add("metadata:" + event.eventId());
-            }
-        };
+        MaterializedView<Counted> view = overloadRecordingView(callsReceived);
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
                 "split-overload", view, Filter.all(), store, converter, Counted::eventId, null);
         feed.catchUp();
@@ -218,6 +206,25 @@ class CatchupProjectionFeedTest {
         feed.accept(metadata("s", 1L), new Counted("with-metadata"));
 
         assertThat(callsReceived).containsExactly("event-only:plain", "metadata:with-metadata");
+    }
+
+    @Test
+    void a_replayed_event_always_gets_the_metadata_form_never_the_one_argument_form() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+
+        List<String> callsReceived = new CopyOnWriteArrayList<>();
+        MaterializedView<Counted> view = overloadRecordingView(callsReceived);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "replay-overload", view, Filter.all(), store, converter, Counted::eventId, null);
+
+        feed.catchUp();
+
+        // A replayed event has a CloudEvent behind it, so it always carries metadata and must take the metadata route.
+        // Live and replayed deliveries share one carrier whose metadata is nullable, so this pins that a replayed one is
+        // never constructed without it and so can never fall through to the one-argument overload.
+        assertThat(callsReceived).containsExactly("metadata:1", "metadata:2");
     }
 
     @Test
@@ -283,7 +290,7 @@ class CatchupProjectionFeedTest {
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
-                "counter", projection(), repository, store, converter, Counted::eventId, null, 10, 2);
+                "counter", projection(), repository, store, converter, Counted::eventId, null, new CatchupThenLiveOptions(10, 2));
 
         feed.accept(new Counted("l1"));
         feed.accept(new Counted("l2"));
@@ -474,5 +481,20 @@ class CatchupProjectionFeedTest {
         public boolean exists(String subscriptionId) {
             return checkpoints.containsKey(subscriptionId);
         }
+    }
+
+    // Implements both MaterializedView overloads differently, so a test can tell which route a delivery took.
+    private static MaterializedView<Counted> overloadRecordingView(List<String> callsReceived) {
+        return new MaterializedView<>() {
+            @Override
+            public void update(Counted event) {
+                callsReceived.add("event-only:" + event.eventId());
+            }
+
+            @Override
+            public void update(EventMetadata metadata, Counted event) {
+                callsReceived.add("metadata:" + event.eventId());
+            }
+        };
     }
 }

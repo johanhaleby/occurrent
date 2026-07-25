@@ -29,6 +29,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -141,7 +142,7 @@ class CatchupThenPushSubscriptionModelTest {
             }
         }), 1);
 
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null, 10, 2);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null, new CatchupThenLiveOptions(10, 2));
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
 
         // The event that overflowed the buffer reports the failure to its caller (the listener), which can nack it.

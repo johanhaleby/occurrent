@@ -65,4 +65,15 @@ public final class HandoverMessages {
     public static String catchUpFailed(String noun) {
         return "Catch-up failed for this " + noun + ", so it cannot accept live events. Rebuild it after fixing the cause.";
     }
+
+    /**
+     * Rejects a null replay-to-live de-dup key. The key function is caller-supplied and declared non-null, but nothing
+     * enforces that at runtime, and a null reaches {@code BoundedIdCache} as a null element for its eviction queue,
+     * which throws a bare {@link NullPointerException} from inside the cache. On the live path that happens after the
+     * fold has already run, so the payload is delivered and the pipeline then fails with no indication of the cause.
+     */
+    public static String dedupKeyRequired() {
+        return "The de-dup key function returned null for a payload. It must return a stable non-null id per event, "
+                + "since that id is what suppresses the replay-to-live overlap.";
+    }
 }

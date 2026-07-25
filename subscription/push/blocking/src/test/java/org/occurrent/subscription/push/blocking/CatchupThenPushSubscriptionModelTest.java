@@ -30,6 +30,7 @@ import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -142,7 +143,7 @@ class CatchupThenPushSubscriptionModelTest {
         // On the first replayed element, three live events arrive but the buffer cap is two.
         PositionOrderedReader reader = readerThatOnFirstElementPushesMany(List.of(e1), List.of(l1, l2, l3), feed);
 
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null, 10, 2);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null, new CatchupThenLiveOptions(10, 2));
         Throwable thrown = catchThrowable(() ->
                 model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
                 }));

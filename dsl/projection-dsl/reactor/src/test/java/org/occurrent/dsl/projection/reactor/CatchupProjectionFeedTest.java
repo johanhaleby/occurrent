@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -219,7 +220,7 @@ class CatchupProjectionFeedTest {
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
-                "counter", projection(), repository, reader(), converter, Counted::eventId, null, 10, 2);
+                "counter", projection(), repository, reader(), converter, Counted::eventId, null, new CatchupThenLiveOptions(10, 2));
 
         feed.accept(new Counted("l1")).subscribe();
         feed.accept(new Counted("l2")).subscribe();

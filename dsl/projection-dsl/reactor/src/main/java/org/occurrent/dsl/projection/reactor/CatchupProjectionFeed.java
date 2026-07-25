@@ -31,7 +31,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -67,9 +67,6 @@ import java.util.function.Function;
 @NullMarked
 public final class CatchupProjectionFeed<E> {
 
-    public static final int DEFAULT_DEDUP_CACHE_SIZE = HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE;
-    public static final int DEFAULT_MAX_BUFFERED_EVENTS = HandoverOptions.DEFAULT_MAX_BUFFERED_EVENTS;
-
     private final BiFunction<EventMetadata, E, Mono<Void>> fold;
     private final Filter replayFilter;
     private final PositionOrderedReader reader;
@@ -78,11 +75,11 @@ public final class CatchupProjectionFeed<E> {
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
 
-    private final ReactiveHandover<DeliveredEvent<E>, DeliveredEvent<E>> handover;
+    private final ReactiveHandover<DeliveredEvent<E>> handover;
 
     private CatchupProjectionFeed(String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
-                                        @Nullable CheckpointStorage catchupMarker, HandoverOptions options) {
+                                        @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
         this.id = id;
         this.fold = fold;
         this.replayFilter = replayFilter;
@@ -95,7 +92,6 @@ public final class CatchupProjectionFeed<E> {
         this.catchupMarker = catchupMarker;
         this.handover = ReactiveHandover.create(
                 delivered -> fold.apply(delivered.metadata(), delivered.event()), delivered -> eventKey(delivered.event()),
-                delivered -> fold.apply(delivered.metadata(), delivered.event()), delivered -> eventKey(delivered.event()),
                 options);
     }
 
@@ -107,18 +103,17 @@ public final class CatchupProjectionFeed<E> {
             String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
             @Nullable CheckpointStorage catchupMarker) {
-        return create(id, projection, repository, reader, converter, eventId, catchupMarker,
-                DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
+        return create(id, projection, repository, reader, converter, eventId, catchupMarker, CatchupThenLiveOptions.defaults());
     }
 
     /**
      * As {@link #create(String, Projection, ViewStateRepository, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage)},
-     * with an explicit de-dup cache size and live-buffer cap.
+     * with explicit handover {@code options}.
      */
     public static <S extends @Nullable Object, E, ID> CatchupProjectionFeed<E> create(
             String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
-            @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+            @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
         // The metadata-aware fold, so a projection keyed by metadata (a stream id, say) resolves the same instance during
@@ -126,7 +121,7 @@ public final class CatchupProjectionFeed<E> {
         // replayed event.
         BiFunction<EventMetadata, E, Mono<Void>> fold = Projections.reactiveUpdateWithMetadata(projection, repository, id);
         Filter filter = ProjectionFilters.filterFor(converter, projection);
-        return create(id, fold, filter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
+        return create(id, fold, filter, reader, converter, eventId, catchupMarker, options);
     }
 
     /**
@@ -138,41 +133,51 @@ public final class CatchupProjectionFeed<E> {
             String id, Function<E, Mono<Void>> fold, Filter replayFilter,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
             @Nullable CheckpointStorage catchupMarker) {
-        return create(id, fold, replayFilter, reader, converter, eventId, catchupMarker,
-                DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
+        return create(id, fold, replayFilter, reader, converter, eventId, catchupMarker, CatchupThenLiveOptions.defaults());
     }
 
     /**
      * As {@link #create(String, Function, Filter, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage)},
-     * with an explicit de-dup cache size and live-buffer cap.
+     * with explicit handover {@code options}.
      */
     public static <E> CatchupProjectionFeed<E> create(
             String id, Function<E, Mono<Void>> fold, Filter replayFilter,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
-            @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+            @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
         Objects.requireNonNull(fold, "fold cannot be null");
         // A caller-supplied one-argument fold has no metadata channel, so the replay drops the metadata it decoded.
-        return create(id, (metadata, event) -> fold.apply(event), replayFilter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
+        return create(id, (metadata, event) -> fold.apply(event), replayFilter, reader, converter, eventId, catchupMarker, options);
     }
 
     /**
      * Create a feed driving a metadata-aware {@code fold}, the form that can key or fold on the event's
      * {@link EventMetadata}. Prefer this over
-     * {@link #create(String, Function, Filter, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage, int, int)}
+     * {@link #create(String, Function, Filter, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage)}
      * when the fold reads metadata: the replay always supplies the metadata it decoded from the CloudEvent, and the live
      * path supplies whatever the source passed to {@link #accept(EventMetadata, Object)}.
      */
     public static <E> CatchupProjectionFeed<E> create(
             String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
-            @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+            @Nullable CheckpointStorage catchupMarker) {
+        return create(id, fold, replayFilter, reader, converter, eventId, catchupMarker, CatchupThenLiveOptions.defaults());
+    }
+
+    /**
+     * As {@link #create(String, BiFunction, Filter, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage)},
+     * with explicit handover {@code options}.
+     */
+    public static <E> CatchupProjectionFeed<E> create(
+            String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter,
+            PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
+            @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(fold, "fold cannot be null");
         Objects.requireNonNull(replayFilter, "replayFilter cannot be null");
         Objects.requireNonNull(reader, "reader cannot be null");
         Objects.requireNonNull(converter, "converter cannot be null");
         Objects.requireNonNull(eventId, "eventId cannot be null");
-        HandoverOptions options = new HandoverOptions(dedupCacheSize, maxBufferedEvents);
+        Objects.requireNonNull(options, "options cannot be null");
         return new CatchupProjectionFeed<>(id, fold, replayFilter, reader, converter, eventId, catchupMarker, options);
     }
 

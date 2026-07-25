@@ -30,7 +30,7 @@ import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.ReplayFilters;
 
 import java.time.Duration;
@@ -77,21 +77,10 @@ import java.util.stream.Stream;
 @NullMarked
 public class CatchupThenPushSubscriptionModel implements Subscribable {
 
-    /**
-     * The default number of recently delivered event ids retained to de-duplicate the replay-to-live overlap. Beyond
-     * this window the at-least-once contract applies (the idempotent fold absorbs a duplicate).
-     */
-    public static final int DEFAULT_DEDUP_CACHE_SIZE = HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE;
-
-    /**
-     * The default cap on events buffered from the live feed during a catch-up replay before the model fails loud.
-     */
-    public static final int DEFAULT_MAX_BUFFERED_EVENTS = HandoverOptions.DEFAULT_MAX_BUFFERED_EVENTS;
-
     private final PositionOrderedReader reader;
     private final PushSubscriptionModel liveFeed;
     private final @Nullable CheckpointStorage catchupMarker;
-    private final HandoverOptions options;
+    private final CatchupThenLiveOptions options;
 
     /**
      * @param reader          Reads the projection's history in position order for the catch-up replay.
@@ -100,17 +89,20 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
      *                        catch up on every subscribe.
      */
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker) {
-        this(reader, liveFeed, catchupMarker, DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
+        this(reader, liveFeed, catchupMarker, CatchupThenLiveOptions.defaults());
     }
 
-    public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+    /**
+     * @param options De-dup cache size and live-buffer cap for the catch-up-to-live handover.
+     */
+    public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
         if (!reader.writesPosition()) {
             throw new IllegalArgumentException(HandoverMessages.POSITIONED_READER_REQUIRED);
         }
         this.liveFeed = Objects.requireNonNull(liveFeed, "liveFeed cannot be null");
         this.catchupMarker = catchupMarker;
-        this.options = new HandoverOptions(dedupCacheSize, maxBufferedEvents);
+        this.options = Objects.requireNonNull(options, "options cannot be null");
     }
 
     @Override
@@ -122,8 +114,7 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // Fail fast on a filter that cannot be replayed, before registering anything on the live feed.
         Filter replayFilter = ReplayFilters.replayFilterFor(filter);
 
-        BlockingHandover<CloudEvent, CloudEvent> handover = BlockingHandover.create(
-                action, CloudEvent::getId, action, CloudEvent::getId, options, "subscription");
+        BlockingHandover<CloudEvent> handover = BlockingHandover.create(action, CloudEvent::getId, options, "subscription");
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);

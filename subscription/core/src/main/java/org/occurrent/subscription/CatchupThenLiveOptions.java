@@ -14,24 +14,30 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.internal;
+package org.occurrent.subscription;
 
 /**
- * Tuning knobs shared by every catch-up-then-live handover engine ({@code BlockingHandover} and
- * {@code ReactiveHandover}): the de-dup cache retained across the replay-to-live overlap, and the cap on events
- * buffered from the live feed while the catch-up replay runs.
+ * Tuning knobs for a catch-up-then-live handover: a bootstrap that replays history from the event store, buffers what
+ * the live feed emits meanwhile, then drains the buffer and goes live. Accepted by
+ * {@code CatchupThenPushSubscriptionModel} and the projection DSL's {@code CatchupProjectionFeed} on both stacks.
+ * <p>
+ * {@code dedupCacheSize} bounds how far the replay-to-live overlap can be de-duplicated exactly. Beyond that window the
+ * at-least-once contract applies, so an idempotent fold absorbs a duplicate.
+ * <p>
+ * {@code maxBufferedEvents} is a fail-loud cap, not a throttle. Reaching it means the replay is not keeping up with the
+ * live feed at all, so the catch-up throws rather than silently dropping events or growing without bound.
  *
  * @param dedupCacheSize    Recently delivered event ids retained to de-duplicate the replay-to-live overlap.
  * @param maxBufferedEvents Cap on events buffered from the live feed during the catch-up replay before failing loud.
  */
-public record HandoverOptions(int dedupCacheSize, int maxBufferedEvents) {
+public record CatchupThenLiveOptions(int dedupCacheSize, int maxBufferedEvents) {
 
     /** Default de-dup cache size, shared by every catch-up-then-live caller unless overridden. */
     public static final int DEFAULT_DEDUP_CACHE_SIZE = 10_000;
     /** Default live-buffer cap, shared by every catch-up-then-live caller unless overridden. */
     public static final int DEFAULT_MAX_BUFFERED_EVENTS = 100_000;
 
-    public HandoverOptions {
+    public CatchupThenLiveOptions {
         if (dedupCacheSize <= 0) {
             throw new IllegalArgumentException("dedupCacheSize must be greater than zero");
         }
@@ -41,7 +47,7 @@ public record HandoverOptions(int dedupCacheSize, int maxBufferedEvents) {
     }
 
     /** The default options: {@link #DEFAULT_DEDUP_CACHE_SIZE} and {@link #DEFAULT_MAX_BUFFERED_EVENTS}. */
-    public static HandoverOptions defaults() {
-        return new HandoverOptions(DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
+    public static CatchupThenLiveOptions defaults() {
+        return new CatchupThenLiveOptions(DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
     }
 }

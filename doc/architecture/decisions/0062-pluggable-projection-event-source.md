@@ -274,3 +274,52 @@ routes, so its live payload carries a nullable metadata while a replayed payload
 tracked as separate follow-up work rather than folded in here, so a behaviour change to what a split-overload view
 observes cannot hide inside a feature change. The claim there that `Projections.domainEventFeed(...)` and
 `DomainEventFeed` are "unchanged" was true of that extraction and is not true of this one.
+
+## Amendment (2026-07-27): one type parameter per engine, and the tunables become a public record
+
+**Two type parameters reverses to one.** `BlockingHandover<L, R>` and `ReactiveHandover<L, R>` are now
+`BlockingHandover<T>` and `ReactiveHandover<T>`, with one `deliver` and one `dedupId` instead of two of each.
+
+Both reasons the 2026-07-25 amendment gave are gone, and neither was abandoned as a matter of taste. The first premise,
+that a live domain event carries no `EventMetadata`, stopped being true when the feeds gained `accept(EventMetadata, E)`
+(recorded in the 2026-07-26 amendment above). The second, that `MaterializedView.update(E)` and
+`update(EventMetadata, E)` are separately implementable so collapsing would not preserve behaviour, was resolved by
+merging the blocking feed's two carriers into a single record with a nullable metadata. The routing decision still
+happens, but it happens on a null check inside the caller's own delivery function, where the engine's type parameters
+were never involved. Leaving the ADR as it stood would have documented a type-level guarantee the code no longer had.
+
+The reactive engine never had a call site where `L` and `R` differed, so its half is dead-code removal. Three of the four
+callers already bound `L == R`, and two passed literally the same reference twice.
+
+**What this gives up.** A caller can no longer count replayed versus live deliveries by which lambda fired, and cannot
+differentiate error handling per phase on the reactive side. No caller did either. The engine tests lose their
+which-lambda-fired assertions and keep ordering and delivered-once, which is stronger for the interleaving test, since
+one list now pins the order across both phases rather than two lists pinning each phase separately.
+
+**One widened contract.** The same caller-supplied function is now invoked on both sides of the blocking engine's
+monitor, outside it for the replay fold and while holding it for the drain and a live `accept`. Both lambdas already
+called into the same view, so this is practically unchanged, but the engine documents it rather than describing the lock
+asymmetry as a per-path property.
+
+**`Named handover, not catchup` also reverses, for the options record only.** `HandoverOptions` moves from
+`org.occurrent.subscription.internal` to the public `org.occurrent.subscription` as `CatchupThenLiveOptions`, replacing
+the loose `(int dedupCacheSize, int maxBufferedEvents)` pair at all seven public occurrences and retiring the eight
+per-caller `DEFAULT_*` constants.
+
+The rename is forced, not preferred. `CatchupSubscriptionModelConfig.DEFAULT_HANDOVER_CACHE_SIZE` is public API in
+0.30.0 and the changelog already describes that mechanism as the "handover cache", for the change-stream catch-up models
+under `subscription/util` with a different default. A second public "handover" de-dup cache would collide with released
+vocabulary. So `handover` stays the engines' internal word, which is what the 2026-07-25 amendment actually established,
+and the public type is named after what a caller configures. `CatchupThenLiveOptions` maps onto
+`CatchupThenPushSubscriptionModel` and `catchUp()`, and its suffix keeps it distinguishable from
+`CatchupSubscriptionModelConfig`.
+
+`org.occurrent.subscription` adds no coupling: both projection-dsl poms already declare a compile-scope
+`occurrent-subscription-core`, every public `CatchupProjectionFeed.create(...)` already takes `CheckpointStorage` from
+`org.occurrent.subscription.api.*`, and that package already holds public types such as `StartAt` and
+`SubscriptionFilter`.
+
+The reactor feed also gains the defaults-taking metadata-aware factory it was missing. Before this, the preferred
+metadata-aware path existed only in the int-pair form, so `reactor/DomainEventFeed` had to hand-write both default
+constants while the plain-`Function` path three methods above it called a clean defaults-taking form. The API penalised
+the path callers should use.
