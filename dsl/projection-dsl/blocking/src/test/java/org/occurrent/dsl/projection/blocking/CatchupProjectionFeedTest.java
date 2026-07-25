@@ -95,7 +95,7 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    void a_live_domain_event_is_folded_with_empty_metadata_so_a_metadata_keyed_projection_fails_loud() {
+    void a_live_domain_event_is_folded_with_empty_metadata_so_a_stream_id_keyed_projection_throws() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
@@ -111,9 +111,10 @@ class CatchupProjectionFeedTest {
         feed.catchUp();
 
         // Metadata exists only where an event arrives as a CloudEvent. A live domain event has none, so it folds with
-        // EventMetadata.empty() and a projection keyed off metadata fails loud here rather than writing a wrong key.
-        // Pinned deliberately: driving a metadata-keyed projection from a domain-event feed is not supported live, and
-        // the reactor feed behaves identically. Change this test only alongside a decision to support it.
+        // EventMetadata.empty(). Keying on getStreamId() throws, because that accessor requires the extension to be
+        // present. This is not a general "fails loud" guarantee: getPosition() returns null on empty metadata, and a
+        // null id means "skip this event", so a position-keyed projection drops every live event silently instead.
+        // Both are the same unsupported combination, tracked in issue 389. The reactor feed behaves identically.
         assertThatThrownBy(() -> feed.accept(new Counted("3")))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("streamId extension is absent");
