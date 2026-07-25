@@ -50,6 +50,31 @@ public interface SagaStateStore<S extends @Nullable Object> {
     List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit);
 
     /**
+     * Instances with {@code status} whose {@link SagaEnvelope#updatedAt()} is strictly before {@code updatedBefore},
+     * least recently updated first, at most {@code limit} of them. This is what {@link SagaInstances} enumerates over,
+     * so every store must agree on the contract:
+     * <ul>
+     *   <li>{@code updatedBefore} is <em>exclusive</em>. Pass the current time to mean "every instance in this status",
+     *       or {@code now} minus a threshold to mean "every instance that has gone quiet for longer than that".</li>
+     *   <li>The order is ascending by {@code updatedAt}, so the stalest instance comes first. That is the useful end
+     *       for finding a stuck instance: the worst offenders arrive before {@code limit} truncates.</li>
+     *   <li>{@code limit} is a <em>bound, not a page</em>. There is no cursor: {@code updatedAt} persists at
+     *       millisecond precision, so instances saved in one executor tick tie, and resuming from the last row's
+     *       timestamp would silently drop the rest of a tie group. A caller that needs to walk everything should
+     *       raise {@code limit}, and one that needs true paging needs an ordering this method does not offer.</li>
+     *   <li>An instance whose {@code updatedAt} is {@code null} is never returned. The executor always stamps it, so
+     *       this only excludes a hand-built envelope, and it keeps a store whose query engine skips a missing field
+     *       from disagreeing with one that could have treated {@code null} as matching.</li>
+     * </ul>
+     * Unlike {@link #findWithDueTimers(Instant, int)} this reads whole instances, state included, because
+     * {@link SagaInstance#currentStep()} cannot be answered without it. Enumerating flow-saga instances therefore
+     * decodes their received logs, which is why {@code limit} is required rather than optional.
+     *
+     * @throws IllegalArgumentException if {@code limit} is not positive
+     */
+    List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit);
+
+    /**
      * Remove the instance, for retention tooling. Most deployments keep completed instances (with a TTL) instead, and that
      * is the recommended default for a reason: deleting an instance discards the dedup watermarks and the completed status
      * that make the instance absorbing. If the event source can still redeliver an event this instance already consumed (a

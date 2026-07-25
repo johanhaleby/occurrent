@@ -33,6 +33,7 @@ import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Query;
@@ -138,6 +139,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // Safe: the converter only ever sees domain events read out of a FlowState, whose element type is erased anyway.
         this.cloudEventConverter = (CloudEventConverter<Object>) cloudEventConverter;
         mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
+        mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
     }
 
     @Override
@@ -179,6 +181,23 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // decode no state, so the cost the exclusion above protects against is untouched.
         query.fields().include(ID).include(STATUS).include(TIMERS).include(NEXT_TIMER_FIRES_AT).include(VERSION)
                 .include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT);
+        return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
+    }
+
+    @Override
+    public List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+        Objects.requireNonNull(status, "status cannot be null");
+        Objects.requireNonNull(updatedBefore, "updatedBefore cannot be null");
+        if (limit < 1) {
+            // A Mongo limit of 0 means "no limit", so a caller passing 0 would get the whole collection instead of
+            // nothing. Reject it here rather than let that through as a surprise full scan.
+            throw new IllegalArgumentException("limit must be positive, was " + limit);
+        }
+        Query query = Query.query(where(STATUS).is(status.name()).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
+                .with(Sort.by(Sort.Direction.ASC, UPDATED_AT))
+                .limit(limit);
+        // No field projection here, unlike findWithDueTimers: SagaInstance.currentStep() is read off the state, so an
+        // instance has to come back whole. The {status, updatedAt} index still serves the predicate and the sort.
         return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
     }
 

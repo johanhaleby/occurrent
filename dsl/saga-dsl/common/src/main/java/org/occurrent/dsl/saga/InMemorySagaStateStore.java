@@ -20,6 +20,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -78,6 +79,27 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
             }
         }
         return due;
+    }
+
+    @Override
+    public List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+        requireNonNull(status, "status cannot be null");
+        requireNonNull(updatedBefore, "updatedBefore cannot be null");
+        if (limit < 1) {
+            throw new IllegalArgumentException("limit must be positive, was " + limit);
+        }
+        // Sort before truncating, so "the first limit" is the stalest instances the contract promises. Note that
+        // findWithDueTimers above breaks at limit mid-iteration and so returns an arbitrary subset; that is fine for a
+        // poller that will see the rest on its next tick, but it is not what this method promises.
+        return store.values().stream()
+                .filter(envelope -> envelope.status() == status)
+                .filter(envelope -> {
+                    Instant updatedAt = envelope.updatedAt();
+                    return updatedAt != null && updatedAt.isBefore(updatedBefore);
+                })
+                .sorted(Comparator.comparing(envelope -> requireNonNull(envelope.updatedAt())))
+                .limit(limit)
+                .toList();
     }
 
     @Override

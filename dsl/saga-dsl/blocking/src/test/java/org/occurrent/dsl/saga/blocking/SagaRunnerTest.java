@@ -219,6 +219,11 @@ class SagaRunnerTest {
             }
 
             @Override
+            public List<SagaEnvelope<OrderState>> findByStatus(@NonNull SagaStatus status, @NonNull Instant updatedBefore, int limit) {
+                return List.of();
+            }
+
+            @Override
             public void delete(@NonNull String sagaId) {
             }
         }
@@ -506,6 +511,11 @@ class SagaRunnerTest {
             public List<SagaEnvelope<OrderState>> findWithDueTimers(@NonNull Instant now, int limit) {
                 dueTimerQueries.incrementAndGet();
                 return delegate.findWithDueTimers(now, limit);
+            }
+
+            @Override
+            public List<SagaEnvelope<OrderState>> findByStatus(@NonNull SagaStatus status, @NonNull Instant updatedBefore, int limit) {
+                return delegate.findByStatus(status, updatedBefore, limit);
             }
 
             @Override
