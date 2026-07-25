@@ -151,6 +151,7 @@ public final class ReactiveHandover<L, R> {
      * how that relates to the buffered live payloads).
      */
     public Mono<Void> catchUp(Source<R> source) {
+        Objects.requireNonNull(source, "source cannot be null");
         Sinks.One<Void> catchupDone = Sinks.one();
 
         // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is

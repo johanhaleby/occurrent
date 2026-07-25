@@ -126,6 +126,7 @@ public final class BlockingHandover<L, R> {
      * @throws IllegalStateException  if the live buffer overflows during the catch-up.
      */
     public void accept(L payload) {
+        Objects.requireNonNull(payload, "payload cannot be null");
         synchronized (lock) {
             if (catchUpFailure != null) {
                 throw new CatchUpFailedException(catchUpFailure);
@@ -146,6 +147,7 @@ public final class BlockingHandover<L, R> {
      * payloads and go live, then mark the catch-up complete.
      */
     public void catchUp(Source<R> source) {
+        Objects.requireNonNull(source, "source cannot be null");
         try {
             if (source.isAlreadyCaughtUp()) {
                 drainBufferAndGoLive();
