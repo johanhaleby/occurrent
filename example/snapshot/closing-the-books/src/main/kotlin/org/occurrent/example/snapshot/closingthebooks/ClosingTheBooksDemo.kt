@@ -24,7 +24,7 @@ import org.occurrent.dsl.snapshot.SnapshotPolicy
 import org.occurrent.dsl.snapshot.blocking.SnapshotStore
 import org.occurrent.dsl.snapshot.blocking.SnapshotDecider
 import org.occurrent.dsl.snapshot.blocking.SnapshotDeciderApplicationService
-import org.occurrent.dsl.snapshot.SnapshotPolicies
+import org.occurrent.dsl.snapshot.blocking.SnapshotPolicies
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.net.URI

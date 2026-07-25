@@ -177,6 +177,31 @@ keeping the full criteria, for example
 A custom key that drops the boundary detail for brevity is allowed, but it trades away the automatic boundary-change
 invalidation, so it must be paired with a manual key or `schemaVersion` change when the boundary changes.
 
+## Amendment (2026-07-25): the blocking store moved to the blocking module, `whenTerminal` did not move
+
+This ADR placed the `SnapshotStore` in the common module alongside the descriptor. That is now corrected: the blocking
+`SnapshotStore` and `InMemorySnapshotStore` live in `dsl/snapshot-dsl/blocking` (package
+`org.occurrent.dsl.snapshot.blocking`), next to the blocking executors.
+
+**Why.** The blocking store and the reactor `ReactiveSnapshotStore` are the same port in two flavours, but only one of
+them sat in common, which `dsl/snapshot-dsl/reactor` depends on. So the reactor stack transitively imported a blocking
+interface it can never call, and the blocking flavour got the unprefixed name by accident of placement rather than by
+design. Placing each flavour in its own module mirrors how `application/service` already places `ApplicationService` in
+`blocking` and `reactor` with no prefix. The genuinely neutral types stay in common: `Snapshot`, `SnapshotDecision`,
+`SnapshotOptions`, `SnapshotPolicy`, `SnapshotView`, `DcbSnapshotView` and `DcbSnapshotKeys`.
+
+`SnapshotSupport` split along the same line. Its three store-taking methods (`maybeSave` and both `maybeSaveBestEffort`
+overloads) moved to the blocking module's `internal` package. The pure `resolveBase`, `isRedelivery` and `requireInt`
+stayed in `common/internal`, because `ReactiveSnapshotSupport` reuses them and the version-drift guard recorded in the
+2026-07-20 amendment must stay shared by both stacks.
+
+**`SnapshotPolicies` deliberately did not move, and must not.** Collapsing the identical-looking blocking and reactor
+copies into common was attempted in the same pass and reverted. Its single method `whenTerminal(Decider)` is
+decider-aware, and the decision recorded above keeps it out of common precisely so a `SnapshotView`-only consumer does
+not need `occurrent-decider` on its classpath. Collapsing it adds a non-optional `occurrent-decider` dependency to
+`snapshot-dsl-common`, which defeats the deciders-free path this ADR set out to preserve. A one-method class duplicated
+across the two executor modules is the intended price of that layering, not an oversight.
+
 ## Consequences
 
 - Snapshots are entirely opt-in. An application that does not use them pays nothing, because `fromStreamVersion` and
