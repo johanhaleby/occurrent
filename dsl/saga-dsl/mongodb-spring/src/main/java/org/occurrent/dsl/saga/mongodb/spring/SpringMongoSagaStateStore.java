@@ -173,7 +173,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // Project only the fields the poller needs to decide which timers are due. This deliberately excludes the state
         // (a flow saga's received log can be large), so the poll never pays to decode it. The executor re-loads the full
         // document with find(sagaId) before it processes a timer, which is the authoritative read the fire acts on.
-        query.fields().include(ID).include(STATUS).include(TIMERS).include(NEXT_TIMER_FIRES_AT).include(VERSION);
+        // The timestamps are included even though the poller ignores them: an envelope is also a SagaInstance, whose
+        // lifecycle accessors would otherwise read null here while the in-memory store (which cannot project) returns
+        // them, making one SPI method hand back differently-populated instances per store. They are three longs and
+        // decode no state, so the cost the exclusion above protects against is untouched.
+        query.fields().include(ID).include(STATUS).include(TIMERS).include(NEXT_TIMER_FIRES_AT).include(VERSION)
+                .include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT);
         return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
     }
 
