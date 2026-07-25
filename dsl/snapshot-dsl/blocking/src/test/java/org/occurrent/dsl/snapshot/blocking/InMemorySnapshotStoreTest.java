@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.snapshot;
+package org.occurrent.dsl.snapshot.blocking;
 
 import org.junit.jupiter.api.Test;
+import org.occurrent.dsl.snapshot.Snapshot;
 
 import java.util.Optional;
 

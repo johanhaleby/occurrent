@@ -24,7 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
-import org.occurrent.application.service.SynchronousEventDispatcher;
+import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.DomainEventConverter;
 import org.occurrent.domain.Name;

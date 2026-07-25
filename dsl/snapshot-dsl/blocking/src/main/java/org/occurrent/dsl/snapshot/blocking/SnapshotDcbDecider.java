@@ -20,7 +20,6 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.dcb.DcbDecider;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 
 import java.util.Objects;

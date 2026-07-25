@@ -25,8 +25,8 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
+import org.occurrent.dsl.snapshot.blocking.internal.SnapshotStoreSupport;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 
@@ -156,7 +156,7 @@ public final class SnapshotDcbDeciderApplicationService<E> {
         // head guard or self-heal is needed here, and eventsSinceSnapshot (tail + events) cannot go negative. The
         // Supplier-based best-effort is used only for symmetry with the stream executor.
         appendResult.ifPresent(result ->
-                SnapshotSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(), () -> {
+                SnapshotStoreSupport.maybeSaveBestEffort(store, key, options.schemaVersion(), options.policy(), () -> {
                     int eventsSinceSnapshot = tailSize.get() + decision.events().size();
                     return new SnapshotDecision<>(decision.state(), decision.events(), result.lastSequencePosition(), eventsSinceSnapshot);
                 }));

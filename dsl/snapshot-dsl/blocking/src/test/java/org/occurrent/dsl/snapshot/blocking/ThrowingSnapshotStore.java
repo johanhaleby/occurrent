@@ -17,7 +17,6 @@
 package org.occurrent.dsl.snapshot.blocking;
 
 import org.occurrent.dsl.snapshot.Snapshot;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 
 import java.util.Optional;
 

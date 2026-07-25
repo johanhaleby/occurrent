@@ -21,7 +21,7 @@ import org.occurrent.dsl.snapshot.Snapshot;
 import reactor.core.publisher.Mono;
 
 /**
- * The reactive counterpart to {@code org.occurrent.dsl.snapshot.SnapshotStore}: stores and retrieves the latest
+ * The reactive counterpart to {@code org.occurrent.dsl.snapshot.blocking.SnapshotStore}: stores and retrieves the latest
  * {@link Snapshot} for a key without blocking, so it composes into a reactive pipeline. A reactive application has no
  * blocking {@code MongoOperations}, so the reactive snapshot executors take this rather than the blocking store.
  * <p>

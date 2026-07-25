@@ -20,7 +20,7 @@ import com.mongodb.TransactionOptions;
 import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.application.service.TransactionExecutor;
+import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.eventstore.mongodb.nativedriver.ClientSessionHolder;
 
 import java.util.Objects;

@@ -31,7 +31,6 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.snapshot.Snapshot;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
