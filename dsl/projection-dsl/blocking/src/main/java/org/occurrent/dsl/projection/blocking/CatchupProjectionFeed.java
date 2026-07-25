@@ -248,15 +248,16 @@ public final class CatchupProjectionFeed<E> {
      * One delivery, live or replayed, with whatever metadata it had. Null metadata means none was given, which is what
      * picks the one-argument {@link MaterializedView} overload in {@link #deliver}.
      * <p>
-     * The canonical constructor is private so the only ways in are the three factories below. That keeps "a replayed
-     * delivery always has metadata" checkable: {@link #replayed} takes a non-null {@link EventMetadata} under
-     * {@code @NullMarked}, so a future edit cannot quietly construct a replayed delivery without it. That guarantee used
-     * to come from having two separate carrier types.
+     * Construct through the three factories rather than the canonical constructor. That keeps "a replayed delivery
+     * always has metadata" checkable, because {@link #replayed} takes a non-null {@link EventMetadata} under
+     * {@code @NullMarked} while the canonical constructor accepts a nullable one, so JSpecify flags a replayed delivery
+     * built without metadata. That guarantee used to come from having two separate carrier types.
+     * <p>
+     * The reactor feed's sibling carrier spells "none given" as {@link EventMetadata#empty()} rather than null, so the
+     * two are not interchangeable despite both engines now taking one type parameter. Reconciling them is tracked
+     * separately, see the 2026-07-27 amendment in ADR 62.
      */
     private record Delivered<E>(@Nullable EventMetadata metadata, E event) {
-
-        private Delivered {
-        }
 
         /** A live delivery the source gave no metadata for. */
         static <E> Delivered<E> live(E event) {

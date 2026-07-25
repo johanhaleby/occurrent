@@ -197,20 +197,7 @@ class CatchupProjectionFeedTest {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         List<String> callsReceived = new CopyOnWriteArrayList<>();
-        // Implements both MaterializedView overloads differently, to pin that accept(event) and accept(metadata, event)
-        // are two separate routes rather than accept(event) being rewritten into the metadata overload with an empty
-        // metadata.
-        MaterializedView<Counted> view = new MaterializedView<>() {
-            @Override
-            public void update(Counted event) {
-                callsReceived.add("event-only:" + event.eventId());
-            }
-
-            @Override
-            public void update(EventMetadata metadata, Counted event) {
-                callsReceived.add("metadata:" + event.eventId());
-            }
-        };
+        MaterializedView<Counted> view = overloadRecordingView(callsReceived);
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
                 "split-overload", view, Filter.all(), store, converter, Counted::eventId, null);
         feed.catchUp();
@@ -228,17 +215,7 @@ class CatchupProjectionFeedTest {
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
 
         List<String> callsReceived = new CopyOnWriteArrayList<>();
-        MaterializedView<Counted> view = new MaterializedView<>() {
-            @Override
-            public void update(Counted event) {
-                callsReceived.add("event-only:" + event.eventId());
-            }
-
-            @Override
-            public void update(EventMetadata metadata, Counted event) {
-                callsReceived.add("metadata:" + event.eventId());
-            }
-        };
+        MaterializedView<Counted> view = overloadRecordingView(callsReceived);
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
                 "replay-overload", view, Filter.all(), store, converter, Counted::eventId, null);
 
@@ -504,5 +481,20 @@ class CatchupProjectionFeedTest {
         public boolean exists(String subscriptionId) {
             return checkpoints.containsKey(subscriptionId);
         }
+    }
+
+    // Implements both MaterializedView overloads differently, so a test can tell which route a delivery took.
+    private static MaterializedView<Counted> overloadRecordingView(List<String> callsReceived) {
+        return new MaterializedView<>() {
+            @Override
+            public void update(Counted event) {
+                callsReceived.add("event-only:" + event.eventId());
+            }
+
+            @Override
+            public void update(EventMetadata metadata, Counted event) {
+                callsReceived.add("metadata:" + event.eventId());
+            }
+        };
     }
 }
