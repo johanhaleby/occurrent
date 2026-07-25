@@ -143,6 +143,26 @@ class BlockingHandoverTest {
                 .hasMessage("source cannot be null");
     }
 
+    @Test
+    void a_null_de_dup_key_fails_loud_on_both_the_replay_and_the_live_path() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = BlockingHandover.create(
+                delivered::add, payload -> null, CatchupThenLiveOptions.defaults(), NOUN);
+
+        // Without the guard this reaches BoundedIdCache, whose eviction queue rejects a null element, so it surfaces as
+        // a bare NullPointerException from inside the cache after the payload was already folded.
+        assertThatThrownBy(() -> handover.catchUp(source(List.of("R1"), false)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.dedupKeyRequired());
+
+        BlockingHandover<String> live = BlockingHandover.create(
+                delivered::add, payload -> null, CatchupThenLiveOptions.defaults(), NOUN);
+        live.catchUp(source(List.of(), true));
+        assertThatThrownBy(() -> live.accept("L1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.dedupKeyRequired());
+    }
+
     // --- helpers ---
 
     private static BlockingHandover<String> handover(List<String> delivered) {

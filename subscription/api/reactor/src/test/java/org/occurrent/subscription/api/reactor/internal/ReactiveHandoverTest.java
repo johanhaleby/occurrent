@@ -225,6 +225,28 @@ class ReactiveHandoverTest {
         assertThat(delivered).containsExactly("L2");
     }
 
+    @Test
+    void a_null_de_dup_key_fails_loud_on_both_the_replay_and_the_live_path() {
+        List<String> delivered = new ArrayList<>();
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> null, CatchupThenLiveOptions.defaults());
+
+        // Without the guard this reaches BoundedIdCache, whose eviction queue rejects a null element, so it surfaces as
+        // a bare NullPointerException from inside the cache rather than naming the cause.
+        StepVerifier.create(handover.catchUp(source(List.of("R1"), false)))
+                .verifyErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage(HandoverMessages.dedupKeyRequired()));
+
+        ReactiveHandover<String> live = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> null, CatchupThenLiveOptions.defaults());
+        live.catchUp(source(List.of(), true)).block();
+        StepVerifier.create(live.accept("L1"))
+                .verifyErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage(HandoverMessages.dedupKeyRequired()));
+    }
+
     // --- helpers ---
 
     private static ReactiveHandover<String> handover(List<String> delivered) {

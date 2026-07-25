@@ -128,7 +128,13 @@ public final class ReactiveHandover<T> {
                 ackSink.error(failure);
                 return;
             }
-            String key = dedupId.apply(payload);
+            String key;
+            try {
+                key = dedupKey(payload);
+            } catch (RuntimeException keyFailure) {
+                ackSink.error(keyFailure);
+                return;
+            }
             Item item = new Item(() -> deliver.apply(payload), key, ackSink);
             Sinks.EmitResult result = liveSink.tryEmitNext(item);
             if (result.isFailure()) {
@@ -204,7 +210,16 @@ public final class ReactiveHandover<T> {
     }
 
     private Item replayedItem(T replayed) {
-        return new Item(() -> deliver.apply(replayed), dedupId.apply(replayed), null);
+        return new Item(() -> deliver.apply(replayed), dedupKey(replayed), null);
+    }
+
+    @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.
+    private String dedupKey(T payload) {
+        String key = dedupId.apply(payload);
+        if (key == null) {
+            throw new IllegalStateException(HandoverMessages.dedupKeyRequired());
+        }
+        return key;
     }
 
     // A replayed payload has a null ack; a live payload carries the MonoSink whose completion lets the caller

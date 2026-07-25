@@ -140,10 +140,12 @@ public final class BlockingHandover<T> {
             }
             try (Stream<T> history = source.replay()) {
                 history.forEach(replayed -> {
-                    // Outside the monitor on purpose: only the cache write needs it, not the caller's fold.
+                    // Outside the monitor on purpose: only the cache write needs it, neither the caller's fold nor its
+                    // key function.
+                    String key = dedupKey(replayed);
                     deliver.accept(replayed);
                     synchronized (lock) {
-                        deliveredIds.add(dedupId.apply(replayed));
+                        deliveredIds.add(key);
                     }
                 });
             }
@@ -169,9 +171,18 @@ public final class BlockingHandover<T> {
         }
     }
 
+    @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.
+    private String dedupKey(T payload) {
+        String key = dedupId.apply(payload);
+        if (key == null) {
+            throw new IllegalStateException(HandoverMessages.dedupKeyRequired());
+        }
+        return key;
+    }
+
     // Must be called holding lock. Folds unless the payload was already folded by the replay or an earlier live copy.
     private void deliverLive(T payload) {
-        String key = dedupId.apply(payload);
+        String key = dedupKey(payload);
         if (deliveredIds.contains(key)) {
             return;
         }
