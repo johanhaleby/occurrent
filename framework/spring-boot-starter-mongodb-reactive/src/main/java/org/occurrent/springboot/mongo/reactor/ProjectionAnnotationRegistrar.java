@@ -34,7 +34,10 @@ import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.mongo.common.OccurrentProperties;
+import org.occurrent.springboot.mongo.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
@@ -167,7 +170,7 @@ class ProjectionAnnotationRegistrar {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
         CheckpointStorage catchupMarker = applicationContext.getBean(CheckpointStorage.class);
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker, catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ReactiveProjectionRunner<E> runner = stream ? ReactiveProjectionRunner.stream(model, converter) : ReactiveProjectionRunner.agnostic(model, converter);
         // The catch-up replay runs when the pipeline is subscribed; block until it has handed over to the live feed.
@@ -311,5 +314,18 @@ class ProjectionAnnotationRegistrar {
         } catch (Exception e) {
             throw new IllegalStateException("Failed to invoke @Projection factory %s#%s".formatted(bean.getClass().getName(), method.getName()), e);
         }
+    }
+
+    // Unset knobs keep their own default, so setting one does not reset the other.
+    private static CatchupThenLiveOptions catchupThenLiveOptions(OccurrentProperties properties) {
+        CatchupThenLiveProperties configured = properties.getSubscription().getCatchupThenLive();
+        Integer dedupCacheSize = configured.getDedupCacheSize();
+        Integer maxBufferedEvents = configured.getMaxBufferedEvents();
+        if (dedupCacheSize == null && maxBufferedEvents == null) {
+            return CatchupThenLiveOptions.defaults();
+        }
+        return new CatchupThenLiveOptions(
+                dedupCacheSize == null ? CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE : dedupCacheSize,
+                maxBufferedEvents == null ? CatchupThenLiveOptions.DEFAULT_MAX_BUFFERED_EVENTS : maxBufferedEvents);
     }
 }

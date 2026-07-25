@@ -26,6 +26,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import java.util.Objects;
@@ -46,6 +47,9 @@ import java.util.function.Function;
  * it (directly, or through {@code @Projection(source = PUSH)}), and feeds each received domain event to
  * {@link #accept(Object)} from its listener. Each registration is a {@link CatchupProjectionFeed}, so the
  * contract, live-resume owned by the broker, at-least-once idempotent folds, bounded buffering, is per projection.
+ * <p>
+ * The {@code occurrent.subscription.catchup-then-live.*} properties do <strong>not</strong> reach this feed. Your
+ * application declares this bean, so tune its catch-up by passing {@link CatchupThenLiveOptions} to the constructor.
  */
 @NullMarked
 public final class DomainEventFeed<E> {
@@ -54,6 +58,7 @@ public final class DomainEventFeed<E> {
     private final CloudEventConverter<E> converter;
     private final Function<E, String> eventId;
     private final @Nullable CheckpointStorage catchupMarker;
+    private final CatchupThenLiveOptions options;
     private final CopyOnWriteArrayList<CatchupProjectionFeed<E>> feeds = new CopyOnWriteArrayList<>();
     private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
 
@@ -67,10 +72,21 @@ public final class DomainEventFeed<E> {
      */
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
                            Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker) {
+        this(reader, converter, eventId, catchupMarker, CatchupThenLiveOptions.defaults());
+    }
+
+    /**
+     * As {@link #DomainEventFeed(PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage)}, with
+     * explicit handover {@code options} applied to every projection registered on this feed.
+     */
+    public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
+                           Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker,
+                           CatchupThenLiveOptions options) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
         this.converter = Objects.requireNonNull(converter, "converter cannot be null");
         this.eventId = Objects.requireNonNull(eventId, "eventId cannot be null");
         this.catchupMarker = catchupMarker;
+        this.options = Objects.requireNonNull(options, "options cannot be null");
     }
 
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId) {
@@ -99,7 +115,7 @@ public final class DomainEventFeed<E> {
         if (registeredIds.contains(id)) {
             throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
         }
-        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker);
+        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker, options);
         // Reserve the id only once the feed exists, so a failed registration never permanently burns the id.
         if (!registeredIds.add(id)) {
             throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
