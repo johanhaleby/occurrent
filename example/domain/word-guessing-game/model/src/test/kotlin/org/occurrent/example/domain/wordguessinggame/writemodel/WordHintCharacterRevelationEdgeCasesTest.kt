@@ -55,4 +55,35 @@ class WordHintCharacterRevelationEdgeCasesTest {
         // Then
         Assertions.assertThat(events).isEmpty()
     }
+
+    @Test
+    fun `reveal character in word hint when player guessed the wrong word doesn't reveal any character when only two characters remain obfuscated`() {
+        // Given
+        val wordHintData = WordHintData(UUID.randomUUID(), "pear", currentlyRevealedPositions = setOf(1, 2))
+
+        // When
+        val events = WordHintCharacterRevelation.revealCharacterInWordHintWhenPlayerGuessedTheWrongWord(wordHintData).toList()
+
+        // Then
+        Assertions.assertThat(events).isEmpty()
+    }
+
+    @Test
+    fun `reveal character in word hint when player guessed the wrong word reveals one character when three characters remain obfuscated`() {
+        // Given
+        val wordHintData = WordHintData(UUID.randomUUID(), "apple", currentlyRevealedPositions = setOf(1, 2))
+
+        // When
+        val events = WordHintCharacterRevelation.revealCharacterInWordHintWhenPlayerGuessedTheWrongWord(wordHintData).toList()
+
+        // Then
+        Assertions.assertThat(events).hasSize(1)
+        val e1 = events.single()
+        assertAll(
+                { Assertions.assertThat(e1.character).isIn(wordHintData.wordToGuess.toCharArray().asIterable()) },
+                { Assertions.assertThat(e1.character).isNotEqualTo(WordHintCharacterRevelation.dash) },
+                { Assertions.assertThat(e1.characterPositionInWord).isNotIn(wordHintData.currentlyRevealedPositions) },
+                { Assertions.assertThat(e1.characterPositionInWord - 1).isIn(wordHintData.wordToGuess.indices) },
+        )
+    }
 }

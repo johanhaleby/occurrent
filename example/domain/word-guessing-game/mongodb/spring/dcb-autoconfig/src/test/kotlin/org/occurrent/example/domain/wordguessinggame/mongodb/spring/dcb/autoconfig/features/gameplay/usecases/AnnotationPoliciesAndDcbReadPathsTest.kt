@@ -147,6 +147,9 @@ class AnnotationPoliciesAndDcbReadPathsTest {
         assertThat(events<PlayerWasAwardedPointsForGuessingTheRightWord>(GameDcbQueries.pointsCriteria(gameId))).hasSize(1)
     }
 
+    // Every word needs at least five characters. The domain keeps two characters obfuscated, so a wrong guess
+    // reveals nothing once only two remain, and this test waits for a reveal after a wrong guess - a shorter word
+    // would make that wait unsatisfiable. See WordHintCharacterRevelationEdgeCasesTest for the rule.
     private fun wordList() = WordList(
         WordCategory("test"),
         listOf(Word("alpha"), Word("bravo"), Word("crane"), Word("delta"))
