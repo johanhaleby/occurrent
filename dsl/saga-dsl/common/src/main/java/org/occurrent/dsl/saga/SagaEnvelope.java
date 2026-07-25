@@ -40,6 +40,11 @@ import java.util.OptionalLong;
  * @param createdAt         when the instance was created
  * @param updatedAt         when the instance was last saved
  * @param completedAt       when the instance completed, or {@code null} while active
+ * @param currentStep       the step a flow saga is waiting in, derived from {@code state} whenever it is present. A
+ *                          store may pass this directly, but only when it passes a {@code null} state: that is how a
+ *                          store answers {@link SagaInstance#currentStep()} from a projected read without loading the
+ *                          state at all. Whenever {@code state} is present the constructor re-derives this and ignores
+ *                          what was passed, so the two can never disagree.
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
@@ -51,11 +56,18 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable Long positionWatermark,
                                                        @Nullable Instant createdAt,
                                                        @Nullable Instant updatedAt,
-                                                       @Nullable Instant completedAt) implements SagaInstance {
+                                                       @Nullable Instant completedAt,
+                                                       @Nullable String currentStep) implements SagaInstance {
 
     public SagaEnvelope {
         timers = List.copyOf(timers);
         streamWatermarks = Map.copyOf(streamWatermarks);
+        if (state != null) {
+            // currentStep duplicates something state already knows, which is the kind of field that drifts. Re-derive it
+            // here rather than trusting callers to keep the two aligned: a passed value is honoured only when there is no
+            // state to derive from, which is exactly the projected-read case a store needs it for.
+            currentStep = state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
+        }
     }
 
     /** A pending timer: its name and when it should fire (epoch millis). */
@@ -85,14 +97,4 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         return earliest.isPresent() ? Instant.ofEpochMilli(earliest.getAsLong()) : null;
     }
 
-    /**
-     * {@inheritDoc}
-     * <p>
-     * Read off {@code state}, so this is {@code null} on an envelope whose state was not loaded, as is the case for the
-     * ones {@link SagaStateStore#findWithDueTimers(Instant, int)} returns.
-     */
-    @Override
-    public @Nullable String currentStep() {
-        return state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
-    }
 }

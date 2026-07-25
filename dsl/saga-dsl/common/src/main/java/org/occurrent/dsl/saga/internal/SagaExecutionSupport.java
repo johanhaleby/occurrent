@@ -164,7 +164,9 @@ public final class SagaExecutionSupport {
                 positionWatermark,
                 createdAt,
                 now,
-                terminal ? now : null);
+                terminal ? now : null,
+                // Derived from nextState by the envelope's constructor; nothing sensible to pass here.
+                null);
         return Outcome.processed(next, commands, expectedVersion);
     }
 

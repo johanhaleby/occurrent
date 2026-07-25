@@ -41,15 +41,15 @@ class InMemorySagaStateStoreTest {
     private final InMemorySagaStateStore<String> store = new InMemorySagaStateStore<>();
 
     private static SagaEnvelope<String> envelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null, null);
     }
 
     private static SagaEnvelope<String> completedEnvelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW, null);
     }
 
     private static SagaEnvelope<String> activeEnvelopeUpdatedAt(String sagaId, Instant updatedAt) {
-        return new SagaEnvelope<>(sagaId, "a", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null);
+        return new SagaEnvelope<>(sagaId, "a", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null);
     }
 
     @Nested
@@ -153,7 +153,7 @@ class InMemorySagaStateStoreTest {
             Instant createdAt = NOW.minusSeconds(120);
             Instant updatedAt = NOW.minusSeconds(30);
             SagaEnvelope<String> saved = new SagaEnvelope<>("due", "a", SagaStatus.ACTIVE, 1,
-                    List.of(new TimerEntry("t", NOW.toEpochMilli())), Map.of(), null, createdAt, updatedAt, null);
+                    List.of(new TimerEntry("t", NOW.toEpochMilli())), Map.of(), null, createdAt, updatedAt, null, null);
             store.compareAndSave("due", saved, 0);
 
             SagaEnvelope<String> found = store.findWithDueTimers(NOW, 10).getFirst();
@@ -265,7 +265,7 @@ class InMemorySagaStateStoreTest {
         @Test
         void excludes_an_envelope_with_a_null_updatedAt() {
             SagaEnvelope<String> noUpdatedAt = new SagaEnvelope<>("no-updated-at", "a", SagaStatus.ACTIVE, 1,
-                    List.of(), Map.of(), null, NOW, null, null);
+                    List.of(), Map.of(), null, NOW, null, null, null);
             store.compareAndSave("no-updated-at", noUpdatedAt, 0);
 
             assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(60), 10)).isEmpty();
@@ -281,7 +281,7 @@ class InMemorySagaStateStoreTest {
             Instant updatedAt = NOW.minusSeconds(30);
             Instant completedAt = NOW;
             SagaEnvelope<String> saved = new SagaEnvelope<>("s1", "a", SagaStatus.COMPLETED, 1, List.of(), Map.of(), null,
-                    createdAt, updatedAt, completedAt);
+                    createdAt, updatedAt, completedAt, null);
             store.compareAndSave("s1", saved, 0);
 
             SagaEnvelope<String> found = store.find("s1").orElseThrow();

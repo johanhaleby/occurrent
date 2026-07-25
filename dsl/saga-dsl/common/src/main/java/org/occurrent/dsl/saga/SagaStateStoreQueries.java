@@ -61,16 +61,16 @@ public interface SagaStateStoreQueries<S extends @Nullable Object> {
      *       this only excludes a hand-built envelope, and it keeps a store whose query engine skips a missing field
      *       from disagreeing with one that could have treated {@code null} as matching.</li>
      * </ul>
-     * Unlike {@link SagaStateStore#findWithDueTimers(Instant, int)} this reads whole instances, state included, because
-     * {@link SagaInstance#currentStep()} cannot be answered without it. Enumerating flow-saga instances therefore
-     * decodes their received logs, which is why {@code limit} is required rather than optional.
+     * Every returned envelope must answer every {@link SagaInstance} member, {@link SagaInstance#currentStep()} included.
+     * It need not carry the saga's {@code state}, which is not part of that view: a store is expected to answer this
+     * without reading state at all, so that enumeration costs the same whether an instance carries one event of history
+     * or a hundred. {@link SagaEnvelope#state()} may therefore be {@code null} on these results even for a healthy
+     * instance; use {@link SagaStateStore#find(String)} when the state itself is wanted.
      * <p>
-     * Because this is the observation path, an instance whose state can no longer be decoded must be <em>reported
-     * without its state</em> rather than making the whole enumeration fail. One instance holding, say, a received event
-     * whose class was renamed away would otherwise take down the progress view for every caller, at the exact moment
-     * someone is looking into what went wrong. Such a row still answers every {@link SagaInstance} member except
-     * {@link SagaInstance#currentStep()}. This is the opposite of {@link SagaStateStore#find(String)}, which must keep
-     * failing loudly, because the executor loads an instance in order to fold and save it.
+     * A useful consequence: because observation reads no state, an instance whose state can no longer be decoded (a
+     * received event whose class was renamed away, say) is still reported with its lifecycle intact, rather than making
+     * the whole enumeration throw at the exact moment someone is looking into what went wrong. {@code find(sagaId)} does
+     * still fail loudly on such an instance, which is correct: the executor loads one in order to fold and save it.
      *
      * @throws IllegalArgumentException if {@code limit} is not positive
      */

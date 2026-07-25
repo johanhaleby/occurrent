@@ -44,7 +44,7 @@ class SagaInstancesTest {
     private static final class CoreOnlyStore implements SagaStateStore<String> {
 
         private final SagaEnvelope<String> only = new SagaEnvelope<>("s1", "a", SagaStatus.ACTIVE, 1,
-                List.of(), Map.of(), null, NOW, NOW, null);
+                List.of(), Map.of(), null, NOW, NOW, null, null);
 
         @Override
         public Optional<SagaEnvelope<String>> find(String sagaId) {
@@ -99,7 +99,7 @@ class SagaInstancesTest {
         @Test
         void enumerates_through_the_capability() {
             store.compareAndSave("s1", new SagaEnvelope<>("s1", "a", SagaStatus.ACTIVE, 1,
-                    List.of(), Map.of(), null, NOW, NOW, null), 0);
+                    List.of(), Map.of(), null, NOW, NOW, null, null), 0);
 
             assertThat(instances.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10))
                     .extracting(SagaInstance::sagaId).containsExactly("s1");

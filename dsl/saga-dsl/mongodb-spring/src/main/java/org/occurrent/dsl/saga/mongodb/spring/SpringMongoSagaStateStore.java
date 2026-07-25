@@ -83,6 +83,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String TIMER_NAME = "name";
     private static final String TIMER_FIRES_AT = "firesAtEpochMilli";
     private static final String NEXT_TIMER_FIRES_AT = "nextTimerFiresAt";
+    private static final String CURRENT_STEP = "currentStep";
     private static final String STREAM_WATERMARKS = "streamWatermarks";
     private static final String POSITION_WATERMARK = "positionWatermark";
     private static final String CREATED_AT = "createdAt";
@@ -180,12 +181,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // Project only the fields the poller needs to decide which timers are due. This deliberately excludes the state
         // (a flow saga's received log can be large), so the poll never pays to decode it. The executor re-loads the full
         // document with find(sagaId) before it processes a timer, which is the authoritative read the fire acts on.
-        // The timestamps are included even though the poller ignores them: an envelope is also a SagaInstance, whose
-        // lifecycle accessors would otherwise read null here while the in-memory store (which cannot project) returns
-        // them, making one SPI method hand back differently-populated instances per store. They are three longs and
-        // decode no state, so the cost the exclusion above protects against is untouched.
-        query.fields().include(ID).include(STATUS).include(TIMERS).include(NEXT_TIMER_FIRES_AT).include(VERSION)
-                .include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT);
+        // The timestamps and currentStep are included even though the poller ignores them: an envelope is also a
+        // SagaInstance, and every member of that view must be populated on any envelope a store hands back. They are
+        // three longs and a string, and decode no state, so the cost the exclusion above protects against is untouched.
+        projectEverySagaInstanceMember(query);
         return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
     }
 
@@ -201,11 +200,18 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         Query query = Query.query(where(STATUS).is(status.name()).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
                 .with(Sort.by(Sort.Direction.ASC, UPDATED_AT))
                 .limit(limit);
-        // No field projection here, unlike findWithDueTimers: SagaInstance.currentStep() is read off the state, so an
-        // instance has to come back whole. The {status, updatedAt} index still serves the predicate and the sort.
-        return mongoOperations.find(query, Document.class, collectionName).stream()
-                .map(this::toEnvelopeToleratingUndecodableState)
-                .toList();
+        // Projected exactly like the due-timer query: every SagaInstance member and no state. currentStep is a top-level
+        // field, so observing a flow saga never decodes its received log. That also means this query cannot fail on an
+        // instance whose state no longer decodes, because it never decodes any.
+        projectEverySagaInstanceMember(query);
+        return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
+    }
+
+    // The fields backing SagaInstance, which is the whole observable surface of an instance: enough for both enumeration
+    // queries and deliberately excluding the state, whose decode is the expensive and failure-prone part.
+    private static void projectEverySagaInstanceMember(Query query) {
+        query.fields().include(ID).include(STATUS).include(VERSION).include(TIMERS).include(NEXT_TIMER_FIRES_AT)
+                .include(CURRENT_STEP).include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT);
     }
 
     @Override
@@ -228,6 +234,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         document.append(TIMERS, timers);
         envelope.earliestTimerFiresAtEpochMilli().ifPresent(next -> document.append(NEXT_TIMER_FIRES_AT, next));
+        // Denormalized beside nextTimerFiresAt and for the same reason: it lets a query answer SagaInstance.currentStep()
+        // without decoding the state, which for a flow saga means not decoding its received log.
+        if (envelope.currentStep() != null) {
+            document.append(CURRENT_STEP, envelope.currentStep());
+        }
         document.append(STREAM_WATERMARKS, new Document(new LinkedHashMap<>(envelope.streamWatermarks())));
         if (envelope.positionWatermark() != null) {
             document.append(POSITION_WATERMARK, envelope.positionWatermark());
@@ -278,40 +289,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     private SagaEnvelope<S> toEnvelope(Document document) {
-        return toEnvelope(document, readState(document.get(STATE)));
-    }
-
-    /**
-     * Like {@link #toEnvelope(Document)}, but a state that can no longer be decoded yields an envelope with a
-     * {@code null} state instead of throwing.
-     * <p>
-     * Only {@code findByStatus} uses this, because observation must not be the thing that breaks when an instance goes
-     * bad. A stored received event whose class was renamed away, or a state document that no longer matches its type,
-     * would otherwise make one poisoned instance throw for every caller enumerating the collection, taking the whole
-     * progress view down exactly when someone is looking for what is wrong, and leaving no way out except deleting the
-     * document through the SPI this feature exists to avoid using. The degraded row still answers every
-     * {@code SagaInstance} member except {@code currentStep()}, and in a stuck-instance report it is likely the most
-     * interesting row of all. This mirrors how the Mongo snapshot stores degrade rather than fail a command.
-     * <p>
-     * {@code find(sagaId)} deliberately keeps throwing: the executor loads an instance in order to fold and save it, and
-     * silently handing it a null state there would restart the process from its initial state and re-dispatch commands.
-     */
-    private SagaEnvelope<S> toEnvelopeToleratingUndecodableState(Document document) {
-        S state;
-        try {
-            // Scoped to the decode alone. The documents are already materialized by the query above, so nothing in here
-            // does I/O and a connectivity failure still propagates from the find itself.
-            state = readState(document.get(STATE));
-        } catch (RuntimeException e) {
-            log.warn("Could not decode the state of saga instance '{}' in collection '{}', reporting it without state. Its lifecycle is still observable, but currentStep() reads null.",
-                    document.getString(ID), collectionName, e);
-            state = null;
-        }
-        return toEnvelope(document, state);
-    }
-
-    private SagaEnvelope<S> toEnvelope(Document document, S state) {
         String sagaId = document.getString(ID);
+        S state = readState(document.get(STATE));
         SagaStatus status = SagaStatus.valueOf(document.getString(STATUS));
         long version = document.getLong(VERSION);
 
@@ -330,8 +309,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         Long positionWatermark = document.containsKey(POSITION_WATERMARK) ? document.getLong(POSITION_WATERMARK) : null;
 
+        // currentStep is only honoured when the state was projected away; with a state present the envelope re-derives it.
         return new SagaEnvelope<>(sagaId, state, status, version, timers, streamWatermarks, positionWatermark,
-                readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT));
+                readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT),
+                document.getString(CURRENT_STEP));
     }
 
     @SuppressWarnings("unchecked")

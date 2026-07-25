@@ -58,7 +58,7 @@ The interface is **not generic**. No member needs the state type, so a type para
 `SagaEnvelope.Status` becomes a top-level `SagaStatus`, so the user-facing view does not name the store's envelope type
 in its own signature. The persisted values are unchanged.
 
-### `SagaStateStore.findByStatus(SagaStatus, Instant updatedBefore, int limit)`
+### `findByStatus`, on an optional `SagaStateStoreQueries` capability
 
 One purpose-shaped method, not a query object or filter language. A query object would put a translation burden on every
 store and invite a surface nobody asked for; two purpose-named methods (list-active and find-stalled) would be the same
@@ -78,42 +78,67 @@ implementation:
   hand-built envelope, and it stops a store whose query engine skips a missing field from disagreeing with one that
   could read null as matching.
 
-Unlike `findWithDueTimers` it reads whole instances, because `currentStep` cannot be answered without the state. That is
-why `limit` is required rather than optional: enumerating flow-saga instances decodes their received logs.
+**It is an optional capability, not part of the core `SagaStateStore`.** The executor never calls it: running a saga needs
+only `find`, `compareAndSave` and `findWithDueTimers`. AGENTS.md requires public APIs to be small capability interfaces
+composed together, and this repository already does exactly that for the analogous case, where `EventStore` carries the
+minimal contract and `EventStoreQueries`, `EventStoreOperations` and `ReadEventStreamWithFilter` are optional capabilities
+layered on. `SagaStateStoreQueries` follows that convention, standalone rather than extending the store, and is named for
+the store it extends the way `EventStoreQueries` is.
 
-The due-timer projection is widened to include the three timestamps. It omitted them, so its envelopes read null for all
-three while the in-memory store returned them — invisible while only the poller consumed them, but a contract violation
-once an envelope is also a `SagaInstance`.
+An earlier draft of this ADR put the method on the core interface and only ever argued about its *shape*, never about
+where it belonged. The objection that any store able to do `findWithDueTimers` can surely do `findByStatus` is wrong, and
+the reason is instructive: `findWithDueTimers` may return instances in **any order at all** — the in-memory store iterates
+a hash map and breaks at `limit` — while `findByStatus` demands ascending `updatedAt`. Ordering is a genuinely new demand
+on a store, which is precisely why the in-memory implementation had to grow a sort. A store can serve the executor
+faithfully and still be unable to enumerate.
 
-The invariant that motivates it is specifically **every `SagaInstance` member must be populated on every envelope a store
-returns**, not the broader "one SPI method must not hand back differently-populated envelopes per store". The broader
-version is not true and is not being claimed: `streamWatermarks` and `positionWatermark` still differ between the stores
-on the due-timer path, because they are executor bookkeeping that the poller does not read. A TCK author should assert the
-narrow rule.
+`SagaInstances` therefore takes a plain `SagaStateStore` and checks for the capability when enumeration is *attempted*,
+not at construction: a store that only lacks enumeration can still answer every by-id question, and refusing to build the
+facade would deny it that. The failure names the store's class and the interface it must implement, following the
+filtered-read precedent in `GenericApplicationService`. This also dissolves a risk an earlier version of this ADR listed:
+adding the method no longer breaks an out-of-tree store, and the SQL store in
+[#411](https://github.com/johanhaleby/occurrent/issues/411) can ship without observation support.
 
-**An undecodable state must not fail the whole enumeration.** `findByStatus` decodes state per instance, and a stored
-received event whose class was renamed away, or a state document that no longer matches its type, throws. One such
-instance would otherwise take the progress view down for every caller, at the moment someone is looking into what went
-wrong, with no way out but deleting the document through the SPI this feature exists to avoid. So `findByStatus` catches a
-decode failure per instance, logs at WARN naming the saga id, and reports that instance with a null state; every
-`SagaInstance` member except `currentStep()` is still correct, and in a stuck-instance report that row is likely the most
-interesting one. The catch is scoped to the decode step alone so a connectivity error still propagates, matching how the
-Mongo snapshot stores degrade rather than fail a command. `find(sagaId)` deliberately keeps throwing: the executor loads
-an instance in order to fold and save it, and a silently null state there would restart the process and re-dispatch its
-commands.
+### Observation reads no saga state
 
-Note the inversion this creates: `findWithDueTimers` is immune because it projects state away, so a poisoned instance
-would break observation while execution carried on unaffected.
+Both enumeration queries project the state away, and `currentStep` is denormalized to a top-level document field written
+on save — exactly as `nextTimerFiresAt` already was, for exactly the same reason: so a query need not decode a structure
+to answer one derived question about it. `findWithDueTimers` avoided decoding `timers` that way; `findByStatus` now avoids
+decoding a flow saga's received log.
 
-**Why not denormalize `currentStep` instead.** There is a direct precedent for the better fix: `nextTimerFiresAt` is
-already a top-level derived field written on save, existing precisely so the due-timer query need not decode `timers`.
-Doing the same for `currentStep` would let `findByStatus` field-project, which would remove the whole-instance read cost,
-the poller's `currentStep` carve-out, and the degradation case above all at once. It is deliberately **not** done here,
-for the maintainer to weigh: it adds a second derived duplicate of state to a public record's persisted form, with drift
-potential against `state.currentStep()` if a future write path forgets it, and it is a storage-format change rather than
-the additive API change this ADR is about. Projecting the *nested* `state.currentStep` is not a middle ground and is
-worse: the read path would reconstruct a `FlowStateImpl` with a silently empty `received()` and a defaulted
-`windowStart`, which is a corrupted state object rather than an absent one.
+This is what makes the governing invariant true: **every envelope a store returns answers every `SagaInstance` member.**
+Not the broader "no envelope differs between stores" — that is false and is not claimed, since `streamWatermarks` and
+`positionWatermark` still differ on the due-timer path, being executor bookkeeping the poller does not read. The narrow
+rule is the one a TCK should assert. `state()` is deliberately outside it: it is not a `SagaInstance` member, which is
+exactly why the enumerations are free to project it away, and `find(sagaId)` remains the way to get it.
+
+Three problems disappear together as a result, which is why this was worth a storage-format change rather than an
+API-only one:
+
+- The cost. Enumeration is now a bounded indexed read whose price does not scale with how much history each instance
+  carries. An earlier version warned callers not to poll `findByStatus` at subscription frequency because 100 instances
+  against the default 100-event history window meant on the order of ten thousand CloudEvent deserializations. That
+  warning is gone because the cost is.
+- The failure mode. Because no state is decoded, an instance whose state can no longer be read — a received event whose
+  class was renamed away, a state document that no longer matches its type — is simply reported with its lifecycle
+  intact. A previous iteration caught the decode failure per instance and degraded to a null state with a warning; that
+  path is deleted rather than kept, because there is no longer anything to tolerate. `find(sagaId)` still throws on such
+  an instance, which is correct: the executor loads one in order to fold and save it, and a silently null state there
+  would restart the process from its initial state and re-dispatch its commands.
+- The carve-out. `currentStep` used to be derived from `state` on access, so a poll that projected state away could not
+  answer it, and "every envelope is a fully populated `SagaInstance`" held only with an exemption for the due-timer
+  query. There is no exemption now.
+
+`currentStep` becoming a real record component introduces the one hazard a denormalized duplicate always has: it can
+drift from `state.currentStep()`. That is prevented structurally rather than by discipline. `SagaEnvelope`'s compact
+constructor re-derives `currentStep` from `state` whenever the state is present and honours a passed value only when the
+state is `null` — which is exactly and only the projected-read case a store needs it for. A caller cannot construct an
+envelope whose `currentStep` disagrees with its state, because a record compact constructor can reassign the component
+before it is bound to the field, the same mechanism the existing `List.copyOf(timers)` defensive copy already uses.
+
+Projecting the *nested* `state.currentStep` instead was rejected as strictly worse rather than a middle ground: the read
+path would reconstruct a `FlowStateImpl` with a silently empty `received()` and a defaulted `windowStart`, which is a
+corrupted state object rather than an absent one.
 
 ### `SagaInstances`, reachable from both paths
 
@@ -179,8 +204,9 @@ before a second implementation exists also avoids writing it twice.
 
 - A saga's lifecycle is observable on both execution stacks without exposing the executor's bookkeeping, and a
   stuck-instance check is expressible: active instances not updated for longer than a threshold, stalest first.
-- Every `SagaStateStore` implementation gains a method. Two in-tree stores and two test doubles, and out-of-tree
-  implementors would break — acceptable only because the DSL is unreleased.
+- No `SagaStateStore` implementation is obliged to change. Enumeration is an optional capability, so an existing or
+  out-of-tree store keeps compiling and simply cannot be enumerated; both in-tree stores opt in, and neither test double
+  needed to, which is the clearest evidence the split was at the right altitude.
 - Mongo gains a `{status, updatedAt}` index beside the due-timer one. Occurrent creates missing indexes and never
   removes them, so this is additive on an existing collection.
 - The ordering and boundary contract is the likeliest place for a defect, since it must hold identically across stores
@@ -193,14 +219,13 @@ before a second implementation exists also avoids writing it twice.
   `Instant`s and the executor stamps a possibly sub-millisecond one. No store is more inclusive than the boundary, but an
   instance updated inside the same millisecond may be excluded. The javadoc says so, and a TCK asserting sub-millisecond
   boundary behaviour would fail on Mongo for reasons that are not defects.
-- Enumerating flow-saga instances decodes their received logs. `limit` is mandatory for that reason, and a caller
-  wanting cheap counts should not use this method.
-- One residual of the projection issue is accepted rather than fixed: `findWithDueTimers` still omits the state, so
-  `currentStep` reads null on an envelope it returns. Including the state would defeat the projection's entire purpose.
-  `SagaInstances` never exposes such an envelope, since it only calls `find` and `findByStatus` — but `SagaStateStore` is
-  public and has a public `inMemory()` factory, so an application monitoring its own store can call `findWithDueTimers`
-  directly and see one. The envelope's javadoc says so at the accessor. A store TCK asserting "every returned envelope is
-  a fully populated `SagaInstance`" would have to exempt the due-timer query.
+- Enumeration reads no saga state, so its cost does not scale with per-instance history. `limit` still bounds the result
+  set, but it no longer bounds a decode cost, and there is no longer a reason to avoid a periodic sweep.
+- "Every envelope answers every `SagaInstance` member" holds without exemption, for the first time. A store TCK can
+  assert it flatly across both enumeration methods. The price is a persisted derived field, `currentStep`, whose drift is
+  prevented by the envelope's constructor rather than by convention.
+- `SagaEnvelope` gained an eleventh component, so every construction site changed. Free to do only because the saga DSL
+  is unreleased; the constructor re-derivation means almost every caller passes `null` and gets the right value anyway.
 - The new `{status, updatedAt}` index is maintained on **every** `compareAndSave`, because `updatedAt` changes on every
   save. Saga writes therefore carry index-maintenance cost for a query that only observation uses. Accepted as the price
   of an indexed enumeration, but it is a write-path cost paid for a read-path feature, so a deployment that never observes

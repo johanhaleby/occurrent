@@ -44,7 +44,7 @@ class SagaEnvelopeTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
 
     private static SagaEnvelope<String> envelopeWithTimers(List<TimerEntry> timers) {
-        return new SagaEnvelope<>("s1", "state", SagaStatus.ACTIVE, 1, timers, Map.of(), null, NOW, NOW, null);
+        return new SagaEnvelope<>("s1", "state", SagaStatus.ACTIVE, 1, timers, Map.of(), null, NOW, NOW, null, null);
     }
 
     @Nested
@@ -81,7 +81,7 @@ class SagaEnvelopeTest {
         void is_populated_for_a_flow_saga_whose_state_is_a_FlowState() {
             FlowStateImpl<Object> flowState = new FlowStateImpl<>("awaiting-payment", List.of(), 1, 0, false, null, ActionKind.NONE, -1);
             SagaEnvelope<FlowStateImpl<Object>> envelope = new SagaEnvelope<>("s1", flowState, SagaStatus.ACTIVE, 1,
-                    List.of(), Map.of(), null, NOW, NOW, null);
+                    List.of(), Map.of(), null, NOW, NOW, null, null);
 
             assertThat(envelope.currentStep()).isEqualTo("awaiting-payment");
         }
@@ -93,7 +93,7 @@ class SagaEnvelopeTest {
 
         @Test
         void is_null_when_the_state_itself_is_null() {
-            SagaEnvelope<String> envelope = new SagaEnvelope<>("s1", null, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, NOW, NOW, null);
+            SagaEnvelope<String> envelope = new SagaEnvelope<>("s1", null, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, NOW, NOW, null, null);
 
             assertThat(envelope.currentStep()).isNull();
         }

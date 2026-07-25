@@ -68,11 +68,10 @@ public final class SagaInstances {
      *
      * @throws UnsupportedOperationException if the store cannot enumerate instances
      * <p>
-     * <strong>This is not a cheap call for a flow saga, so do not poll it at subscription frequency.</strong> Instances
-     * come back whole because {@link SagaInstance#currentStep()} is read off the state, and a flow saga's state carries
-     * its received events. {@code limit} bounds the number of <em>instances</em>, not the work per instance: with
-     * {@code limit} 100 against the default 100-event history window that is on the order of ten thousand CloudEvent
-     * deserializations. Size it for a dashboard refresh or a periodic stuck-instance sweep.
+     * A store is expected to answer this without reading saga state, so the cost is a bounded indexed query rather than
+     * one proportional to how much history each instance carries. The Mongo store projects only the fields behind
+     * {@link SagaInstance} and reads {@code currentStep} from a denormalized field, so enumerating flow-saga instances
+     * does not decode their received events.
      */
     public List<SagaInstance> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
         requireNonNull(status, "status cannot be null");

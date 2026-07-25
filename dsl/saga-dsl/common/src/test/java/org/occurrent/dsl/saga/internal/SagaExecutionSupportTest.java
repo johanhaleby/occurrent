@@ -128,7 +128,7 @@ class SagaExecutionSupportTest {
 
     private static SagaEnvelope<OrderState> activeEnvelope(String sagaId, OrderState state, long version, List<TimerEntry> timers,
                                                             Map<String, Long> streamWatermarks, Long positionWatermark) {
-        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, streamWatermarks, positionWatermark, NOW, NOW, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, streamWatermarks, positionWatermark, NOW, NOW, null, null);
     }
 
     @Nested
@@ -173,7 +173,7 @@ class SagaExecutionSupportTest {
     class TerminalInstance {
 
         private SagaEnvelope<OrderState> completed(OrderState state) {
-            return new SagaEnvelope<>("o1", state, SagaStatus.COMPLETED, 2, List.of(), Map.of(), null, NOW.minusSeconds(120), NOW.minusSeconds(60), NOW.minusSeconds(60));
+            return new SagaEnvelope<>("o1", state, SagaStatus.COMPLETED, 2, List.of(), Map.of(), null, NOW.minusSeconds(120), NOW.minusSeconds(60), NOW.minusSeconds(60), null);
         }
 
         @Test

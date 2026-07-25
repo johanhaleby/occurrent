@@ -66,8 +66,11 @@ public interface SagaInstance {
     @Nullable Instant nextTimerAt();
 
     /**
-     * The step a flow saga is currently waiting in, or {@code null} for a saga written against the core builder,
-     * which has named states only in its own state type rather than in a step the executor knows about.
+     * The step a flow saga is currently waiting in, or {@code null} for a saga written against the core builder, which
+     * has named states only in its own state type rather than in a step the executor knows about.
+     * <p>
+     * A store is expected to answer this without loading the saga's state, so it is populated even on an instance
+     * returned by a query that projected the state away.
      */
     @Nullable String currentStep();
 }
