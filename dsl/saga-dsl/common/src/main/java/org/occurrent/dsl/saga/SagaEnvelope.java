@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.saga.flow.FlowState;
 
 import java.time.Instant;
 import java.util.List;
@@ -84,8 +85,14 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         return earliest.isPresent() ? Instant.ofEpochMilli(earliest.getAsLong()) : null;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Read off {@code state}, so this is {@code null} on an envelope whose state was not loaded, as is the case for the
+     * ones {@link SagaStateStore#findWithDueTimers(Instant, int)} returns.
+     */
     @Override
     public @Nullable String currentStep() {
-        return SagaInstance.currentStepOf(state);
+        return state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
     }
 }

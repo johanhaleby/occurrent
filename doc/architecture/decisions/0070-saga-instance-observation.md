@@ -117,6 +117,11 @@ before a second implementation exists also avoids writing it twice.
   ([#395](https://github.com/johanhaleby/occurrent/issues/395)).
 - Enumerating flow-saga instances decodes their received logs. `limit` is mandatory for that reason, and a caller
   wanting cheap counts should not use this method.
+- One residual of the projection issue is accepted rather than fixed: `findWithDueTimers` still omits the state, so
+  `currentStep` reads null on an envelope it returns. Including the state would defeat the projection's entire purpose,
+  and no user-facing path hands out a poller envelope, since `SagaInstances` only calls `find` and `findByStatus`. The
+  envelope's javadoc says so at the accessor. A store TCK asserting "every returned envelope is a fully populated
+  `SagaInstance`" would have to exempt the due-timer query.
 - True paging is absent. A deployment with more instances in one status than a sensible `limit` cannot walk them all,
   and closing that needs a compound `(updatedAt, sagaId)` ordering.
 - The Spring bean's post-refresh registration is a rough edge: constructor injection does not see it. A bean definition

@@ -70,9 +70,4 @@ public interface SagaInstance {
      * which has named states only in its own state type rather than in a step the executor knows about.
      */
     @Nullable String currentStep();
-
-    /** The step a flow saga is on, read off {@code state} when it is a {@link FlowState}. */
-    static @Nullable String currentStepOf(@Nullable Object state) {
-        return state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
-    }
 }
