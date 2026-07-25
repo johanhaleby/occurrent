@@ -61,13 +61,14 @@ public interface SagaInstancesRegistry {
      * names every id that <em>is</em> registered. Code resolving an id from a request or a configuration value has no
      * bug when it misses, and should use {@link #find(String)}.
      *
-     * @throws IllegalArgumentException if no saga with that id is registered, listing the ids that are
+     * @throws IllegalArgumentException if no saga with that id is registered, naming the ids that are registered
      */
     SagaInstances get(String sagaId);
 
     /**
      * The ids of every registered saga, so a caller can enumerate sagas instead of hardcoding their ids. Unordered, and
-     * a snapshot: it does not change as more sagas register.
+     * an immutable snapshot of the ids registered when the call was made. The returned set never changes, but a later
+     * call can report more ids, because sagas register after the context has refreshed.
      */
     Set<String> sagaIds();
 }
