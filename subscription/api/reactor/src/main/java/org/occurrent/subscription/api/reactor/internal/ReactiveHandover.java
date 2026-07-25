@@ -41,8 +41,10 @@ import java.util.function.Supplier;
  * payload. Because the whole pipeline is serialized by {@code concatMap}, the de-dup cache needs no locking. Extracted
  * from (and mirrors exactly) the reactor projection feed and the reactor push subscription model.
  * <p>
- * {@code L} is the live payload type and {@code R} is the replay payload type, kept separate for the same reason as
- * the blocking engine: a replayed payload typically carries decoded metadata a live payload does not.
+ * {@code T} is the payload type, one for both phases. The caller decides what a payload carries, so where a replayed
+ * payload has metadata a live one may not, that difference lives in the payload rather than in this engine's signature.
+ * The live-versus-replay distinction that this engine does care about is {@link Item#ack()}, decided per payload at
+ * runtime, not per type.
  * <p>
  * <strong>This engine's ordering differs from the blocking one on purpose</strong>: here, the catch-up-complete
  * {@link Mono} returned by {@link #catchUp(Source)} completes, and the marker is persisted, <em>before</em> the
@@ -55,27 +57,25 @@ import java.util.function.Supplier;
  * itself already fired. Neither ordering is "fixed" by this extraction; both are preserved as-is.
  */
 @NullMarked
-public final class ReactiveHandover<L, R> {
+public final class ReactiveHandover<T> {
 
     /**
      * The replay side of a handover: whether the catch-up already ran, the position-ordered replay flux, and how to
      * record that the catch-up completed.
      */
-    public interface Source<R> {
+    public interface Source<T> {
         /** Whether a prior catch-up already completed, so this one should skip straight to going live. */
         Mono<Boolean> isAlreadyCaughtUp();
 
         /** The history to replay, in position order, from the beginning. */
-        Flux<R> replay();
+        Flux<T> replay();
 
         /** Record that the catch-up completed. */
         Mono<Void> markCaughtUp();
     }
 
-    private final Function<L, Mono<Void>> deliverLive;
-    private final Function<L, String> liveDedupId;
-    private final Function<R, Mono<Void>> deliverReplayed;
-    private final Function<R, String> replayDedupId;
+    private final Function<T, Mono<Void>> deliver;
+    private final Function<T, String> dedupId;
     private final int maxBufferedEvents;
     private final BoundedIdCache deliveredIds;
     private final Sinks.Many<Item> liveSink;
@@ -84,35 +84,25 @@ public final class ReactiveHandover<L, R> {
     private final Set<MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
 
-    private ReactiveHandover(Function<L, Mono<Void>> deliverLive, Function<L, String> liveDedupId,
-                             Function<R, Mono<Void>> deliverReplayed, Function<R, String> replayDedupId,
-                             HandoverOptions options) {
-        this.deliverLive = deliverLive;
-        this.liveDedupId = liveDedupId;
-        this.deliverReplayed = deliverReplayed;
-        this.replayDedupId = replayDedupId;
+    private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, String> dedupId, HandoverOptions options) {
+        this.deliver = deliver;
+        this.dedupId = dedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
         this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
         this.liveSink = Sinks.many().unicast().onBackpressureBuffer(new ArrayBlockingQueue<>(maxBufferedEvents));
     }
 
     /**
-     * @param deliverLive     Folds a live payload (outside the catch-up window, or the buffered overlap once drained).
-     * @param liveDedupId     Extracts the replay-to-live de-dup key from a live payload.
-     * @param deliverReplayed Folds a replayed payload during the catch-up.
-     * @param replayDedupId   Extracts the replay-to-live de-dup key from a replayed payload.
-     * @param options         De-dup cache size and live-buffer cap.
+     * @param deliver Folds a payload, replayed during the catch-up or live once going live.
+     * @param dedupId Extracts the replay-to-live de-dup key from a payload.
+     * @param options De-dup cache size and live-buffer cap.
      */
-    public static <L, R> ReactiveHandover<L, R> create(
-            Function<L, Mono<Void>> deliverLive, Function<L, String> liveDedupId,
-            Function<R, Mono<Void>> deliverReplayed, Function<R, String> replayDedupId,
-            HandoverOptions options) {
-        Objects.requireNonNull(deliverLive, "deliverLive cannot be null");
-        Objects.requireNonNull(liveDedupId, "liveDedupId cannot be null");
-        Objects.requireNonNull(deliverReplayed, "deliverReplayed cannot be null");
-        Objects.requireNonNull(replayDedupId, "replayDedupId cannot be null");
+    public static <T> ReactiveHandover<T> create(
+            Function<T, Mono<Void>> deliver, Function<T, String> dedupId, HandoverOptions options) {
+        Objects.requireNonNull(deliver, "deliver cannot be null");
+        Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");
-        return new ReactiveHandover<>(deliverLive, liveDedupId, deliverReplayed, replayDedupId, options);
+        return new ReactiveHandover<>(deliver, dedupId, options);
     }
 
     /**
@@ -120,7 +110,7 @@ public final class ReactiveHandover<L, R> {
      * is a de-duplicated overlap). Payloads fed before or during the catch-up are buffered and delivered after the
      * replay.
      */
-    public Mono<Void> accept(L payload) {
+    public Mono<Void> accept(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
         return Mono.create(ackSink -> {
             ackSink.onDispose(() -> pendingLiveAcks.remove(ackSink));
@@ -136,8 +126,8 @@ public final class ReactiveHandover<L, R> {
                 ackSink.error(failure);
                 return;
             }
-            String key = liveDedupId.apply(payload);
-            Item item = new Item(() -> deliverLive.apply(payload), key, ackSink);
+            String key = dedupId.apply(payload);
+            Item item = new Item(() -> deliver.apply(payload), key, ackSink);
             Sinks.EmitResult result = liveSink.tryEmitNext(item);
             if (result.isFailure()) {
                 ackSink.error(new IllegalStateException(HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
@@ -150,7 +140,7 @@ public final class ReactiveHandover<L, R> {
      * live feed. The returned {@link Mono} completes when the replay and marker are done (see the class javadoc for
      * how that relates to the buffered live payloads).
      */
-    public Mono<Void> catchUp(Source<R> source) {
+    public Mono<Void> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
         Sinks.One<Void> catchupDone = Sinks.one();
 
@@ -204,13 +194,12 @@ public final class ReactiveHandover<L, R> {
         return Mono.defer(item.deliver()).doOnSuccess(v -> deliveredIds.add(item.dedupKey()));
     }
 
-    private Item replayedItem(R replayed) {
-        return new Item(() -> deliverReplayed.apply(replayed), replayDedupId.apply(replayed), null);
+    private Item replayedItem(T replayed) {
+        return new Item(() -> deliver.apply(replayed), dedupId.apply(replayed), null);
     }
 
     // A replayed payload has a null ack; a live payload carries the MonoSink whose completion lets the caller
-    // acknowledge. The deliver supplier is bound at creation time so one Item shape serves both the L and R payload
-    // types without a type parameter of its own.
+    // acknowledge. The deliver supplier is bound at creation time, so Item needs no type parameter of its own.
     private record Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Void> ack) {
     }
 }

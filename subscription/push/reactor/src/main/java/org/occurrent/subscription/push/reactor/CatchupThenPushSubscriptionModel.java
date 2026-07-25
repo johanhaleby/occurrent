@@ -94,8 +94,7 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // Fail fast on a filter that cannot be replayed, before registering anything on the live feed.
         Filter replayFilter = ReplayFilters.replayFilterFor(filter);
 
-        ReactiveHandover<CloudEvent, CloudEvent> handover = ReactiveHandover.create(
-                action, CloudEvent::getId, action, CloudEvent::getId, options);
+        ReactiveHandover<CloudEvent> handover = ReactiveHandover.create(action, CloudEvent::getId, options);
 
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not lost.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);

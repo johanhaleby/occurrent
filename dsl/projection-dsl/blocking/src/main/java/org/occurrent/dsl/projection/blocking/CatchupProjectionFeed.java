@@ -83,7 +83,7 @@ public final class CatchupProjectionFeed<E> {
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
 
-    private final BlockingHandover<Delivered<E>, Delivered<E>> handover;
+    private final BlockingHandover<Delivered<E>> handover;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -99,9 +99,7 @@ public final class CatchupProjectionFeed<E> {
         this.eventId = eventId;
         this.catchupMarker = catchupMarker;
         this.handover = BlockingHandover.create(
-                this::deliver, delivered -> eventKey(delivered.event()),
-                this::deliver, delivered -> eventKey(delivered.event()),
-                options, "projection feed");
+                this::deliver, delivered -> eventKey(delivered.event()), options, "projection feed");
     }
 
     /**

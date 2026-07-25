@@ -38,83 +38,71 @@ class BlockingHandoverTest {
 
     @Test
     void live_payloads_accepted_before_catch_up_are_buffered_and_delivered_after_the_replay_in_order() {
-        List<String> replayDelivered = new ArrayList<>();
-        List<String> liveDelivered = new ArrayList<>();
-        BlockingHandover<String, Replayed> handover = handover(replayDelivered, liveDelivered);
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
 
         handover.accept("L1");
         handover.accept("L2");
 
-        handover.catchUp(source(List.of(new Replayed("R1"), new Replayed("R2")), false));
+        handover.catchUp(source(List.of("R1", "R2"), false));
 
-        assertThat(replayDelivered).containsExactly("R1", "R2");
-        assertThat(liveDelivered).containsExactly("L1", "L2");
+        assertThat(delivered).containsExactly("R1", "R2", "L1", "L2");
 
         handover.accept("L3");
-        assertThat(liveDelivered).containsExactly("L1", "L2", "L3");
+        assertThat(delivered).containsExactly("R1", "R2", "L1", "L2", "L3");
     }
 
     @Test
     void the_buffer_is_drained_and_the_marker_is_recorded_only_after_every_buffered_live_payload_was_delivered() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
-        BlockingHandover<String, Replayed> handover = BlockingHandover.create(
-                live -> log.add("live:" + live), live -> live,
-                replayed -> log.add("replayed:" + replayed.id()), Replayed::id,
-                HandoverOptions.defaults(), NOUN);
+        BlockingHandover<String> handover = BlockingHandover.create(log::add, payload -> payload, HandoverOptions.defaults(), NOUN);
 
         handover.accept("L1");
-        FakeSource source = source(List.of(new Replayed("R1")), false);
+        FakeSource source = source(List.of("R1"), false);
         source.onMarkCaughtUp = () -> log.add("marker");
 
         handover.catchUp(source);
 
         // Load-bearing order for the blocking engine: replay, then the buffered live payload, then the marker.
-        assertThat(log).containsExactly("replayed:R1", "live:L1", "marker");
+        assertThat(log).containsExactly("R1", "L1", "marker");
     }
 
     @Test
     void when_already_caught_up_the_replay_is_skipped_the_marker_is_not_recorded_again_but_buffered_live_payloads_are_still_delivered() {
-        List<String> replayDelivered = new ArrayList<>();
-        List<String> liveDelivered = new ArrayList<>();
-        BlockingHandover<String, Replayed> handover = handover(replayDelivered, liveDelivered);
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
 
         handover.accept("L1");
-        FakeSource source = source(List.of(new Replayed("R1")), true);
+        FakeSource source = source(List.of("R1"), true);
 
         handover.catchUp(source);
 
         assertThat(source.replayCallCount).isZero();
         assertThat(source.markCaughtUpCallCount).isZero();
-        assertThat(replayDelivered).isEmpty();
-        assertThat(liveDelivered).containsExactly("L1");
+        assertThat(delivered).containsExactly("L1");
     }
 
     @Test
     void a_payload_already_delivered_by_the_replay_is_not_delivered_again_whether_buffered_or_live() {
-        List<String> replayDelivered = new ArrayList<>();
-        List<String> liveDelivered = new ArrayList<>();
-        BlockingHandover<String, Replayed> handover = handover(replayDelivered, liveDelivered);
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
 
         // Buffered before the replay runs, but shares the replay's dedup id.
         handover.accept("1");
-        handover.catchUp(source(List.of(new Replayed("1")), false));
+        handover.catchUp(source(List.of("1"), false));
 
-        assertThat(replayDelivered).containsExactly("1");
-        assertThat(liveDelivered).isEmpty();
+        assertThat(delivered).containsExactly("1");
 
         // A second live copy of the same id, arriving after the engine has gone live, is skipped too.
         handover.accept("1");
-        assertThat(liveDelivered).isEmpty();
+        assertThat(delivered).containsExactly("1");
     }
 
     @Test
     void exceeding_the_max_buffered_events_cap_while_replaying_fails_loud_with_the_documented_message() {
-        List<String> replayDelivered = new ArrayList<>();
-        List<String> liveDelivered = new ArrayList<>();
-        BlockingHandover<String, Replayed> handover = BlockingHandover.create(
-                liveDelivered::add, live -> live,
-                replayed -> replayDelivered.add(replayed.id()), Replayed::id,
-                new HandoverOptions(HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE, 2), NOUN);
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = BlockingHandover.create(
+                delivered::add, payload -> payload, new HandoverOptions(HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE, 2), NOUN);
 
         handover.accept("L1");
         handover.accept("L2");
@@ -128,9 +116,7 @@ class BlockingHandoverTest {
 
     @Test
     void a_failed_catch_up_makes_a_subsequent_accept_fail_fast_with_the_original_failure_as_its_cause() {
-        List<String> replayDelivered = new ArrayList<>();
-        List<String> liveDelivered = new ArrayList<>();
-        BlockingHandover<String, Replayed> handover = handover(replayDelivered, liveDelivered);
+        BlockingHandover<String> handover = handover(new ArrayList<>());
 
         RuntimeException replayFailure = new RuntimeException("replay boom");
         FakeSource source = source(List.of(), false);
@@ -147,9 +133,7 @@ class BlockingHandoverTest {
 
     @Test
     void accept_and_catch_up_reject_null_arguments_eagerly() {
-        List<String> replayDelivered = new ArrayList<>();
-        List<String> liveDelivered = new ArrayList<>();
-        BlockingHandover<String, Replayed> handover = handover(replayDelivered, liveDelivered);
+        BlockingHandover<String> handover = handover(new ArrayList<>());
 
         assertThatThrownBy(() -> handover.accept(null))
                 .isInstanceOf(NullPointerException.class)
@@ -161,29 +145,23 @@ class BlockingHandoverTest {
 
     // --- helpers ---
 
-    private static BlockingHandover<String, Replayed> handover(List<String> replayDelivered, List<String> liveDelivered) {
-        return BlockingHandover.create(
-                liveDelivered::add, live -> live,
-                replayed -> replayDelivered.add(replayed.id()), Replayed::id,
-                HandoverOptions.defaults(), NOUN);
+    private static BlockingHandover<String> handover(List<String> delivered) {
+        return BlockingHandover.create(delivered::add, payload -> payload, HandoverOptions.defaults(), NOUN);
     }
 
-    private static FakeSource source(List<Replayed> history, boolean alreadyCaughtUp) {
+    private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {
         return new FakeSource(history, alreadyCaughtUp);
     }
 
-    private record Replayed(String id) {
-    }
-
-    private static final class FakeSource implements BlockingHandover.Source<Replayed> {
-        private final List<Replayed> history;
+    private static final class FakeSource implements BlockingHandover.Source<String> {
+        private final List<String> history;
         private final boolean alreadyCaughtUp;
         private RuntimeException replayFailure;
         private Runnable onMarkCaughtUp;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
 
-        private FakeSource(List<Replayed> history, boolean alreadyCaughtUp) {
+        private FakeSource(List<String> history, boolean alreadyCaughtUp) {
             this.history = history;
             this.alreadyCaughtUp = alreadyCaughtUp;
         }
@@ -194,7 +172,7 @@ class BlockingHandoverTest {
         }
 
         @Override
-        public Stream<Replayed> replay() {
+        public Stream<String> replay() {
             replayCallCount++;
             if (replayFailure != null) {
                 throw replayFailure;

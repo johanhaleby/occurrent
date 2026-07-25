@@ -78,7 +78,7 @@ public final class CatchupProjectionFeed<E> {
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
 
-    private final ReactiveHandover<DeliveredEvent<E>, DeliveredEvent<E>> handover;
+    private final ReactiveHandover<DeliveredEvent<E>> handover;
 
     private CatchupProjectionFeed(String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -94,7 +94,6 @@ public final class CatchupProjectionFeed<E> {
         this.eventId = eventId;
         this.catchupMarker = catchupMarker;
         this.handover = ReactiveHandover.create(
-                delivered -> fold.apply(delivered.metadata(), delivered.event()), delivered -> eventKey(delivered.event()),
                 delivered -> fold.apply(delivered.metadata(), delivered.event()), delivered -> eventKey(delivered.event()),
                 options);
     }
