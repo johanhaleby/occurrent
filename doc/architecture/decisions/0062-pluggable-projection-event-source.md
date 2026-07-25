@@ -163,3 +163,69 @@ event source implicitly based on which beans happen to be present. Push source i
 `mode = SYNCHRONOUS` and the catch-up start knobs (the catch-up always replays from the beginning and live-resume is the
 broker's job), and with a `DcbProjection` (a DCB boundary cannot be catch-up-replayed in position order). Implemented on
 both the blocking and reactor stacks.
+
+## Amendment (2026-07-25): the catch-up handover is one shared engine per stack
+
+When this ADR was implemented, extracting a shared core between the CloudEvent handover
+(`CatchupThenPushSubscriptionModel`) and the domain feed (`CatchupProjectionFeed`) was assessed and deliberately
+deferred, on the grounds that it was cross-module and would touch already-tested code. The parallel implementations were
+kept and unification was recorded as a candidate follow-up. That deferral is now reversed.
+
+**Why.** The coordination is concurrency-sensitive (a lock and a bounded buffer on one stack, a unicast sink and
+`concatMap` on the other) and it was written out four times. That is the kind of duplication where a divergence is
+hardest to see, because reading any one copy tells you nothing about the other three.
+
+The evidence that the copies do drift is concrete: the reactor `CatchupProjectionFeed` folded replayed events through a
+metadata-less `Function<E, Mono<Void>>`, so a projection keyed by metadata (`Projection.idWithMetadata()`) mis-keyed
+every replayed event on the reactor stack while catching up correctly on blocking, and the divergence was invisible
+because the blocking test class had a metadata test and the reactor one simply had no equivalent.
+
+Be precise about what that proves, though. That bug lived in the caller's fold wiring, which this extraction
+deliberately leaves with each caller, so a shared engine would not have prevented it and a fifth caller could
+reproduce the same class of mistake tomorrow. It is evidence that four hand-maintained twins drift unnoticed, not
+evidence that this particular extraction was the fix for that particular bug. The extraction stands on the duplicated
+coordination alone.
+
+**What is shared.** The duplicated part is the *coordination*, not the payload handling: the bounded live buffer and its
+fail-loud overflow, the de-duplication window, the live/replaying state, the poison latch that fails live events after a
+failed catch-up, the drain, and the ordering rules in the replay-then-push section above. That is extracted into
+`BlockingHandover<L, R>` and `ReactiveHandover<L, R>`, which live in `internal` packages of the existing
+`occurrent-subscription-api-blocking` and `occurrent-subscription-api-reactor` modules, with the shared
+`HandoverOptions` and `HandoverMessages` in `org.occurrent.subscription.internal` alongside `BoundedIdCache` and
+`ReplayFilters`. This follows the precedent this ADR already set for `RegisteringSubscribable`, which was likewise
+added inside the pre-existing subscription api modules: the two callers differ in role, one driven by a broker over
+CloudEvents and one by a listener over domain events, but not in mechanism.
+
+**No new published artifacts.** An earlier attempt minted `occurrent-subscription-handover-{common,blocking,reactor}`
+for this and was reversed. Three published artifacts, three BOM entries and an aggregator pom are too much permanent
+user-facing surface for reuse across four call sites that are all internal to Occurrent, and both consumers already
+depend on the subscription api and core modules. The `internal` package name carries the "not user API" signal instead,
+the same way `BoundedIdCache`, `RetryImpl` and `SnapshotSupport` already do.
+
+**Two engines, not one.** `Stream` versus `Flux` and `long` versus `Mono<Long>` run through the whole SPI, so a single
+engine is not reachable without wrapping one stack in the other. Only data and messages are genuinely shared across
+both: the two default tunables, the positioned-reader guard, the tunable validation, the overflow message, and the
+de-duplication cache.
+
+**Two type parameters, not one.** `L` is the live payload and `R` the replayed one. They are kept distinct because a
+replayed event carries `EventMetadata` decoded from its CloudEvent and a live domain event has none. Collapsing them
+would also not be behaviour-preserving, since `MaterializedView.update(E)` and `update(EventMetadata, E)` are separate
+interface methods that a caller's view may implement differently.
+
+**What stays with each caller.** The replay read, the decode, the delivery functions, the de-duplication key function,
+and the filter derivation. `Projections.domainEventFeed(...)`, `DomainEventFeed<E>` and the `@Projection` routing
+described above are unchanged, and every public signature of the four classes is unchanged, so the existing four
+catch-up test classes pass without modification. That is what makes this a behaviour-preserving extraction rather than a
+rewrite.
+
+**Named `handover`, not `catchup`.** This ADR already calls the CloudEvent side "the CloudEvent handover" and the
+blocking push model already had a private `Handover` class, so `handover` was the existing vocabulary for exactly this
+replay-to-live transition. `catchup` would also have read as the change-stream catch-up subscription models under
+`subscription/util`, which are a different mechanism: they page a bulk window and reconcile against a moving stream
+head, machinery these engines neither have nor need.
+
+**One difference is preserved on purpose.** The reactor stack completes its catch-up signal and persists the
+catch-up-complete marker before the buffered live events are folded, whereas the blocking stack returns only after the
+drain. Each is self-consistent with its own acknowledgement model: a blocking `accept` returns before the fold, so the
+marker must wait for the drain to keep the store the backstop, while a reactor ack completes only after its fold. The
+engines state this explicitly rather than leaving it to be inferred from the pipeline shape.
