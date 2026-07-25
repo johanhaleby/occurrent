@@ -21,6 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.internal.BoundedIdCache;
 
 import java.net.URI;
 import java.time.Duration;
@@ -50,7 +51,7 @@ class PositionCatchupPipelineTest {
         // drains positions 1..20, and returns. assertTimeoutPreemptively fails loudly if the livelock ever returns.
         FakeReader reader = FakeReader.withEventsInRange(1, 100).headSupplier(advancingBy(10));
         CopyOnWriteArrayList<String> delivered = new CopyOnWriteArrayList<>();
-        FixedSizeCache cache = new FixedSizeCache(1000);
+        BoundedIdCache cache = new BoundedIdCache(1000);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
 
         long cursor = assertTimeoutPreemptively(Duration.ofSeconds(5), () ->
@@ -70,7 +71,7 @@ class PositionCatchupPipelineTest {
             headReads.incrementAndGet();
             return 30L;
         });
-        FixedSizeCache cache = new FixedSizeCache(1000);
+        BoundedIdCache cache = new BoundedIdCache(1000);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
 
         long cursor = pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(CloudEvent::getId), cache);

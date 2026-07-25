@@ -45,7 +45,7 @@ public final class ProjectionKeys {
      */
     public static void failIfKeyNeededMetadata(boolean metadataKeyed, EventMetadata metadata) {
         if (metadataKeyed && metadata.getData().isEmpty()) {
-            throw new IllegalStateException("Could not resolve the view-instance id: this projection is keyed by event metadata (id(BiFunction)) but the event was folded with empty metadata, so the key resolved to null and the event would have been skipped silently. Supply the metadata alongside the event (accept(metadata, event) on a domain-event feed), or key with the event-only id(Function) if the key does not need metadata.");
+            throw new IllegalStateException("Could not resolve the view-instance id: this projection is keyed by event metadata (id(BiFunction)) but the event was folded with empty metadata, so the key resolved to null and the event would have been skipped silently. Supply the metadata alongside the event on whichever sink you feed: accept(metadata, event) on a CatchupProjectionFeed or DomainEventFeed, update(metadata, event) on a MaterializedView, or apply(metadata, event) on the BiFunction from Projections.domainEventFeed(...). Or key with the event-only id(Function) if the key does not need metadata.");
         }
     }
 }
