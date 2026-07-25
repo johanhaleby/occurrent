@@ -1,0 +1,123 @@
+# 70. Observing saga instances
+
+Date: 2026-07-25
+
+## Status
+
+Accepted
+
+Refines [ADR 63](0063-saga-dsl.md).
+
+## Context
+
+ADR 63 put a saga's timers in its own state envelope rather than in JobRunr, and accepted a named cost for it: "no
+JobRunr dashboard/retry surface for saga timers specifically". Nothing replaced that surface, so a deployment running
+sagas had no supported way to answer an operational question. Two in particular:
+
+- Is instance X still running, and which step is it on?
+- Which instances have stopped moving, so a timer that should have fired has not?
+
+`SagaStateStore` could answer neither. It offers `find(sagaId)`, `compareAndSave`, `findWithDueTimers(now, limit)` and
+`delete(sagaId)`. The first needs an id the asker does not have when the question is "which instances are stuck", and the
+third is the poller's own query, scoped to instances with a *due* timer.
+
+Reading the collection directly is not an alternative. ADR 63's G5 carve-out declares the flow-state bookkeeping fields
+non-wire-format, so the document shape is deliberately not a contract, and a flow saga's received log persists as
+CloudEvent JSON strings, which is hostile to ad-hoc querying.
+
+There was also a shape problem. `SagaEnvelope` is a record, so all ten components are public accessors. Six describe the
+instance's lifecycle; four (`version`, `timers`, `streamWatermarks`, `positionWatermark`) exist only so the executor is
+safe under at-least-once delivery. Issue #377 proposed narrowing that the way [ADR 63's](0063-saga-dsl.md) `FlowState`
+was narrowed in the same spirit, and deferred it for want of a demonstrated need.
+
+## Decision
+
+Add an observation surface in three parts, and one enumeration method to the SPI to make it possible.
+
+### `SagaInstance`, a narrow view the envelope implements
+
+`SagaInstance` exposes `sagaId`, `status`, `isCompleted`, the three lifecycle timestamps, `nextTimerAt` and
+`currentStep`. `SagaEnvelope` implements it and remains the `SagaStateStore` type.
+
+**This is not the `FlowState` narrowing, and it is worth being precise about why.** `FlowState` worked because the
+concrete `FlowStateImpl` could move into an `internal` package, putting the bookkeeping genuinely out of reach.
+`SagaEnvelope` cannot move: the SPI both returns and accepts it, so relocating it would make the SPI name an internal
+type. The interface therefore narrows what an observing caller is *handed*; it does not hide the envelope's components
+from anyone holding one. That is a smaller claim than encapsulation, and it is only worth making because a facade
+returns it on both execution paths. Had the Spring half been left out, the honest outcome would have been the
+enumeration method alone and no new type.
+
+The state `S` is excluded. A caller folding over process-internal state couples itself to how the process is written,
+and a read model shaped for querying belongs in the projection DSL. `currentStep` is the one exception, because #377
+named "which step is it on" as a trigger question and `FlowState` is already a narrow public interface, so reading
+`currentStep` off it exposes nothing the flow layer does not already publish.
+
+The interface is **not generic**. No member needs the state type, so a type parameter would only force callers to write
+`SagaInstance<?>`.
+
+`SagaEnvelope.Status` becomes a top-level `SagaStatus`, so the user-facing view does not name the store's envelope type
+in its own signature. The persisted values are unchanged.
+
+### `SagaStateStore.findByStatus(SagaStatus, Instant updatedBefore, int limit)`
+
+One purpose-shaped method, not a query object or filter language. A query object would put a translation burden on every
+store and invite a surface nobody asked for; two purpose-named methods (list-active and find-stalled) would be the same
+query twice.
+
+The contract is specified on the interface because correctness here is cross-store agreement, not any single
+implementation:
+
+- `updatedBefore` is exclusive. `Instant.now()` means "everything in this status"; `now` minus a threshold means
+  "everything quiet for longer than that".
+- Ascending by `updatedAt`, so the stalest instance arrives first. Descending would fill `limit` with the *least* stale
+  of a stuck set and push the genuinely stuck past the end, which inverts the primary use case.
+- `limit` is a bound, **not** a page. `updatedAt` persists at millisecond precision, so instances saved in one executor
+  tick tie, and a cursor resuming from the last row's timestamp would silently drop the rest of a tie group. Correct
+  paging needs `(updatedAt, sagaId)` and is not offered rather than offered wrongly.
+- An instance with a null `updatedAt` is never returned. The executor always stamps it, so this only excludes a
+  hand-built envelope, and it stops a store whose query engine skips a missing field from disagreeing with one that
+  could read null as matching.
+
+Unlike `findWithDueTimers` it reads whole instances, because `currentStep` cannot be answered without the state. That is
+why `limit` is required rather than optional: enumerating flow-saga instances decodes their received logs.
+
+The due-timer projection is widened to include the three timestamps. It omitted them, so its envelopes read null for all
+three while the in-memory store returned them — invisible while only the poller consumed them, but a contract violation
+once an envelope is also a `SagaInstance`.
+
+### `SagaInstances`, reachable from both paths
+
+A read-only facade over a store, returning `SagaInstance`. It offers nothing that writes: the executor owns instance
+transitions, and a compare-and-set from outside it would race the subscription and the poller.
+
+Programmatically it hangs off `SagaSubscription`. On the Spring stack the `@Saga` registrar publishes one per saga as
+`sagaInstances-<id>`, which had no handle before: the registrar kept its subscriptions private and the zero-config path
+built the store inline without registering it. It is a registered singleton rather than a bean definition, because a
+`@Saga` factory can only run once its collaborators are wired, which is after refresh. The consequence is that it cannot
+be constructor-injected into another singleton; `ObjectProvider` or `getBean` works.
+
+### Why now rather than when an ops need appears
+
+#377's own reasoning was that the view is additive whenever it is wanted. That holds for the interface and not for the
+SPI method. Per the repository's release-status rule, an unreleased type may be reshaped with no migration path, and the
+saga DSL is unreleased — so `findByStatus` is free today and breaks every out-of-tree `SagaStateStore` once it ships.
+[Issue #411](https://github.com/johanhaleby/occurrent/issues/411) adds a SQL `SagaStateStore`, so defining the method
+before a second implementation exists also avoids writing it twice.
+
+## Consequences
+
+- A saga's lifecycle is observable on both execution stacks without exposing the executor's bookkeeping, and a
+  stuck-instance check is expressible: active instances not updated for longer than a threshold, stalest first.
+- Every `SagaStateStore` implementation gains a method. Two in-tree stores and two test doubles, and out-of-tree
+  implementors would break — acceptable only because the DSL is unreleased.
+- Mongo gains a `{status, updatedAt}` index beside the due-timer one. Occurrent creates missing indexes and never
+  removes them, so this is additive on an existing collection.
+- The ordering and boundary contract is the likeliest place for a defect, since it must hold identically across stores
+  that share no code. It is covered by one test body run against both, written so it lifts into the store TCK
+  ([#395](https://github.com/johanhaleby/occurrent/issues/395)).
+- Enumerating flow-saga instances decodes their received logs. `limit` is mandatory for that reason, and a caller
+  wanting cheap counts should not use this method.
+- True paging is absent. A deployment with more instances in one status than a sensible `limit` cannot walk them all,
+  and closing that needs a compound `(updatedAt, sagaId)` ordering.
+- The Spring bean's post-refresh registration is a rough edge: constructor injection does not see it. A bean definition
+  contributed by the autoconfiguration would remove the caveat and is the obvious follow-up if it bites.
