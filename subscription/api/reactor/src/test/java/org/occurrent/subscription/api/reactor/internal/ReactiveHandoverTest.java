@@ -23,11 +23,15 @@ import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -166,6 +170,43 @@ class ReactiveHandoverTest {
         }, () -> log.add("ack:L1"));
 
         assertThat(log).containsExactly("fold:L1", "ack:L1");
+    }
+
+    @Test
+    void the_marker_is_recorded_only_after_every_replayed_payload_has_actually_been_folded() throws Exception {
+        List<String> log = Collections.synchronizedList(new ArrayList<>());
+        // Holds a replayed fold open until the test releases it, so the assertion is about ordering rather than
+        // about which thread happens to win. The fold is asynchronous, like the reactor projection DSL's boundedElastic
+        // bridge to a blocking repository. A synchronous fold cannot show the defect, because concatMap's inner
+        // completes before the replay Flux can signal onComplete.
+        // Gates the LAST replayed payload. That is where the defect lives: the replay Flux signals onComplete once its
+        // final item is emitted, so concat can advance to the marker while concatMap still has that item to fold.
+        CompletableFuture<Void> lastFoldGate = new CompletableFuture<>();
+        CountDownLatch lastFoldStarted = new CountDownLatch(1);
+        Function<String, Mono<Void>> gatedFold = payload -> {
+            Mono<Void> fold = "R2".equals(payload)
+                    ? Mono.<Void>fromRunnable(lastFoldStarted::countDown)
+                    .then(Mono.fromFuture(lastFoldGate))
+                    .then(Mono.<Void>fromRunnable(() -> log.add("folded:R2")))
+                    : Mono.<Void>fromRunnable(() -> log.add("folded:" + payload));
+            return fold.subscribeOn(Schedulers.boundedElastic());
+        };
+        ReactiveHandover<String> handover = ReactiveHandover.create(gatedFold, payload -> payload, CatchupThenLiveOptions.defaults());
+
+        FakeSource source = source(List.of("R1", "R2"), false);
+        source.onMarkCaughtUp = () -> log.add("marker");
+
+        CountDownLatch caughtUp = new CountDownLatch(1);
+        handover.catchUp(source).subscribe(ignored -> {
+        }, error -> caughtUp.countDown(), caughtUp::countDown);
+
+        assertThat(lastFoldStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        lastFoldGate.complete(null);
+        assertThat(caughtUp.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // The marker means "catch-up done", so a restart skips the replay. Recording it while a replayed payload is
+        // still unfolded loses that payload for good, with no error anywhere.
+        assertThat(log).containsExactly("folded:R1", "folded:R2", "marker");
     }
 
     @Test

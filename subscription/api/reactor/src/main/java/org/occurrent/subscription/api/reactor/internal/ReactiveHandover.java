@@ -35,11 +35,12 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * The shared reactive catch-up-then-live coordination: the replay, a catch-up-complete marker step, and the live feed
- * are composed into one ordered pipeline with {@link Flux#concat}, live payloads arriving during the replay are
- * buffered in a bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id extracted from the
- * payload. Because the whole pipeline is serialized by {@code concatMap}, the de-dup cache needs no locking. Extracted
- * from (and mirrors exactly) the reactor projection feed and the reactor push subscription model.
+ * The shared reactive catch-up-then-live coordination: the replay is folded to completion, then the catch-up-complete
+ * marker is recorded, then the live feed is delivered. Live payloads arriving during the replay are buffered in a
+ * bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id extracted from the payload. Each phase
+ * is serialized by its own {@code concatMap} and the phases run one after another, so the de-dup cache is only ever
+ * touched by one thread at a time and needs no locking. Extracted from (and mirrors exactly) the reactor projection
+ * feed and the reactor push subscription model.
  * <p>
  * {@code T} is the payload type, one for both phases. The caller decides what a payload carries, so where a replayed
  * payload has metadata a live one may not, that difference lives in the payload rather than in this engine's signature.
@@ -48,9 +49,10 @@ import java.util.function.Supplier;
  * <p>
  * <strong>This engine's ordering differs from the blocking one on purpose</strong>: here, the catch-up-complete
  * {@link Mono} returned by {@link #catchUp(Source)} completes, and the marker is persisted, <em>before</em> the
- * buffered live payloads are folded (the marker step and the live sink are both stages of the same
- * {@code Flux.concat}, and the returned {@code Mono} completes at the marker stage, not at the end of the live
- * stream). The blocking engine's {@code BlockingHandover.catchUp} returns only <em>after</em> the buffered live
+ * buffered live payloads are folded, because the returned {@code Mono} completes once the marker phase is done rather
+ * than at the end of the live stream. It does <em>not</em> complete before the replayed payloads are folded: the marker
+ * phase starts only after the replay phase has finished folding. The blocking engine's
+ * {@code BlockingHandover.catchUp} returns only <em>after</em> the buffered live
  * payloads are drained. Both are internally consistent: a blocking {@code accept} call returns before its payload is
  * folded during the catch-up window, whereas here a live payload's {@code accept} {@link Mono} completes only once
  * its fold has actually run (including payloads buffered during the replay), even though the catch-up-done signal
@@ -147,17 +149,23 @@ public final class ReactiveHandover<T> {
         // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
         // written only when the replay actually ran (not on a restart that skips it).
         Mono<Boolean> alreadyDone = source.isAlreadyCaughtUp().cache();
-        Flux<Item> replay = alreadyDone
+        // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
+        // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
+        // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
+        // the next sibling while the folds are still running. That wrote the marker mid-replay for an asynchronous
+        // fold, and since the marker makes a restart skip the replay, the unfolded events were lost with no error.
+        Mono<Void> replayFolded = alreadyDone
                 .flatMapMany(done -> done
-                        ? Flux.empty()
-                        : source.replay().map(this::replayedItem));
-        Flux<Item> markerThenLive = Flux.concat(
-                alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp()).thenMany(Flux.<Item>empty()),
-                Mono.<Item>fromRunnable(catchupDone::tryEmitEmpty),
-                liveSink.asFlux());
-
-        Flux.concat(replay, markerThenLive)
+                        ? Flux.<Item>empty()
+                        : source.replay().map(this::replayedItem))
                 .concatMap(this::deliver)
+                .then();
+        Mono<Void> recordMarker = alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp());
+
+        replayFolded
+                .then(recordMarker)
+                .doOnSuccess(ignored -> catchupDone.tryEmitEmpty())
+                .thenMany(liveSink.asFlux().concatMap(this::deliver))
                 .subscribe(ignored -> {
                 }, error -> {
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
@@ -170,7 +178,8 @@ public final class ReactiveHandover<T> {
         return catchupDone.asMono();
     }
 
-    // Serialized by concatMap, so the de-dup cache is touched by one thread at a time and needs no synchronization.
+    // Serialized by concatMap within a phase, and the phases run sequentially, so the de-dup cache is touched by one
+    // thread at a time and needs no synchronization.
     private Mono<Void> deliver(Item item) {
         MonoSink<Void> ack = item.ack();
         if (ack != null) {
