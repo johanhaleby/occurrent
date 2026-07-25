@@ -85,6 +85,36 @@ The due-timer projection is widened to include the three timestamps. It omitted 
 three while the in-memory store returned them — invisible while only the poller consumed them, but a contract violation
 once an envelope is also a `SagaInstance`.
 
+The invariant that motivates it is specifically **every `SagaInstance` member must be populated on every envelope a store
+returns**, not the broader "one SPI method must not hand back differently-populated envelopes per store". The broader
+version is not true and is not being claimed: `streamWatermarks` and `positionWatermark` still differ between the stores
+on the due-timer path, because they are executor bookkeeping that the poller does not read. A TCK author should assert the
+narrow rule.
+
+**An undecodable state must not fail the whole enumeration.** `findByStatus` decodes state per instance, and a stored
+received event whose class was renamed away, or a state document that no longer matches its type, throws. One such
+instance would otherwise take the progress view down for every caller, at the moment someone is looking into what went
+wrong, with no way out but deleting the document through the SPI this feature exists to avoid. So `findByStatus` catches a
+decode failure per instance, logs at WARN naming the saga id, and reports that instance with a null state; every
+`SagaInstance` member except `currentStep()` is still correct, and in a stuck-instance report that row is likely the most
+interesting one. The catch is scoped to the decode step alone so a connectivity error still propagates, matching how the
+Mongo snapshot stores degrade rather than fail a command. `find(sagaId)` deliberately keeps throwing: the executor loads
+an instance in order to fold and save it, and a silently null state there would restart the process and re-dispatch its
+commands.
+
+Note the inversion this creates: `findWithDueTimers` is immune because it projects state away, so a poisoned instance
+would break observation while execution carried on unaffected.
+
+**Why not denormalize `currentStep` instead.** There is a direct precedent for the better fix: `nextTimerFiresAt` is
+already a top-level derived field written on save, existing precisely so the due-timer query need not decode `timers`.
+Doing the same for `currentStep` would let `findByStatus` field-project, which would remove the whole-instance read cost,
+the poller's `currentStep` carve-out, and the degradation case above all at once. It is deliberately **not** done here,
+for the maintainer to weigh: it adds a second derived duplicate of state to a public record's persisted form, with drift
+potential against `state.currentStep()` if a future write path forgets it, and it is a storage-format change rather than
+the additive API change this ADR is about. Projecting the *nested* `state.currentStep` is not a middle ground and is
+worse: the read path would reconstruct a `FlowStateImpl` with a silently empty `received()` and a defaulted
+`windowStart`, which is a corrupted state object rather than an absent one.
+
 ### `SagaInstances`, reachable from both paths
 
 A read-only facade over a store, returning `SagaInstance`. It offers nothing that writes: the executor owns instance
@@ -154,15 +184,29 @@ before a second implementation exists also avoids writing it twice.
 - Mongo gains a `{status, updatedAt}` index beside the due-timer one. Occurrent creates missing indexes and never
   removes them, so this is additive on an existing collection.
 - The ordering and boundary contract is the likeliest place for a defect, since it must hold identically across stores
-  that share no code. It is covered by one test body run against both, written so it lifts into the store TCK
-  ([#395](https://github.com/johanhaleby/occurrent/issues/395)).
+  that share no code. It is covered against both stores, but the assertions are **hand-duplicated** between
+  `InMemorySagaStateStoreTest` and `SpringMongoSagaStateStoreMongoTest` rather than shared: there is no test-jar
+  dependency between the modules. Both files say so in a comment. Sharing one body waits on the store TCK
+  ([#395](https://github.com/johanhaleby/occurrent/issues/395)), and until then a contract change has to be made twice.
+- The exclusive `updatedBefore` boundary holds in *direction* on every store but not at a common *resolution*: Mongo
+  persists `updatedAt` as epoch millis and compares truncated values, while the in-memory store compares whole
+  `Instant`s and the executor stamps a possibly sub-millisecond one. No store is more inclusive than the boundary, but an
+  instance updated inside the same millisecond may be excluded. The javadoc says so, and a TCK asserting sub-millisecond
+  boundary behaviour would fail on Mongo for reasons that are not defects.
 - Enumerating flow-saga instances decodes their received logs. `limit` is mandatory for that reason, and a caller
   wanting cheap counts should not use this method.
 - One residual of the projection issue is accepted rather than fixed: `findWithDueTimers` still omits the state, so
-  `currentStep` reads null on an envelope it returns. Including the state would defeat the projection's entire purpose,
-  and no user-facing path hands out a poller envelope, since `SagaInstances` only calls `find` and `findByStatus`. The
-  envelope's javadoc says so at the accessor. A store TCK asserting "every returned envelope is a fully populated
-  `SagaInstance`" would have to exempt the due-timer query.
+  `currentStep` reads null on an envelope it returns. Including the state would defeat the projection's entire purpose.
+  `SagaInstances` never exposes such an envelope, since it only calls `find` and `findByStatus` — but `SagaStateStore` is
+  public and has a public `inMemory()` factory, so an application monitoring its own store can call `findWithDueTimers`
+  directly and see one. The envelope's javadoc says so at the accessor. A store TCK asserting "every returned envelope is
+  a fully populated `SagaInstance`" would have to exempt the due-timer query.
+- The new `{status, updatedAt}` index is maintained on **every** `compareAndSave`, because `updatedAt` changes on every
+  save. Saga writes therefore carry index-maintenance cost for a query that only observation uses. Accepted as the price
+  of an indexed enumeration, but it is a write-path cost paid for a read-path feature, so a deployment that never observes
+  still pays it.
+- `createIndex` runs in the store's constructor, so on an existing large collection startup blocks while the index builds.
+  This matches how the due-timer index already behaved, but it is now two indexes rather than one.
 - True paging is absent. A deployment with more instances in one status than a sensible `limit` cannot walk them all,
   and closing that needs a compound `(updatedAt, sagaId)` ordering.
 - Spring has two entry points to keep current for one capability, and a saga id therefore appears in two places: the
@@ -175,5 +219,11 @@ before a second implementation exists also avoids writing it twice.
   implementation the framework writes to. The cost is an extra type and a concrete-type lookup in the registrar; the
   benefit is that no application can corrupt the registry, and the read-only guarantee is enforced by the compiler
   instead of by a comment. It rejects a duplicate id rather than silently keeping one of two sagas.
-- Replacing the `SagaInstancesRegistry` bean with a custom implementation is possible but pointless: Occurrent can only
-  populate its own, so a replacement stays empty. The registrar warns when it cannot find one it can write to.
+- Two Spring conflicts fail fast rather than degrading, on the principle that a footgun is prevented or made loud rather
+  than documented. A `SagaInstancesRegistry` bean Occurrent cannot populate would report "no sagas" forever, so it is
+  rejected at startup instead of warned about; a supported-looking extension point that cannot work is worse than none.
+  And a pre-existing bean named `sagaInstances-<id>` is rejected with a message naming the saga and the name, because
+  `registerSingleton` already failed there — with a bare duplicate-singleton error from inside
+  `afterSingletonsInstantiated` that says nothing about sagas. Neither changes success into failure; both turn an opaque
+  or silent failure into a diagnosable one. A registry that is simply absent (annotation processing off) still warns and
+  carries on, since that is a legitimate configuration.

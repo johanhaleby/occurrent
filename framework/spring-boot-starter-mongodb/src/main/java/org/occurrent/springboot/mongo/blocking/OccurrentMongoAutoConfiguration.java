@@ -115,9 +115,12 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(SagaInstancesRegistry.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public SagaInstancesRegistry occurrentSagaInstancesRegistry() {
-        // Declared as the read-only interface, which is what an application injects. The registrar populates it by
-        // resolving the concrete type, so replacing this bean with your own implementation leaves it unpopulated.
+    public SagaInstancesRegistryImpl occurrentSagaInstancesRegistry() {
+        // The declared return type is the implementation, not the SagaInstancesRegistry interface an application
+        // injects, so that the registrar's by-type lookup of the writable type matches from the bean definition rather
+        // than only once the singleton has been instantiated. Declaring the interface here happens to work today
+        // because population runs from afterSingletonsInstantiated, but it would silently start resolving nothing if
+        // this bean became @Lazy or population moved earlier, leaving an empty registry forever.
         return new SagaInstancesRegistryImpl();
     }
 

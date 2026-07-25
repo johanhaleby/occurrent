@@ -32,6 +32,8 @@ import org.occurrent.dsl.decider.DeciderApplicationService;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaInstance;
+import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
@@ -180,6 +182,59 @@ class SagaRunnerTest {
             assertAll(
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(envelope.timers()).isEmpty()
+            );
+        }
+    }
+
+    @Nested
+    class ProgrammaticObservation {
+
+        /**
+         * The observation facade is justified by serving the programmatic path as well as Spring's, but only the Spring
+         * path had coverage: nothing invoked {@code SagaSubscription.instances()} or {@code SagaInstances.findByStatus}.
+         * This drives a real saga through the runner and observes it through the handle {@code run(...)} hands back.
+         */
+        @Test
+        void observes_an_instance_through_the_handle_the_runner_returns() {
+            String orderId = "order-observed";
+            SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
+            SagaSubscription subscription = run("programmatic-observation", orderFulfillment(LONG_PAYMENT_TIMEOUT),
+                    stateStore, command -> {
+                    }, FAST_POLL_CONFIG);
+            subscription.waitUntilStarted();
+            SagaInstances instances = subscription.instances();
+            Instant wellAfterNow = Instant.now().plusSeconds(60);
+
+            assertThat(instances.find(orderId)).as("nothing is observable before the saga starts").isEmpty();
+
+            write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
+
+            await().untilAsserted(() -> assertThat(instances.find(orderId)).isPresent());
+            SagaInstance active = instances.find(orderId).orElseThrow();
+            assertAll(
+                    () -> assertThat(active.sagaId()).isEqualTo(orderId),
+                    () -> assertThat(active.status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(active.isCompleted()).isFalse(),
+                    () -> assertThat(active.createdAt()).isNotNull(),
+                    () -> assertThat(active.completedAt()).as("still running").isNull(),
+                    () -> assertThat(active.nextTimerAt()).as("the payment timeout is pending").isNotNull(),
+                    () -> assertThat(active.currentStep()).as("a core saga has no flow step").isNull(),
+                    () -> assertThat(instances.findByStatus(SagaStatus.ACTIVE, wellAfterNow, 10))
+                            .extracting(SagaInstance::sagaId).containsExactly(orderId),
+                    () -> assertThat(instances.findByStatus(SagaStatus.COMPLETED, wellAfterNow, 10)).isEmpty()
+            );
+
+            write(orderId, new PaymentReserved(UUID.randomUUID().toString(), orderId));
+
+            await().untilAsserted(() -> assertThat(instances.find(orderId).orElseThrow().isCompleted()).isTrue());
+            SagaInstance completed = instances.find(orderId).orElseThrow();
+            assertAll(
+                    () -> assertThat(completed.status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(completed.completedAt()).isNotNull(),
+                    () -> assertThat(completed.nextTimerAt()).as("a terminal instance holds no timers").isNull(),
+                    () -> assertThat(instances.findByStatus(SagaStatus.COMPLETED, Instant.now().plusSeconds(60), 10))
+                            .extracting(SagaInstance::sagaId).containsExactly(orderId),
+                    () -> assertThat(instances.findByStatus(SagaStatus.ACTIVE, Instant.now().plusSeconds(60), 10)).isEmpty()
             );
         }
     }

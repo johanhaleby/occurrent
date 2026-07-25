@@ -62,6 +62,12 @@ public final class SagaInstances {
      * Pass {@code Instant.now()} to list everything in a status, or {@code Instant.now().minus(threshold)} to find the
      * instances that have gone quiet for longer than {@code threshold}. The full contract, including why {@code limit}
      * is a bound rather than a page, is on {@link SagaStateStore#findByStatus(SagaStatus, Instant, int)}.
+     * <p>
+     * <strong>This is not a cheap call for a flow saga, so do not poll it at subscription frequency.</strong> Instances
+     * come back whole because {@link SagaInstance#currentStep()} is read off the state, and a flow saga's state carries
+     * its received events. {@code limit} bounds the number of <em>instances</em>, not the work per instance: with
+     * {@code limit} 100 against the default 100-event history window that is on the order of ten thousand CloudEvent
+     * deserializations. Size it for a dashboard refresh or a periodic stuck-instance sweep.
      */
     public List<SagaInstance> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
         requireNonNull(status, "status cannot be null");

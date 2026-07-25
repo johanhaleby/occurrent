@@ -55,7 +55,12 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * so every store must agree on the contract:
      * <ul>
      *   <li>{@code updatedBefore} is <em>exclusive</em>. Pass the current time to mean "every instance in this status",
-     *       or {@code now} minus a threshold to mean "every instance that has gone quiet for longer than that".</li>
+     *       or {@code now} minus a threshold to mean "every instance that has gone quiet for longer than that". The
+     *       <em>resolution</em> of that comparison is store-dependent and at best milliseconds: a store that persists
+     *       {@code updatedAt} as epoch millis compares truncated values, while the executor stamps a possibly
+     *       sub-millisecond {@code Instant}. An instance updated within the same millisecond as {@code updatedBefore}
+     *       may therefore be excluded. A store may not be more <em>inclusive</em> than the exclusive boundary, so no
+     *       instance at or after it is ever returned.</li>
      *   <li>The order is ascending by {@code updatedAt}, so the stalest instance comes first. That is the useful end
      *       for finding a stuck instance: the worst offenders arrive before {@code limit} truncates.</li>
      *   <li>{@code limit} is a <em>bound, not a page</em>. There is no cursor: {@code updatedAt} persists at
@@ -69,6 +74,13 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * Unlike {@link #findWithDueTimers(Instant, int)} this reads whole instances, state included, because
      * {@link SagaInstance#currentStep()} cannot be answered without it. Enumerating flow-saga instances therefore
      * decodes their received logs, which is why {@code limit} is required rather than optional.
+     * <p>
+     * Because this is the observation path, an instance whose state can no longer be decoded must be <em>reported
+     * without its state</em> rather than making the whole enumeration fail. One instance holding, say, a received event
+     * whose class was renamed away would otherwise take down the progress view for every caller, at the exact moment
+     * someone is looking into what went wrong. Such a row still answers every {@link SagaInstance} member except
+     * {@link SagaInstance#currentStep()}. This is the opposite of {@link #find(String)}, which must keep failing loudly,
+     * because the executor loads an instance in order to fold and save it.
      *
      * @throws IllegalArgumentException if {@code limit} is not positive
      */

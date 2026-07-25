@@ -81,10 +81,11 @@ class SpringMongoSagaStateStoreMongoTest {
     private CloudEventConverter<FlowEvent> cloudEventConverter;
 
     private SpringMongoSagaStateStore<Counter> store;
+    private String collection;
 
     @BeforeEach
     void setUp() {
-        String collection = "saga-store-test-" + System.nanoTime();
+        collection = "saga-store-test-" + System.nanoTime();
         store = new SpringMongoSagaStateStore<>(mongoOperations, collection, Counter.class);
     }
 
@@ -195,6 +196,42 @@ class SpringMongoSagaStateStoreMongoTest {
         assertThat(active).extracting(SagaEnvelope::sagaId).containsExactly("active-1");
     }
 
+    /**
+     * Guards the {@code status} argument itself. Every other case here queries {@code ACTIVE}, so an implementation that
+     * dropped the parameter and hardcoded {@code ACTIVE} the way {@code findWithDueTimers} does would pass all of them.
+     */
+    @Test
+    void findByStatus_selects_on_the_requested_status_rather_than_always_active() {
+        store.compareAndSave("active-1", activeAt("active-1", Instant.ofEpochMilli(1_000)), 0);
+        store.compareAndSave("completed-1", completed("completed-1", new Counter(1), 1), 0);
+
+        List<SagaEnvelope<Counter>> completed = store.findByStatus(SagaStatus.COMPLETED, Instant.ofEpochMilli(2_000), 10);
+
+        assertThat(completed).extracting(SagaEnvelope::sagaId).containsExactly("completed-1");
+    }
+
+    /**
+     * Instances saved in one executor tick share an {@code updatedAt}, and a tie group larger than {@code limit} is the
+     * whole reason the contract calls {@code limit} a bound rather than a page. Asserts only what both stores can
+     * promise: some two of the three, without error. Pinning a particular pair would bake in one store's tiebreak and
+     * make the two deterministically disagree.
+     */
+    @Test
+    void findByStatus_truncates_a_tie_group_at_limit_without_failing() {
+        Instant sameMillisecond = Instant.ofEpochMilli(7_000);
+        store.compareAndSave("tie-a", activeAt("tie-a", sameMillisecond), 0);
+        store.compareAndSave("tie-b", activeAt("tie-b", sameMillisecond), 0);
+        store.compareAndSave("tie-c", activeAt("tie-c", sameMillisecond), 0);
+
+        List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(8_000), 2);
+
+        assertAll(
+                () -> assertThat(found).hasSize(2),
+                () -> assertThat(found).extracting(SagaEnvelope::sagaId).doesNotHaveDuplicates(),
+                () -> assertThat(found).extracting(SagaEnvelope::sagaId).isSubsetOf("tie-a", "tie-b", "tie-c")
+        );
+    }
+
     @Test
     void findByStatus_updatedBefore_is_exclusive() {
         store.compareAndSave("exact", activeAt("exact", Instant.ofEpochMilli(5_000)), 0);
@@ -233,6 +270,40 @@ class SpringMongoSagaStateStoreMongoTest {
         assertThatThrownBy(() -> store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(1_000), 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("limit must be positive");
+    }
+
+    /**
+     * A single instance whose state no longer decodes must not take the whole enumeration down. Observation is exactly
+     * what someone reaches for when an instance has gone bad, and the only escape from a throwing query would be deleting
+     * the document by hand. Note the asymmetry asserted at the end: {@code find} still fails loudly, because the executor
+     * uses it to fold and save, and a silently null state there would restart the process and re-dispatch its commands.
+     */
+    @Test
+    void findByStatus_reports_an_instance_whose_state_cannot_be_decoded_rather_than_failing_the_query() {
+        store.compareAndSave("healthy", activeAt("healthy", Instant.ofEpochMilli(2_000)), 0);
+        // A state written as a scalar where the store expects a Counter document, which is what a renamed-away or
+        // reshaped state type looks like on read.
+        mongoOperations.insert(new Document("_id", "poisoned")
+                .append("status", SagaStatus.ACTIVE.name())
+                .append("version", 1L)
+                .append("state", "no-longer-a-counter")
+                .append("timers", List.of())
+                .append("streamWatermarks", new Document())
+                .append("createdAt", 1_000L)
+                .append("updatedAt", 1_000L), collection);
+
+        List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(3_000), 10);
+
+        assertAll(
+                () -> assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("poisoned", "healthy"),
+                () -> assertThat(found.getFirst().state()).as("the undecodable instance is reported without its state").isNull(),
+                () -> assertThat(found.getFirst().currentStep()).as("currentStep is unanswerable without state").isNull(),
+                () -> assertThat(found.getFirst().status()).isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(found.getFirst().version()).isEqualTo(1),
+                () -> assertThat(found.getFirst().updatedAt()).as("every other SagaInstance member is still correct").isEqualTo(Instant.ofEpochMilli(1_000)),
+                () -> assertThat(found.getLast().state()).as("the healthy instance is unaffected").isEqualTo(new Counter(1)),
+                () -> assertThatThrownBy(() -> store.find("poisoned")).as("the executor's own read must still fail loudly").isInstanceOf(RuntimeException.class)
+        );
     }
 
     @Test

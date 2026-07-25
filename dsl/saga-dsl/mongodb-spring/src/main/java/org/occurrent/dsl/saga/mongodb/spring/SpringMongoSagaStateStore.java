@@ -32,6 +32,8 @@ import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -69,6 +71,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  */
 @NullMarked
 public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S> {
+
+    private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 
     private static final String ID = "_id";
     private static final String STATE = "state";
@@ -198,7 +202,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 .limit(limit);
         // No field projection here, unlike findWithDueTimers: SagaInstance.currentStep() is read off the state, so an
         // instance has to come back whole. The {status, updatedAt} index still serves the predicate and the sort.
-        return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
+        return mongoOperations.find(query, Document.class, collectionName).stream()
+                .map(this::toEnvelopeToleratingUndecodableState)
+                .toList();
     }
 
     @Override
@@ -271,10 +277,42 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     private SagaEnvelope<S> toEnvelope(Document document) {
+        return toEnvelope(document, readState(document.get(STATE)));
+    }
+
+    /**
+     * Like {@link #toEnvelope(Document)}, but a state that can no longer be decoded yields an envelope with a
+     * {@code null} state instead of throwing.
+     * <p>
+     * Only {@code findByStatus} uses this, because observation must not be the thing that breaks when an instance goes
+     * bad. A stored received event whose class was renamed away, or a state document that no longer matches its type,
+     * would otherwise make one poisoned instance throw for every caller enumerating the collection, taking the whole
+     * progress view down exactly when someone is looking for what is wrong, and leaving no way out except deleting the
+     * document through the SPI this feature exists to avoid using. The degraded row still answers every
+     * {@code SagaInstance} member except {@code currentStep()}, and in a stuck-instance report it is likely the most
+     * interesting row of all. This mirrors how the Mongo snapshot stores degrade rather than fail a command.
+     * <p>
+     * {@code find(sagaId)} deliberately keeps throwing: the executor loads an instance in order to fold and save it, and
+     * silently handing it a null state there would restart the process from its initial state and re-dispatch commands.
+     */
+    private SagaEnvelope<S> toEnvelopeToleratingUndecodableState(Document document) {
+        S state;
+        try {
+            // Scoped to the decode alone. The documents are already materialized by the query above, so nothing in here
+            // does I/O and a connectivity failure still propagates from the find itself.
+            state = readState(document.get(STATE));
+        } catch (RuntimeException e) {
+            log.warn("Could not decode the state of saga instance '{}' in collection '{}', reporting it without state. Its lifecycle is still observable, but currentStep() reads null.",
+                    document.getString(ID), collectionName, e);
+            state = null;
+        }
+        return toEnvelope(document, state);
+    }
+
+    private SagaEnvelope<S> toEnvelope(Document document, S state) {
         String sagaId = document.getString(ID);
         SagaStatus status = SagaStatus.valueOf(document.getString(STATUS));
         long version = document.getLong(VERSION);
-        S state = readState(document.get(STATE));
 
         List<TimerEntry> timers = new ArrayList<>();
         List<Document> timerDocuments = document.getList(TIMERS, Document.class, List.of());

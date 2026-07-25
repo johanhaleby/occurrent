@@ -185,6 +185,43 @@ class InMemorySagaStateStoreTest {
             assertThat(active).extracting(SagaEnvelope::sagaId).containsExactly("active-1");
         }
 
+        /**
+         * Guards the {@code status} argument itself. Every other case here queries {@code ACTIVE}, so an implementation
+         * that dropped the parameter and hardcoded {@code ACTIVE} the way {@code findWithDueTimers} does would pass all
+         * of them.
+         */
+        @Test
+        void selects_on_the_requested_status_rather_than_always_active() {
+            store.compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
+            store.compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
+
+            List<SagaEnvelope<String>> completed = store.findByStatus(SagaStatus.COMPLETED, NOW.plusSeconds(1), 10);
+
+            assertThat(completed).extracting(SagaEnvelope::sagaId).containsExactly("completed-1");
+        }
+
+        /**
+         * Instances saved in one executor tick share an {@code updatedAt}, and a tie group larger than {@code limit} is
+         * the whole reason the contract calls {@code limit} a bound rather than a page. Asserts only what both stores can
+         * promise: some two of the three, without error. Pinning a particular pair would bake in one store's tiebreak and
+         * make the two deterministically disagree.
+         */
+        @Test
+        void truncates_a_tie_group_at_limit_without_failing() {
+            Instant sameMillisecond = NOW.minusSeconds(30);
+            store.compareAndSave("tie-a", activeEnvelopeUpdatedAt("tie-a", sameMillisecond), 0);
+            store.compareAndSave("tie-b", activeEnvelopeUpdatedAt("tie-b", sameMillisecond), 0);
+            store.compareAndSave("tie-c", activeEnvelopeUpdatedAt("tie-c", sameMillisecond), 0);
+
+            List<SagaEnvelope<String>> found = store.findByStatus(SagaStatus.ACTIVE, NOW, 2);
+
+            assertAll(
+                    () -> assertThat(found).hasSize(2),
+                    () -> assertThat(found).extracting(SagaEnvelope::sagaId).doesNotHaveDuplicates(),
+                    () -> assertThat(found).extracting(SagaEnvelope::sagaId).isSubsetOf("tie-a", "tie-b", "tie-c")
+            );
+        }
+
         @Test
         void updatedBefore_is_exclusive() {
             store.compareAndSave("exact", activeEnvelopeUpdatedAt("exact", NOW), 0);

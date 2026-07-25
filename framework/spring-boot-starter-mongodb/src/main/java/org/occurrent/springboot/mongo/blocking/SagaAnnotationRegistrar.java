@@ -36,6 +36,7 @@ import org.occurrent.subscription.api.blocking.Subscribable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -128,17 +129,24 @@ class SagaAnnotationRegistrar {
         registerSagaInstancesSingleton(id, instances);
     }
 
-    // The registry is auto-configured alongside the annotation post-processor, so it is normally present. Resolved by
-    // its concrete type rather than the interface, because only the implementation can be written to: the public
-    // interface is read-only by design. It is absent if an application defines its own bean set without it, or replaces
-    // the registry with its own implementation, neither of which must fail a saga that is otherwise fine.
+    // Resolved by its concrete type rather than the interface, because only the implementation can be written to: the
+    // public interface is read-only by design.
     private void addToSagaInstancesRegistry(String id, SagaInstances instances) {
         SagaInstancesRegistryImpl registry = applicationContext.getBeanProvider(SagaInstancesRegistryImpl.class).getIfAvailable();
-        if (registry == null) {
-            log.warn("No SagaInstancesRegistry that Occurrent can populate is available, so saga '{}' is not in it. Look it up as '{}' or use SagaSubscription.instances() instead.", id, sagaInstancesBeanName(id));
+        if (registry != null) {
+            registry.register(id, instances);
             return;
         }
-        registry.register(id, instances);
+        if (applicationContext.getBeanNamesForType(SagaInstancesRegistry.class).length > 0) {
+            // A SagaInstancesRegistry exists that Occurrent cannot write to, which can only mean the application
+            // replaced the auto-configured one. That bean would stay empty for the lifetime of the context, so every
+            // lookup through it would report no sagas at all. Fail at startup rather than serve an observation API that
+            // silently answers "nothing is running".
+            throw new IllegalStateException("A SagaInstancesRegistry bean is defined that Occurrent cannot populate, so it would stay empty forever and report no sagas. The registry is read-only for applications and is auto-configured; remove your own bean and inject SagaInstancesRegistry instead.");
+        }
+        // No registry at all is a legitimate configuration (annotation processing switched off, say), and must not fail
+        // a saga that is otherwise running fine.
+        log.warn("No SagaInstancesRegistry bean is available, so saga '{}' is not in one. Look it up as '{}' or use SagaSubscription.instances() instead.", id, sagaInstancesBeanName(id));
     }
 
     /**
@@ -159,7 +167,14 @@ class SagaAnnotationRegistrar {
             log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext; use the SagaInstancesRegistry or SagaSubscription.instances() instead.", beanName);
             return;
         }
-        configurableContext.getBeanFactory().registerSingleton(beanName, instances);
+        ConfigurableListableBeanFactory beanFactory = configurableContext.getBeanFactory();
+        if (beanFactory.containsBean(beanName)) {
+            // registerSingleton would throw from inside afterSingletonsInstantiated, which fails startup with a message
+            // that says nothing about sagas. The name is documented API, so a collision means two different things claim
+            // it; say which saga and which name rather than letting Spring report a bare duplicate-singleton error.
+            throw new IllegalStateException("Cannot publish the SagaInstances of saga '%s' as '%s' because a bean with that name already exists. Occurrent publishes each @Saga's SagaInstances under 'sagaInstances-<id>', so rename your bean or the saga.".formatted(id, beanName));
+        }
+        beanFactory.registerSingleton(beanName, instances);
     }
 
     /** The bean name the {@link SagaInstances} for {@code sagaId} is published under. */
