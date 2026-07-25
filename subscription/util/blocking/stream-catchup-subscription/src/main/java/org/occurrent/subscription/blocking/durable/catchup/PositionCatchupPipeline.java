@@ -19,6 +19,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.internal.BoundedIdCache;
 
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
@@ -76,7 +77,7 @@ final class PositionCatchupPipeline {
      * @param deliver     Called with each window's events (bulk windows get a {@code null} cache, reconciliation
      *                    windows get {@code cache}) so the caller can dedupe, persist checkpoints and deliver.
      */
-    long replay(long startPosition, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable FixedSizeCache> deliver, FixedSizeCache cache) {
+    long replay(long startPosition, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache> deliver, BoundedIdCache cache) {
         long bulkHead = reader.currentHead();
         long cursor = windows(startPosition, bulkHead, keepRunning, deliver, null);
 
@@ -90,7 +91,7 @@ final class PositionCatchupPipeline {
 
     // Delivers events in (fromExclusive, toInclusive], paging in position windows. Stops early when keepRunning
     // reports false, for example on shutdown or cancellation.
-    private long windows(long fromExclusive, long toInclusive, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable FixedSizeCache> deliver, @Nullable FixedSizeCache cache) {
+    private long windows(long fromExclusive, long toInclusive, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache> deliver, @Nullable BoundedIdCache cache) {
         long cursor = fromExclusive;
         while (cursor < toInclusive && keepRunning.getAsBoolean()) {
             long upTo = Math.min(cursor + windowSize, toInclusive);

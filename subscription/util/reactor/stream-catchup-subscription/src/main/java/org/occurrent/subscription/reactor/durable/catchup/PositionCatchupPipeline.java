@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.internal.BoundedIdCache;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -82,7 +83,7 @@ final class PositionCatchupPipeline {
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")))
                 .flatMapMany(liveToken ->
                         reader.currentHead().flatMapMany(bulkHead -> {
-                            HandoverCache cache = new HandoverCache(handoverCacheSize);
+                            BoundedIdCache cache = new BoundedIdCache(handoverCacheSize);
                             // Cache the replayed ids, including the bulk tail, since the reactive global position
                             // resumes inclusively and the live change stream re-delivers boundary events already
                             // emitted. Dedup by id, not position, so an in-flight event never seen during the
@@ -97,7 +98,7 @@ final class PositionCatchupPipeline {
 
     // Emits events in (fromExclusive, toInclusive], paging in position windows. Records every emitted id in the cache
     // so the inclusive live resume can skip the replayed events. Used by both the bulk and the reconciliation phases.
-    private Flux<CloudEvent> windows(long fromExclusive, long toInclusive, HandoverCache cache) {
+    private Flux<CloudEvent> windows(long fromExclusive, long toInclusive, BoundedIdCache cache) {
         if (fromExclusive >= toInclusive) {
             return Flux.empty();
         }
@@ -110,7 +111,7 @@ final class PositionCatchupPipeline {
     // Snapshot the head once and drain events up to it in position order. Re-reading a moving head would advance
     // forever under sustained writes and never hand over to live (livelock). Anything after the snapshot is
     // covered by the live change stream (resumes from the pre-bulk token), deduped by the id cache.
-    private Flux<CloudEvent> reconcile(long cursor, HandoverCache cache) {
+    private Flux<CloudEvent> reconcile(long cursor, BoundedIdCache cache) {
         return reader.currentHead().flatMapMany(snapshotHead -> windows(cursor, snapshotHead, cache));
     }
 }
