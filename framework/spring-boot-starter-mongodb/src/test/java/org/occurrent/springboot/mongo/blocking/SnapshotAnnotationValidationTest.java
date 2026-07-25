@@ -25,7 +25,7 @@ import org.occurrent.annotation.Mode;
 import org.occurrent.annotation.Snapshot;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
-import org.occurrent.dsl.snapshot.SnapshotStore;
+import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;

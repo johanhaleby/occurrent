@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.application.service;
+package org.occurrent.application.service.blocking;
 
 import org.jspecify.annotations.NullMarked;
 

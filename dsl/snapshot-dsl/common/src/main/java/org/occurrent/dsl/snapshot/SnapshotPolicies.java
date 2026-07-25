@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.snapshot.blocking;
+package org.occurrent.dsl.snapshot;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.decider.Decider;
-import org.occurrent.dsl.snapshot.SnapshotPolicy;
 
 import java.util.Objects;
 
 /**
  * Snapshot policies that need a {@link Decider}, complementing the storage-neutral built-ins on {@link SnapshotPolicy}.
  * <p>
- * This lives in the executor module (not {@code snapshot-dsl-common}) so that a {@code SnapshotView}-only consumer
- * doesn't have to pull {@code occurrent-decider} onto its classpath just to read snapshots (see ADR 0061).
+ * Previously duplicated per stack (blocking and reactor, see ADR 0061) because it depends on {@link Decider}. The two
+ * copies were byte-identical, so they were collapsed into this single copy here; {@code occurrent-decider} is now a
+ * dependency of this module.
  */
 public final class SnapshotPolicies {
 

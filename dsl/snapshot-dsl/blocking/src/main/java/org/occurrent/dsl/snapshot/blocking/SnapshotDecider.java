@@ -19,7 +19,6 @@ package org.occurrent.dsl.snapshot.blocking;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 
 import java.util.Objects;
 

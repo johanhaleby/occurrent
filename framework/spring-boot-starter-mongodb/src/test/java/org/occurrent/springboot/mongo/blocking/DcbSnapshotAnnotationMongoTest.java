@@ -30,7 +30,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
-import org.occurrent.dsl.snapshot.SnapshotStore;
+import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;

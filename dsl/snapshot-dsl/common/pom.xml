@@ -45,6 +45,11 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-decider</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
         </dependency>

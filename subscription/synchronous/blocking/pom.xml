@@ -41,7 +41,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-application-service-common</artifactId>
+            <artifactId>occurrent-application-service-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

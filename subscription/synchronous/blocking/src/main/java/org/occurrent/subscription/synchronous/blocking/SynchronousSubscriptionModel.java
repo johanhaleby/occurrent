@@ -18,7 +18,7 @@ package org.occurrent.subscription.synchronous.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.application.service.SynchronousEventDispatcher;
+import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 

@@ -21,7 +21,6 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.snapshot.Snapshot;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.blocking.EventStore;

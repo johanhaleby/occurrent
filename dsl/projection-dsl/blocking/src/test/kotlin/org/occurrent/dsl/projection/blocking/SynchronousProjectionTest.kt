@@ -22,7 +22,7 @@ import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.jackson.jacksonCloudEventConverter
-import org.occurrent.application.service.TransactionExecutor
+import org.occurrent.application.service.blocking.TransactionExecutor
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined

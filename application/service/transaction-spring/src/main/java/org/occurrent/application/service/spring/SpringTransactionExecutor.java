@@ -17,7 +17,7 @@
 package org.occurrent.application.service.spring;
 
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.application.service.TransactionExecutor;
+import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 

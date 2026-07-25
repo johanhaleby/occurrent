@@ -25,7 +25,7 @@ import org.occurrent.condition.Condition;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
-import org.occurrent.dsl.snapshot.SnapshotStore;
+import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
