@@ -221,6 +221,35 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
+    void a_replayed_event_always_gets_the_metadata_form_never_the_one_argument_form() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+
+        List<String> callsReceived = new CopyOnWriteArrayList<>();
+        MaterializedView<Counted> view = new MaterializedView<>() {
+            @Override
+            public void update(Counted event) {
+                callsReceived.add("event-only:" + event.eventId());
+            }
+
+            @Override
+            public void update(EventMetadata metadata, Counted event) {
+                callsReceived.add("metadata:" + event.eventId());
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "replay-overload", view, Filter.all(), store, converter, Counted::eventId, null);
+
+        feed.catchUp();
+
+        // A replayed event has a CloudEvent behind it, so it always carries metadata and must take the metadata route.
+        // Live and replayed deliveries share one carrier whose metadata is nullable, so this pins that a replayed one is
+        // never constructed without it and so can never fall through to the one-argument overload.
+        assertThat(callsReceived).containsExactly("metadata:1", "metadata:2");
+    }
+
+    @Test
     void an_event_both_replayed_and_delivered_live_during_catch_up_is_folded_once() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();

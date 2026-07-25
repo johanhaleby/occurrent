@@ -83,7 +83,7 @@ public final class CatchupProjectionFeed<E> {
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
 
-    private final BlockingHandover<LiveEvent<E>, ReplayedEvent<E>> handover;
+    private final BlockingHandover<Delivered<E>, Delivered<E>> handover;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -99,8 +99,8 @@ public final class CatchupProjectionFeed<E> {
         this.eventId = eventId;
         this.catchupMarker = catchupMarker;
         this.handover = BlockingHandover.create(
-                this::deliverLive, live -> eventKey(live.event()),
-                replayed -> view.update(replayed.metadata(), replayed.event()), replayed -> eventKey(replayed.event()),
+                this::deliver, delivered -> eventKey(delivered.event()),
+                this::deliver, delivered -> eventKey(delivered.event()),
                 options, "projection feed");
     }
 
@@ -180,7 +180,7 @@ public final class CatchupProjectionFeed<E> {
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        handover.accept(new LiveEvent<>(null, event));
+        handover.accept(Delivered.live(event));
     }
 
     /**
@@ -195,18 +195,19 @@ public final class CatchupProjectionFeed<E> {
     public void accept(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
-        handover.accept(new LiveEvent<>(metadata, event));
+        handover.accept(Delivered.live(metadata, event));
     }
 
     // Two routes on purpose. MaterializedView.update(E) and update(EventMetadata, E) are separate interface methods a
     // caller's view may implement differently, so an event fed without metadata must still take the one-argument route
-    // rather than the metadata one carrying EventMetadata.empty().
-    private void deliverLive(LiveEvent<E> live) {
-        EventMetadata metadata = live.metadata();
+    // rather than the metadata one carrying EventMetadata.empty(). A replayed delivery always has metadata, so it always
+    // takes the metadata route.
+    private void deliver(Delivered<E> delivered) {
+        EventMetadata metadata = delivered.metadata();
         if (metadata == null) {
-            view.update(live.event());
+            view.update(delivered.event());
         } else {
-            view.update(metadata, live.event());
+            view.update(metadata, delivered.event());
         }
     }
 
@@ -223,10 +224,10 @@ public final class CatchupProjectionFeed<E> {
             }
 
             @Override
-            public Stream<ReplayedEvent<E>> replay() {
+            public Stream<Delivered<E>> replay() {
                 return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
                         // Replay decodes CloudEvents, so metadata is available here (unlike the live accept(E) path).
-                        .map(cloudEvent -> new ReplayedEvent<>(EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent)));
+                        .map(cloudEvent -> Delivered.replayed(EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent)));
             }
 
             @Override
@@ -252,12 +253,33 @@ public final class CatchupProjectionFeed<E> {
         }
     }
 
-    // A replayed event always carries the metadata decoded from its CloudEvent.
-    private record ReplayedEvent<E>(EventMetadata metadata, E event) {
-    }
+    /**
+     * One delivery, live or replayed, with whatever metadata it had. Null metadata means none was given, which is what
+     * picks the one-argument {@link MaterializedView} overload in {@link #deliver}.
+     * <p>
+     * The canonical constructor is private so the only ways in are the three factories below. That keeps "a replayed
+     * delivery always has metadata" checkable: {@link #replayed} takes a non-null {@link EventMetadata} under
+     * {@code @NullMarked}, so a future edit cannot quietly construct a replayed delivery without it. That guarantee used
+     * to come from having two separate carrier types.
+     */
+    private record Delivered<E>(@Nullable EventMetadata metadata, E event) {
 
-    // A live event carries metadata only when the source supplied it via accept(metadata, event). Null means none was
-    // given, which is what picks the one-argument MaterializedView overload in deliverLive.
-    private record LiveEvent<E>(@Nullable EventMetadata metadata, E event) {
+        private Delivered {
+        }
+
+        /** A live delivery the source gave no metadata for. */
+        static <E> Delivered<E> live(E event) {
+            return new Delivered<>(null, event);
+        }
+
+        /** A live delivery the source supplied metadata for. */
+        static <E> Delivered<E> live(EventMetadata metadata, E event) {
+            return new Delivered<>(metadata, event);
+        }
+
+        /** A replayed delivery, which always has the metadata decoded from its CloudEvent. */
+        static <E> Delivered<E> replayed(EventMetadata metadata, E event) {
+            return new Delivered<>(metadata, event);
+        }
     }
 }
