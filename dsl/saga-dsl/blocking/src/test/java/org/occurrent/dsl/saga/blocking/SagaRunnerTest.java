@@ -32,7 +32,7 @@ import org.occurrent.dsl.decider.DeciderApplicationService;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaEnvelope.Status;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -178,7 +178,7 @@ class SagaRunnerTest {
             await().untilAsserted(() -> assertThat(issued).containsExactly(new ShipOrder(orderId)));
             SagaEnvelope<OrderState> envelope = stateStore.find(orderId).orElseThrow();
             assertAll(
-                    () -> assertThat(envelope.status()).isEqualTo(Status.COMPLETED),
+                    () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(envelope.timers()).isEmpty()
             );
         }
@@ -309,7 +309,7 @@ class SagaRunnerTest {
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> assertThat(issued).containsExactly(new CancelOrder(orderId)));
             SagaEnvelope<OrderState> envelope = stateStore.find(orderId).orElseThrow();
             assertAll(
-                    () -> assertThat(envelope.status()).isEqualTo(Status.COMPLETED),
+                    () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(envelope.state()).isEqualTo(new Cancelled(orderId)),
                     () -> assertThat(envelope.timers()).isEmpty()
             );
@@ -436,7 +436,7 @@ class SagaRunnerTest {
             SagaEnvelope<OrderState> envelope = stateStore.find(orderId).orElseThrow();
             assertAll(
                     () -> assertThat(shipAttempts.get()).isGreaterThanOrEqualTo(2),
-                    () -> assertThat(envelope.status()).isEqualTo(Status.COMPLETED),
+                    () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(envelope.version()).isEqualTo(2)
             );
         }

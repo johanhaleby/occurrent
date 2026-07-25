@@ -26,9 +26,9 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
@@ -168,7 +168,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
         Objects.requireNonNull(now, "now cannot be null");
-        Query query = Query.query(where(STATUS).is(Status.ACTIVE.name()).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
+        Query query = Query.query(where(STATUS).is(SagaStatus.ACTIVE.name()).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
                 .limit(limit);
         // Project only the fields the poller needs to decide which timers are due. This deliberately excludes the state
         // (a flow saga's received log can be large), so the poll never pays to decode it. The executor re-loads the full
@@ -253,7 +253,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private SagaEnvelope<S> toEnvelope(Document document) {
         String sagaId = document.getString(ID);
-        Status status = Status.valueOf(document.getString(STATUS));
+        SagaStatus status = SagaStatus.valueOf(document.getString(STATUS));
         long version = document.getLong(VERSION);
         S state = readState(document.get(STATE));
 

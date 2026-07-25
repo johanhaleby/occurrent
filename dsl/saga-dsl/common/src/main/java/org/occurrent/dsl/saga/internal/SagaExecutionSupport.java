@@ -20,7 +20,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaEnvelope.Status;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.cloudevents.EventMetadata;
@@ -157,7 +157,7 @@ public final class SagaExecutionSupport {
         SagaEnvelope<S> next = new SagaEnvelope<>(
                 sagaId,
                 nextState,
-                terminal ? Status.COMPLETED : Status.ACTIVE,
+                terminal ? SagaStatus.COMPLETED : SagaStatus.ACTIVE,
                 expectedVersion + 1,
                 List.copyOf(timers.values()),
                 streamWatermarks,

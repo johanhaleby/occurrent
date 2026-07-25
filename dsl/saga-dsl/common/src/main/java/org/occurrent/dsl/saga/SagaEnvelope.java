@@ -43,7 +43,7 @@ import java.util.OptionalLong;
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        S state,
-                                                       Status status,
+                                                       SagaStatus status,
                                                        long version,
                                                        List<TimerEntry> timers,
                                                        Map<String, Long> streamWatermarks,
@@ -57,16 +57,13 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         streamWatermarks = Map.copyOf(streamWatermarks);
     }
 
-    /** Whether the instance is active or completed. */
-    public enum Status {ACTIVE, COMPLETED}
-
     /** A pending timer: its name and when it should fire (epoch millis). */
     public record TimerEntry(String name, long firesAtEpochMilli) {
     }
 
     /** Whether the instance has completed. */
     public boolean isCompleted() {
-        return status == Status.COMPLETED;
+        return status == SagaStatus.COMPLETED;
     }
 
     /** The earliest firing time across all pending timers, or empty when there are none. Drives the due-timer query. */

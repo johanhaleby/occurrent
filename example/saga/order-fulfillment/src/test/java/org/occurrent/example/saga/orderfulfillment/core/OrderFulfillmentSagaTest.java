@@ -32,7 +32,7 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.decider.DeciderApplicationService;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaEnvelope.Status;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.command.CommandDispatchers;
@@ -138,7 +138,7 @@ class OrderFulfillmentSagaTest {
                     .containsExactly(new PaymentReservationRequested(orderId, 42.0), new OrderShipped(orderId)));
             SagaEnvelope<OrderSagaState> envelope = stateStore.find(orderId).orElseThrow();
             assertAll(
-                    () -> assertThat(envelope.status()).isEqualTo(Status.COMPLETED),
+                    () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(envelope.timers()).isEmpty()
             );
         }

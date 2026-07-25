@@ -21,7 +21,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.occurrent.dsl.saga.SagaEnvelope.Status;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 
 import java.time.Instant;
@@ -40,11 +40,11 @@ class InMemorySagaStateStoreTest {
     private final InMemorySagaStateStore<String> store = new InMemorySagaStateStore<>();
 
     private static SagaEnvelope<String> envelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        return new SagaEnvelope<>(sagaId, state, Status.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, Map.of(), null, NOW, NOW, null);
     }
 
     private static SagaEnvelope<String> completedEnvelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        return new SagaEnvelope<>(sagaId, state, Status.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW);
     }
 
     @Nested
