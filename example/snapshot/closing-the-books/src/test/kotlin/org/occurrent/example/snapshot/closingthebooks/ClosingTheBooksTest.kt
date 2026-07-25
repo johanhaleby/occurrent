@@ -27,7 +27,7 @@ import org.occurrent.application.service.blocking.generic.GenericApplicationServ
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.snapshot.SnapshotOptions
 import org.occurrent.dsl.snapshot.SnapshotPolicy
-import org.occurrent.dsl.snapshot.SnapshotStore
+import org.occurrent.dsl.snapshot.blocking.SnapshotStore
 import org.occurrent.dsl.snapshot.blocking.SnapshotDecider
 import org.occurrent.dsl.snapshot.blocking.SnapshotDeciderApplicationService
 import org.occurrent.dsl.snapshot.blocking.SnapshotPolicies

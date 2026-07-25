@@ -24,8 +24,8 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotDecision;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
+import org.occurrent.dsl.snapshot.blocking.internal.SnapshotStoreSupport;
 import org.occurrent.eventstore.api.WriteResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -222,7 +222,7 @@ public final class SnapshotDeciderApplicationService<E> {
         }
         // Build the decision (including the eventsSinceSnapshot narrowing) inside the best-effort boundary so nothing
         // after the commit can surface the committed command as a failure.
-        SnapshotSupport.maybeSaveBestEffort(store, streamId, options.schemaVersion(), options.policy(), () -> {
+        SnapshotStoreSupport.maybeSaveBestEffort(store, streamId, options.schemaVersion(), options.policy(), () -> {
             long newVersion = writeResult.newStreamVersion();
             int eventsSinceSnapshot = SnapshotSupport.requireInt(newVersion - base.version(), "the number of events since the snapshot");
             return new SnapshotDecision<>(decision.state(), decision.events(), newVersion, eventsSinceSnapshot);

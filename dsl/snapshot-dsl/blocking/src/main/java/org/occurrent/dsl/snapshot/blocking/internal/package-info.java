@@ -14,21 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.snapshot.blocking;
+@NullMarked
+package org.occurrent.dsl.snapshot.blocking.internal;
 
-import org.occurrent.dsl.snapshot.Snapshot;
-
-import java.util.Optional;
-
-/** A test double whose {@code save} always throws, used to assert how the facades handle a store failure. */
-final class ThrowingSnapshotStore<S> implements SnapshotStore<S> {
-    @Override
-    public Optional<Snapshot<S>> findLatest(String key) {
-        return Optional.empty();
-    }
-
-    @Override
-    public void save(String key, Snapshot<S> snapshot) {
-        throw new RuntimeException("snapshot store save failed (test double)");
-    }
-}
+import org.jspecify.annotations.NullMarked;

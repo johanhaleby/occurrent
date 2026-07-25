@@ -35,7 +35,6 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.SnapshotOptions;
 import org.occurrent.dsl.snapshot.SnapshotPolicy;
-import org.occurrent.dsl.snapshot.SnapshotStore;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;

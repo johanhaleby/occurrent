@@ -29,7 +29,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
-import org.occurrent.dsl.snapshot.SnapshotStore;
+import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;

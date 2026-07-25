@@ -21,7 +21,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.dsl.snapshot.SnapshotOptions
 import org.occurrent.dsl.snapshot.SnapshotPolicy
-import org.occurrent.dsl.snapshot.SnapshotStore
+import org.occurrent.dsl.snapshot.blocking.SnapshotStore
 import org.occurrent.dsl.snapshot.blocking.SnapshotDecider
 import org.occurrent.dsl.snapshot.blocking.SnapshotDeciderApplicationService
 import org.occurrent.dsl.snapshot.blocking.SnapshotPolicies

@@ -21,7 +21,7 @@ import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.snapshot.Snapshot;
-import org.occurrent.dsl.snapshot.SnapshotStore;
+import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoOperations;
