@@ -65,13 +65,13 @@ public final class SagaInstances {
      * <p>
      * Enumeration is an optional store capability, so this throws when the underlying store does not implement
      * {@link SagaStateStoreQueries}. {@link #find(String)} works on any store.
-     *
-     * @throws UnsupportedOperationException if the store cannot enumerate instances
      * <p>
      * A store is expected to answer this without reading saga state, so the cost is a bounded indexed query rather than
      * one proportional to how much history each instance carries. The Mongo store projects only the fields behind
      * {@link SagaInstance} and reads {@code currentStep} from a denormalized field, so enumerating flow-saga instances
      * does not decode their received events.
+     *
+     * @throws UnsupportedOperationException if the store cannot enumerate instances
      */
     public List<SagaInstance> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
         requireNonNull(status, "status cannot be null");
