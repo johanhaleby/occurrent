@@ -48,7 +48,7 @@ import java.util.function.Supplier;
  * {@link Mono} returned by {@link #catchUp(Source)} completes, and the marker is persisted, <em>before</em> the
  * buffered live payloads are folded (the marker step and the live sink are both stages of the same
  * {@code Flux.concat}, and the returned {@code Mono} completes at the marker stage, not at the end of the live
- * stream). The blocking engine's {@link BlockingHandover#catchUp} returns only <em>after</em> the buffered live
+ * stream). The blocking engine's {@code BlockingHandover.catchUp} returns only <em>after</em> the buffered live
  * payloads are drained. Both are internally consistent: a blocking {@code accept} call returns before its payload is
  * folded during the catch-up window, whereas here a live payload's {@code accept} {@link Mono} completes only once
  * its fold has actually run (including payloads buffered during the replay), even though the catch-up-done signal
