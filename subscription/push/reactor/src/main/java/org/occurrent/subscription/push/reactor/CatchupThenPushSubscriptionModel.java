@@ -22,25 +22,20 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
-import org.occurrent.subscription.internal.BoundedIdCache;
+import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
+import org.occurrent.subscription.internal.HandoverMessages;
+import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.internal.ReplayFilters;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.MonoSink;
-import reactor.core.publisher.Sinks;
 
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
@@ -60,19 +55,22 @@ import java.util.function.Function;
  * position watermark is persisted and delivery is at-least-once over idempotent folds. A live event's {@code accept}
  * {@link Mono} completes only once its handler has run (including events buffered during the replay), so the listener
  * can acknowledge after processing. Only stream and capability-agnostic subscription filters can be replayed.
+ * <p>
+ * The catch-up-then-live coordination itself (the bounded live sink, the de-dup cache, and the
+ * replay-then-marker-then-live pipeline shape) is delegated per-subscription to {@link ReactiveHandover}, shared with
+ * {@code CatchupProjectionFeed}.
  */
 @NullMarked
 public class CatchupThenPushSubscriptionModel implements Subscribable {
 
     /** @see org.occurrent.subscription.push.reactor.CatchupThenPushSubscriptionModel */
-    public static final int DEFAULT_DEDUP_CACHE_SIZE = 10_000;
-    public static final int DEFAULT_MAX_BUFFERED_EVENTS = 100_000;
+    public static final int DEFAULT_DEDUP_CACHE_SIZE = HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE;
+    public static final int DEFAULT_MAX_BUFFERED_EVENTS = HandoverOptions.DEFAULT_MAX_BUFFERED_EVENTS;
 
     private final PositionOrderedReader reader;
     private final PushSubscriptionModel liveFeed;
     private final @Nullable CheckpointStorage catchupMarker;
-    private final int dedupCacheSize;
-    private final int maxBufferedEvents;
+    private final HandoverOptions options;
 
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker) {
         this(reader, liveFeed, catchupMarker, DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
@@ -81,18 +79,11 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
         if (!reader.writesPosition()) {
-            throw new IllegalArgumentException("The reader does not write positions (writesPosition() returns false), so the catch-up cannot replay history in position order. Supply a reader from a positioned event store.");
+            throw new IllegalArgumentException(HandoverMessages.POSITIONED_READER_REQUIRED);
         }
         this.liveFeed = Objects.requireNonNull(liveFeed, "liveFeed cannot be null");
         this.catchupMarker = catchupMarker;
-        if (dedupCacheSize <= 0) {
-            throw new IllegalArgumentException("dedupCacheSize must be greater than zero");
-        }
-        if (maxBufferedEvents <= 0) {
-            throw new IllegalArgumentException("maxBufferedEvents must be greater than zero");
-        }
-        this.dedupCacheSize = dedupCacheSize;
-        this.maxBufferedEvents = maxBufferedEvents;
+        this.options = new HandoverOptions(dedupCacheSize, maxBufferedEvents);
     }
 
     @Override
@@ -101,91 +92,32 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
         // Fail fast on a filter that cannot be replayed, before registering anything on the live feed.
-        Filter replayFilter = replayFilterFor(filter);
+        Filter replayFilter = ReplayFilters.replayFilterFor(filter);
 
-        BoundedIdCache deliveredIds = new BoundedIdCache(dedupCacheSize);
-        Sinks.Many<Item> liveSink = Sinks.many().unicast().onBackpressureBuffer(new ArrayBlockingQueue<>(maxBufferedEvents));
-        Sinks.One<Void> catchupDone = Sinks.one();
-        // Track the acks of live events buffered but not yet delivered, so a catch-up failure fails them rather than
-        // leaving the listener's accept Monos hanging forever.
-        Set<MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
-        AtomicReference<Throwable> terminalError = new AtomicReference<>();
+        ReactiveHandover<CloudEvent, CloudEvent> handover = ReactiveHandover.create(
+                action, CloudEvent::getId, action, CloudEvent::getId, options);
 
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not lost.
-        liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), cloudEvent -> Mono.create(ackSink -> {
-            ackSink.onDispose(() -> pendingLiveAcks.remove(ackSink));
-            Throwable failure = terminalError.get();
-            if (failure != null) {
-                ackSink.error(failure);
-                return;
-            }
-            pendingLiveAcks.add(ackSink);
-            // Re-check after registering: if the catch-up failed concurrently, fail this ack rather than hang.
-            failure = terminalError.get();
-            if (failure != null) {
-                ackSink.error(failure);
-                return;
-            }
-            Sinks.EmitResult result = liveSink.tryEmitNext(new Item(cloudEvent, ackSink));
-            if (result.isFailure()) {
-                ackSink.error(new IllegalStateException("Live event buffer overflowed during catch-up replay (cap "
-                        + maxBufferedEvents + "). The history is too large to buffer the live feed across a full replay. "
-                        + "Rebuild offline from the event store instead of catching up over a live feed. Emit result: " + result));
-            }
-        }));
+        liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
 
-        // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
-        // written only when the replay actually ran (not on a restart that skips it).
-        Mono<Boolean> alreadyDone = alreadyCaughtUp(subscriptionId).cache();
-        Flux<Item> replay = alreadyDone
-                .flatMapMany(done -> done
-                        ? Flux.empty()
-                        : reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning()).map(Item::replayed));
-        Flux<Item> markerThenLive = Flux.concat(
-                alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : markCaughtUp(subscriptionId)).thenMany(Flux.<Item>empty()),
-                Mono.<Item>fromRunnable(() -> catchupDone.tryEmitEmpty()),
-                liveSink.asFlux());
-
-        Flux.concat(replay, markerThenLive)
-                .concatMap(item -> deliver(item, action, deliveredIds))
-                .subscribe(ignored -> {
-                }, error -> {
-                    // A catch-up-phase failure terminates the pipeline before the buffered live events are drained.
-                    // Fail their acks and reject later ones, so the listener sees the error instead of hanging.
-                    terminalError.set(error);
-                    catchupDone.tryEmitError(error);
-                    pendingLiveAcks.forEach(sink -> sink.error(error));
-                });
-
-        return new AlreadyStartedSubscription(subscriptionId, catchupDone.asMono());
-    }
-
-    // Serialized by concatMap, so the de-dup cache is touched by one thread at a time and needs no synchronization.
-    private static Mono<Void> deliver(Item item, Function<CloudEvent, Mono<Void>> action, BoundedIdCache deliveredIds) {
-        CloudEvent cloudEvent = item.event();
-        String id = cloudEvent.getId();
-        if (item.ack() != null) {
-            // Live event: de-dup against the overlap, then run the handler and complete its accept Mono so the listener
-            // can acknowledge only after processing. A handler error is reported to the listener but does not stop the
-            // pipeline (the next event is still delivered).
-            if (deliveredIds.contains(id)) {
-                item.ack().success();
-                return Mono.empty();
+        Mono<Void> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                return CatchupThenPushSubscriptionModel.this.alreadyCaughtUp(subscriptionId);
             }
-            // Mono.defer so a synchronous throw from action.apply becomes an onError signal onErrorResume can catch,
-            // rather than aborting the whole pipeline.
-            return Mono.defer(() -> action.apply(cloudEvent))
-                    .doOnSuccess(v -> {
-                        deliveredIds.add(id);
-                        item.ack().success();
-                    })
-                    .onErrorResume(error -> {
-                        item.ack().error(error);
-                        return Mono.empty();
-                    });
-        }
-        // Replay event: an error here propagates and fails the catch-up.
-        return Mono.defer(() -> action.apply(cloudEvent)).doOnSuccess(v -> deliveredIds.add(id));
+
+            @Override
+            public Flux<CloudEvent> replay() {
+                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                return CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
+            }
+        });
+
+        return new AlreadyStartedSubscription(subscriptionId, catchupDone);
     }
 
     private Mono<Boolean> alreadyCaughtUp(String subscriptionId) {
@@ -200,24 +132,6 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         return reader.currentPosition()
                 .flatMap(head -> catchupMarker.save(subscriptionId, GlobalCheckpoint.of(head)))
                 .then();
-    }
-
-    private static Filter replayFilterFor(@Nullable SubscriptionFilter filter) {
-        return switch (filter) {
-            case null -> Filter.all();
-            case StreamSubscriptionFilter streamSubscriptionFilter -> streamSubscriptionFilter.filter();
-            case AgnosticSubscriptionFilter agnosticSubscriptionFilter -> agnosticSubscriptionFilter.filter();
-            default ->
-                    throw new IllegalArgumentException("Cannot catch-up-replay a " + filter.getClass().getSimpleName()
-                            + ". Only a stream or capability-agnostic subscription filter can be replayed in position order.");
-        };
-    }
-
-    // A replayed event has a null ack; a live event carries the MonoSink whose completion lets the listener acknowledge.
-    private record Item(CloudEvent event, @Nullable MonoSink<Void> ack) {
-        static Item replayed(CloudEvent event) {
-            return new Item(event, null);
-        }
     }
 
     private record AlreadyStartedSubscription(String id, Mono<Void> started) implements Subscription {
