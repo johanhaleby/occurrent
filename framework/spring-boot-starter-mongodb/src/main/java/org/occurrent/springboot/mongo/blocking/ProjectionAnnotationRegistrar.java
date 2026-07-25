@@ -347,7 +347,8 @@ class ProjectionAnnotationRegistrar {
     }
 
     // Unset knobs keep their own default, so setting one does not reset the other.
-    private static CatchupThenLiveOptions catchupThenLiveOptions(OccurrentProperties properties) {
+    // Package-private for a direct unit test: resolution is easy to get subtly wrong and needs no Spring context.
+    static CatchupThenLiveOptions catchupThenLiveOptions(OccurrentProperties properties) {
         CatchupThenLiveProperties configured = properties.getSubscription().getCatchupThenLive();
         Integer dedupCacheSize = configured.getDedupCacheSize();
         Integer maxBufferedEvents = configured.getMaxBufferedEvents();
