@@ -18,20 +18,20 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>subscription-push</artifactId>
+        <artifactId>subscription-handover</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>occurrent-subscription-push-reactor</artifactId>
+    <artifactId>occurrent-subscription-handover-reactor</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-api-reactor</artifactId>
+            <artifactId>occurrent-subscription-handover-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -39,26 +39,9 @@
             <artifactId>occurrent-subscription-core</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- The shared catch-up-then-live coordination engine -->
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-handover-reactor</artifactId>
-            <version>${project.version}</version>
-        </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
-        </dependency>
-        <!-- Position-ordered event-store read for the one-time catch-up replay in CatchupThenPushSubscriptionModel -->
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-api-reactor</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-filter</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
@@ -67,17 +50,6 @@
         </dependency>
 
         <!-- Test -->
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-api-dcb</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.cloudevents</groupId>
-            <artifactId>cloudevents-core</artifactId>
-            <scope>test</scope>
-        </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-test</artifactId>

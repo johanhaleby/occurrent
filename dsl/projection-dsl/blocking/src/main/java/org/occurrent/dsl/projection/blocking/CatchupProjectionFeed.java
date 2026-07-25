@@ -20,10 +20,9 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.dsl.projection.Projection;
-import org.occurrent.dsl.projection.internal.BoundedIdCache;
-import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
@@ -31,10 +30,11 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.handover.HandoverMessages;
+import org.occurrent.subscription.handover.HandoverOptions;
+import org.occurrent.subscription.handover.blocking.BlockingHandover;
 
-import java.util.ArrayDeque;
 import java.util.Objects;
-import java.util.Queue;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -57,14 +57,17 @@ import java.util.stream.Stream;
  * before it is folded, so a message may be acknowledged before it is applied. That is safe because the marker is written
  * only after the drain, so a crash mid-catch-up re-replays the whole history from the store, the backstop for any event
  * acknowledged but not yet folded.
+ * <p>
+ * The catch-up-then-live coordination itself (the buffer, the de-dup cache, and the drain-then-mark ordering) is
+ * delegated to {@link BlockingHandover}, shared with {@code CatchupThenPushSubscriptionModel}.
  */
 @NullMarked
 public final class CatchupProjectionFeed<E> {
 
     /** Recently folded event ids retained to de-duplicate the replay-to-live overlap. */
-    public static final int DEFAULT_DEDUP_CACHE_SIZE = 10_000;
+    public static final int DEFAULT_DEDUP_CACHE_SIZE = HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE;
     /** Cap on events buffered from the live feed during the catch-up replay before failing loud. */
-    public static final int DEFAULT_MAX_BUFFERED_EVENTS = 100_000;
+    public static final int DEFAULT_MAX_BUFFERED_EVENTS = HandoverOptions.DEFAULT_MAX_BUFFERED_EVENTS;
 
     private final MaterializedView<E> view;
     private final Filter replayFilter;
@@ -73,13 +76,8 @@ public final class CatchupProjectionFeed<E> {
     private final Function<E, String> eventId;
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
-    private final int maxBufferedEvents;
 
-    private final Object lock = new Object();
-    private final Queue<E> buffer = new ArrayDeque<>();
-    private final BoundedIdCache deliveredIds;
-    private boolean live = false;
-    private @Nullable Throwable catchUpFailure = null;
+    private final BlockingHandover<E, ReplayedEvent<E>> handover;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -89,13 +87,15 @@ public final class CatchupProjectionFeed<E> {
         this.replayFilter = replayFilter;
         this.reader = reader;
         if (!reader.writesPosition()) {
-            throw new IllegalArgumentException("The reader does not write positions (writesPosition() returns false), so the catch-up cannot replay history in position order. Supply a reader from a positioned event store.");
+            throw new IllegalArgumentException(HandoverMessages.POSITIONED_READER_REQUIRED);
         }
         this.converter = converter;
         this.eventId = eventId;
         this.catchupMarker = catchupMarker;
-        this.maxBufferedEvents = maxBufferedEvents;
-        this.deliveredIds = new BoundedIdCache(dedupCacheSize);
+        this.handover = BlockingHandover.create(
+                view::update, this::eventKey,
+                replayed -> view.update(replayed.metadata(), replayed.event()), replayed -> eventKey(replayed.event()),
+                new HandoverOptions(dedupCacheSize, maxBufferedEvents));
     }
 
     /**
@@ -180,20 +180,10 @@ public final class CatchupProjectionFeed<E> {
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        synchronized (lock) {
-            if (catchUpFailure != null) {
-                throw new IllegalStateException("Catch-up failed for this projection feed, so it cannot accept live events. Rebuild it after fixing the cause.", catchUpFailure);
-            }
-            if (live) {
-                deliverLive(event);
-                return;
-            }
-            if (buffer.size() >= maxBufferedEvents) {
-                throw new IllegalStateException("Live event buffer overflowed during catch-up replay (cap "
-                        + maxBufferedEvents + "). The history is too large to buffer the live feed across a full replay. "
-                        + "Rebuild offline from the event store instead of catching up over a live feed.");
-            }
-            buffer.add(event);
+        try {
+            handover.accept(event);
+        } catch (BlockingHandover.CatchUpFailedException e) {
+            throw new IllegalStateException("Catch-up failed for this projection feed, so it cannot accept live events. Rebuild it after fixing the cause.", e.getCause());
         }
     }
 
@@ -203,51 +193,24 @@ public final class CatchupProjectionFeed<E> {
      * after wiring the live feed, so events arriving during the replay are captured.
      */
     public void catchUp() {
-        try {
-            if (isAlreadyCaughtUp()) {
-                drainBufferAndGoLive();
-                return;
+        handover.catchUp(new BlockingHandover.Source<>() {
+            @Override
+            public boolean isAlreadyCaughtUp() {
+                return CatchupProjectionFeed.this.isAlreadyCaughtUp();
             }
-            try (Stream<CloudEvent> history = reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())) {
-                history.forEach(cloudEvent -> {
-                    E event = converter.toDomainEvent(cloudEvent);
-                    // Replay decodes CloudEvents, so metadata is available here (unlike the live accept(E) path).
-                    view.update(EventMetadata.from(cloudEvent), event);
-                    synchronized (lock) {
-                        deliveredIds.add(eventKey(event));
-                    }
-                });
-            }
-            drainBufferAndGoLive();
-            markCaughtUp();
-        } catch (RuntimeException e) {
-            // Record the failure so a live event fed after a failed catch-up fails fast instead of buffering until
-            // overflow and hiding the error.
-            synchronized (lock) {
-                catchUpFailure = e;
-            }
-            throw e;
-        }
-    }
 
-    private void drainBufferAndGoLive() {
-        synchronized (lock) {
-            for (E buffered : buffer) {
-                deliverLive(buffered);
+            @Override
+            public Stream<ReplayedEvent<E>> replay() {
+                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
+                        // Replay decodes CloudEvents, so metadata is available here (unlike the live accept(E) path).
+                        .map(cloudEvent -> new ReplayedEvent<>(EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent)));
             }
-            buffer.clear();
-            live = true;
-        }
-    }
 
-    // Must be called holding lock. Folds unless the event was already folded by the replay or an earlier live copy.
-    private void deliverLive(E event) {
-        String key = eventKey(event);
-        if (deliveredIds.contains(key)) {
-            return;
-        }
-        view.update(event);
-        deliveredIds.add(key);
+            @Override
+            public void markCaughtUp() {
+                CatchupProjectionFeed.this.markCaughtUp();
+            }
+        });
     }
 
     // A null id would collapse every such event to one de-dup key and silently drop deliveries, so fail loud instead.
@@ -264,5 +227,10 @@ public final class CatchupProjectionFeed<E> {
             // The stored position marks that the catch-up replay completed, not a live resume watermark.
             catchupMarker.save(id, GlobalCheckpoint.of(reader.currentPosition()));
         }
+    }
+
+    // A replayed event carries the metadata decoded from its CloudEvent; a live event (delivered via accept(E)) has
+    // none, so the two deliveries are separate MaterializedView overloads (see the class javadoc).
+    private record ReplayedEvent<E>(EventMetadata metadata, E event) {
     }
 }
