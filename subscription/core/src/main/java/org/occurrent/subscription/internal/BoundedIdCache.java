@@ -24,9 +24,19 @@ import java.util.Queue;
 import java.util.Set;
 
 /**
- * A bounded set of event ids that de-duplicates the replay-to-live overlap in the catch-up feeds. It retains
- * the most recently added ids up to {@code maxSize}, evicting the oldest once the cap is reached. Not thread-safe: the
- * catch-up pipelines serialize all access to it.
+ * A bounded, insertion-ordered set of event ids that de-duplicates the replay-to-live overlap at the handover seam of
+ * the catch-up feeds. Recording the replayed ids lets the live consumer skip the events the inclusive live resume
+ * re-delivers. The overlap is bounded by write volume during the replay, not by total history, since live delivery
+ * resumes from a recent token.
+ * <p>
+ * Dedup is id-based with a fixed ceiling: it holds up to {@code maxSize} ids and evicts in first-added order past
+ * that, so exceeding {@code maxSize} causes duplicate delivery, never loss, since delivery is at-least-once. Eviction
+ * follows first insertion, not last use. Adding an id that is already held does nothing, so it keeps its original
+ * place in the eviction order and is evicted at the same time it would have been otherwise. This is not an LRU cache.
+ * Never dedupes by position, so a late-committing low-position event, absent from the forward-only replay, is always
+ * delivered live.
+ * <p>
+ * Thread-safe. The catch-up pipelines write on the catch-up thread and read on the live thread at the handover seam.
  */
 @NullMarked
 public final class BoundedIdCache {
@@ -35,16 +45,21 @@ public final class BoundedIdCache {
     private final Queue<String> order;
 
     public BoundedIdCache(int maxSize) {
+        if (maxSize < 1) {
+            // A cache of 0 would evict on every add and de-duplicate nothing, so reject it instead of
+            // silently re-delivering every replayed event.
+            throw new IllegalArgumentException("maxSize must be at least 1, was " + maxSize);
+        }
         this.maxSize = maxSize;
         this.ids = new HashSet<>(Math.min(maxSize, 1024));
         this.order = new ArrayDeque<>();
     }
 
-    public boolean contains(String id) {
+    public synchronized boolean contains(String id) {
         return ids.contains(id);
     }
 
-    public void add(String id) {
+    public synchronized void add(String id) {
         if (ids.add(id)) {
             order.add(id);
             if (order.size() > maxSize) {

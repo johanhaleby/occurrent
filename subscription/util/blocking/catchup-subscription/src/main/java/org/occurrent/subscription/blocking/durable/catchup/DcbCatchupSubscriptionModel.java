@@ -34,6 +34,7 @@ import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
+import org.occurrent.subscription.internal.BoundedIdCache;
 
 import java.util.Objects;
 import java.util.StringJoiner;
@@ -108,17 +109,17 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 
-    private Subscription startLiveDcbSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
+    private Subscription startLiveDcbSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
         return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, dcbLiveConsumer(action, cache));
     }
 
-    private Consumer<CloudEvent> dcbLiveConsumer(Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
+    private Consumer<CloudEvent> dcbLiveConsumer(Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
         return cloudEvent -> {
             // The live change stream sees every event, so keep only DCB events matching the query and skip those
             // already delivered during catch-up. DCB events are identified by isDcbEvent (the tags extension), not by
             // position, since stream events now carry a position too.
             if (DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, dcbQuery)
-                    && (cache == null || !cache.isCached(cloudEvent.getId()))) {
+                    && (cache == null || !cache.contains(cloudEvent.getId()))) {
                 action.accept(cloudEvent);
             }
         };
@@ -143,7 +144,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
         // Position is monotonic and server-assigned, so this needs no count and no time sort. Anything written
         // after the reconciliation loop stabilises is newer than the live resume position and arrives live.
-        FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
+        BoundedIdCache catchupPhaseCache = new BoundedIdCache(config.cacheSize);
         PositionCatchupPipeline.Reader dcbReader = new PositionCatchupPipeline.Reader() {
             @Override
             public long currentHead() {
@@ -213,7 +214,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      * Delivers catch-up events to {@code action}, optionally deduping against {@code cache}, and persists the DCB
      * subscription position for events matching the catch-up persist predicate.
      */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
+    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
         // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
         // resource-backed read does not leak its cursor.
         try (cloudEvents) {
@@ -222,7 +223,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                 // Skip events already delivered in an earlier reconciliation pass (the delta is re-read until it
                 // stabilises, so passes overlap) and record the rest so the live subscription can skip them at the
                 // handover seam. Without the filter the overlapping re-reads would deliver duplicates.
-                takeWhile = takeWhile.filter(e -> !cache.isCached(e.getId())).peek(e -> cache.put(e.getId()));
+                takeWhile = takeWhile.filter(e -> !cache.contains(e.getId())).peek(e -> cache.add(e.getId()));
             }
             takeWhile
                     .peek(action)
