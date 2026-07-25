@@ -50,7 +50,7 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable Long positionWatermark,
                                                        @Nullable Instant createdAt,
                                                        @Nullable Instant updatedAt,
-                                                       @Nullable Instant completedAt) {
+                                                       @Nullable Instant completedAt) implements SagaInstance {
 
     public SagaEnvelope {
         timers = List.copyOf(timers);
@@ -62,6 +62,7 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     }
 
     /** Whether the instance has completed. */
+    @Override
     public boolean isCompleted() {
         return status == SagaStatus.COMPLETED;
     }
@@ -69,5 +70,22 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     /** The earliest firing time across all pending timers, or empty when there are none. Drives the due-timer query. */
     public OptionalLong earliestTimerFiresAtEpochMilli() {
         return timers.stream().mapToLong(TimerEntry::firesAtEpochMilli).min();
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The same instant as {@link #earliestTimerFiresAtEpochMilli()}, which stays in epoch millis because it is what
+     * the poller's indexed query compares against.
+     */
+    @Override
+    public @Nullable Instant nextTimerAt() {
+        OptionalLong earliest = earliestTimerFiresAtEpochMilli();
+        return earliest.isPresent() ? Instant.ofEpochMilli(earliest.getAsLong()) : null;
+    }
+
+    @Override
+    public @Nullable String currentStep() {
+        return SagaInstance.currentStepOf(state);
     }
 }
