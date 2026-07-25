@@ -56,6 +56,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * Verifies the MongoDB-backed {@link SpringMongoSagaStateStore}: state round-trips, compare-and-set enforces the version,
@@ -176,6 +178,152 @@ class SpringMongoSagaStateStoreMongoTest {
         List<SagaEnvelope<Counter>> due = store.findWithDueTimers(Instant.ofEpochMilli(2_000), 10);
 
         assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("due");
+    }
+
+    // --- findByStatus: mirrors InMemorySagaStateStoreTest.FindByStatus so the contract is verified identically against
+    // both store implementations. No test-jar dependency exists between saga-dsl/common and saga-dsl/mongodb-spring, so
+    // the assertions are duplicated by hand rather than shared through a common base class; see the planned Technology
+    // Compatibility Kit (issue #395). ---
+
+    @Test
+    void findByStatus_returns_instances_with_the_given_status() {
+        store.compareAndSave("active-1", activeAt("active-1", Instant.ofEpochMilli(1_000)), 0);
+        store.compareAndSave("completed-1", completed("completed-1", new Counter(1), 1), 0);
+
+        List<SagaEnvelope<Counter>> active = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(2_000), 10);
+
+        assertThat(active).extracting(SagaEnvelope::sagaId).containsExactly("active-1");
+    }
+
+    @Test
+    void findByStatus_updatedBefore_is_exclusive() {
+        store.compareAndSave("exact", activeAt("exact", Instant.ofEpochMilli(5_000)), 0);
+
+        assertAll(
+                () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(5_000), 10)).isEmpty(),
+                () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(5_001), 10))
+                        .extracting(SagaEnvelope::sagaId).containsExactly("exact")
+        );
+    }
+
+    @Test
+    void findByStatus_orders_ascending_by_updatedAt_so_the_stalest_instance_is_first() {
+        store.compareAndSave("newest", activeAt("newest", Instant.ofEpochMilli(3_000)), 0);
+        store.compareAndSave("oldest", activeAt("oldest", Instant.ofEpochMilli(1_000)), 0);
+        store.compareAndSave("middle", activeAt("middle", Instant.ofEpochMilli(2_000)), 0);
+
+        List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(4_000), 10);
+
+        assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle", "newest");
+    }
+
+    @Test
+    void findByStatus_limit_truncates_after_ordering_to_the_stalest_N_not_an_arbitrary_N() {
+        store.compareAndSave("oldest", activeAt("oldest", Instant.ofEpochMilli(1_000)), 0);
+        store.compareAndSave("middle", activeAt("middle", Instant.ofEpochMilli(2_000)), 0);
+        store.compareAndSave("newest", activeAt("newest", Instant.ofEpochMilli(3_000)), 0);
+
+        List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(4_000), 2);
+
+        assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle");
+    }
+
+    @Test
+    void findByStatus_rejects_a_limit_below_1() {
+        assertThatThrownBy(() -> store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(1_000), 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("limit must be positive");
+    }
+
+    @Test
+    void findByStatus_excludes_an_envelope_with_a_null_updatedAt() {
+        SagaEnvelope<Counter> noUpdatedAt = new SagaEnvelope<>("no-updated-at", new Counter(1), SagaStatus.ACTIVE, 1,
+                List.of(), Map.of(), null, Instant.ofEpochMilli(1), null, null);
+        store.compareAndSave("no-updated-at", noUpdatedAt, 0);
+
+        assertThat(store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(60_000), 10)).isEmpty();
+    }
+
+    // --- Lifecycle timestamps: no existing test asserted createdAt/updatedAt/completedAt survive persistence, only that
+    // the fold sets them. ---
+
+    @Test
+    void createdAt_updatedAt_and_completedAt_round_trip_through_find() {
+        Instant createdAt = Instant.ofEpochMilli(1_000);
+        Instant updatedAt = Instant.ofEpochMilli(2_000);
+        Instant completedAt = Instant.ofEpochMilli(3_000);
+        SagaEnvelope<Counter> envelope = new SagaEnvelope<>("lifecycle-1", new Counter(1), SagaStatus.COMPLETED, 1,
+                List.of(), Map.of(), null, createdAt, updatedAt, completedAt);
+        store.compareAndSave("lifecycle-1", envelope, 0);
+
+        SagaEnvelope<Counter> found = store.find("lifecycle-1").orElseThrow();
+
+        assertAll(
+                () -> assertThat(found.createdAt()).isEqualTo(createdAt),
+                () -> assertThat(found.updatedAt()).isEqualTo(updatedAt),
+                () -> assertThat(found.completedAt()).isEqualTo(completedAt)
+        );
+    }
+
+    @Test
+    void an_active_instance_has_no_completedAt() {
+        store.compareAndSave("lifecycle-2", active("lifecycle-2", new Counter(1), 1, List.of(), 0), 0);
+
+        assertThat(store.find("lifecycle-2")).hasValueSatisfying(e -> assertThat(e.completedAt()).isNull());
+    }
+
+    @Test
+    void the_widened_due_timer_projection_returns_the_lifecycle_timestamps_populated_rather_than_null() {
+        Instant createdAt = Instant.ofEpochMilli(10);
+        Instant updatedAt = Instant.ofEpochMilli(20);
+        SagaEnvelope<Counter> envelope = new SagaEnvelope<>("lifecycle-3", new Counter(1), SagaStatus.ACTIVE, 1,
+                List.of(new TimerEntry("t", 1_000)), Map.of(), null, createdAt, updatedAt, null);
+        store.compareAndSave("lifecycle-3", envelope, 0);
+
+        SagaEnvelope<Counter> found = store.findWithDueTimers(Instant.ofEpochMilli(2_000), 10).getFirst();
+
+        assertAll(
+                () -> assertThat(found.createdAt()).isEqualTo(createdAt),
+                () -> assertThat(found.updatedAt()).isEqualTo(updatedAt),
+                () -> assertThat(found.completedAt()).isNull()
+        );
+    }
+
+    // --- currentStep(): populated for a flow saga, null for a saga written against the core builder. ---
+
+    @Test
+    void a_core_saga_instance_reports_a_null_currentStep() {
+        store.compareAndSave("core-1", active("core-1", new Counter(1), 1, List.of(), 0), 0);
+
+        assertThat(store.find("core-1")).hasValueSatisfying(e -> assertThat(e.currentStep()).isNull());
+    }
+
+    @Test
+    void the_due_timer_projection_carve_out_means_currentStep_reads_null_on_a_poller_envelope() {
+        // Deliberate, not a bug: findWithDueTimers projects away state (see the store's javadoc and
+        // the_due_timer_poll_projects_away_the_state_so_it_never_decodes_the_flow_saga_received_log below), so the
+        // SagaInstance view of a poller-returned envelope cannot answer currentStep(). The authoritative find(sagaId)
+        // still has it.
+        String collection = "saga-flowpoll-currentstep-" + System.nanoTime();
+        SpringMongoSagaStateStore<FlowState<FlowEvent>> flowStore =
+                new SpringMongoSagaStateStore<>(mongoOperations, collection, rawFlowStateType(), cloudEventConverter);
+        Saga<FlowEvent, FlowState<FlowEvent>, Object> saga = flowSaga();
+        FlowState<FlowEvent> withReceived = saga.evolve(saga.initialState(), SagaInput.event(new FlowStarted("flow-poll-step")));
+        SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-poll-step", withReceived, SagaStatus.ACTIVE, 1,
+                List.of(new TimerEntry("step:started", 1_000)), Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null);
+        flowStore.compareAndSave("flow-poll-step", envelope, 0);
+
+        SagaEnvelope<FlowState<FlowEvent>> polled = flowStore.findWithDueTimers(Instant.ofEpochMilli(2_000), 10).getFirst();
+
+        assertAll(
+                () -> assertThat(polled.currentStep()).as("state is projected away on the poll, so currentStep() cannot be answered here").isNull(),
+                () -> assertThat(flowStore.find("flow-poll-step").orElseThrow().currentStep())
+                        .as("the authoritative find(...) still has it").isNotNull()
+        );
+    }
+
+    private static SagaEnvelope<Counter> activeAt(String id, Instant updatedAt) {
+        return new SagaEnvelope<>(id, new Counter(1), SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null);
     }
 
     /**
