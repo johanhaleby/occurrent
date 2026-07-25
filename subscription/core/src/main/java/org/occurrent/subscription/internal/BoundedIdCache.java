@@ -29,10 +29,12 @@ import java.util.Set;
  * re-delivers. The overlap is bounded by write volume during the replay, not by total history, since live delivery
  * resumes from a recent token.
  * <p>
- * Dedup is id-based with a fixed ceiling: it retains the most recently added ids up to {@code maxSize} and evicts
- * oldest-first past that, so exceeding {@code maxSize} causes duplicate delivery, never loss, since delivery is
- * at-least-once. Never dedupes by position, so a late-committing low-position event, absent from the forward-only
- * replay, is always delivered live.
+ * Dedup is id-based with a fixed ceiling: it holds up to {@code maxSize} ids and evicts in first-added order past
+ * that, so exceeding {@code maxSize} causes duplicate delivery, never loss, since delivery is at-least-once. Eviction
+ * follows first insertion, not last use. Adding an id that is already held does nothing, so it keeps its original
+ * place in the eviction order and is evicted at the same time it would have been otherwise. This is not an LRU cache.
+ * Never dedupes by position, so a late-committing low-position event, absent from the forward-only replay, is always
+ * delivered live.
  * <p>
  * Thread-safe. The catch-up pipelines write on the catch-up thread and read on the live thread at the handover seam.
  */
