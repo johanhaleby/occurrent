@@ -43,6 +43,11 @@ public final class BoundedIdCache {
     private final Queue<String> order;
 
     public BoundedIdCache(int maxSize) {
+        if (maxSize < 1) {
+            // A cache of 0 would evict on every add and de-duplicate nothing, so reject it instead of
+            // silently re-delivering every replayed event.
+            throw new IllegalArgumentException("maxSize must be at least 1, was " + maxSize);
+        }
         this.maxSize = maxSize;
         this.ids = new HashSet<>(Math.min(maxSize, 1024));
         this.order = new ArrayDeque<>();
