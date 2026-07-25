@@ -53,7 +53,7 @@ public final class SagaInstances {
     /** The instance with {@code sagaId}, or empty when the saga has never seen that correlation id. */
     public Optional<SagaInstance> find(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
-        return stateStore.find(sagaId).map(envelope -> (SagaInstance) envelope);
+        return stateStore.find(sagaId).map(SagaInstances::asInstance);
     }
 
     /**
@@ -73,7 +73,15 @@ public final class SagaInstances {
         requireNonNull(status, "status cannot be null");
         requireNonNull(updatedBefore, "updatedBefore cannot be null");
         return stateStore.findByStatus(status, updatedBefore, limit).stream()
-                .map(envelope -> (SagaInstance) envelope)
+                .map(SagaInstances::asInstance)
                 .toList();
+    }
+
+    // Widens an envelope to the view an observing caller is handed. A method rather than a cast at each call site: in
+    // findByStatus the map sits in qualifier position ahead of toList(), so the lambda's type is inferred standalone as
+    // SagaEnvelope and the chain needs an explicit target type to compile at all. Naming the widening once keeps both
+    // lookups reading the same way.
+    private static SagaInstance asInstance(SagaEnvelope<?> envelope) {
+        return envelope;
     }
 }
