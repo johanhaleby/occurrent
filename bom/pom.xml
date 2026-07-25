@@ -233,21 +233,6 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
-                <artifactId>occurrent-subscription-handover-common</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.occurrent</groupId>
-                <artifactId>occurrent-subscription-handover-blocking</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.occurrent</groupId>
-                <artifactId>occurrent-subscription-handover-reactor</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-subscription-synchronous-blocking</artifactId>
                 <version>${project.version}</version>
             </dependency>

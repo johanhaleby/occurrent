@@ -28,9 +28,9 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
-import org.occurrent.subscription.handover.HandoverMessages;
-import org.occurrent.subscription.handover.HandoverOptions;
-import org.occurrent.subscription.handover.reactor.ReactiveHandover;
+import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
+import org.occurrent.subscription.internal.HandoverMessages;
+import org.occurrent.subscription.internal.HandoverOptions;
 import org.occurrent.subscription.internal.ReplayFilters;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -83,12 +83,6 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         }
         this.liveFeed = Objects.requireNonNull(liveFeed, "liveFeed cannot be null");
         this.catchupMarker = catchupMarker;
-        if (dedupCacheSize <= 0) {
-            throw new IllegalArgumentException("dedupCacheSize must be greater than zero");
-        }
-        if (maxBufferedEvents <= 0) {
-            throw new IllegalArgumentException("maxBufferedEvents must be greater than zero");
-        }
         this.options = new HandoverOptions(dedupCacheSize, maxBufferedEvents);
     }
 

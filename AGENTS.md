@@ -10,7 +10,7 @@ Occurrent is a Maven multi-module JVM event-sourcing library built on CloudEvent
 
 - `test-support`: shared test/domain fixtures.
 - `eventstore`: event-store APIs (`api/common`, `api/blocking`, `api/reactor`) and implementations (`inmemory`, `mongodb/native`, `mongodb/spring/blocking`, `mongodb/spring/reactor`).
-- `subscription`: subscription APIs (blocking/reactor), Mongo/native/Spring/Redis/in-memory adapters, durable/catchup/competing-consumer wrappers, the CloudEvent `push` models, the `synchronous` wrapper, and the shared `handover` catch-up-then-live coordination engines.
+- `subscription`: subscription APIs (blocking/reactor), Mongo/native/Spring/Redis/in-memory adapters, durable/catchup/competing-consumer wrappers, the CloudEvent `push` models, and the `synchronous` wrapper.
 - `cloudevents-extension`: Occurrent CloudEvent stream metadata extensions.
 - `common`: shared condition/filter/time/retry/Mongo utility modules.
 - `application`: `ApplicationService`/`GenericApplicationService`, command composition, `CloudEventConverter`, CloudEvent type mapping, `command-dispatch` plus its `-annotation` and `-dcb` extensions.

@@ -34,10 +34,9 @@
             <artifactId>occurrent-projection-dsl-common</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- The shared catch-up-then-live coordination engine -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-handover-blocking</artifactId>
+            <artifactId>occurrent-subscription-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

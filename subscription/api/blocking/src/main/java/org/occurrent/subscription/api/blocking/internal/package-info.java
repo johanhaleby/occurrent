@@ -15,6 +15,6 @@
  */
 
 @NullMarked
-package org.occurrent.subscription.handover.reactor;
+package org.occurrent.subscription.api.blocking.internal;
 
 import org.jspecify.annotations.NullMarked;

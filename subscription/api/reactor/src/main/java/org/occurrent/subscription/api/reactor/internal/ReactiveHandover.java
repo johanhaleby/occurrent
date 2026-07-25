@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.handover.reactor;
+package org.occurrent.subscription.api.reactor.internal;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.subscription.handover.HandoverMessages;
-import org.occurrent.subscription.handover.HandoverOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
+import org.occurrent.subscription.internal.HandoverMessages;
+import org.occurrent.subscription.internal.HandoverOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;

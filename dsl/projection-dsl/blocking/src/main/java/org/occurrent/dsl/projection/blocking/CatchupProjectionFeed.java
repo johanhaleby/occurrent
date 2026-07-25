@@ -30,9 +30,9 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.handover.HandoverMessages;
-import org.occurrent.subscription.handover.HandoverOptions;
-import org.occurrent.subscription.handover.blocking.BlockingHandover;
+import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
+import org.occurrent.subscription.internal.HandoverMessages;
+import org.occurrent.subscription.internal.HandoverOptions;
 
 import java.util.Objects;
 import java.util.function.Function;
@@ -81,7 +81,7 @@ public final class CatchupProjectionFeed<E> {
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
-                                        @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+                                        @Nullable CheckpointStorage catchupMarker, HandoverOptions options) {
         this.id = id;
         this.view = view;
         this.replayFilter = replayFilter;
@@ -95,7 +95,7 @@ public final class CatchupProjectionFeed<E> {
         this.handover = BlockingHandover.create(
                 view::update, this::eventKey,
                 replayed -> view.update(replayed.metadata(), replayed.event()), replayed -> eventKey(replayed.event()),
-                new HandoverOptions(dedupCacheSize, maxBufferedEvents));
+                options, "projection feed");
     }
 
     /**
@@ -162,14 +162,8 @@ public final class CatchupProjectionFeed<E> {
         Objects.requireNonNull(reader, "reader cannot be null");
         Objects.requireNonNull(converter, "converter cannot be null");
         Objects.requireNonNull(eventId, "eventId cannot be null");
-        if (dedupCacheSize <= 0) {
-            throw new IllegalArgumentException("dedupCacheSize must be greater than zero");
-        }
-        if (maxBufferedEvents <= 0) {
-            throw new IllegalArgumentException("maxBufferedEvents must be greater than zero");
-        }
-        return new CatchupProjectionFeed<>(id, view, replayFilter, reader, converter, eventId, catchupMarker,
-                dedupCacheSize, maxBufferedEvents);
+        HandoverOptions options = new HandoverOptions(dedupCacheSize, maxBufferedEvents);
+        return new CatchupProjectionFeed<>(id, view, replayFilter, reader, converter, eventId, catchupMarker, options);
     }
 
     /**
@@ -180,11 +174,7 @@ public final class CatchupProjectionFeed<E> {
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        try {
-            handover.accept(event);
-        } catch (BlockingHandover.CatchUpFailedException e) {
-            throw new IllegalStateException("Catch-up failed for this projection feed, so it cannot accept live events. Rebuild it after fixing the cause.", e.getCause());
-        }
+        handover.accept(event);
     }
 
     /**

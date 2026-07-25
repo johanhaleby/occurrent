@@ -14,15 +14,11 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.handover;
+package org.occurrent.subscription.internal;
 
 /**
  * The wording shared verbatim by every catch-up-then-live caller, kept in one place so the four call sites
  * (the blocking and reactor projection feeds, and the blocking and reactor push subscription models) cannot drift.
- * <p>
- * The catch-up-failure message is deliberately <strong>not</strong> here: its noun differs per caller ("this
- * projection feed" vs. "this subscription"), so each caller composes its own sentence around
- * {@link HandoverOptions} instead.
  */
 public final class HandoverMessages {
 
@@ -37,7 +33,7 @@ public final class HandoverMessages {
             "The reader does not write positions (writesPosition() returns false), so the catch-up cannot replay history in position order. Supply a reader from a positioned event store.";
 
     /**
-     * The live-buffer overflow message, without the reactor push model's emit-result suffix.
+     * The live-buffer overflow message, without the emit-result suffix. Used by the blocking handover engine.
      *
      * @param maxBufferedEvents The configured cap, echoed in the message.
      */
@@ -48,13 +44,25 @@ public final class HandoverMessages {
     }
 
     /**
-     * The live-buffer overflow message with the reactor push model's {@code Emit result: <result>} suffix, describing
-     * the {@code Sinks.EmitResult} that failed the {@code tryEmitNext}.
+     * The live-buffer overflow message with the {@code Emit result: <result>} suffix, describing the
+     * {@code Sinks.EmitResult} that failed the {@code tryEmitNext}. Used by the reactive handover engine, which
+     * serves both reactor callers.
      *
      * @param maxBufferedEvents The configured cap, echoed in the message.
      * @param emitResult        The {@code Sinks.EmitResult} (or equivalent) to append.
      */
     public static String bufferOverflow(int maxBufferedEvents, Object emitResult) {
         return bufferOverflow(maxBufferedEvents) + " Emit result: " + emitResult;
+    }
+
+    /**
+     * The catch-up-failure message a caller shows once a prior catch-up has failed and it can no longer accept live
+     * events, with the caller's own noun ("this projection feed" vs. "this subscription") substituted in.
+     *
+     * @param noun The noun describing what cannot accept live events, e.g. {@code "projection feed"} or
+     *             {@code "subscription"}.
+     */
+    public static String catchUpFailed(String noun) {
+        return "Catch-up failed for this " + noun + ", so it cannot accept live events. Rebuild it after fixing the cause.";
     }
 }

@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.handover.blocking;
+package org.occurrent.subscription.api.blocking.internal;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.subscription.handover.HandoverMessages;
-import org.occurrent.subscription.handover.HandoverOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
+import org.occurrent.subscription.internal.HandoverMessages;
+import org.occurrent.subscription.internal.HandoverOptions;
 
 import java.util.ArrayDeque;
 import java.util.Objects;
@@ -66,22 +66,12 @@ public final class BlockingHandover<L, R> {
         void markCaughtUp();
     }
 
-    /**
-     * Thrown by {@link #accept(Object)} once a prior {@link #catchUp(Source)} has failed, wrapping the original
-     * failure. Callers with their own wording for this case (the two current callers phrase it differently) should
-     * catch this type and re-throw with their own message, using {@link #getCause()} as the original failure.
-     */
-    public static final class CatchUpFailedException extends RuntimeException {
-        public CatchUpFailedException(Throwable cause) {
-            super(cause);
-        }
-    }
-
     private final Consumer<L> deliverLive;
     private final Function<L, String> liveDedupId;
     private final Consumer<R> deliverReplayed;
     private final Function<R, String> replayDedupId;
     private final int maxBufferedEvents;
+    private final String noun;
 
     private final Object lock = new Object();
     private final Queue<L> buffer = new ArrayDeque<>();
@@ -91,13 +81,14 @@ public final class BlockingHandover<L, R> {
 
     private BlockingHandover(Consumer<L> deliverLive, Function<L, String> liveDedupId,
                               Consumer<R> deliverReplayed, Function<R, String> replayDedupId,
-                              HandoverOptions options) {
+                              HandoverOptions options, String noun) {
         this.deliverLive = deliverLive;
         this.liveDedupId = liveDedupId;
         this.deliverReplayed = deliverReplayed;
         this.replayDedupId = replayDedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
         this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
+        this.noun = noun;
     }
 
     /**
@@ -106,30 +97,33 @@ public final class BlockingHandover<L, R> {
      * @param deliverReplayed Folds a replayed payload during the catch-up.
      * @param replayDedupId   Extracts the replay-to-live de-dup key from a replayed payload.
      * @param options         De-dup cache size and live-buffer cap.
+     * @param noun            The caller's noun for {@link HandoverMessages#catchUpFailed(String)}, e.g.
+     *                        {@code "projection feed"} or {@code "subscription"}.
      */
     public static <L, R> BlockingHandover<L, R> create(
             Consumer<L> deliverLive, Function<L, String> liveDedupId,
             Consumer<R> deliverReplayed, Function<R, String> replayDedupId,
-            HandoverOptions options) {
+            HandoverOptions options, String noun) {
         Objects.requireNonNull(deliverLive, "deliverLive cannot be null");
         Objects.requireNonNull(liveDedupId, "liveDedupId cannot be null");
         Objects.requireNonNull(deliverReplayed, "deliverReplayed cannot be null");
         Objects.requireNonNull(replayDedupId, "replayDedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");
-        return new BlockingHandover<>(deliverLive, liveDedupId, deliverReplayed, replayDedupId, options);
+        Objects.requireNonNull(noun, "noun cannot be null");
+        return new BlockingHandover<>(deliverLive, liveDedupId, deliverReplayed, replayDedupId, options, noun);
     }
 
     /**
      * Feed a live payload. Buffered while the catch-up replay runs, folded directly afterwards, on the calling thread.
      *
-     * @throws CatchUpFailedException if a prior {@link #catchUp(Source)} failed.
-     * @throws IllegalStateException  if the live buffer overflows during the catch-up.
+     * @throws IllegalStateException if a prior {@link #catchUp(Source)} has failed, or if the live buffer overflows
+     *                                during the catch-up.
      */
     public void accept(L payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
         synchronized (lock) {
             if (catchUpFailure != null) {
-                throw new CatchUpFailedException(catchUpFailure);
+                throw new IllegalStateException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (live) {
                 deliverLive(payload);

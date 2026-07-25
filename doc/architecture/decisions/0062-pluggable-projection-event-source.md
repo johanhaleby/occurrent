@@ -171,20 +171,36 @@ When this ADR was implemented, extracting a shared core between the CloudEvent h
 deferred, on the grounds that it was cross-module and would touch already-tested code. The parallel implementations were
 kept and unification was recorded as a candidate follow-up. That deferral is now reversed.
 
-**Why.** The bet behind the deferral was that four parallel implementations of one algorithm would stay in agreement.
-They did not. The reactor `CatchupProjectionFeed` folded replayed events through a metadata-less
-`Function<E, Mono<Void>>`, so a projection keyed by metadata (`Projection.idWithMetadata()`) mis-keyed every replayed
-event on the reactor stack while catching up correctly on blocking. The divergence was invisible because the blocking
-test class had a metadata test and the reactor one simply had no equivalent. A defect that exists on one stack and not
-its twin, in code that is supposed to implement the same contract, is the cost the deferral was betting against, so the
-trade no longer holds.
+**Why.** The coordination is concurrency-sensitive (a lock and a bounded buffer on one stack, a unicast sink and
+`concatMap` on the other) and it was written out four times. That is the kind of duplication where a divergence is
+hardest to see, because reading any one copy tells you nothing about the other three.
+
+The evidence that the copies do drift is concrete: the reactor `CatchupProjectionFeed` folded replayed events through a
+metadata-less `Function<E, Mono<Void>>`, so a projection keyed by metadata (`Projection.idWithMetadata()`) mis-keyed
+every replayed event on the reactor stack while catching up correctly on blocking, and the divergence was invisible
+because the blocking test class had a metadata test and the reactor one simply had no equivalent.
+
+Be precise about what that proves, though. That bug lived in the caller's fold wiring, which this extraction
+deliberately leaves with each caller, so a shared engine would not have prevented it and a fifth caller could
+reproduce the same class of mistake tomorrow. It is evidence that four hand-maintained twins drift unnoticed, not
+evidence that this particular extraction was the fix for that particular bug. The extraction stands on the duplicated
+coordination alone.
 
 **What is shared.** The duplicated part is the *coordination*, not the payload handling: the bounded live buffer and its
 fail-loud overflow, the de-duplication window, the live/replaying state, the poison latch that fails live events after a
 failed catch-up, the drain, and the ordering rules in the replay-then-push section above. That is extracted into
-`occurrent-subscription-handover-{common,blocking,reactor}`, as `BlockingHandover<L, R>` and `ReactiveHandover<L, R>`.
-This extends the precedent already set in this ADR for `RegisteringSubscribable`: the two callers differ in role, one
-driven by a broker over CloudEvents and one by a listener over domain events, but not in mechanism.
+`BlockingHandover<L, R>` and `ReactiveHandover<L, R>`, which live in `internal` packages of the existing
+`occurrent-subscription-api-blocking` and `occurrent-subscription-api-reactor` modules, with the shared
+`HandoverOptions` and `HandoverMessages` in `org.occurrent.subscription.internal` alongside `BoundedIdCache` and
+`ReplayFilters`. This follows the precedent this ADR already set for `RegisteringSubscribable`, which was likewise
+added inside the pre-existing subscription api modules: the two callers differ in role, one driven by a broker over
+CloudEvents and one by a listener over domain events, but not in mechanism.
+
+**No new published artifacts.** An earlier attempt minted `occurrent-subscription-handover-{common,blocking,reactor}`
+for this and was reversed. Three published artifacts, three BOM entries and an aggregator pom are too much permanent
+user-facing surface for reuse across four call sites that are all internal to Occurrent, and both consumers already
+depend on the subscription api and core modules. The `internal` package name carries the "not user API" signal instead,
+the same way `BoundedIdCache`, `RetryImpl` and `SnapshotSupport` already do.
 
 **Two engines, not one.** `Stream` versus `Flux` and `long` versus `Mono<Long>` run through the whole SPI, so a single
 engine is not reachable without wrapping one stack in the other. Only data and messages are genuinely shared across
@@ -202,10 +218,11 @@ described above are unchanged, and every public signature of the four classes is
 catch-up test classes pass without modification. That is what makes this a behaviour-preserving extraction rather than a
 rewrite.
 
-**Named `handover`, not `catchup`.** `occurrent-subscription-catchup-blocking` and `-reactor` already exist under
-`subscription/util` for the change-stream catch-up subscription models, so `catchup` would collide on artifactId. This
-ADR already calls the CloudEvent side "the CloudEvent handover" and the blocking push model already had a private
-`Handover` class, so `handover` was the existing vocabulary for exactly this replay-to-live transition.
+**Named `handover`, not `catchup`.** This ADR already calls the CloudEvent side "the CloudEvent handover" and the
+blocking push model already had a private `Handover` class, so `handover` was the existing vocabulary for exactly this
+replay-to-live transition. `catchup` would also have read as the change-stream catch-up subscription models under
+`subscription/util`, which are a different mechanism: they page a bulk window and reconcile against a moving stream
+head, machinery these engines neither have nor need.
 
 **One difference is preserved on purpose.** The reactor stack completes its catch-up signal and persists the
 catch-up-complete marker before the buffered live events are folded, whereas the blocking stack returns only after the

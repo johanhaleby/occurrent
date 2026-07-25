@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.handover;
+package org.occurrent.subscription.internal;
 
 /**
  * Tuning knobs shared by every catch-up-then-live handover engine ({@code BlockingHandover} and

@@ -28,9 +28,9 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.handover.HandoverMessages;
-import org.occurrent.subscription.handover.HandoverOptions;
-import org.occurrent.subscription.handover.blocking.BlockingHandover;
+import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
+import org.occurrent.subscription.internal.HandoverMessages;
+import org.occurrent.subscription.internal.HandoverOptions;
 import org.occurrent.subscription.internal.ReplayFilters;
 
 import java.time.Duration;
@@ -110,12 +110,6 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         }
         this.liveFeed = Objects.requireNonNull(liveFeed, "liveFeed cannot be null");
         this.catchupMarker = catchupMarker;
-        if (dedupCacheSize <= 0) {
-            throw new IllegalArgumentException("dedupCacheSize must be greater than zero");
-        }
-        if (maxBufferedEvents <= 0) {
-            throw new IllegalArgumentException("maxBufferedEvents must be greater than zero");
-        }
         this.options = new HandoverOptions(dedupCacheSize, maxBufferedEvents);
     }
 
@@ -129,16 +123,10 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         Filter replayFilter = ReplayFilters.replayFilterFor(filter);
 
         BlockingHandover<CloudEvent, CloudEvent> handover = BlockingHandover.create(
-                action, CloudEvent::getId, action, CloudEvent::getId, options);
+                action, CloudEvent::getId, action, CloudEvent::getId, options, "subscription");
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live.
-        liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), cloudEvent -> {
-            try {
-                handover.accept(cloudEvent);
-            } catch (BlockingHandover.CatchUpFailedException e) {
-                throw new IllegalStateException("Catch-up failed for this subscription, so it cannot accept live events. Rebuild it after fixing the cause.", e.getCause());
-            }
-        });
+        liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
 
         handover.catchUp(new BlockingHandover.Source<>() {
             @Override

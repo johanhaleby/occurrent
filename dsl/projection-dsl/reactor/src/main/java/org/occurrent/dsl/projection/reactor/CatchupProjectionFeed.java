@@ -29,9 +29,9 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.handover.HandoverMessages;
-import org.occurrent.subscription.handover.HandoverOptions;
-import org.occurrent.subscription.handover.reactor.ReactiveHandover;
+import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
+import org.occurrent.subscription.internal.HandoverMessages;
+import org.occurrent.subscription.internal.HandoverOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -82,7 +82,7 @@ public final class CatchupProjectionFeed<E> {
 
     private CatchupProjectionFeed(String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
-                                        @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+                                        @Nullable CheckpointStorage catchupMarker, HandoverOptions options) {
         this.id = id;
         this.fold = fold;
         this.replayFilter = replayFilter;
@@ -96,7 +96,7 @@ public final class CatchupProjectionFeed<E> {
         this.handover = ReactiveHandover.create(
                 event -> fold.apply(EventMetadata.empty(), event), this::eventKey,
                 replayed -> fold.apply(replayed.metadata(), replayed.event()), replayed -> eventKey(replayed.event()),
-                new HandoverOptions(dedupCacheSize, maxBufferedEvents));
+                options);
     }
 
     /**
@@ -165,13 +165,8 @@ public final class CatchupProjectionFeed<E> {
         Objects.requireNonNull(reader, "reader cannot be null");
         Objects.requireNonNull(converter, "converter cannot be null");
         Objects.requireNonNull(eventId, "eventId cannot be null");
-        if (dedupCacheSize <= 0) {
-            throw new IllegalArgumentException("dedupCacheSize must be greater than zero");
-        }
-        if (maxBufferedEvents <= 0) {
-            throw new IllegalArgumentException("maxBufferedEvents must be greater than zero");
-        }
-        return new CatchupProjectionFeed<>(id, fold, replayFilter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
+        HandoverOptions options = new HandoverOptions(dedupCacheSize, maxBufferedEvents);
+        return new CatchupProjectionFeed<>(id, fold, replayFilter, reader, converter, eventId, catchupMarker, options);
     }
 
     /**
