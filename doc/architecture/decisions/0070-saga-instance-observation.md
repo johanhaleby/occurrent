@@ -90,11 +90,41 @@ once an envelope is also a `SagaInstance`.
 A read-only facade over a store, returning `SagaInstance`. It offers nothing that writes: the executor owns instance
 transitions, and a compare-and-set from outside it would race the subscription and the poller.
 
-Programmatically it hangs off `SagaSubscription`. On the Spring stack the `@Saga` registrar publishes one per saga as
-`sagaInstances-<id>`, which had no handle before: the registrar kept its subscriptions private and the zero-config path
-built the store inline without registering it. It is a registered singleton rather than a bean definition, because a
-`@Saga` factory can only run once its collaborators are wired, which is after refresh. The consequence is that it cannot
-be constructor-injected into another singleton; `ObjectProvider` or `getBean` works.
+Programmatically it hangs off `SagaSubscription`. On the Spring stack sagas had no handle at all before: the registrar
+kept its subscriptions private and the zero-config path built the store inline without registering it.
+
+Spring gets **two** ways in, because the two lookups are genuinely different and neither subsumes the other:
+
+- `SagaInstancesRegistry`, a normal `@Bean`, keyed by saga id. Being a bean definition it exists during refresh, so it
+  is constructor-injectable, and it can enumerate the registered saga ids, which a dashboard needs so it does not have
+  to hardcode them. It offers both a throwing `get(id)` and an `Optional`-returning `find(id)`: code holding a constant
+  id has a bug when that id is unknown and should fail at the mistake (the message names every id that *is* registered,
+  since "unknown saga id" with no list is a miserable error for a typo), while code resolving an id from a request has
+  no bug when it misses.
+- Each saga's `SagaInstances` published as a singleton named `sagaInstances-<id>`, so a `getBean` or `@Qualifier` lookup
+  reaches one directly. Per id rather than one bean of the type, so two sagas do not make a by-type injection ambiguous.
+
+**The registry is empty until the `@Saga` scan has run, and that is inherent rather than a defect.** A `@Saga` factory
+can only be invoked once the beans it collaborates with are wired, which is after refresh, so the sagas genuinely do not
+exist earlier. Injecting the registry into a constructor is fine; *reading* it from one is not. That constraint is
+documented on the type instead of being papered over. It is not a practical limitation, because anything observing a
+saga instance runs in response to a request, a schedule or a health check.
+
+The per-id singleton keeps the sharper form of the same constraint: it is not a bean definition at all, so it cannot be
+constructor-injected. `ObjectProvider`, `getBean`, or the registry all work.
+
+The two paths are populated independently: the registry is a bean defined during refresh and so gets filled whatever
+kind of context this is, whereas `registerSingleton` needs a `ConfigurableApplicationContext`. If that is missing (only
+reachable from an exotic harness, since every Boot context is configurable) the registry still works, and the registrar
+warns rather than failing a saga that is otherwise running.
+
+The registry type lives in `dsl/saga-dsl/common` beside `SagaInstances`, not in a starter, because it is a Spring-free
+map from saga id to `SagaInstances`; putting it in the starter would force a programmatic user wanting the same lookup to
+depend on Spring Boot. Its `@Bean` goes in the **blocking** starter's autoconfiguration, not in
+`spring-boot-autoconfigure-mongodb-common`: `@Saga` is blocking-only (the reactive starter has no saga registrar at
+all), and that common module is for stack-neutral wiring the reactive starter also consumes. Keeping the `@Bean` beside
+`SagaAnnotationRegistrar` also means [#409](https://github.com/johanhaleby/occurrent/issues/409) moves the two together
+when the annotation machinery becomes store-neutral, rather than having to undo a placement in the common module.
 
 ### Why now rather than when an ops need appears
 
@@ -124,5 +154,12 @@ before a second implementation exists also avoids writing it twice.
   `SagaInstance`" would have to exempt the due-timer query.
 - True paging is absent. A deployment with more instances in one status than a sensible `limit` cannot walk them all,
   and closing that needs a compound `(updatedAt, sagaId)` ordering.
-- The Spring bean's post-refresh registration is a rough edge: constructor injection does not see it. A bean definition
-  contributed by the autoconfiguration would remove the caveat and is the obvious follow-up if it bites.
+- Spring has two entry points to keep current for one capability, and a saga id therefore appears in two places: the
+  registry and a bean name. They are populated in one method so they cannot drift apart.
+- Refresh timing is the one thing a Spring caller must understand: nothing observable exists until the `@Saga` scan has
+  run. Reading the registry from a constructor yields an empty registry, and a `sagaInstances-<id>` constructor injection
+  fails outright. Both are documented at the point of use, and no amount of wiring removes the underlying constraint,
+  since a saga factory cannot precede its own collaborators.
+- `SagaInstancesRegistry` is a mutable bean with a `register` method that is public only because the registrar sits in
+  another module, the same compromise `FlowStateImpl` makes for the Mongo store. It rejects a duplicate id rather than
+  silently keeping one of two sagas.

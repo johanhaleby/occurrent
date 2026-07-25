@@ -21,6 +21,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaInstances;
+import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
@@ -111,24 +112,51 @@ class SagaAnnotationRegistrar {
     }
 
     /**
-     * Publish the saga's {@link SagaInstances} as a singleton so an application can observe instance lifecycles. The
-     * name is {@code sagaInstances-<id>}, matching the {@code saga-<id>} collection convention.
+     * Make the saga's {@link SagaInstances} reachable from the application, two ways: added to the
+     * {@link SagaInstancesRegistry} (typed, injectable, keyed by saga id) and published as a singleton named
+     * {@code sagaInstances-<id>}, matching the {@code saga-<id>} collection convention, for a {@code getBean} or
+     * {@code @Qualifier} lookup when the id is already known.
      * <p>
-     * This registers a singleton rather than a bean definition because a {@code @Saga} factory can only run once its
-     * collaborators are wired, which is after the context has refreshed. The bean is therefore not available for
-     * constructor injection into another singleton; inject an {@code ObjectProvider<SagaInstances>} or look it up with
-     * {@code getBean(name, SagaInstances.class)} instead. Registering per id rather than one bean of the type keeps two
-     * sagas from making a by-type injection ambiguous.
+     * The two are independent on purpose. The registry is a bean defined during refresh, so it is populated whatever
+     * kind of context this is, while the singleton needs a {@link ConfigurableApplicationContext}. If that registration
+     * cannot happen, the registry still works.
      */
     private void publishSagaInstances(String id, SagaSubscription sagaSubscription) {
+        SagaInstances instances = sagaSubscription.instances();
+        addToSagaInstancesRegistry(id, instances);
+        registerSagaInstancesSingleton(id, instances);
+    }
+
+    // The registry is auto-configured alongside the annotation post-processor, so it is normally present. It can be
+    // absent if an application defines its own bean set without it, which must not fail a saga that is otherwise fine.
+    private void addToSagaInstancesRegistry(String id, SagaInstances instances) {
+        SagaInstancesRegistry registry = applicationContext.getBeanProvider(SagaInstancesRegistry.class).getIfAvailable();
+        if (registry == null) {
+            log.warn("No SagaInstancesRegistry bean is available, so saga '{}' is not in it. Look it up as '{}' or use SagaSubscription.instances() instead.", id, sagaInstancesBeanName(id));
+            return;
+        }
+        registry.register(id, instances);
+    }
+
+    /**
+     * Publish the saga's {@link SagaInstances} under its own bean name. This registers a singleton rather than a bean
+     * definition because a {@code @Saga} factory can only run once its collaborators are wired, which is after the
+     * context has refreshed. This particular bean is therefore not available for constructor injection into another
+     * singleton; inject an {@code ObjectProvider<SagaInstances>}, look it up with
+     * {@code getBean(name, SagaInstances.class)}, or inject the {@link SagaInstancesRegistry}, which does exist during
+     * refresh. Registering per id rather than one bean of the type keeps two sagas from making a by-type injection
+     * ambiguous.
+     */
+    private void registerSagaInstancesSingleton(String id, SagaInstances instances) {
         String beanName = sagaInstancesBeanName(id);
         if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
             // Every Spring Boot context is configurable, so this is only reachable from an exotic harness. The saga
-            // itself is running fine and SagaSubscription.instances() still works, so this must not fail startup.
-            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext; observe this saga through SagaSubscription.instances() instead.", beanName);
+            // itself is running fine and both the registry and SagaSubscription.instances() still work, so this must
+            // not fail startup.
+            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext; use the SagaInstancesRegistry or SagaSubscription.instances() instead.", beanName);
             return;
         }
-        configurableContext.getBeanFactory().registerSingleton(beanName, sagaSubscription.instances());
+        configurableContext.getBeanFactory().registerSingleton(beanName, instances);
     }
 
     /** The bean name the {@link SagaInstances} for {@code sagaId} is published under. */

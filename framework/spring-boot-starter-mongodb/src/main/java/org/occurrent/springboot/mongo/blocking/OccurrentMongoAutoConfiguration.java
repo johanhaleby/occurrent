@@ -38,6 +38,8 @@ import org.occurrent.command.annotation.AnnotationStreamIdResolver;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
+import org.occurrent.dsl.saga.SagaInstances;
+import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.EventStoreCapability;
@@ -96,6 +98,24 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     static OccurrentBlockingAnnotationBeanPostProcessor occurrentBlockingAnnotationBeanPostProcessor() {
         return new OccurrentBlockingAnnotationBeanPostProcessor();
+    }
+
+    /**
+     * Lets an application observe the instances of every {@code @Saga} in the context. It is defined here, rather than
+     * registered as a singleton the way each saga's own {@link SagaInstances} is, so that it exists during refresh and
+     * can be constructor-injected. The {@code @Saga} registrar fills it in afterwards, which is why it is empty until
+     * the scan has run: a saga factory cannot be invoked before the beans it collaborates with are wired. See
+     * {@link SagaInstancesRegistry} for what that means for a caller.
+     * <p>
+     * Gated on the same property as the annotation post-processor that populates it, because it has nothing to hold
+     * when annotation processing is off. It is blocking-only, since {@code @Saga} is: the reactive starter has no saga
+     * registrar.
+     */
+    @Bean
+    @ConditionalOnMissingBean(SagaInstancesRegistry.class)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    public SagaInstancesRegistry occurrentSagaInstancesRegistry() {
+        return new SagaInstancesRegistry();
     }
 
     @Bean
