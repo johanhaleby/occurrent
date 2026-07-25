@@ -32,7 +32,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.util.Objects;
 import java.util.function.Function;
@@ -70,11 +70,6 @@ import java.util.stream.Stream;
 @NullMarked
 public final class CatchupProjectionFeed<E> {
 
-    /** Recently folded event ids retained to de-duplicate the replay-to-live overlap. */
-    public static final int DEFAULT_DEDUP_CACHE_SIZE = HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE;
-    /** Cap on events buffered from the live feed during the catch-up replay before failing loud. */
-    public static final int DEFAULT_MAX_BUFFERED_EVENTS = HandoverOptions.DEFAULT_MAX_BUFFERED_EVENTS;
-
     private final MaterializedView<E> view;
     private final Filter replayFilter;
     private final PositionOrderedReader reader;
@@ -87,7 +82,7 @@ public final class CatchupProjectionFeed<E> {
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
-                                        @Nullable CheckpointStorage catchupMarker, HandoverOptions options) {
+                                        @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
         this.id = id;
         this.view = view;
         this.replayFilter = replayFilter;
@@ -120,23 +115,22 @@ public final class CatchupProjectionFeed<E> {
             @Nullable CheckpointStorage catchupMarker) {
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
-        return create(id, projection, repository, reader, converter, eventId, catchupMarker,
-                DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
+        return create(id, projection, repository, reader, converter, eventId, catchupMarker, CatchupThenLiveOptions.defaults());
     }
 
     /**
      * As {@link #create(String, Projection, ViewStateRepository, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage)},
-     * with an explicit de-dup cache size and live-buffer cap.
+     * with explicit handover {@code options}.
      */
     public static <S extends @Nullable Object, E, ID> CatchupProjectionFeed<E> create(
             String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
-            @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+            @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
         MaterializedView<E> view = Projections.materializedView(projection, repository, id);
         Filter filter = ProjectionFilters.filterFor(converter, projection);
-        return create(id, view, filter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
+        return create(id, view, filter, reader, converter, eventId, catchupMarker, options);
     }
 
     /**
@@ -148,25 +142,24 @@ public final class CatchupProjectionFeed<E> {
             String id, MaterializedView<E> view, Filter replayFilter,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
             @Nullable CheckpointStorage catchupMarker) {
-        return create(id, view, replayFilter, reader, converter, eventId, catchupMarker,
-                DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
+        return create(id, view, replayFilter, reader, converter, eventId, catchupMarker, CatchupThenLiveOptions.defaults());
     }
 
     /**
      * As {@link #create(String, MaterializedView, Filter, PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage)},
-     * with an explicit de-dup cache size and live-buffer cap.
+     * with explicit handover {@code options}.
      */
     public static <E> CatchupProjectionFeed<E> create(
             String id, MaterializedView<E> view, Filter replayFilter,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
-            @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+            @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(view, "view cannot be null");
         Objects.requireNonNull(replayFilter, "replayFilter cannot be null");
         Objects.requireNonNull(reader, "reader cannot be null");
         Objects.requireNonNull(converter, "converter cannot be null");
         Objects.requireNonNull(eventId, "eventId cannot be null");
-        HandoverOptions options = new HandoverOptions(dedupCacheSize, maxBufferedEvents);
+        Objects.requireNonNull(options, "options cannot be null");
         return new CatchupProjectionFeed<>(id, view, replayFilter, reader, converter, eventId, catchupMarker, options);
     }
 

@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -56,7 +56,7 @@ class ReactiveHandoverTest {
     void the_returned_mono_completes_and_the_marker_is_persisted_before_the_buffered_live_payloads_are_folded() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
         ReactiveHandover<String> handover = ReactiveHandover.create(
-                payload -> Mono.fromRunnable(() -> log.add(payload)), payload -> payload, HandoverOptions.defaults());
+                payload -> Mono.fromRunnable(() -> log.add(payload)), payload -> payload, CatchupThenLiveOptions.defaults());
 
         handover.accept("L1").subscribe();
         FakeSource source = source(List.of("R1"), false);
@@ -107,7 +107,7 @@ class ReactiveHandoverTest {
         List<String> delivered = new ArrayList<>();
         ReactiveHandover<String> handover = ReactiveHandover.create(
                 payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload,
-                new HandoverOptions(HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE, 1));
+                new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 1));
 
         handover.accept("L1").subscribe();
 
@@ -158,7 +158,7 @@ class ReactiveHandoverTest {
     void a_live_payloads_accept_mono_completes_only_after_its_fold_has_run() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
         ReactiveHandover<String> handover = ReactiveHandover.create(
-                payload -> Mono.fromRunnable(() -> log.add("fold:" + payload)), payload -> payload, HandoverOptions.defaults());
+                payload -> Mono.fromRunnable(() -> log.add("fold:" + payload)), payload -> payload, CatchupThenLiveOptions.defaults());
 
         handover.catchUp(source(List.of(), true)).subscribe();
         handover.accept("L1").subscribe(v -> {
@@ -174,7 +174,7 @@ class ReactiveHandoverTest {
         Function<String, Mono<Void>> deliver = payload -> "boom".equals(payload)
                 ? Mono.error(new RuntimeException("fold failed"))
                 : Mono.fromRunnable(() -> delivered.add(payload));
-        ReactiveHandover<String> handover = ReactiveHandover.create(deliver, payload -> payload, HandoverOptions.defaults());
+        ReactiveHandover<String> handover = ReactiveHandover.create(deliver, payload -> payload, CatchupThenLiveOptions.defaults());
 
         handover.catchUp(source(List.of(), true)).subscribe();
 
@@ -188,7 +188,7 @@ class ReactiveHandoverTest {
 
     private static ReactiveHandover<String> handover(List<String> delivered) {
         return ReactiveHandover.create(
-                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload, HandoverOptions.defaults());
+                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload, CatchupThenLiveOptions.defaults());
     }
 
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {

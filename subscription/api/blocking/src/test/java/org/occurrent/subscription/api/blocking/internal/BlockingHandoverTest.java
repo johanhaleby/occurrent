@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -55,7 +55,7 @@ class BlockingHandoverTest {
     @Test
     void the_buffer_is_drained_and_the_marker_is_recorded_only_after_every_buffered_live_payload_was_delivered() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
-        BlockingHandover<String> handover = BlockingHandover.create(log::add, payload -> payload, HandoverOptions.defaults(), NOUN);
+        BlockingHandover<String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
 
         handover.accept("L1");
         FakeSource source = source(List.of("R1"), false);
@@ -102,7 +102,7 @@ class BlockingHandoverTest {
     void exceeding_the_max_buffered_events_cap_while_replaying_fails_loud_with_the_documented_message() {
         List<String> delivered = new ArrayList<>();
         BlockingHandover<String> handover = BlockingHandover.create(
-                delivered::add, payload -> payload, new HandoverOptions(HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE, 2), NOUN);
+                delivered::add, payload -> payload, new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 2), NOUN);
 
         handover.accept("L1");
         handover.accept("L2");
@@ -146,7 +146,7 @@ class BlockingHandoverTest {
     // --- helpers ---
 
     private static BlockingHandover<String> handover(List<String> delivered) {
-        return BlockingHandover.create(delivered::add, payload -> payload, HandoverOptions.defaults(), NOUN);
+        return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }
 
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {

@@ -20,7 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.util.ArrayDeque;
 import java.util.Objects;
@@ -79,7 +79,7 @@ public final class BlockingHandover<T> {
     private boolean live = false;
     private @Nullable Throwable catchUpFailure = null;
 
-    private BlockingHandover(Consumer<T> deliver, Function<T, String> dedupId, HandoverOptions options, String noun) {
+    private BlockingHandover(Consumer<T> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
         this.deliver = deliver;
         this.dedupId = dedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
@@ -96,7 +96,7 @@ public final class BlockingHandover<T> {
      *                {@code "projection feed"} or {@code "subscription"}.
      */
     public static <T> BlockingHandover<T> create(
-            Consumer<T> deliver, Function<T, String> dedupId, HandoverOptions options, String noun) {
+            Consumer<T> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
         Objects.requireNonNull(deliver, "deliver cannot be null");
         Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");

@@ -33,6 +33,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.net.URI;
 import java.util.HashMap;
@@ -312,7 +313,7 @@ class CatchupProjectionFeedTest {
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
-                "counter", projection(), repository, store, converter, Counted::eventId, null, 10, 2);
+                "counter", projection(), repository, store, converter, Counted::eventId, null, new CatchupThenLiveOptions(10, 2));
 
         feed.accept(new Counted("l1"));
         feed.accept(new Counted("l2"));

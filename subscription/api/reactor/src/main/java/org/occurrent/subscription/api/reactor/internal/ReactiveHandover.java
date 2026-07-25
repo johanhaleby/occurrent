@@ -20,7 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
@@ -84,7 +84,7 @@ public final class ReactiveHandover<T> {
     private final Set<MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
 
-    private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, String> dedupId, HandoverOptions options) {
+    private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options) {
         this.deliver = deliver;
         this.dedupId = dedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
@@ -98,7 +98,7 @@ public final class ReactiveHandover<T> {
      * @param options De-dup cache size and live-buffer cap.
      */
     public static <T> ReactiveHandover<T> create(
-            Function<T, Mono<Void>> deliver, Function<T, String> dedupId, HandoverOptions options) {
+            Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options) {
         Objects.requireNonNull(deliver, "deliver cannot be null");
         Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");

@@ -30,7 +30,7 @@ import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.internal.HandoverOptions;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.ReplayFilters;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -63,27 +63,23 @@ import java.util.function.Function;
 @NullMarked
 public class CatchupThenPushSubscriptionModel implements Subscribable {
 
-    /** @see org.occurrent.subscription.push.reactor.CatchupThenPushSubscriptionModel */
-    public static final int DEFAULT_DEDUP_CACHE_SIZE = HandoverOptions.DEFAULT_DEDUP_CACHE_SIZE;
-    public static final int DEFAULT_MAX_BUFFERED_EVENTS = HandoverOptions.DEFAULT_MAX_BUFFERED_EVENTS;
-
     private final PositionOrderedReader reader;
     private final PushSubscriptionModel liveFeed;
     private final @Nullable CheckpointStorage catchupMarker;
-    private final HandoverOptions options;
+    private final CatchupThenLiveOptions options;
 
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker) {
-        this(reader, liveFeed, catchupMarker, DEFAULT_DEDUP_CACHE_SIZE, DEFAULT_MAX_BUFFERED_EVENTS);
+        this(reader, liveFeed, catchupMarker, CatchupThenLiveOptions.defaults());
     }
 
-    public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+    public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
         if (!reader.writesPosition()) {
             throw new IllegalArgumentException(HandoverMessages.POSITIONED_READER_REQUIRED);
         }
         this.liveFeed = Objects.requireNonNull(liveFeed, "liveFeed cannot be null");
         this.catchupMarker = catchupMarker;
-        this.options = new HandoverOptions(dedupCacheSize, maxBufferedEvents);
+        this.options = Objects.requireNonNull(options, "options cannot be null");
     }
 
     @Override
