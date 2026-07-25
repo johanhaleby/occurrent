@@ -20,6 +20,7 @@ package org.occurrent.springboot.mongo.blocking;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
@@ -30,8 +31,11 @@ import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.lang.reflect.Method;
@@ -50,6 +54,8 @@ import java.util.List;
  * only.
  */
 class SagaAnnotationRegistrar {
+
+    private static final Logger log = LoggerFactory.getLogger(SagaAnnotationRegistrar.class);
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
@@ -99,7 +105,35 @@ class SagaAnnotationRegistrar {
         }
 
         startPositionSupport.applyStartupWorkarounds();
-        sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config));
+        SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config);
+        sagaSubscriptions.add(sagaSubscription);
+        publishSagaInstances(id, sagaSubscription);
+    }
+
+    /**
+     * Publish the saga's {@link SagaInstances} as a singleton so an application can observe instance lifecycles. The
+     * name is {@code sagaInstances-<id>}, matching the {@code saga-<id>} collection convention.
+     * <p>
+     * This registers a singleton rather than a bean definition because a {@code @Saga} factory can only run once its
+     * collaborators are wired, which is after the context has refreshed. The bean is therefore not available for
+     * constructor injection into another singleton; inject an {@code ObjectProvider<SagaInstances>} or look it up with
+     * {@code getBean(name, SagaInstances.class)} instead. Registering per id rather than one bean of the type keeps two
+     * sagas from making a by-type injection ambiguous.
+     */
+    private void publishSagaInstances(String id, SagaSubscription sagaSubscription) {
+        String beanName = sagaInstancesBeanName(id);
+        if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
+            // Every Spring Boot context is configurable, so this is only reachable from an exotic harness. The saga
+            // itself is running fine and SagaSubscription.instances() still works, so this must not fail startup.
+            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext; observe this saga through SagaSubscription.instances() instead.", beanName);
+            return;
+        }
+        configurableContext.getBeanFactory().registerSingleton(beanName, sagaSubscription.instances());
+    }
+
+    /** The bean name the {@link SagaInstances} for {@code sagaId} is published under. */
+    static String sagaInstancesBeanName(String sagaId) {
+        return "sagaInstances-" + sagaId;
     }
 
     // Gate the saga timer poller on the shared competing-consumer lease so only one instance polls, mirroring the
