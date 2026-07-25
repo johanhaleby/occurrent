@@ -52,14 +52,16 @@ public final class Projection<S extends @Nullable Object, E, ID> {
 
     private final View<S, E> view;
     private final @Nullable BiFunction<EventMetadata, E, @Nullable ID> id;
+    private final boolean metadataKeyed;
     private final Set<Class<? extends E>> eventTypes;
     private final @Nullable Filter filter;
 
     // Private on purpose: the only way to build a Projection is the builder/singletonBuilder/adapt factories, which fix
     // a single-instance projection's id type to String, so a non-String singleton cannot be constructed.
-    private Projection(View<S, E> view, @Nullable BiFunction<EventMetadata, E, @Nullable ID> id, Set<Class<? extends E>> eventTypes, @Nullable Filter filter) {
+    private Projection(View<S, E> view, @Nullable BiFunction<EventMetadata, E, @Nullable ID> id, boolean metadataKeyed, Set<Class<? extends E>> eventTypes, @Nullable Filter filter) {
         this.view = requireNonNull(view, "view cannot be null");
         this.id = id;
+        this.metadataKeyed = metadataKeyed;
         this.eventTypes = Set.copyOf(requireNonNull(eventTypes, "eventTypes cannot be null"));
         this.filter = filter;
     }
@@ -103,6 +105,22 @@ public final class Projection<S extends @Nullable Object, E, ID> {
      */
     public @Nullable BiFunction<EventMetadata, E, @Nullable ID> idWithMetadata() {
         return id;
+    }
+
+    /**
+     * Whether the id function was declared through {@link Builder#id(BiFunction)} rather than
+     * {@link Builder#id(Function)}, meaning it was given the chance to key on {@link EventMetadata}.
+     * <p>
+     * This says how the key was <em>declared</em>, not whether it actually reads the metadata: a caller writing
+     * {@code id((metadata, event) -> event.orderId())} is reported as metadata-keyed even though it ignores the
+     * metadata. That is why this must not be used to reject a projection up front. It is safe as one input to a
+     * failure that has already happened: a runner that folded with {@link EventMetadata#empty()} and got a
+     * {@code null} id can use this to tell "the key needed metadata it never received" apart from "this event maps
+     * to no instance", which is a legitimate skip. A projection that ignores the metadata still returns a real id,
+     * so it never reaches that branch.
+     */
+    public boolean metadataKeyed() {
+        return metadataKeyed;
     }
 
     /** The event types the fold handles, the default subscription selector. Empty means "all types" (no type narrowing). */
@@ -158,7 +176,8 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         BiFunction<EventMetadata, E, @Nullable ID> widenedId = subId == null ? null
                 : (metadata, event) -> eventType.isInstance(event) ? subId.apply(metadata, eventType.cast(event)) : null;
         Set<Class<? extends E>> widenedTypes = new LinkedHashSet<>(projection.eventTypes());
-        return new Projection<>(widenedView, widenedId, widenedTypes, projection.filter());
+        // Carry metadataKeyed across: widening rebuilds the id from idWithMetadata(), which loses how it was declared.
+        return new Projection<>(widenedView, widenedId, projection.metadataKeyed(), widenedTypes, projection.filter());
     }
 
     /**
@@ -170,6 +189,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         private final Map<Class<?>, View.Fold<S, E>> handlers = new LinkedHashMap<>();
         private final Set<Class<? extends E>> eventTypes = new LinkedHashSet<>();
         private @Nullable BiFunction<EventMetadata, E, @Nullable ID> id;
+        private boolean metadataKeyed;
         private boolean singleton;
         private @Nullable Filter filter;
 
@@ -184,7 +204,9 @@ public final class Projection<S extends @Nullable Object, E, ID> {
          */
         public Builder<S, E, ID> id(Function<E, @Nullable ID> id) {
             requireNonNull(id, "id cannot be null");
-            return id((metadata, event) -> id.apply(event));
+            // Deliberately does not route through id(BiFunction): this key provably cannot read metadata, and
+            // metadataKeyed must stay false so a metadata-less path is not blamed for a null id it did not cause.
+            return setId((metadata, event) -> id.apply(event), false);
         }
 
         /**
@@ -196,6 +218,10 @@ public final class Projection<S extends @Nullable Object, E, ID> {
          * read that way.
          */
         public Builder<S, E, ID> id(BiFunction<EventMetadata, E, @Nullable ID> id) {
+            return setId(id, true);
+        }
+
+        private Builder<S, E, ID> setId(@Nullable BiFunction<EventMetadata, E, @Nullable ID> id, boolean metadataKeyed) {
             if (this.id != null) {
                 throw new IllegalStateException("id(...) has already been set and can only be set once");
             }
@@ -203,6 +229,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
                 throw new IllegalStateException("id(...) cannot be combined with singleton()");
             }
             this.id = requireNonNull(id, "id cannot be null");
+            this.metadataKeyed = metadataKeyed;
             return this;
         }
 
@@ -291,7 +318,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
                 throw new IllegalStateException("a projection needs exactly one of id(...) or singleton(), call one before build()");
             }
             View<S, E> view = View.create(initialState, new HandlerDispatch<>(handlers));
-            return new Projection<>(view, id, new LinkedHashSet<>(eventTypes), filter);
+            return new Projection<>(view, id, metadataKeyed, new LinkedHashSet<>(eventTypes), filter);
         }
     }
 

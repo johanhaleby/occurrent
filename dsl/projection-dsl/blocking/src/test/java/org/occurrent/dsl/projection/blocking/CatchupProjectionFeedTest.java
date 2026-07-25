@@ -23,7 +23,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
@@ -38,11 +40,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -95,13 +97,15 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
-    void a_live_domain_event_is_folded_with_empty_metadata_so_a_stream_id_keyed_projection_throws() {
+    void a_live_domain_event_fed_with_metadata_lands_under_the_metadata_derived_key() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
         store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
 
         ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
         ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        // Keyed by the stream id from the metadata and folding the global position, same shape as issue 389's
+        // headline bug: catches up correctly, then a live event supplies its own metadata via accept(metadata, event).
         Projection<Long, Counted, String> projection = Projection.<Long, Counted, String>builder(0L)
                 .id((metadata, event) -> metadata.getStreamId())
                 .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
@@ -110,14 +114,110 @@ class CatchupProjectionFeedTest {
                 "positions", projection, repository, store, converter, Counted::eventId, null);
         feed.catchUp();
 
-        // Metadata exists only where an event arrives as a CloudEvent. A live domain event has none, so it folds with
-        // EventMetadata.empty(). Keying on getStreamId() throws, because that accessor requires the extension to be
-        // present. This is not a general "fails loud" guarantee: getPosition() returns null on empty metadata, and a
-        // null id means "skip this event", so a position-keyed projection drops every live event silently instead.
-        // Both are the same unsupported combination, tracked in issue 389. The reactor feed behaves identically.
-        assertThatThrownBy(() -> feed.accept(new Counted("3")))
-                .isInstanceOf(NullPointerException.class)
-                .hasMessageContaining("streamId extension is absent");
+        feed.accept(metadata("live-stream", 99L), new Counted("3"));
+
+        assertThat(repo).containsKey("live-stream");
+        assertThat(repo.get("live-stream")).isEqualTo(99L);
+    }
+
+    @Test
+    void a_live_domain_event_fed_without_metadata_for_a_position_keyed_projection_throws_IllegalStateException() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"))));
+
+        ConcurrentHashMap<Long, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, Long> repository = ViewStateRepository.create(repo::get, repo::put);
+        // Keyed on getPosition(), the accessor that returns null on empty metadata rather than throwing. Before the
+        // fix this silently dropped the live event and returned normally instead of surfacing the missing metadata.
+        Projection<Integer, Counted, Long> projection = Projection.<Integer, Counted, Long>builder(0)
+                .id((metadata, event) -> metadata.getPosition())
+                .on(Counted.class, (state, event) -> state + 1)
+                .build();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "positions-key", projection, repository, store, converter, Counted::eventId, null);
+        feed.catchUp();
+
+        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("2")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("would have been skipped silently");
+    }
+
+    @Test
+    void a_projection_declared_metadata_keyed_but_ignoring_the_metadata_does_not_throw_on_a_plain_live_event() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        // Declared through id(BiFunction), so metadataKeyed() is true, but the key itself never reads the metadata,
+        // so it always returns a real id and the metadata guard must never trip for it.
+        Projection<Integer, Counted, String> projection = Projection.<Integer, Counted, String>builder(0)
+                .id((metadata, event) -> event.eventId())
+                .on(Counted.class, (state, event) -> state + 1)
+                .build();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "ignoring-metadata", projection, repository, store, converter, Counted::eventId, null);
+        feed.catchUp();
+
+        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("live-1")));
+
+        assertThat(thrown).isNull();
+        assertThat(repo.get("live-1")).isEqualTo(1);
+    }
+
+    @Test
+    void an_event_keyed_projection_whose_id_returns_null_skips_that_event_and_still_folds_the_rest() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        // id(Function), not id(BiFunction): metadataKeyed() stays false, so a null id here is the documented "skip",
+        // not the metadata guard's failure mode.
+        Projection<Integer, Counted, String> projection = Projection.<Integer, Counted, String>builder(0)
+                .id(event -> event.eventId().equals("skip-me") ? null : "counter")
+                .on(Counted.class, (state, event) -> state + 1)
+                .build();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "skip-null-id", projection, repository, store, converter, Counted::eventId, null);
+        feed.catchUp();
+
+        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("skip-me")));
+        feed.accept(new Counted("keep-me"));
+
+        assertThat(thrown).isNull();
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void a_hand_written_materialized_view_gets_the_one_argument_form_for_accept_event_and_the_metadata_form_for_accept_metadata_event() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        List<String> callsReceived = new CopyOnWriteArrayList<>();
+        // Implements both MaterializedView overloads differently, to pin that accept(event) and accept(metadata, event)
+        // are two separate routes rather than accept(event) being rewritten into the metadata overload with an empty
+        // metadata.
+        MaterializedView<Counted> view = new MaterializedView<>() {
+            @Override
+            public void update(Counted event) {
+                callsReceived.add("event-only:" + event.eventId());
+            }
+
+            @Override
+            public void update(EventMetadata metadata, Counted event) {
+                callsReceived.add("metadata:" + event.eventId());
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "split-overload", view, Filter.all(), store, converter, Counted::eventId, null);
+        feed.catchUp();
+
+        feed.accept(new Counted("plain"));
+        feed.accept(metadata("s", 1L), new Counted("with-metadata"));
+
+        assertThat(callsReceived).containsExactly("event-only:plain", "metadata:with-metadata");
     }
 
     @Test
@@ -260,6 +360,13 @@ class CatchupProjectionFeedTest {
     }
 
     // --- helpers ---
+
+    private static EventMetadata metadata(String streamId, long position) {
+        Map<String, Object> data = new HashMap<>();
+        data.put(OccurrentCloudEventExtension.STREAM_ID, streamId);
+        data.put(OccurrentCloudEventExtension.POSITION, position);
+        return new EventMetadata(data);
+    }
 
     private static CatchupProjectionFeed<Counted> feed(String id, InMemoryEventStore store, CloudEventConverter<Counted> converter,
                                                              Map<String, Integer> repo, CheckpointStorage marker) {

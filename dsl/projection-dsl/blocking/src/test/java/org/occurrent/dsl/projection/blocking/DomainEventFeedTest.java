@@ -23,6 +23,8 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
@@ -31,6 +33,8 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 
 import java.net.URI;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
@@ -125,6 +129,40 @@ class DomainEventFeedTest {
         Throwable thrown = catchThrowable(() -> feed.register("counter-2", projection(), repository));
 
         assertThat(thrown).isNull();
+    }
+
+    @Test
+    void accept_with_metadata_fans_out_to_every_registered_projection_with_the_metadata_intact() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Long> repoA = new ConcurrentHashMap<>();
+        ConcurrentHashMap<String, Long> repoB = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repositoryA = ViewStateRepository.create(repoA::get, repoA::put);
+        ViewStateRepository<Long, String> repositoryB = ViewStateRepository.create(repoB::get, repoB::put);
+        feed.register("a", positionKeyedProjection(), repositoryA);
+        feed.register("b", positionKeyedProjection(), repositoryB);
+        feed.catchUpAll();
+
+        feed.accept(metadata("stream-1", 7L), new Counted("live"));
+
+        assertThat(repoA.get("stream-1")).isEqualTo(7L);
+        assertThat(repoB.get("stream-1")).isEqualTo(7L);
+    }
+
+    private static Projection<Long, Counted, String> positionKeyedProjection() {
+        return Projection.<Long, Counted, String>builder(0L)
+                .id((metadata, event) -> metadata.getStreamId())
+                .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
+                .build();
+    }
+
+    private static EventMetadata metadata(String streamId, long position) {
+        Map<String, Object> data = new HashMap<>();
+        data.put(OccurrentCloudEventExtension.STREAM_ID, streamId);
+        data.put(OccurrentCloudEventExtension.POSITION, position);
+        return new EventMetadata(data);
     }
 
     private static Projection<Integer, Counted, String> projection() {

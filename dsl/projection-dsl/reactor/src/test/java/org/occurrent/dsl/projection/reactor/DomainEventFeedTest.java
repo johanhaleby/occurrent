@@ -22,6 +22,8 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
@@ -31,7 +33,10 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -103,6 +108,57 @@ class DomainEventFeedTest {
         Throwable thrown = catchThrowable(() -> feed.register("counter-2", projection(), repository));
 
         assertThat(thrown).isNull();
+    }
+
+    @Test
+    void accept_with_metadata_fans_out_to_every_registered_projection_with_the_metadata_intact() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Long> repoA = new ConcurrentHashMap<>();
+        ConcurrentHashMap<String, Long> repoB = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repositoryA = ViewStateRepository.create(repoA::get, repoA::put);
+        ViewStateRepository<Long, String> repositoryB = ViewStateRepository.create(repoB::get, repoB::put);
+        feed.register("a", positionKeyedProjection(), repositoryA);
+        feed.register("b", positionKeyedProjection(), repositoryB);
+        feed.catchUpAll().block();
+
+        feed.accept(metadata("stream-1", 7L), new Counted("live")).block();
+
+        assertThat(repoA.get("stream-1")).isEqualTo(7L);
+        assertThat(repoB.get("stream-1")).isEqualTo(7L);
+    }
+
+    @Test
+    void register_with_a_metadata_aware_fold_replays_and_folds_live_events_with_metadata_intact() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        // The metadata-aware register overload: the caller supplies a BiFunction<EventMetadata, E, Mono<Void>> fold
+        // directly instead of a Projection and repository.
+        BiFunction<EventMetadata, Counted, Mono<Void>> fold = (metadata, event) ->
+                Mono.fromRunnable(() -> repo.put(metadata.getStreamId(), metadata.getPosition()));
+
+        feed.register("positions", fold, Filter.all());
+        feed.catchUpAll().block();
+
+        feed.accept(metadata("stream-1", 5L), new Counted("live")).block();
+
+        assertThat(repo.get("stream-1")).isEqualTo(5L);
+    }
+
+    private static Projection<Long, Counted, String> positionKeyedProjection() {
+        return Projection.<Long, Counted, String>builder(0L)
+                .id((metadata, event) -> metadata.getStreamId())
+                .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
+                .build();
+    }
+
+    private static EventMetadata metadata(String streamId, long position) {
+        Map<String, Object> data = new HashMap<>();
+        data.put(OccurrentCloudEventExtension.STREAM_ID, streamId);
+        data.put(OccurrentCloudEventExtension.POSITION, position);
+        return new EventMetadata(data);
     }
 
     private static Projection<Integer, Counted, String> projection() {

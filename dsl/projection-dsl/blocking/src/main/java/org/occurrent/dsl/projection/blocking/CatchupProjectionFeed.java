@@ -50,6 +50,12 @@ import java.util.stream.Stream;
  * de-dup does not depend on the CloudEvent id). A one-shot marker (an optional {@link CheckpointStorage}) makes a
  * restart skip the replay.
  * <p>
+ * A replayed event has a CloudEvent behind it, so the replay always folds with real {@link EventMetadata}. A live event
+ * does not, so metadata on the live path is something the source supplies: use {@link #accept(EventMetadata, Object)}
+ * when the broker message carries the stream id, version or position, which is what a projection keyed on metadata
+ * needs to work live as well as during the replay. {@link #accept(Object)} folds with no metadata, and a projection
+ * keyed on metadata fed that way fails loud rather than silently skipping the event.
+ * <p>
  * Contract (see ADR 62): catch-up is Occurrent's job, live-resume is the broker's (acknowledge after {@code accept}
  * returns). No live position watermark is kept, so delivery is at-least-once and the fold must be idempotent. The
  * de-dup cache and the live buffer are bounded; the buffer fails loud on overflow. The "acknowledge after processing"
@@ -77,7 +83,7 @@ public final class CatchupProjectionFeed<E> {
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
 
-    private final BlockingHandover<E, ReplayedEvent<E>> handover;
+    private final BlockingHandover<LiveEvent<E>, ReplayedEvent<E>> handover;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -93,7 +99,7 @@ public final class CatchupProjectionFeed<E> {
         this.eventId = eventId;
         this.catchupMarker = catchupMarker;
         this.handover = BlockingHandover.create(
-                view::update, this::eventKey,
+                this::deliverLive, live -> eventKey(live.event()),
                 replayed -> view.update(replayed.metadata(), replayed.event()), replayed -> eventKey(replayed.event()),
                 options, "projection feed");
     }
@@ -174,7 +180,34 @@ public final class CatchupProjectionFeed<E> {
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        handover.accept(event);
+        handover.accept(new LiveEvent<>(null, event));
+    }
+
+    /**
+     * Feed a live domain event together with the {@link EventMetadata} the source knows about it, so a projection keyed on
+     * the stream id, version or position works on the live path and not only during the catch-up replay. Use this when the
+     * broker message carries those values (as headers, say) and your listener can read them. Otherwise call
+     * {@link #accept(Object)}, which folds with no metadata.
+     *
+     * @param metadata The metadata the source has for this event.
+     * @param event    The domain event received from the external source.
+     */
+    public void accept(EventMetadata metadata, E event) {
+        Objects.requireNonNull(metadata, "metadata cannot be null");
+        Objects.requireNonNull(event, "event cannot be null");
+        handover.accept(new LiveEvent<>(metadata, event));
+    }
+
+    // Two routes on purpose. MaterializedView.update(E) and update(EventMetadata, E) are separate interface methods a
+    // caller's view may implement differently, so an event fed without metadata must still take the one-argument route
+    // rather than the metadata one carrying EventMetadata.empty().
+    private void deliverLive(LiveEvent<E> live) {
+        EventMetadata metadata = live.metadata();
+        if (metadata == null) {
+            view.update(live.event());
+        } else {
+            view.update(metadata, live.event());
+        }
     }
 
     /**
@@ -219,8 +252,12 @@ public final class CatchupProjectionFeed<E> {
         }
     }
 
-    // A replayed event carries the metadata decoded from its CloudEvent; a live event (delivered via accept(E)) has
-    // none, so the two deliveries are separate MaterializedView overloads (see the class javadoc).
+    // A replayed event always carries the metadata decoded from its CloudEvent.
     private record ReplayedEvent<E>(EventMetadata metadata, E event) {
+    }
+
+    // A live event carries metadata only when the source supplied it via accept(metadata, event). Null means none was
+    // given, which is what picks the one-argument MaterializedView overload in deliverLive.
+    private record LiveEvent<E>(@Nullable EventMetadata metadata, E event) {
     }
 }

@@ -213,6 +213,60 @@ class ProjectionTest {
     }
 
     @Nested
+    class MetadataKeyedFlag {
+
+        @Test
+        void is_true_after_id_biFunction() {
+            Projection<Long, AccountEvent, String> projection = Projection.<Long, AccountEvent, String>builder(0L)
+                    .id((metadata, event) -> metadata.getStreamId())
+                    .on(AccountRegistered.class, (state, metadata, event) -> metadata.getPosition())
+                    .build();
+
+            assertThat(projection.metadataKeyed()).isTrue();
+        }
+
+        @Test
+        void is_false_after_id_function_even_though_it_delegates_to_a_biFunction_internally() {
+            Projection<Boolean, AccountEvent, String> projection = isUsernameClaimed("bob");
+
+            assertThat(projection.metadataKeyed()).isFalse();
+        }
+
+        @Test
+        void is_false_for_a_singleton_projection() {
+            Projection<Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent>singletonBuilder(false)
+                    .on(AccountRegistered.class, (state, event) -> true)
+                    .build();
+
+            assertThat(projection.metadataKeyed()).isFalse();
+        }
+
+        @Test
+        void is_preserved_across_adapt_when_declared_metadata_keyed() {
+            Projection<Integer, AccountRegistered, String> narrow = Projection.<Integer, AccountRegistered, String>builder(0)
+                    .id((metadata, event) -> metadata.getStreamId())
+                    .on(AccountRegistered.class, (state, event) -> state + 1)
+                    .build();
+
+            Projection<Integer, AccountEvent, String> widened = Projection.adapt(narrow, AccountRegistered.class);
+
+            assertThat(widened.metadataKeyed()).isTrue();
+        }
+
+        @Test
+        void is_preserved_across_adapt_when_declared_event_only_keyed() {
+            Projection<Integer, AccountRegistered, String> narrow = Projection.<Integer, AccountRegistered, String>builder(0)
+                    .id(AccountRegistered::accountId)
+                    .on(AccountRegistered.class, (state, event) -> state + 1)
+                    .build();
+
+            Projection<Integer, AccountEvent, String> widened = Projection.adapt(narrow, AccountRegistered.class);
+
+            assertThat(widened.metadataKeyed()).isFalse();
+        }
+    }
+
+    @Nested
     class ExplicitFilter {
 
         @Test
