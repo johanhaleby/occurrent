@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayName("InMemorySagaStateStore")
@@ -45,6 +46,10 @@ class InMemorySagaStateStoreTest {
 
     private static SagaEnvelope<String> completedEnvelope(String sagaId, String state, long version, List<TimerEntry> timers) {
         return new SagaEnvelope<>(sagaId, state, SagaStatus.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW);
+    }
+
+    private static SagaEnvelope<String> activeEnvelopeUpdatedAt(String sagaId, Instant updatedAt) {
+        return new SagaEnvelope<>(sagaId, "a", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null);
     }
 
     @Nested
@@ -141,6 +146,121 @@ class InMemorySagaStateStoreTest {
             List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 2);
 
             assertThat(due).hasSize(2);
+        }
+
+        @Test
+        void due_instances_carry_the_lifecycle_timestamps() {
+            Instant createdAt = NOW.minusSeconds(120);
+            Instant updatedAt = NOW.minusSeconds(30);
+            SagaEnvelope<String> saved = new SagaEnvelope<>("due", "a", SagaStatus.ACTIVE, 1,
+                    List.of(new TimerEntry("t", NOW.toEpochMilli())), Map.of(), null, createdAt, updatedAt, null);
+            store.compareAndSave("due", saved, 0);
+
+            SagaEnvelope<String> found = store.findWithDueTimers(NOW, 10).getFirst();
+
+            assertAll(
+                    () -> assertThat(found.createdAt()).isEqualTo(createdAt),
+                    () -> assertThat(found.updatedAt()).isEqualTo(updatedAt),
+                    () -> assertThat(found.completedAt()).isNull()
+            );
+        }
+    }
+
+    /**
+     * Mirrors {@code SpringMongoSagaStateStoreMongoTest}'s {@code findByStatus_*} tests, so the contract is verified
+     * identically against both store implementations. No test-jar dependency exists between saga-dsl/common and
+     * saga-dsl/mongodb-spring, so the assertions are duplicated by hand rather than shared through a common base class;
+     * see the planned Technology Compatibility Kit (issue #395).
+     */
+    @Nested
+    class FindByStatus {
+
+        @Test
+        void returns_instances_with_the_given_status() {
+            store.compareAndSave("active-1", envelope("active-1", "a", 1, List.of()), 0);
+            store.compareAndSave("completed-1", completedEnvelope("completed-1", "a", 1, List.of()), 0);
+
+            List<SagaEnvelope<String>> active = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
+
+            assertThat(active).extracting(SagaEnvelope::sagaId).containsExactly("active-1");
+        }
+
+        @Test
+        void updatedBefore_is_exclusive() {
+            store.compareAndSave("exact", activeEnvelopeUpdatedAt("exact", NOW), 0);
+
+            assertAll(
+                    () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW, 10)).isEmpty(),
+                    () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW.plusMillis(1), 10))
+                            .extracting(SagaEnvelope::sagaId).containsExactly("exact")
+            );
+        }
+
+        @Test
+        void orders_ascending_by_updatedAt_so_the_stalest_instance_is_first() {
+            store.compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
+            store.compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
+            store.compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
+
+            List<SagaEnvelope<String>> found = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 10);
+
+            assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle", "newest");
+        }
+
+        @Test
+        void limit_truncates_after_ordering_to_the_stalest_N_not_an_arbitrary_N() {
+            store.compareAndSave("oldest", activeEnvelopeUpdatedAt("oldest", NOW.minusSeconds(10)), 0);
+            store.compareAndSave("middle", activeEnvelopeUpdatedAt("middle", NOW.minusSeconds(5)), 0);
+            store.compareAndSave("newest", activeEnvelopeUpdatedAt("newest", NOW), 0);
+
+            List<SagaEnvelope<String>> found = store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(1), 2);
+
+            assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle");
+        }
+
+        @Test
+        void rejects_a_limit_below_1() {
+            assertThatThrownBy(() -> store.findByStatus(SagaStatus.ACTIVE, NOW, 0))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("limit must be positive");
+        }
+
+        @Test
+        void excludes_an_envelope_with_a_null_updatedAt() {
+            SagaEnvelope<String> noUpdatedAt = new SagaEnvelope<>("no-updated-at", "a", SagaStatus.ACTIVE, 1,
+                    List.of(), Map.of(), null, NOW, null, null);
+            store.compareAndSave("no-updated-at", noUpdatedAt, 0);
+
+            assertThat(store.findByStatus(SagaStatus.ACTIVE, NOW.plusSeconds(60), 10)).isEmpty();
+        }
+    }
+
+    @Nested
+    class LifecycleTimestamps {
+
+        @Test
+        void createdAt_updatedAt_and_completedAt_round_trip_through_find() {
+            Instant createdAt = NOW.minusSeconds(120);
+            Instant updatedAt = NOW.minusSeconds(30);
+            Instant completedAt = NOW;
+            SagaEnvelope<String> saved = new SagaEnvelope<>("s1", "a", SagaStatus.COMPLETED, 1, List.of(), Map.of(), null,
+                    createdAt, updatedAt, completedAt);
+            store.compareAndSave("s1", saved, 0);
+
+            SagaEnvelope<String> found = store.find("s1").orElseThrow();
+
+            assertAll(
+                    () -> assertThat(found.createdAt()).isEqualTo(createdAt),
+                    () -> assertThat(found.updatedAt()).isEqualTo(updatedAt),
+                    () -> assertThat(found.completedAt()).isEqualTo(completedAt)
+            );
+        }
+
+        @Test
+        void an_active_instance_has_no_completedAt() {
+            store.compareAndSave("s2", envelope("s2", "a", 1, List.of()), 0);
+
+            assertThat(store.find("s2")).hasValueSatisfying(e -> assertThat(e.completedAt()).isNull());
         }
     }
 
