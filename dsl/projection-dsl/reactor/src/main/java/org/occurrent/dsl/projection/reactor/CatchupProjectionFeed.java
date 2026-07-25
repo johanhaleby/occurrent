@@ -16,9 +16,11 @@
 
 package org.occurrent.dsl.projection.reactor;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.BoundedIdCache;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
@@ -38,6 +40,7 @@ import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -55,6 +58,11 @@ import java.util.function.Function;
  * Contract (see ADR 62): catch-up is Occurrent's job, live-resume is the broker's. A live event's {@code accept}
  * {@link Mono} completes only after its handler runs, so the listener can acknowledge after processing. Delivery is
  * at-least-once, so the fold must be idempotent. The buffer is bounded and fails loud on overflow.
+ * <p>
+ * The replay decodes CloudEvents, so {@link EventMetadata} is available there and is folded with the event. A live
+ * domain event arrives with no CloudEvent behind it and is folded with {@link EventMetadata#empty()}. A projection
+ * keyed by metadata therefore resolves its instance from the metadata during the replay and from the event alone once
+ * live, the same split as the blocking {@code CatchupProjectionFeed}.
  */
 @NullMarked
 public final class CatchupProjectionFeed<E> {
@@ -62,13 +70,14 @@ public final class CatchupProjectionFeed<E> {
     public static final int DEFAULT_DEDUP_CACHE_SIZE = 10_000;
     public static final int DEFAULT_MAX_BUFFERED_EVENTS = 100_000;
 
-    private final Function<E, Mono<Void>> fold;
+    private final BiFunction<EventMetadata, E, Mono<Void>> fold;
     private final Filter replayFilter;
     private final PositionOrderedReader reader;
     private final CloudEventConverter<E> converter;
     private final Function<E, String> eventId;
     private final @Nullable CheckpointStorage catchupMarker;
     private final String id;
+    private final int maxBufferedEvents;
     private final BoundedIdCache deliveredIds;
     private final Sinks.Many<Item<E>> liveSink;
     // Acks of live events buffered but not yet folded, so a catch-up failure fails them rather than leaving the
@@ -76,7 +85,7 @@ public final class CatchupProjectionFeed<E> {
     private final Set<MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<Throwable> terminalError = new AtomicReference<>();
 
-    private CatchupProjectionFeed(String id, Function<E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
+    private CatchupProjectionFeed(String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
                                         @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
         this.id = id;
@@ -89,6 +98,7 @@ public final class CatchupProjectionFeed<E> {
         this.converter = converter;
         this.eventId = eventId;
         this.catchupMarker = catchupMarker;
+        this.maxBufferedEvents = maxBufferedEvents;
         this.deliveredIds = new BoundedIdCache(dedupCacheSize);
         this.liveSink = Sinks.many().unicast().onBackpressureBuffer(new ArrayBlockingQueue<>(maxBufferedEvents));
     }
@@ -115,7 +125,10 @@ public final class CatchupProjectionFeed<E> {
             @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
-        Function<E, Mono<Void>> fold = Projections.reactiveUpdate(projection, repository, id);
+        // The metadata-aware fold, so a projection keyed by metadata (a stream id, say) resolves the same instance during
+        // the replay as it does live. reactiveUpdate(...) would hardwire EventMetadata.empty() and mis-key every
+        // replayed event.
+        BiFunction<EventMetadata, E, Mono<Void>> fold = Projections.reactiveUpdateWithMetadata(projection, repository, id);
         Filter filter = ProjectionFilters.filterFor(converter, projection);
         return create(id, fold, filter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
     }
@@ -139,6 +152,15 @@ public final class CatchupProjectionFeed<E> {
      */
     public static <E> CatchupProjectionFeed<E> create(
             String id, Function<E, Mono<Void>> fold, Filter replayFilter,
+            PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
+            @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
+        Objects.requireNonNull(fold, "fold cannot be null");
+        // A caller-supplied one-argument fold has no metadata channel, so the replay drops the metadata it decoded.
+        return create(id, (metadata, event) -> fold.apply(event), replayFilter, reader, converter, eventId, catchupMarker, dedupCacheSize, maxBufferedEvents);
+    }
+
+    private static <E> CatchupProjectionFeed<E> create(
+            String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter,
             PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId,
             @Nullable CheckpointStorage catchupMarker, int dedupCacheSize, int maxBufferedEvents) {
         Objects.requireNonNull(id, "id cannot be null");
@@ -180,9 +202,10 @@ public final class CatchupProjectionFeed<E> {
                 ackSink.error(failure);
                 return;
             }
-            Sinks.EmitResult result = liveSink.tryEmitNext(new Item<>(event, ackSink));
+            Sinks.EmitResult result = liveSink.tryEmitNext(new Item<>(EventMetadata.empty(), event, ackSink));
             if (result.isFailure()) {
-                ackSink.error(new IllegalStateException("Live event buffer overflowed during catch-up replay. "
+                ackSink.error(new IllegalStateException("Live event buffer overflowed during catch-up replay (cap "
+                        + maxBufferedEvents + "). "
                         + "The history is too large to buffer the live feed across a full replay. Rebuild offline from "
                         + "the event store instead of catching up over a live feed. Emit result: " + result));
             }
@@ -206,7 +229,7 @@ public final class CatchupProjectionFeed<E> {
                 .flatMapMany(done -> done
                         ? Flux.empty()
                         : reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
-                        .map(converter::toDomainEvent).map(this::replayedItem));
+                        .map(this::replayedItem));
         Flux<Item<E>> markerThenLive = Flux.concat(
                 alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : markCaughtUp()).thenMany(Flux.<Item<E>>empty()),
                 Mono.<Item<E>>fromRunnable(catchupDone::tryEmitEmpty),
@@ -238,7 +261,7 @@ public final class CatchupProjectionFeed<E> {
             }
             // Mono.defer so a synchronous throw from the fold becomes an onError signal onErrorResume can catch, rather
             // than aborting the whole pipeline.
-            return Mono.defer(() -> fold.apply(event))
+            return Mono.defer(() -> fold.apply(item.metadata(), event))
                     .doOnSuccess(v -> {
                         deliveredIds.add(key);
                         ack.success();
@@ -248,7 +271,7 @@ public final class CatchupProjectionFeed<E> {
                         return Mono.empty();
                     });
         }
-        return Mono.defer(() -> fold.apply(event)).doOnSuccess(v -> deliveredIds.add(key));
+        return Mono.defer(() -> fold.apply(item.metadata(), event)).doOnSuccess(v -> deliveredIds.add(key));
     }
 
     // A null id would collapse every such event to one de-dup key and silently drop deliveries, so fail loud instead.
@@ -269,11 +292,11 @@ public final class CatchupProjectionFeed<E> {
                 .then();
     }
 
-    private Item<E> replayedItem(E event) {
-        return new Item<>(event, null);
+    private Item<E> replayedItem(CloudEvent cloudEvent) {
+        return new Item<>(EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent), null);
     }
 
     // A replayed event has a null ack; a live event carries the MonoSink whose completion lets the listener acknowledge.
-    private record Item<E>(E event, @Nullable MonoSink<Void> ack) {
+    private record Item<E>(EventMetadata metadata, E event, @Nullable MonoSink<Void> ack) {
     }
 }

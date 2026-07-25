@@ -22,6 +22,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
@@ -34,6 +35,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -60,6 +62,27 @@ class CatchupProjectionFeedTest {
 
         feed.accept(new Counted("3")).block();
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(3));
+    }
+
+    @Test
+    void catch_up_threads_event_metadata_into_the_fold() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        // Keyed by the stream id from the metadata and folding the global position: both come from the replayed
+        // CloudEvent, so if the catch-up did not thread the metadata, keying on getStreamId() would fail on empty metadata.
+        Projection<Long, Counted, String> projection = Projection.<Long, Counted, String>builder(0L)
+                .id((metadata, event) -> metadata.getStreamId())
+                .on(Counted.class, (state, metadata, event) -> metadata.getPosition())
+                .build();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "positions", projection, repository, metadataReader("1", "2"), converter, Counted::eventId, null);
+
+        feed.catchUp().block();
+
+        // The instance is keyed under the stream id "s" (from metadata) and holds a real, non-null position.
+        assertThat(repo).containsKey("s");
+        assertThat(repo.get("s")).isNotNull();
     }
 
     @Test
@@ -211,6 +234,39 @@ class CatchupProjectionFeedTest {
             @Override
             public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
                 return Flux.fromIterable(List.of(eventIds)).map(CatchupProjectionFeedTest::cloudEvent);
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just((long) eventIds.length);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+    }
+
+    // A reader whose history carries real stream metadata (stream id "s", a stream version, and a global position),
+    // unlike reader(...) above which builds bare CloudEvents with no extensions. Needed to prove the catch-up threads
+    // the decoded EventMetadata into the fold rather than EventMetadata.empty().
+    private static PositionOrderedReader metadataReader(String... eventIds) {
+        return new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                List<CloudEvent> events = new ArrayList<>();
+                for (int i = 0; i < eventIds.length; i++) {
+                    long version = i + 1;
+                    CloudEvent event = CloudEventBuilder.v1()
+                            .withId(eventIds[i])
+                            .withSource(SOURCE)
+                            .withType("Counted")
+                            .withExtension(OccurrentCloudEventExtension.occurrent("s", version))
+                            .build();
+                    events.add(OccurrentCloudEventExtension.withPosition(event, version));
+                }
+                return Flux.fromIterable(events);
             }
 
             @Override
