@@ -101,6 +101,17 @@ Spring gets **two** ways in, because the two lookups are genuinely different and
   id has a bug when that id is unknown and should fail at the mistake (the message names every id that *is* registered,
   since "unknown saga id" with no list is a miserable error for a typo), while code resolving an id from a request has
   no bug when it misses.
+
+  **It is a read-only interface, with the write side on an implementation in `org.occurrent.dsl.saga.internal`.** The
+  registry is populated by the `@Saga` registrar and by nothing else: unlike `SagaStateStore.compareAndSave`, which an
+  application legitimately calls when it wires its own store, `register` has no legitimate application caller at all.
+  Occurrent's callers are unknown and unobservable, so the standing rule is to prevent a footgun at the type level rather
+  than document it — a public `register` on a bean applications are told to inject is exactly the footgun, and it would
+  contradict the guarantee `SagaInstances` makes two paragraphs up. Splitting it is how ADR 63's `FlowState` handled the
+  same problem, and the `internal` package is what carries the not-user-API signal; a public mutable type in a public
+  package carries no signal at all. The starter constructs the implementation, declares the `@Bean` as the interface, and
+  resolves the concrete type when it needs to write, so replacing the bean with your own implementation leaves it
+  unpopulated and logs a warning rather than failing a saga.
 - Each saga's `SagaInstances` published as a singleton named `sagaInstances-<id>`, so a `getBean` or `@Qualifier` lookup
   reaches one directly. Per id rather than one bean of the type, so two sagas do not make a by-type injection ambiguous.
 
@@ -160,6 +171,9 @@ before a second implementation exists also avoids writing it twice.
   run. Reading the registry from a constructor yields an empty registry, and a `sagaInstances-<id>` constructor injection
   fails outright. Both are documented at the point of use, and no amount of wiring removes the underlying constraint,
   since a saga factory cannot precede its own collaborators.
-- `SagaInstancesRegistry` is a mutable bean with a `register` method that is public only because the registrar sits in
-  another module, the same compromise `FlowStateImpl` makes for the Mongo store. It rejects a duplicate id rather than
-  silently keeping one of two sagas.
+- The registry is two types rather than one: a read-only interface an application injects, and an internal
+  implementation the framework writes to. The cost is an extra type and a concrete-type lookup in the registrar; the
+  benefit is that no application can corrupt the registry, and the read-only guarantee is enforced by the compiler
+  instead of by a comment. It rejects a duplicate id rather than silently keeping one of two sagas.
+- Replacing the `SagaInstancesRegistry` bean with a custom implementation is possible but pointless: Occurrent can only
+  populate its own, so a replacement stays empty. The registrar warns when it cannot find one it can write to.

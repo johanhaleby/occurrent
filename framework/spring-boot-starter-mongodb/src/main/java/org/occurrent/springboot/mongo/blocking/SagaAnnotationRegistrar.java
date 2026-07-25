@@ -23,6 +23,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
@@ -127,12 +128,14 @@ class SagaAnnotationRegistrar {
         registerSagaInstancesSingleton(id, instances);
     }
 
-    // The registry is auto-configured alongside the annotation post-processor, so it is normally present. It can be
-    // absent if an application defines its own bean set without it, which must not fail a saga that is otherwise fine.
+    // The registry is auto-configured alongside the annotation post-processor, so it is normally present. Resolved by
+    // its concrete type rather than the interface, because only the implementation can be written to: the public
+    // interface is read-only by design. It is absent if an application defines its own bean set without it, or replaces
+    // the registry with its own implementation, neither of which must fail a saga that is otherwise fine.
     private void addToSagaInstancesRegistry(String id, SagaInstances instances) {
-        SagaInstancesRegistry registry = applicationContext.getBeanProvider(SagaInstancesRegistry.class).getIfAvailable();
+        SagaInstancesRegistryImpl registry = applicationContext.getBeanProvider(SagaInstancesRegistryImpl.class).getIfAvailable();
         if (registry == null) {
-            log.warn("No SagaInstancesRegistry bean is available, so saga '{}' is not in it. Look it up as '{}' or use SagaSubscription.instances() instead.", id, sagaInstancesBeanName(id));
+            log.warn("No SagaInstancesRegistry that Occurrent can populate is available, so saga '{}' is not in it. Look it up as '{}' or use SagaSubscription.instances() instead.", id, sagaInstancesBeanName(id));
             return;
         }
         registry.register(id, instances);

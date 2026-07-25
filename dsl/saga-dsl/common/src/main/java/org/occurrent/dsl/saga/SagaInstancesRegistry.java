@@ -18,10 +18,6 @@ package org.occurrent.dsl.saga;
 
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
-import static java.util.Objects.requireNonNull;
 
 /**
  * The {@link SagaInstances} of every registered saga, keyed by saga id. This is what an application injects when it
@@ -31,82 +27,47 @@ import static java.util.Objects.requireNonNull;
  * On the Spring stack the {@code @Saga} registrar fills this in, and each saga's {@link SagaInstances} is also published
  * under its own bean name so a {@code getBean} or {@code @Qualifier} lookup reaches it directly. The two paths are
  * equivalent; this one is typed and injectable, the named singleton is convenient when the id is already known.
+ * <p>
+ * Like {@link SagaInstances}, this is read-only. Registering a saga is the framework's job and has no legitimate caller
+ * in an application, so the method that does it is not on this interface at all: it lives on the implementation in
+ * {@code org.occurrent.dsl.saga.internal}, which an application never references.
  *
  * <h2>It is empty until the sagas have been registered</h2>
  * A {@code @Saga} factory method can only run once the beans it collaborates with are wired, so the scan that populates
- * this registry happens <em>after</em> the application context has refreshed. A caller that reads the registry while
- * another bean is still being constructed therefore sees it empty, and that is inherent rather than a defect: the sagas
- * genuinely do not exist yet at that point.
+ * the registry happens <em>after</em> the application context has refreshed. A caller that reads it while another bean
+ * is still being constructed therefore sees it empty, and that is inherent rather than a defect: the sagas genuinely do
+ * not exist yet at that point.
  * <p>
- * In practice this is not a constraint, because anything that observes a saga instance runs in response to a request,
- * a schedule or a health check, all of which happen long after refresh. Injecting this registry into a constructor is
+ * In practice this is not a constraint, because anything that observes a saga instance runs in response to a request, a
+ * schedule or a health check, all of which happen long after refresh. Injecting this registry into a constructor is
  * fine; <em>reading</em> it from a constructor is not.
  *
  * @see SagaInstances
  */
-public final class SagaInstancesRegistry {
-
-    private final ConcurrentMap<String, SagaInstances> instancesBySagaId = new ConcurrentHashMap<>();
+public interface SagaInstancesRegistry {
 
     /**
      * The instances of the saga with {@code sagaId}, or empty when no such saga is registered. Prefer
      * {@link #get(String)} when the id is a constant in your code, so a typo fails loudly instead of looking like a
      * saga that has not started.
      */
-    public Optional<SagaInstances> find(String sagaId) {
-        requireNonNull(sagaId, "sagaId cannot be null");
-        return Optional.ofNullable(instancesBySagaId.get(sagaId));
-    }
+    Optional<SagaInstances> find(String sagaId);
 
     /**
      * The instances of the saga with {@code sagaId}.
      * <p>
-     * Both this and {@link #find(String)} exist because the two callers are genuinely different. Code holding a
-     * constant id has a bug if that id is unknown, and should say so at the point of the mistake, which is why this
-     * throws and names every id that <em>is</em> registered. Code resolving an id from a request or a configuration
-     * value has no bug when it misses, and should use {@link #find(String)}.
+     * Both this and {@link #find(String)} exist because the two callers are genuinely different. Code holding a constant
+     * id has a bug if that id is unknown, and should say so at the point of the mistake, which is why this throws and
+     * names every id that <em>is</em> registered. Code resolving an id from a request or a configuration value has no
+     * bug when it misses, and should use {@link #find(String)}.
      *
      * @throws IllegalArgumentException if no saga with that id is registered, listing the ids that are
      */
-    public SagaInstances get(String sagaId) {
-        requireNonNull(sagaId, "sagaId cannot be null");
-        SagaInstances instances = instancesBySagaId.get(sagaId);
-        if (instances == null) {
-            throw new IllegalArgumentException("No saga is registered with id '%s'. Registered saga ids: %s. Note that sagas are registered after the application context has refreshed, so this is also empty when read while another bean is still being constructed.".formatted(sagaId, describeRegisteredIds()));
-        }
-        return instances;
-    }
+    SagaInstances get(String sagaId);
 
     /**
      * The ids of every registered saga, so a caller can enumerate sagas instead of hardcoding their ids. Unordered, and
      * a snapshot: it does not change as more sagas register.
      */
-    public Set<String> sagaIds() {
-        return Set.copyOf(instancesBySagaId.keySet());
-    }
-
-    /**
-     * Registers {@code instances} under {@code sagaId}.
-     * <p>
-     * Called by the framework as it registers each saga, not by an application. It is public only because the
-     * {@code @Saga} registrar lives in another module.
-     *
-     * @throws IllegalArgumentException if {@code sagaId} is already registered
-     */
-    public void register(String sagaId, SagaInstances instances) {
-        requireNonNull(sagaId, "sagaId cannot be null");
-        requireNonNull(instances, "instances cannot be null");
-        SagaInstances previous = instancesBySagaId.putIfAbsent(sagaId, instances);
-        if (previous != null) {
-            // The annotation registrar already rejects a duplicate id against its shared registry, so reaching this
-            // means two registrations raced or bypassed that check. Either way, silently keeping one of them would make
-            // a lookup return the wrong saga's instances.
-            throw new IllegalArgumentException("A saga with id '%s' is already registered.".formatted(sagaId));
-        }
-    }
-
-    private String describeRegisteredIds() {
-        Set<String> ids = sagaIds();
-        return ids.isEmpty() ? "none" : ids.stream().sorted().toList().toString();
-    }
+    Set<String> sagaIds();
 }

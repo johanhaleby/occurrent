@@ -40,6 +40,7 @@ import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
+import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.EventStoreCapability;
@@ -115,7 +116,9 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnMissingBean(SagaInstancesRegistry.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public SagaInstancesRegistry occurrentSagaInstancesRegistry() {
-        return new SagaInstancesRegistry();
+        // Declared as the read-only interface, which is what an application injects. The registrar populates it by
+        // resolving the concrete type, so replacing this bean with your own implementation leaves it unpopulated.
+        return new SagaInstancesRegistryImpl();
     }
 
     @Bean
