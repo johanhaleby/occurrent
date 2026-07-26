@@ -442,7 +442,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
      */
     private <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
         return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory())
-                .flatMap(ownedByCaller -> ownedByCaller ? action : action.retryWhen(retry));
+                .flatMap(transactionAlreadyActive -> transactionAlreadyActive ? action : action.retryWhen(retry));
     }
 
     /**

@@ -24,6 +24,7 @@ import com.mongodb.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -128,6 +129,13 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 .eventStoreCapabilities(STREAM, DCB)
                 .build();
         eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
+    }
+
+    @AfterEach
+    void close_mongo_client() {
+        // One client per test, and every store this class builds shares it, so closing it here keeps the suite from
+        // accumulating connections and threads across its many threaded scenarios.
+        mongoClient.close();
     }
 
     // ---------------------------------------------------------------------------
@@ -728,11 +736,9 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     }
 
     private SpringMongoEventStore buildEventStoreWithStreamIdGenerator(DcbStreamIdGenerator streamIdGenerator) {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcb_concurrency");
-        MongoClient mongoClient = MongoClients.create(connectionString);
-        MongoTemplate template = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        MongoTemplate template = new MongoTemplate(mongoClient, databaseName);
         MongoTransactionManager txManager = new MongoTransactionManager(
-                new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+                new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
         EventStoreConfig config = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(COLLECTION)
                 .transactionConfig(txManager)

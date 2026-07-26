@@ -21,6 +21,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -101,6 +102,13 @@ class ReactorMongoEventStoreDcbTest {
         mongoTemplate = new ReactiveMongoTemplate(mongoClient, databaseName);
         transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         eventStore = storeWith(STREAM, DCB);
+    }
+
+    @AfterEach
+    void close_mongo_client() {
+        // One client per test, shared by every store this class builds, so closing it here keeps the suite from
+        // accumulating connections and threads.
+        mongoClient.close();
     }
 
     private ReactorMongoEventStore storeWith(EventStoreCapability first, EventStoreCapability... rest) {
