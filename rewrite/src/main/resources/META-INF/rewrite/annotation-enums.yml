@@ -23,7 +23,10 @@ description: >-
   Projection annotations, are now top-level types in org.occurrent.annotation. Subscription.StartPosition and
   DcbSubscription.DcbStartPosition also move to the shared top-level org.occurrent.annotation.StartPosition (the
   constants BEGINNING, NOW, and DEFAULT are unchanged). EventMetadata also moves from
-  org.occurrent.dsl.subscription to org.occurrent.cloudevents.
+  org.occurrent.dsl.subscription to org.occurrent.cloudevents. The Spring Boot annotation machinery
+  (OccurrentProperties, SubscriptionAnnotations, Jackson3CloudEventConverterConfiguration, and the five
+  autoconfiguration conditions) also moves from org.occurrent.springboot.mongo.common to
+  org.occurrent.springboot.common, as it is no longer MongoDB-specific.
 recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.annotation.Subscription$ResumeBehavior
@@ -68,4 +71,36 @@ recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.dsl.subscription.EventMetadata
       newFullyQualifiedTypeName: org.occurrent.cloudevents.EventMetadata
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OccurrentProperties
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OccurrentProperties
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.SubscriptionAnnotations
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.Jackson3CloudEventConverterConfiguration
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.Jackson3CloudEventConverterConfiguration
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OnDcbEventStoreCapabilityCondition
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OnDcbEventStoreCapabilityCondition
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OnDomainEventQueriesCapabilityCondition
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OnDomainEventQueriesCapabilityCondition
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OnMissingCloudEventConverterAndCloudEventTypeMapperCondition
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OnMissingCloudEventConverterAndCloudEventTypeMapperCondition
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OnPositionEnabledCondition
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OnPositionEnabledCondition
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OnStreamEventStoreCapabilityCondition
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OnStreamEventStoreCapabilityCondition
       ignoreDefinition: true

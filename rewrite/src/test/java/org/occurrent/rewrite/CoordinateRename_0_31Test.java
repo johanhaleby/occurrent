@@ -78,4 +78,40 @@ class CoordinateRename_0_31Test implements RewriteTest {
                 )
         );
     }
+
+    @Test
+    void renamesSpringBootAutoconfigureCoordinateAndLeavesOthersAlone() {
+        rewriteRun(
+                pomXml(
+                        """
+                        <project>
+                            <modelVersion>4.0.0</modelVersion>
+                            <groupId>com.example</groupId>
+                            <artifactId>app</artifactId>
+                            <version>1.0.0</version>
+                            <dependencies>
+                                <dependency>
+                                    <groupId>org.occurrent</groupId>
+                                    <artifactId>occurrent-mongodb-spring-boot-autoconfigure</artifactId>
+                                    <version>0.30.0</version>
+                                </dependency>
+                                <dependency>
+                                    <groupId>org.occurrent</groupId>
+                                    <artifactId>occurrent-subscription-inmemory</artifactId>
+                                    <version>0.30.0</version>
+                                </dependency>
+                            </dependencies>
+                        </project>
+                        """,
+                        spec -> spec.after(actual -> {
+                            assertThat(actual)
+                                    .contains("<artifactId>occurrent-spring-boot-autoconfigure</artifactId>")
+                                    .doesNotContain("occurrent-mongodb-spring-boot-autoconfigure")
+                                    // an unrelated Occurrent coordinate is untouched
+                                    .contains("<artifactId>occurrent-subscription-inmemory</artifactId>");
+                            return actual;
+                        })
+                )
+        );
+    }
 }
