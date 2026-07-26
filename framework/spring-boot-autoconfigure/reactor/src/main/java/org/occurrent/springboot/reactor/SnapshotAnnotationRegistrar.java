@@ -17,6 +17,7 @@
 
 package org.occurrent.springboot.reactor;
 
+import io.cloudevents.CloudEvent;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -139,11 +140,20 @@ class SnapshotAnnotationRegistrar {
                     }
                     Mono<S> newState;
                     if (eventVersion == base.version() + 1) {
-                        newState = Mono.just(view.evolve(base.state(), event));
+                        newState = Mono.just(view.evolve(base.state(), metadata, event));
                     } else {
+                        // Folded per CloudEvent (not via the List-based evolve) so each event keeps its own metadata
+                        // rather than the whole range sharing EventMetadata.empty(), which a metadata-reading fold
+                        // cannot tolerate. The fold itself stays synchronous, inside map(), so nothing blocks.
                         newState = eventStore.read(key, (int) base.version(), (int) (eventVersion - base.version()))
                                 .flatMap(es -> es.events().collectList())
-                                .map(cloudEvents -> view.evolve(base.state(), converter.toDomainEvents(cloudEvents.stream()).toList()));
+                                .map(cloudEvents -> {
+                                    S state = base.state();
+                                    for (CloudEvent cloudEvent : cloudEvents) {
+                                        state = view.evolve(state, EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent));
+                                    }
+                                    return state;
+                                });
                     }
                     return newState.flatMap(state -> store.save(key, new Snapshot<>(state, eventVersion, schemaVersion)));
                 });
@@ -214,11 +224,15 @@ class SnapshotAnnotationRegistrar {
                     return Mono.<Void>empty(); // throttle before reading, matching events cannot exceed the position gap since the snapshot
                 }
                 return dcbEventStore.read(criteria, DcbReadOptions.between(base.version(), position)).flatMap(eventStream -> {
-                    List<E> range = converter.toDomainEvents(eventStream.events().stream()).toList();
+                    List<CloudEvent> range = eventStream.events();
                     if (range.size() < everyNEvents) {
                         return Mono.<Void>empty(); // throttle: too few matching events since the last saved snapshot
                     }
-                    S newState = view.evolve(base.state(), range);
+                    // Folded per CloudEvent so each event keeps its own metadata, matching the stream path above.
+                    S newState = base.state();
+                    for (CloudEvent rangeCloudEvent : range) {
+                        newState = view.evolve(newState, EventMetadata.from(rangeCloudEvent), converter.toDomainEvent(rangeCloudEvent));
+                    }
                     return store.save(key, new Snapshot<>(newState, position, schemaVersion));
                 });
             });

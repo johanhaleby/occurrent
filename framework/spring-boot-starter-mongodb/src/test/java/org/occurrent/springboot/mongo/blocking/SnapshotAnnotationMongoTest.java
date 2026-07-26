@@ -139,6 +139,46 @@ class SnapshotAnnotationMongoTest {
     }
 
     @Test
+    void a_single_event_update_gives_the_fold_the_events_metadata() {
+        try (ConfigurableApplicationContext context = run(MetadataAwareSnapshotApplication.class, "snapshot-metadata")) {
+            @SuppressWarnings("unchecked")
+            CloudEventConverter<CounterEvent> converter = context.getBean(CloudEventConverter.class);
+            EventStore eventStore = context.getBean(EventStore.class);
+            MongoOperations mongoOperations = context.getBean(MongoOperations.class);
+            SnapshotStore<MetaCounter> store = new SpringMongoSnapshotStore<>(mongoOperations, MetaCounter.class, "occurrent-snapshot-meta-counter");
+
+            eventStore.write("counter-meta", converter.toCloudEvents(List.of(new Incremented(7))));
+
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(store.findLatest("counter-meta")).hasValueSatisfying(snapshot -> {
+                        assertThat(snapshot.state().total()).isEqualTo(7);
+                        assertThat(snapshot.state().lastSeenStreamVersion()).isEqualTo(1L);
+                    }));
+        }
+    }
+
+    @Test
+    void a_range_update_folds_each_event_with_its_own_metadata() {
+        try (ConfigurableApplicationContext context = run(MetadataAwareRangeSnapshotApplication.class, "snapshot-metadata-range")) {
+            @SuppressWarnings("unchecked")
+            CloudEventConverter<CounterEvent> converter = context.getBean(CloudEventConverter.class);
+            EventStore eventStore = context.getBean(EventStore.class);
+            MongoOperations mongoOperations = context.getBean(MongoOperations.class);
+            SnapshotStore<MetaRangeCounter> store = new SpringMongoSnapshotStore<>(mongoOperations, MetaRangeCounter.class, "occurrent-snapshot-meta-range-counter");
+
+            // everyNEvents = 2 means the first delivery (version 1) is throttled and the second delivery (version 2)
+            // takes the range branch (folding versions 1 and 2 from a store read, not the single-event branch).
+            eventStore.write("counter-meta-range", converter.toCloudEvents(List.of(new Incremented(5), new Incremented(9))));
+
+            await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                    assertThat(store.findLatest("counter-meta-range")).hasValueSatisfying(snapshot -> {
+                        assertThat(snapshot.state().total()).isEqualTo(14);
+                        assertThat(snapshot.state().streamVersionSum()).isEqualTo(3L); // 1 + 2, not e.g. the last event's version counted twice
+                    }));
+        }
+    }
+
+    @Test
     void rejects_a_snapshot_id_already_used_by_a_subscription() {
         assertThatThrownBy(() -> run(DuplicateIdApplication.class, "snapshot-duplicate-id"))
                 .hasMessageContaining("Duplicate")
@@ -191,6 +231,62 @@ class SnapshotAnnotationMongoTest {
                 return SnapshotView.<Counter, CounterEvent>builder(new Counter(0))
                         .schemaVersion(SCHEMA_VERSION)
                         .on(Incremented.class, (state, event) -> new Counter(state.total() + event.amount()))
+                        .build();
+            }
+        }
+    }
+
+    @SpringBootApplication
+    @EnableOccurrent
+    static class MetadataAwareSnapshotApplication {
+        @Bean
+        CloudEventTypeMapper<CounterEvent> typeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<CounterEvent> converter(CloudEventTypeMapper<CounterEvent> typeMapper) {
+            return new JacksonCloudEventConverter.Builder<CounterEvent>(new ObjectMapper(), SOURCE)
+                    .typeMapper(typeMapper)
+                    .idMapper(CounterEvent::eventId)
+                    .timeMapper(event -> event.timestamp().toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
+                    .build();
+        }
+
+        @Component
+        static class MetaCounterSnapshot {
+            @Snapshot(id = "meta-counter")
+            SnapshotView<MetaCounter, CounterEvent> metaCounterSnapshot() {
+                return SnapshotView.<MetaCounter, CounterEvent>builder(new MetaCounter(0, 0))
+                        .on(Incremented.class, (state, metadata, event) -> new MetaCounter(state.total() + event.amount(), metadata.getStreamVersion()))
+                        .build();
+            }
+        }
+    }
+
+    @SpringBootApplication
+    @EnableOccurrent
+    static class MetadataAwareRangeSnapshotApplication {
+        @Bean
+        CloudEventTypeMapper<CounterEvent> typeMapper() {
+            return ReflectionCloudEventTypeMapper.qualified();
+        }
+
+        @Bean
+        CloudEventConverter<CounterEvent> converter(CloudEventTypeMapper<CounterEvent> typeMapper) {
+            return new JacksonCloudEventConverter.Builder<CounterEvent>(new ObjectMapper(), SOURCE)
+                    .typeMapper(typeMapper)
+                    .idMapper(CounterEvent::eventId)
+                    .timeMapper(event -> event.timestamp().toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
+                    .build();
+        }
+
+        @Component
+        static class MetaRangeCounterSnapshot {
+            @Snapshot(id = "meta-range-counter", everyNEvents = 2)
+            SnapshotView<MetaRangeCounter, CounterEvent> metaRangeCounterSnapshot() {
+                return SnapshotView.<MetaRangeCounter, CounterEvent>builder(new MetaRangeCounter(0, 0))
+                        .on(Incremented.class, (state, metadata, event) -> new MetaRangeCounter(state.total() + event.amount(), state.streamVersionSum() + metadata.getStreamVersion()))
                         .build();
             }
         }
@@ -285,6 +381,12 @@ class SnapshotAnnotationMongoTest {
     }
 
     record Counter(int total) {
+    }
+
+    record MetaCounter(int total, long lastSeenStreamVersion) {
+    }
+
+    record MetaRangeCounter(int total, long streamVersionSum) {
     }
 
     sealed interface CounterEvent {

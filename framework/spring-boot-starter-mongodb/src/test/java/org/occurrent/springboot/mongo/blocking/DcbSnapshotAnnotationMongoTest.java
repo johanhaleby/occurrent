@@ -83,6 +83,7 @@ class DcbSnapshotAnnotationMongoTest {
 
     private static final URI SOURCE = URI.create("urn:occurrent:dcb-snapshot-test");
     private static final String TAG = "account:1";
+    private static final String RANGE_TAG = "account:range-meta";
     private static final int SCHEMA_VERSION = 2;
 
     @Autowired
@@ -109,10 +110,29 @@ class DcbSnapshotAnnotationMongoTest {
                 }));
     }
 
+    @Test
+    void a_range_update_folds_each_dcb_event_with_its_own_metadata() {
+        appendTagged(dcbEventStore, converter, RANGE_TAG, new Incremented(5), new Incremented(9));
+
+        DcbCriteria criteria = DcbCriteria.tagsAnyOf(Tag.parse(RANGE_TAG));
+        String key = DcbSnapshotKeys.canonicalKey(criteria);
+        SnapshotStore<MetaRangeCounter> store = new SpringMongoSnapshotStore<>(mongoOperations, MetaRangeCounter.class, "occurrent-snapshot-meta-range-dcb-counter");
+
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(store.findLatest(key)).hasValueSatisfying(snapshot -> {
+                    assertThat(snapshot.state().total()).isEqualTo(14);
+                    assertThat(snapshot.state().streamVersionSum()).isEqualTo(3L); // 1 + 2, not e.g. the last event's version counted twice
+                }));
+    }
+
     private static void appendTagged(DcbEventStore dcbEventStore, CloudEventConverter<CounterEvent> converter, CounterEvent... events) {
+        appendTagged(dcbEventStore, converter, TAG, events);
+    }
+
+    private static void appendTagged(DcbEventStore dcbEventStore, CloudEventConverter<CounterEvent> converter, String tag, CounterEvent... events) {
         List<CloudEvent> cloudEvents = Arrays.stream(events)
                 .map(event -> converter.toCloudEvent(event))
-                .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
+                .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(tag))))
                 .toList();
         dcbEventStore.append(cloudEvents);
     }
@@ -155,9 +175,24 @@ class DcbSnapshotAnnotationMongoTest {
                         DcbCriteria.tagsAnyOf(Tag.parse(TAG)));
             }
         }
+
+        @Component
+        static class MetaRangeCounterSnapshot {
+            @Snapshot(id = "meta-range-dcb-counter", everyNEvents = 2)
+            DcbSnapshotView<MetaRangeCounter, CounterEvent> metaRangeCounterSnapshot() {
+                return new DcbSnapshotView<>(
+                        SnapshotView.<MetaRangeCounter, CounterEvent>builder(new MetaRangeCounter(0, 0))
+                                .on(Incremented.class, (state, metadata, event) -> new MetaRangeCounter(state.total() + event.amount(), state.streamVersionSum() + metadata.getStreamVersion()))
+                                .build(),
+                        DcbCriteria.tagsAnyOf(Tag.parse(RANGE_TAG)));
+            }
+        }
     }
 
     record Counter(int total) {
+    }
+
+    record MetaRangeCounter(int total, long streamVersionSum) {
     }
 
     sealed interface CounterEvent {

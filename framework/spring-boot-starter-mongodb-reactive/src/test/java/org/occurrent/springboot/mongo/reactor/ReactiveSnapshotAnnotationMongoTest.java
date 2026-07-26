@@ -130,6 +130,34 @@ class ReactiveSnapshotAnnotationMongoTest {
                 }));
     }
 
+    @Test
+    void a_single_event_update_gives_the_fold_the_events_metadata() {
+        ReactiveSnapshotStore<MetaCounter> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, MetaCounter.class, "occurrent-snapshot-reactive-meta-counter");
+
+        applicationService.execute("counter-meta", __ -> List.of(new Incremented(7))).block();
+
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(store.findLatest("counter-meta").blockOptional()).hasValueSatisfying(snapshot -> {
+                    assertThat(snapshot.state().total()).isEqualTo(7);
+                    assertThat(snapshot.state().lastSeenStreamVersion()).isEqualTo(1L);
+                }));
+    }
+
+    @Test
+    void a_range_update_folds_each_event_with_its_own_metadata() {
+        ReactiveSnapshotStore<MetaRangeCounter> store = new ReactiveSpringMongoSnapshotStore<>(mongoOperations, MetaRangeCounter.class, "occurrent-snapshot-reactive-meta-range-counter");
+
+        // everyNEvents = 2 means the first delivery (version 1) is throttled and the second delivery (version 2)
+        // takes the range branch (folding versions 1 and 2 from a store read, not the single-event branch).
+        applicationService.execute("counter-meta-range", __ -> List.of(new Incremented(5), new Incremented(9))).block();
+
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(store.findLatest("counter-meta-range").blockOptional()).hasValueSatisfying(snapshot -> {
+                    assertThat(snapshot.state().total()).isEqualTo(14);
+                    assertThat(snapshot.state().streamVersionSum()).isEqualTo(3L); // 1 + 2, not e.g. the last event's version counted twice
+                }));
+    }
+
     @TestConfiguration(proxyBeanMethods = false)
     static class MongoDbContainerConfiguration {
         @Bean
@@ -167,9 +195,35 @@ class ReactiveSnapshotAnnotationMongoTest {
                         .build();
             }
         }
+
+        @Component
+        static class MetaCounterSnapshot {
+            @Snapshot(id = "reactive-meta-counter")
+            SnapshotView<MetaCounter, CounterEvent> metaCounterSnapshot() {
+                return SnapshotView.<MetaCounter, CounterEvent>builder(new MetaCounter(0, 0))
+                        .on(Incremented.class, (state, metadata, event) -> new MetaCounter(state.total() + event.amount(), metadata.getStreamVersion()))
+                        .build();
+            }
+        }
+
+        @Component
+        static class MetaRangeCounterSnapshot {
+            @Snapshot(id = "reactive-meta-range-counter", everyNEvents = 2)
+            SnapshotView<MetaRangeCounter, CounterEvent> metaRangeCounterSnapshot() {
+                return SnapshotView.<MetaRangeCounter, CounterEvent>builder(new MetaRangeCounter(0, 0))
+                        .on(Incremented.class, (state, metadata, event) -> new MetaRangeCounter(state.total() + event.amount(), state.streamVersionSum() + metadata.getStreamVersion()))
+                        .build();
+            }
+        }
     }
 
     record Counter(int total) {
+    }
+
+    record MetaCounter(int total, long lastSeenStreamVersion) {
+    }
+
+    record MetaRangeCounter(int total, long streamVersionSum) {
     }
 
     sealed interface CounterEvent {

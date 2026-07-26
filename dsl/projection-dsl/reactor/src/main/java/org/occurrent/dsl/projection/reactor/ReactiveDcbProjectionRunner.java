@@ -19,6 +19,7 @@ package org.occurrent.dsl.projection.reactor;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.view.MaterializedView;
@@ -28,6 +29,7 @@ import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Mono;
 
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
@@ -104,7 +106,7 @@ public final class ReactiveDcbProjectionRunner<E> {
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository, @Nullable DcbStartAt startAt) {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
-        return project(subscriptionId, dcbProjection, Projections.reactiveUpdate(dcbProjection.projection(), repository, subscriptionId), startAt);
+        return projectWithMetadata(subscriptionId, dcbProjection, Projections.reactiveUpdateWithMetadata(dcbProjection.projection(), repository, subscriptionId), startAt);
     }
 
     /**
@@ -121,6 +123,16 @@ public final class ReactiveDcbProjectionRunner<E> {
      * the projection's DCB criteria.
      */
     public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, MaterializedView<E> materializedView, @Nullable DcbStartAt startAt) {
-        return project(subscriptionId, dcbProjection, Projections.reactiveUpdate(materializedView), startAt);
+        return projectWithMetadata(subscriptionId, dcbProjection, Projections.reactiveUpdateWithMetadata(materializedView), startAt);
+    }
+
+    // Routes through subscribeWithMetadata so the ViewStateRepository/MaterializedView overloads above carry real DCB
+    // delivery metadata into the fold, instead of the plain subscribe() path, which has none to give.
+    private Subscription projectWithMetadata(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable DcbStartAt startAt) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(dcbProjection, "dcbProjection cannot be null");
+        requireNonNull(update, "update cannot be null");
+        return dcbSubscriptions.subscribeWithMetadata(subscriptionId, dcbProjection.criteria(), startAt,
+                (dcbMetadata, event) -> update.apply(dcbMetadata.eventMetadata(), event));
     }
 }
