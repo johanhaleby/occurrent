@@ -56,6 +56,21 @@ OrderFulfillmentFlowSaga.kt:45:58 Return type mismatch: expected 'FlowReactions<
 reads better than `this`, and it is needed because a trailing `if` without an `else` has type `Unit`. A reaction with no
 commands at all takes no lambda instead, through the defaulted `on<T>(then = ...)` described below.
 
+`noMore` is a normal part of the vocabulary rather than an escape hatch. A reaction that issues a command in some cases
+and none in the others is an ordinary thing to write. An earlier draft called that case rare on the grounds that no
+reaction in this repository needs one, which was true and beside the point: this is a published library, so its own
+examples are not the population of what callers write. The four spellings that compile are an `if` with an `else` branch
+of `noMore`, a trailing `noMore` on its own line, a conditional followed by an unconditional command, and a `when` whose
+branches all end on a command or `noMore`.
+
+`nothing` and `nothingElse` were the alternatives considered. `nothing` reads best as an else branch and was very nearly
+chosen, but it overclaims: the branch still fires and still follows its continuation, and only the command list is empty,
+so `else nothing` invites the reading that the event is ignored and the flow does not advance. `noMore` scopes itself to
+the effects, which is the true claim, and it reads correctly both as an else branch and as a trailing line. Names in the
+continuation vocabulary (`done`, `stop`, `complete`) were excluded because a step already has `end`, `next` and
+`transitionTo` one line away, and `noCommands` or `noEffects` because the core DSL deals in effects and the flow DSL in
+commands, so neither word is neutral across the two.
+
 **A flow branch with no commands takes no lambda.** The event-only `on`, `startsOn`, `join` and `timeout` default their
 reaction to `{ noMore }`, so a step that only advances reads `on<PlayerJoined>(then = end)`. The metadata-carrying
 siblings keep their lambda required, because defaulting both would make the no-lambda call match two candidates with
@@ -110,8 +125,8 @@ make the two tabs disagree about how many ways there are to write a reaction.
   nothing at runtime.
 - Correct reactions are unaffected, so this is close to a no-op for the tests, the documentation and the example. Only a
   body ending in a conditional needs the new `noMore`.
-- One new word enters the vocabulary, `noMore`, used rarely. That is the price of the compile error, and it is a loud
-  cost: a body that needs it and omits it does not compile.
+- One new word enters the vocabulary, `noMore`. That is the price of the compile error, and it is a loud cost: a body
+  that needs it and omits it does not compile, rather than misbehaving later.
 - `SagaEffects` and `FlowReactions` both stay, with their mutable lists, and every method returns the receiver. Chaining
   becomes available as a side effect, so `issue(cmd).cancelTimeout("payment")` reads as well as two statements.
 - The surface is unreleased, so there is no migration path and no OpenRewrite recipe.
