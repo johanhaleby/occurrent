@@ -65,7 +65,7 @@ class SagaFlowExtensionsTest {
             correlate<GameCreated> { it.gameId }
             correlate<PlayerJoinedGame> { it.gameId }
             step("awaiting-first-player") {
-                on<PlayerJoinedGame>(then = end) {}
+                on<PlayerJoinedGame>(then = end)
                 timeout(after = Duration.ofMinutes(10), then = end) { r ->
                     issue(CloseGame(r.initiating<GameCreated>().gameId))
                 }
@@ -284,8 +284,8 @@ class SagaFlowExtensionsTest {
         private fun minimalOrderSaga(configure: FlowSagaBuilder<OrderEvent, OrderCommand>.() -> Unit): Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> =
             saga {
                 configure()
-                startsOn<OrderPlaced> { }
-                step("awaiting-payment") { on<PaymentReserved>(then = end) { } }
+                startsOn<OrderPlaced>()
+                step("awaiting-payment") { on<PaymentReserved>(then = end) }
             }
 
         @Test
@@ -524,8 +524,8 @@ class SagaFlowExtensionsTest {
             historyWindow(historyWindow)
             correlateAll { it.id }
             startsOn<Begin>()
-            step("a") { on<Tick>(then = transitionTo("b")) {} }
-            step("b") { on<Tick>(then = transitionTo("a")) {} }
+            step("a") { on<Tick>(then = transitionTo("b")) }
+            step("b") { on<Tick>(then = transitionTo("a")) }
         }
 
     private fun runTicks(saga: Saga<WinEvent, FlowState<WinEvent>, WinCommand>, ticks: Int): FlowState<WinEvent> {
@@ -671,7 +671,7 @@ class SagaFlowExtensionsTest {
                     correlate<Started> { it.id }
                     correlate<Foo> { it.id }
                     step("first") {
-                        on<Foo>(then = transitionTo("does-not-exist")) {}
+                        on<Foo>(then = transitionTo("does-not-exist"))
                     }
                 }
             }.isInstanceOf(IllegalStateException::class.java)
@@ -685,7 +685,7 @@ class SagaFlowExtensionsTest {
                     startsOn<Started>()
                     correlate<Started> { it.id }
                     step("first") {
-                        on<Foo>(then = end) {}
+                        on<Foo>(then = end)
                     }
                 }
             }.isInstanceOf(IllegalStateException::class.java)
@@ -700,8 +700,8 @@ class SagaFlowExtensionsTest {
                     startsOn<Started>()
                     correlate<Started> { it.id }
                     correlate<Foo> { it.id }
-                    step("first") { on<Foo>(then = end) {} }
-                    step("first") { on<Foo>(then = end) {} }
+                    step("first") { on<Foo>(then = end) }
+                    step("first") { on<Foo>(then = end) }
                 }
             }.isInstanceOf(IllegalStateException::class.java)
                 .hasMessageContaining("first")
@@ -716,8 +716,8 @@ class SagaFlowExtensionsTest {
                     correlate<Foo> { it.id }
                     correlate<Bar> { it.id }
                     step("first") {
-                        on<Foo>(then = end) {}
-                        join(expect<Bar>(), then = end) {}
+                        on<Foo>(then = end)
+                        join(expect<Bar>(), then = end)
                     }
                 }
             }.isInstanceOf(IllegalStateException::class.java)
@@ -728,7 +728,7 @@ class SagaFlowExtensionsTest {
             assertThatThrownBy {
                 saga<ValidationEvent, ValidationCommand> {
                     correlate<Foo> { it.id }
-                    step("first") { on<Foo>(then = end) {} }
+                    step("first") { on<Foo>(then = end) }
                 }
             }.isInstanceOf(IllegalStateException::class.java)
                 .hasMessageContaining("startsOn")

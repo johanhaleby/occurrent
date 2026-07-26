@@ -29,6 +29,7 @@ import org.occurrent.dsl.saga.SagaTimeout;
 import org.occurrent.cloudevents.EventMetadata;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -131,6 +132,147 @@ class FlowSagaTest {
                     () -> assertThat(seen.get().getStreamId()).isEqualTo("stream-1"),
                     () -> assertThat(seen.get().getStreamVersion()).isEqualTo(5L),
                     () -> assertThat(seen.get().getPosition()).isEqualTo(88L)
+            );
+        }
+    }
+
+    @Nested
+    class StartMetadata {
+
+        @Test
+        void a_bifunction_start_reaction_receives_the_starting_events_metadata() {
+            AtomicReference<EventMetadata> seen = new AtomicReference<>();
+            Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(OrderPlaced.class, (metadata, o) -> {
+                        seen.set(metadata);
+                        return List.of(new ReservePayment(o.orderId(), o.amount()));
+                    })
+                    .correlate(OrderPlaced.class, OrderPlaced::orderId)
+                    .correlate(PaymentReserved.class, PaymentReserved::orderId)
+                    .step("awaiting-payment", step -> step
+                            .on(PaymentReserved.class, Continuation.end(), p -> List.of(new ShipOrder(p.orderId()))))
+                    .build();
+
+            OrderPlaced startEvent = new OrderPlaced("o1", 100);
+            FlowState<OrderEvent> state = saga.evolve(saga.initialState(), SagaInput.event(startEvent));
+            EventMetadata metadata = new EventMetadata(Map.of(
+                    OccurrentCloudEventExtension.STREAM_ID, "stream-1",
+                    OccurrentCloudEventExtension.STREAM_VERSION, 5L));
+
+            List<SagaEffect<OrderCommand>> effects = saga.onStart(state, metadata, startEvent);
+
+            assertAll(
+                    () -> assertThat(effects).contains(SagaEffect.issue(new ReservePayment("o1", 100))),
+                    () -> assertThat(seen.get().getStreamId()).isEqualTo("stream-1"),
+                    () -> assertThat(seen.get().getStreamVersion()).isEqualTo(5L)
+            );
+        }
+    }
+
+    @Nested
+    class NoCommandsOverloads {
+
+        @Test
+        void an_unguarded_branch_with_no_commands_follows_its_continuation_and_issues_nothing() {
+            Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(OrderPlaced.class)
+                    .correlate(OrderPlaced.class, OrderPlaced::orderId)
+                    .correlate(PaymentReserved.class, PaymentReserved::orderId)
+                    .step("awaiting-payment", step -> step.on(PaymentReserved.class, Continuation.end()))
+                    .build();
+
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> step = saga.step(started.state(), SagaInput.event(new PaymentReserved("o1")));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(step.state())).isTrue(),
+                    () -> assertThat(step.effects()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_guarded_branch_with_no_commands_follows_its_continuation_only_when_the_guard_matches() {
+            Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(OrderPlaced.class)
+                    .correlate(OrderPlaced.class, OrderPlaced::orderId)
+                    .correlate(PaymentFailed.class, PaymentFailed::orderId)
+                    .step("awaiting-payment", step -> step
+                            .on(PaymentFailed.class, (f, received) -> f.amount() > 50, Continuation.end())
+                            .on(PaymentFailed.class, Continuation.transitionTo("awaiting-payment")))
+                    .build();
+
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> guardFalse = saga.step(started.state(), SagaInput.event(new PaymentFailed("o1", 10)));
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> guardTrue = saga.step(started.state(), SagaInput.event(new PaymentFailed("o1", 100)));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(guardFalse.state())).as("falls through to the unguarded branch").isFalse(),
+                    () -> assertThat(guardFalse.state().currentStep()).isEqualTo("awaiting-payment"),
+                    () -> assertThat(guardFalse.effects()).isEmpty(),
+                    () -> assertThat(saga.isTerminal(guardTrue.state())).as("matches the guarded branch").isTrue(),
+                    () -> assertThat(guardTrue.effects()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_join_with_no_commands_follows_its_continuation_once_fulfilled_and_issues_nothing() {
+            Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(OrderPlaced.class)
+                    .correlate(OrderPlaced.class, OrderPlaced::orderId)
+                    .correlate(PaymentReserved.class, PaymentReserved::orderId)
+                    .step("awaiting-payment", step -> step.join(List.of(Expectation.of(PaymentReserved.class, 1)), Continuation.end()))
+                    .build();
+
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> step = saga.step(started.state(), SagaInput.event(new PaymentReserved("o1")));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(step.state())).isTrue(),
+                    () -> assertThat(step.effects()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_relative_timeout_with_no_commands_follows_its_continuation_and_issues_nothing() {
+            Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(OrderPlaced.class)
+                    .correlate(OrderPlaced.class, OrderPlaced::orderId)
+                    .correlate(PaymentReserved.class, PaymentReserved::orderId)
+                    .step("awaiting-payment", step -> step
+                            .on(PaymentReserved.class, Continuation.end(), p -> List.of(new ShipOrder(p.orderId())))
+                            .timeout(Duration.ofMinutes(30), Continuation.end()))
+                    .build();
+
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> step =
+                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", PAYMENT_TIMER)));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(step.state())).isTrue(),
+                    () -> assertThat(step.effects()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_data_derived_timeout_with_no_commands_follows_its_continuation_and_issues_nothing() {
+            Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(OrderPlaced.class)
+                    .correlate(OrderPlaced.class, OrderPlaced::orderId)
+                    .correlate(PaymentReserved.class, PaymentReserved::orderId)
+                    .step("awaiting-payment", step -> step
+                            .on(PaymentReserved.class, Continuation.end(), p -> List.of(new ShipOrder(p.orderId())))
+                            .timeout(r -> r.initiating(OrderPlaced.class).amount() > 0
+                                    ? Instant.EPOCH.plusSeconds(1)
+                                    : Instant.EPOCH, Continuation.end()))
+                    .build();
+
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
+            Saga.Step<FlowState<OrderEvent>, OrderCommand> step =
+                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", PAYMENT_TIMER)));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(step.state())).isTrue(),
+                    () -> assertThat(step.effects()).isEmpty()
             );
         }
     }

@@ -85,12 +85,12 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
     }
 
     /** Registers the reaction for event type [T], given the post-evolve state. */
-    inline fun <reified T : E> react(noinline react: SagaEffects<C>.(S, T) -> Unit) {
+    inline fun <reified T : E> react(noinline react: SagaEffects<C>.(S, T) -> SagaEffects<C>) {
         delegate.react(T::class.java, BiFunction { s, e -> SagaEffects<C>().apply { react(s, e) }.build() })
     }
 
     /** Registers the metadata-carrying reaction for event type [T]: the reaction also receives the event's delivery [EventMetadata]. */
-    inline fun <reified T : E> react(noinline react: SagaEffects<C>.(S, EventMetadata, T) -> Unit) {
+    inline fun <reified T : E> react(noinline react: SagaEffects<C>.(S, EventMetadata, T) -> SagaEffects<C>) {
         delegate.react(T::class.java, Saga.EventReactor<S, T, C> { s, m, e -> SagaEffects<C>().apply { react(s, m, e) }.build() })
     }
 
@@ -100,12 +100,12 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
     }
 
     /** Registers the reaction for the timer named [timerName], given the post-evolve state. */
-    fun reactOnTimeout(timerName: String, react: SagaEffects<C>.(S, SagaTimeout) -> Unit) {
+    fun reactOnTimeout(timerName: String, react: SagaEffects<C>.(S, SagaTimeout) -> SagaEffects<C>) {
         delegate.reactOnTimeout(timerName, BiFunction { s, t -> SagaEffects<C>().apply { react(s, t) }.build() })
     }
 
     /** Effects to run once when a start event creates the instance. Can be set only once. */
-    fun onStart(react: SagaEffects<C>.(S, E) -> Unit) {
+    fun onStart(react: SagaEffects<C>.(S, E) -> SagaEffects<C>) {
         delegate.onStart(BiFunction { s, e -> SagaEffects<C>().apply { react(s, e) }.build() })
     }
 
@@ -113,7 +113,7 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
      * Effects to run once when a start event creates the instance, with the start event's delivery [EventMetadata]. Can be
      * set only once.
      */
-    fun onStart(react: SagaEffects<C>.(S, EventMetadata, E) -> Unit) {
+    fun onStart(react: SagaEffects<C>.(S, EventMetadata, E) -> SagaEffects<C>) {
         delegate.onStart(Saga.EventReactor<S, E, C> { s, m, e -> SagaEffects<C>().apply { react(s, m, e) }.build() })
     }
 
@@ -134,24 +134,35 @@ class SagaEffects<C : Any> @PublishedApi internal constructor() {
     internal val effects: MutableList<SagaEffect<C>> = mutableListOf()
 
     /** Issue [command]. */
-    fun issue(command: C) {
+    fun issue(command: C): SagaEffects<C> {
         effects += SagaEffect.issue(command)
+        return this
     }
 
     /** Start (or restart) the timer named [timerName] to fire once [after] has elapsed. */
-    fun startTimeout(timerName: String, after: Duration) {
+    fun startTimeout(timerName: String, after: Duration): SagaEffects<C> {
         effects += SagaEffect.startTimeout(timerName, after)
+        return this
     }
 
     /** Start (or restart) the timer named [timerName] to fire at [at]. */
-    fun startTimeoutAt(timerName: String, at: Instant) {
+    fun startTimeoutAt(timerName: String, at: Instant): SagaEffects<C> {
         effects += SagaEffect.startTimeoutAt(timerName, at)
+        return this
     }
 
     /** Cancel the timer named [timerName]. */
-    fun cancelTimeout(timerName: String) {
+    fun cancelTimeout(timerName: String): SagaEffects<C> {
         effects += SagaEffect.cancelTimeout(timerName)
+        return this
     }
+
+    /**
+     * Ends a reaction whose last statement is not one of the effect calls, for example a body that finishes on a
+     * conditional. A trailing `if` without an `else` has type `Unit` and would not compile as the last expression.
+     */
+    val noMore: SagaEffects<C>
+        get() = this
 
     @PublishedApi
     internal fun build(): List<SagaEffect<C>> = effects.toList()

@@ -117,6 +117,42 @@ class SagaExtensionsTest {
                 SagaEffect.startTimeout(TURN_TIMER, Duration.ofMinutes(5))
             )
         }
+
+        @Test
+        fun `chaining off the receiver returned by issue records both effects`() {
+            val saga = saga<GameEvent, GameState?, GameCommand>(initialState = null) {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+                evolve<GameStarted> { _, e -> InProgress(e.gameId) }
+                react<GameStarted> { _, e -> issue(NotifyPlayer(e.gameId, "started")).cancelTimeout(TURN_TIMER) }
+            }
+
+            val effects = saga.react(InProgress("game-1"), SagaInput.event(GameStarted("game-1")))
+
+            assertThat(effects).containsExactly(
+                SagaEffect.issue(NotifyPlayer("game-1", "started")),
+                SagaEffect.cancelTimeout(TURN_TIMER)
+            )
+        }
+
+        @Test
+        fun `a reaction that ends on a conditional compiles when terminated with noMore`() {
+            val saga = saga<GameEvent, GameState?, GameCommand>(initialState = null) {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+                evolve<GameStarted> { _, e -> InProgress(e.gameId) }
+                react<GameStarted> { _, e ->
+                    if (e.gameId == "nonexistent") {
+                        issue(NotifyPlayer(e.gameId, "started"))
+                    }
+                    noMore
+                }
+            }
+
+            val effects = saga.react(InProgress("game-1"), SagaInput.event(GameStarted("game-1")))
+
+            assertThat(effects).isEmpty()
+        }
     }
 
     @Nested
