@@ -30,7 +30,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaEnvelope.Status;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.flow.Continuation;
@@ -56,6 +56,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * Verifies the MongoDB-backed {@link SpringMongoSagaStateStore}: state round-trips, compare-and-set enforces the version,
@@ -79,10 +81,11 @@ class SpringMongoSagaStateStoreMongoTest {
     private CloudEventConverter<FlowEvent> cloudEventConverter;
 
     private SpringMongoSagaStateStore<Counter> store;
+    private String collection;
 
     @BeforeEach
     void setUp() {
-        String collection = "saga-store-test-" + System.nanoTime();
+        collection = "saga-store-test-" + System.nanoTime();
         store = new SpringMongoSagaStateStore<>(mongoOperations, collection, Counter.class);
     }
 
@@ -96,9 +99,9 @@ class SpringMongoSagaStateStoreMongoTest {
 
     @Test
     void round_trips_state_timers_and_watermarks() {
-        SagaEnvelope<Counter> envelope = new SagaEnvelope<>("s2", new Counter(42), Status.ACTIVE, 1,
+        SagaEnvelope<Counter> envelope = new SagaEnvelope<>("s2", new Counter(42), SagaStatus.ACTIVE, 1,
                 List.of(new TimerEntry("payment", 7_000)), Map.of("stream-a", 5L), 11L,
-                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null);
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null);
         store.compareAndSave("s2", envelope, 0);
 
         Optional<SagaEnvelope<Counter>> found = store.find("s2");
@@ -106,7 +109,7 @@ class SpringMongoSagaStateStoreMongoTest {
         assertThat(found).hasValueSatisfying(e -> {
             assertThat(e.sagaId()).isEqualTo("s2");
             assertThat(e.state()).isEqualTo(new Counter(42));
-            assertThat(e.status()).isEqualTo(Status.ACTIVE);
+            assertThat(e.status()).isEqualTo(SagaStatus.ACTIVE);
             assertThat(e.version()).isEqualTo(1);
             assertThat(e.timers()).containsExactly(new TimerEntry("payment", 7_000));
             assertThat(e.streamWatermarks()).containsEntry("stream-a", 5L);
@@ -148,9 +151,9 @@ class SpringMongoSagaStateStoreMongoTest {
     void round_trips_a_scalar_state_that_is_not_stored_as_a_document() {
         SpringMongoSagaStateStore<String> scalarStore =
                 new SpringMongoSagaStateStore<>(mongoOperations, "saga-store-test-scalar-" + System.nanoTime(), String.class);
-        SagaEnvelope<String> envelope = new SagaEnvelope<>("scalar-1", "AWAITING_PAYMENT", Status.ACTIVE, 1,
+        SagaEnvelope<String> envelope = new SagaEnvelope<>("scalar-1", "AWAITING_PAYMENT", SagaStatus.ACTIVE, 1,
                 List.of(new TimerEntry("payment", 9_000)), Map.of("stream-a", 3L), 7L,
-                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null);
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null);
 
         scalarStore.compareAndSave("scalar-1", envelope, 0);
         Optional<SagaEnvelope<String>> found = scalarStore.find("scalar-1");
@@ -158,7 +161,7 @@ class SpringMongoSagaStateStoreMongoTest {
         assertThat(found).hasValueSatisfying(e -> {
             assertThat(e.sagaId()).isEqualTo("scalar-1");
             assertThat(e.state()).isEqualTo("AWAITING_PAYMENT");
-            assertThat(e.status()).isEqualTo(Status.ACTIVE);
+            assertThat(e.status()).isEqualTo(SagaStatus.ACTIVE);
             assertThat(e.version()).isEqualTo(1);
             assertThat(e.timers()).containsExactly(new TimerEntry("payment", 9_000));
             assertThat(e.streamWatermarks()).containsEntry("stream-a", 3L);
@@ -176,6 +179,259 @@ class SpringMongoSagaStateStoreMongoTest {
         List<SagaEnvelope<Counter>> due = store.findWithDueTimers(Instant.ofEpochMilli(2_000), 10);
 
         assertThat(due).extracting(SagaEnvelope::sagaId).containsExactly("due");
+    }
+
+    // --- findByStatus: mirrors InMemorySagaStateStoreTest.FindByStatus so the contract is verified identically against
+    // both store implementations. No test-jar dependency exists between saga-dsl/common and saga-dsl/mongodb-spring, so
+    // the assertions are duplicated by hand rather than shared through a common base class; see the planned Technology
+    // Compatibility Kit (issue #395). ---
+
+    @Test
+    void findByStatus_returns_instances_with_the_given_status() {
+        store.compareAndSave("active-1", activeAt("active-1", Instant.ofEpochMilli(1_000)), 0);
+        store.compareAndSave("completed-1", completed("completed-1", new Counter(1), 1), 0);
+
+        List<SagaEnvelope<Counter>> active = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(2_000), 10);
+
+        assertThat(active).extracting(SagaEnvelope::sagaId).containsExactly("active-1");
+    }
+
+    /**
+     * Guards the {@code status} argument itself. Every other case here queries {@code ACTIVE}, so an implementation that
+     * dropped the parameter and hardcoded {@code ACTIVE} the way {@code findWithDueTimers} does would pass all of them.
+     */
+    @Test
+    void findByStatus_selects_on_the_requested_status_rather_than_always_active() {
+        store.compareAndSave("active-1", activeAt("active-1", Instant.ofEpochMilli(1_000)), 0);
+        store.compareAndSave("completed-1", completed("completed-1", new Counter(1), 1), 0);
+
+        List<SagaEnvelope<Counter>> completed = store.findByStatus(SagaStatus.COMPLETED, Instant.ofEpochMilli(2_000), 10);
+
+        assertThat(completed).extracting(SagaEnvelope::sagaId).containsExactly("completed-1");
+    }
+
+    /**
+     * Instances saved in one executor tick share an {@code updatedAt}, and a tie group larger than {@code limit} is the
+     * whole reason the contract calls {@code limit} a bound rather than a page. Asserts only what both stores can
+     * promise: some two of the three, without error. Pinning a particular pair would bake in one store's tiebreak and
+     * make the two deterministically disagree.
+     */
+    @Test
+    void findByStatus_truncates_a_tie_group_at_limit_without_failing() {
+        Instant sameMillisecond = Instant.ofEpochMilli(7_000);
+        store.compareAndSave("tie-a", activeAt("tie-a", sameMillisecond), 0);
+        store.compareAndSave("tie-b", activeAt("tie-b", sameMillisecond), 0);
+        store.compareAndSave("tie-c", activeAt("tie-c", sameMillisecond), 0);
+
+        List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(8_000), 2);
+
+        assertAll(
+                () -> assertThat(found).hasSize(2),
+                () -> assertThat(found).extracting(SagaEnvelope::sagaId).doesNotHaveDuplicates(),
+                () -> assertThat(found).extracting(SagaEnvelope::sagaId).isSubsetOf("tie-a", "tie-b", "tie-c")
+        );
+    }
+
+    @Test
+    void findByStatus_updatedBefore_is_exclusive() {
+        store.compareAndSave("exact", activeAt("exact", Instant.ofEpochMilli(5_000)), 0);
+
+        assertAll(
+                () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(5_000), 10)).isEmpty(),
+                () -> assertThat(store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(5_001), 10))
+                        .extracting(SagaEnvelope::sagaId).containsExactly("exact")
+        );
+    }
+
+    @Test
+    void findByStatus_orders_ascending_by_updatedAt_so_the_stalest_instance_is_first() {
+        store.compareAndSave("newest", activeAt("newest", Instant.ofEpochMilli(3_000)), 0);
+        store.compareAndSave("oldest", activeAt("oldest", Instant.ofEpochMilli(1_000)), 0);
+        store.compareAndSave("middle", activeAt("middle", Instant.ofEpochMilli(2_000)), 0);
+
+        List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(4_000), 10);
+
+        assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle", "newest");
+    }
+
+    @Test
+    void findByStatus_limit_truncates_after_ordering_to_the_stalest_N_not_an_arbitrary_N() {
+        store.compareAndSave("oldest", activeAt("oldest", Instant.ofEpochMilli(1_000)), 0);
+        store.compareAndSave("middle", activeAt("middle", Instant.ofEpochMilli(2_000)), 0);
+        store.compareAndSave("newest", activeAt("newest", Instant.ofEpochMilli(3_000)), 0);
+
+        List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(4_000), 2);
+
+        assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("oldest", "middle");
+    }
+
+    @Test
+    void findByStatus_rejects_a_limit_below_1() {
+        assertThatThrownBy(() -> store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(1_000), 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("limit must be positive");
+    }
+
+    /**
+     * {@code findByStatus} field-projects, so it never decodes state at all: an instance whose state can no longer be read
+     * is reported with its lifecycle intact, and there is no error to recover from rather than an error that is tolerated.
+     * Note the asymmetry asserted at the end: {@code find} still fails loudly, because the executor uses it to fold and
+     * save, and silently handing it a null state would restart the process and re-dispatch its commands.
+     */
+    @Test
+    void findByStatus_reports_an_instance_whose_state_cannot_be_decoded_because_it_never_decodes_state() {
+        store.compareAndSave("healthy", activeAt("healthy", Instant.ofEpochMilli(2_000)), 0);
+        // A state written as a scalar where the store expects a Counter document, which is what a renamed-away or
+        // reshaped state type looks like on read.
+        mongoOperations.insert(new Document("_id", "poisoned")
+                .append("status", SagaStatus.ACTIVE.name())
+                .append("version", 1L)
+                .append("state", "no-longer-a-counter")
+                .append("timers", List.of())
+                .append("streamWatermarks", new Document())
+                .append("createdAt", 1_000L)
+                .append("updatedAt", 1_000L), collection);
+
+        List<SagaEnvelope<Counter>> found = store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(3_000), 10);
+
+        assertAll(
+                () -> assertThat(found).extracting(SagaEnvelope::sagaId).containsExactly("poisoned", "healthy"),
+                () -> assertThat(found.getFirst().status()).isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(found.getFirst().version()).isEqualTo(1),
+                () -> assertThat(found.getFirst().updatedAt()).as("every SagaInstance member is answered").isEqualTo(Instant.ofEpochMilli(1_000)),
+                () -> assertThat(found.getFirst().createdAt()).isEqualTo(Instant.ofEpochMilli(1_000)),
+                () -> assertThat(found.getFirst().state()).as("no state is read on this path, healthy or not").isNull(),
+                () -> assertThat(found.getLast().state()).as("not even for the healthy instance").isNull(),
+                () -> assertThatThrownBy(() -> store.find("poisoned")).as("the executor's own read must still fail loudly").isInstanceOf(RuntimeException.class)
+        );
+    }
+
+    /**
+     * Pins the invariant the {@code currentStep} projection makes possible: every envelope a store returns answers every
+     * {@link org.occurrent.dsl.saga.SagaInstance} member, on both enumeration paths, including for a flow saga whose step
+     * used to be readable only by decoding its received log. {@code state()} is not a {@code SagaInstance} member, which
+     * is exactly why the enumerations are free to project it away.
+     */
+    @Test
+    void every_envelope_from_either_enumeration_answers_every_SagaInstance_member() {
+        SpringMongoSagaStateStore<FlowState<FlowEvent>> flowStore =
+                new SpringMongoSagaStateStore<>(mongoOperations, collection + "-flow", rawFlowStateType(), cloudEventConverter);
+        FlowStateImpl<FlowEvent> awaitingPayment = new FlowStateImpl<>("awaiting-payment", List.of(), 1, 0, false,
+                null, FlowStateImpl.ActionKind.NONE, -1);
+        SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-1", awaitingPayment, SagaStatus.ACTIVE, 1,
+                List.of(new TimerEntry("payment", 4_000)), Map.of(), null,
+                Instant.ofEpochMilli(1_000), Instant.ofEpochMilli(1_000), null, null);
+        flowStore.compareAndSave("flow-1", envelope, 0);
+
+        SagaEnvelope<FlowState<FlowEvent>> enumerated = flowStore.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(2_000), 10).getFirst();
+        SagaEnvelope<FlowState<FlowEvent>> polled = flowStore.findWithDueTimers(Instant.ofEpochMilli(5_000), 10).getFirst();
+
+        assertAll(
+                () -> assertThat(enumerated.currentStep()).as("findByStatus reads the step without the state").isEqualTo("awaiting-payment"),
+                () -> assertThat(polled.currentStep()).as("so does the due-timer poll").isEqualTo("awaiting-payment"),
+                () -> assertThat(enumerated.sagaId()).isEqualTo("flow-1"),
+                () -> assertThat(enumerated.status()).isEqualTo(SagaStatus.ACTIVE),
+                () -> assertThat(enumerated.isCompleted()).isFalse(),
+                () -> assertThat(enumerated.createdAt()).isEqualTo(Instant.ofEpochMilli(1_000)),
+                () -> assertThat(enumerated.updatedAt()).isEqualTo(Instant.ofEpochMilli(1_000)),
+                () -> assertThat(enumerated.completedAt()).isNull(),
+                () -> assertThat(enumerated.nextTimerAt()).isEqualTo(Instant.ofEpochMilli(4_000)),
+                () -> assertThat(enumerated.state()).as("state is the one thing neither enumeration reads").isNull()
+        );
+    }
+
+    @Test
+    void findByStatus_excludes_an_envelope_with_a_null_updatedAt() {
+        SagaEnvelope<Counter> noUpdatedAt = new SagaEnvelope<>("no-updated-at", new Counter(1), SagaStatus.ACTIVE, 1,
+                List.of(), Map.of(), null, Instant.ofEpochMilli(1), null, null, null);
+        store.compareAndSave("no-updated-at", noUpdatedAt, 0);
+
+        assertThat(store.findByStatus(SagaStatus.ACTIVE, Instant.ofEpochMilli(60_000), 10)).isEmpty();
+    }
+
+    // --- Lifecycle timestamps: no existing test asserted createdAt/updatedAt/completedAt survive persistence, only that
+    // the fold sets them. ---
+
+    @Test
+    void createdAt_updatedAt_and_completedAt_round_trip_through_find() {
+        Instant createdAt = Instant.ofEpochMilli(1_000);
+        Instant updatedAt = Instant.ofEpochMilli(2_000);
+        Instant completedAt = Instant.ofEpochMilli(3_000);
+        SagaEnvelope<Counter> envelope = new SagaEnvelope<>("lifecycle-1", new Counter(1), SagaStatus.COMPLETED, 1,
+                List.of(), Map.of(), null, createdAt, updatedAt, completedAt, null);
+        store.compareAndSave("lifecycle-1", envelope, 0);
+
+        SagaEnvelope<Counter> found = store.find("lifecycle-1").orElseThrow();
+
+        assertAll(
+                () -> assertThat(found.createdAt()).isEqualTo(createdAt),
+                () -> assertThat(found.updatedAt()).isEqualTo(updatedAt),
+                () -> assertThat(found.completedAt()).isEqualTo(completedAt)
+        );
+    }
+
+    @Test
+    void an_active_instance_has_no_completedAt() {
+        store.compareAndSave("lifecycle-2", active("lifecycle-2", new Counter(1), 1, List.of(), 0), 0);
+
+        assertThat(store.find("lifecycle-2")).hasValueSatisfying(e -> assertThat(e.completedAt()).isNull());
+    }
+
+    @Test
+    void the_widened_due_timer_projection_returns_the_lifecycle_timestamps_populated_rather_than_null() {
+        Instant createdAt = Instant.ofEpochMilli(10);
+        Instant updatedAt = Instant.ofEpochMilli(20);
+        SagaEnvelope<Counter> envelope = new SagaEnvelope<>("lifecycle-3", new Counter(1), SagaStatus.ACTIVE, 1,
+                List.of(new TimerEntry("t", 1_000)), Map.of(), null, createdAt, updatedAt, null, null);
+        store.compareAndSave("lifecycle-3", envelope, 0);
+
+        SagaEnvelope<Counter> found = store.findWithDueTimers(Instant.ofEpochMilli(2_000), 10).getFirst();
+
+        assertAll(
+                () -> assertThat(found.createdAt()).isEqualTo(createdAt),
+                () -> assertThat(found.updatedAt()).isEqualTo(updatedAt),
+                () -> assertThat(found.completedAt()).isNull()
+        );
+    }
+
+    // --- currentStep(): populated for a flow saga, null for a saga written against the core builder. ---
+
+    @Test
+    void a_core_saga_instance_reports_a_null_currentStep() {
+        store.compareAndSave("core-1", active("core-1", new Counter(1), 1, List.of(), 0), 0);
+
+        assertThat(store.find("core-1")).hasValueSatisfying(e -> assertThat(e.currentStep()).isNull());
+    }
+
+    /**
+     * The due-timer poll still projects the state away, but {@code currentStep} is a denormalized top-level field, so a
+     * poller envelope answers it anyway. This used to assert the opposite: while {@code currentStep} was derived from
+     * state on access, projecting state away made it unanswerable, which was a documented carve-out in the
+     * "every envelope is a fully populated SagaInstance" rule. Denormalizing the field removed the carve-out, so the
+     * assertion is inverted rather than dropped, and the fixture still evolves a real flow saga to get its state.
+     */
+    @Test
+    void a_poller_envelope_answers_currentStep_even_though_the_poll_projects_state_away() {
+        String collection = "saga-flowpoll-currentstep-" + System.nanoTime();
+        SpringMongoSagaStateStore<FlowState<FlowEvent>> flowStore =
+                new SpringMongoSagaStateStore<>(mongoOperations, collection, rawFlowStateType(), cloudEventConverter);
+        Saga<FlowEvent, FlowState<FlowEvent>, Object> saga = flowSaga();
+        FlowState<FlowEvent> withReceived = saga.evolve(saga.initialState(), SagaInput.event(new FlowStarted("flow-poll-step")));
+        SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-poll-step", withReceived, SagaStatus.ACTIVE, 1,
+                List.of(new TimerEntry("step:started", 1_000)), Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null);
+        flowStore.compareAndSave("flow-poll-step", envelope, 0);
+
+        SagaEnvelope<FlowState<FlowEvent>> polled = flowStore.findWithDueTimers(Instant.ofEpochMilli(2_000), 10).getFirst();
+
+        assertAll(
+                () -> assertThat(polled.state()).as("the poll still projects the state away").isNull(),
+                () -> assertThat(polled.currentStep()).as("yet currentStep is answered, from its own top-level field").isNotNull(),
+                () -> assertThat(polled.currentStep()).isEqualTo(flowStore.find("flow-poll-step").orElseThrow().currentStep())
+        );
+    }
+
+    private static SagaEnvelope<Counter> activeAt(String id, Instant updatedAt) {
+        return new SagaEnvelope<>(id, new Counter(1), SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null);
     }
 
     /**
@@ -198,8 +454,8 @@ class SpringMongoSagaStateStoreMongoTest {
         FlowState<FlowEvent> finalState = saga.step(afterStart, SagaInput.event(continuedEvent)).state();
         assertThat(finalState.received()).containsExactly(startEvent, continuedEvent);
 
-        SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-1", finalState, Status.COMPLETED, 1,
-                List.of(), Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), Instant.ofEpochMilli(3));
+        SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-1", finalState, SagaStatus.COMPLETED, 1,
+                List.of(), Map.of(), null, Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), Instant.ofEpochMilli(3), null);
         flowStore.compareAndSave("flow-1", envelope, 0);
 
         Optional<SagaEnvelope<FlowState<FlowEvent>>> found = flowStore.find("flow-1");
@@ -229,9 +485,9 @@ class SpringMongoSagaStateStoreMongoTest {
 
         Saga<FlowEvent, FlowState<FlowEvent>, Object> saga = flowSaga();
         FlowState<FlowEvent> withReceived = saga.evolve(saga.initialState(), SagaInput.event(new FlowStarted("flow-poll")));
-        SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-poll", withReceived, Status.ACTIVE, 1,
+        SagaEnvelope<FlowState<FlowEvent>> envelope = new SagaEnvelope<>("flow-poll", withReceived, SagaStatus.ACTIVE, 1,
                 List.of(new TimerEntry("step:started", 1_000)), Map.of(), null,
-                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null);
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(2), null, null);
         flowStore.compareAndSave("flow-poll", envelope, 0);
 
         List<SagaEnvelope<FlowState<FlowEvent>>> due = flowStore.findWithDueTimers(Instant.ofEpochMilli(2_000), 10);
@@ -269,13 +525,13 @@ class SpringMongoSagaStateStoreMongoTest {
     }
 
     private static SagaEnvelope<Counter> active(String id, Counter state, long version, List<TimerEntry> timers, long positionWatermark) {
-        return new SagaEnvelope<>(id, state, Status.ACTIVE, version, timers, Map.of(),
-                positionWatermark == 0 ? null : positionWatermark, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null);
+        return new SagaEnvelope<>(id, state, SagaStatus.ACTIVE, version, timers, Map.of(),
+                positionWatermark == 0 ? null : positionWatermark, Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null, null);
     }
 
     private static SagaEnvelope<Counter> completed(String id, Counter state, long version) {
-        return new SagaEnvelope<>(id, state, Status.COMPLETED, version, List.of(), Map.of(), null,
-                Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), Instant.ofEpochMilli(1));
+        return new SagaEnvelope<>(id, state, SagaStatus.COMPLETED, version, List.of(), Map.of(), null,
+                Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), Instant.ofEpochMilli(1), null);
     }
 
     record Counter(int value) {

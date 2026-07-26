@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga.blocking;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.internal.ExecutorShutdown;
@@ -39,15 +40,17 @@ public final class SagaSubscription implements AutoCloseable {
 
     private final Subscription subscription;
     private final ExecutorService timerPoller;
+    private final SagaInstances instances;
     private final @Nullable CompetingConsumerStrategy competingConsumerStrategy;
     private final @Nullable String leaseKey;
     private final @Nullable String holderId;
 
-    SagaSubscription(Subscription subscription, ExecutorService timerPoller,
+    SagaSubscription(Subscription subscription, ExecutorService timerPoller, SagaInstances instances,
                      @Nullable CompetingConsumerStrategy competingConsumerStrategy,
                      @Nullable String leaseKey, @Nullable String holderId) {
         this.subscription = requireNonNull(subscription, "subscription cannot be null");
         this.timerPoller = requireNonNull(timerPoller, "timerPoller cannot be null");
+        this.instances = requireNonNull(instances, "instances cannot be null");
         this.competingConsumerStrategy = competingConsumerStrategy;
         this.leaseKey = leaseKey;
         this.holderId = holderId;
@@ -56,6 +59,15 @@ public final class SagaSubscription implements AutoCloseable {
     /** The id of the underlying event subscription. */
     public String id() {
         return subscription.id();
+    }
+
+    /**
+     * Read-only access to this saga's instances, for observing their lifecycle. Backed by the same
+     * {@code SagaStateStore} the saga runs against, so it stays usable after {@link #close()}: closing stops this
+     * instance's poller, it does not close the store.
+     */
+    public SagaInstances instances() {
+        return instances;
     }
 
     /** The underlying event subscription. */

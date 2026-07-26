@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 
+/**
+ * Internal implementation types for the saga layer. These are {@code public} only because the executor and the
+ * annotation registrar live in separate modules and must construct and drive them; they are not part of the public API
+ * and may change or be removed at any time. End users work with {@code org.occurrent.dsl.saga} and never reference this
+ * package.
+ */
 @NullMarked
 package org.occurrent.dsl.saga.internal;
 

@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.saga.flow.FlowState;
 
 import java.time.Instant;
 import java.util.List;
@@ -39,38 +40,61 @@ import java.util.OptionalLong;
  * @param createdAt         when the instance was created
  * @param updatedAt         when the instance was last saved
  * @param completedAt       when the instance completed, or {@code null} while active
+ * @param currentStep       the step a flow saga is waiting in, derived from {@code state} whenever it is present. A
+ *                          store may pass this directly, but only when it passes a {@code null} state: that is how a
+ *                          store answers {@link SagaInstance#currentStep()} from a projected read without loading the
+ *                          state at all. Whenever {@code state} is present the constructor re-derives this and ignores
+ *                          what was passed, so the two can never disagree.
  * @param <S>               the user state type
  */
 public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        S state,
-                                                       Status status,
+                                                       SagaStatus status,
                                                        long version,
                                                        List<TimerEntry> timers,
                                                        Map<String, Long> streamWatermarks,
                                                        @Nullable Long positionWatermark,
                                                        @Nullable Instant createdAt,
                                                        @Nullable Instant updatedAt,
-                                                       @Nullable Instant completedAt) {
+                                                       @Nullable Instant completedAt,
+                                                       @Nullable String currentStep) implements SagaInstance {
 
     public SagaEnvelope {
         timers = List.copyOf(timers);
         streamWatermarks = Map.copyOf(streamWatermarks);
+        if (state != null) {
+            // currentStep duplicates something state already knows, which is the kind of field that drifts. Re-derive it
+            // here rather than trusting callers to keep the two aligned: a passed value is honoured only when there is no
+            // state to derive from, which is exactly the projected-read case a store needs it for.
+            currentStep = state instanceof FlowState<?> flowState ? flowState.currentStep() : null;
+        }
     }
-
-    /** Whether the instance is active or completed. */
-    public enum Status {ACTIVE, COMPLETED}
 
     /** A pending timer: its name and when it should fire (epoch millis). */
     public record TimerEntry(String name, long firesAtEpochMilli) {
     }
 
     /** Whether the instance has completed. */
+    @Override
     public boolean isCompleted() {
-        return status == Status.COMPLETED;
+        return status == SagaStatus.COMPLETED;
     }
 
     /** The earliest firing time across all pending timers, or empty when there are none. Drives the due-timer query. */
     public OptionalLong earliestTimerFiresAtEpochMilli() {
         return timers.stream().mapToLong(TimerEntry::firesAtEpochMilli).min();
     }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The same instant as {@link #earliestTimerFiresAtEpochMilli()}, which stays in epoch millis because it is what
+     * the poller's indexed query compares against.
+     */
+    @Override
+    public @Nullable Instant nextTimerAt() {
+        OptionalLong earliest = earliestTimerFiresAtEpochMilli();
+        return earliest.isPresent() ? Instant.ofEpochMilli(earliest.getAsLong()) : null;
+    }
+
 }

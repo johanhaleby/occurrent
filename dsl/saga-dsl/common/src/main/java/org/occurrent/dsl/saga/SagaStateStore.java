@@ -28,6 +28,10 @@ import java.util.Optional;
  * one instance concurrently, so the executor detects a lost update and retries rather than silently overwriting. The
  * store is also queried for instances with a due timer, since timers live in the envelope rather than an external
  * scheduler.
+ * <p>
+ * This is the minimal contract the executor needs. Observing instances is an optional capability layered on top: a store
+ * that also implements {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a
+ * stuck-instance sweep needs. A store that does not is still perfectly usable for running sagas.
  *
  * @param <S> the user state type
  */

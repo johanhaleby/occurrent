@@ -22,6 +22,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
@@ -59,9 +60,9 @@ import static java.util.Objects.requireNonNull;
  * <h2>Multi-instance timer polling</h2>
  * When the {@link Subscribable} is a competing-consumer model, only one instance handles the event path at a time. The
  * timer poller is not coordinated that way. Without help, every instance polls the shared store on its own interval and
- * multiplies the query load. Pass a {@link CompetingConsumerStrategy} to
- * {@link #run(String, Saga, SagaStateStore, CommandDispatcher, StartAt, SagaRunnerConfig, CompetingConsumerStrategy) run}
- * and only the instance holding the saga's timer lease polls. The others wake on their interval and do nothing without
+ * multiplies the query load. Set a {@link CompetingConsumerStrategy} with
+ * {@link #competingConsumerStrategy(CompetingConsumerStrategy)} and only the instance holding the saga's timer lease
+ * polls. The others wake on their interval and do nothing without
  * touching the store. The lease uses its own key, separate from the event subscription's lease, and is released on
  * {@link SagaSubscription#close()} so another instance takes over within roughly one lease period. Without a strategy
  * the poller runs on every instance (still correct through compare-and-set, just not coordinated).
@@ -185,7 +186,7 @@ public final class SagaRunner<E, C> {
         ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-saga-timer-" + subscriptionId));
         long intervalMillis = config.timerPollInterval().toMillis();
         poller.scheduleWithFixedDelay(pollTask, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
-        return new SagaSubscription(subscription, poller, strategy, leaseKey, holderId);
+        return new SagaSubscription(subscription, poller, SagaInstances.of(stateStore), strategy, leaseKey, holderId);
     }
 
     /**

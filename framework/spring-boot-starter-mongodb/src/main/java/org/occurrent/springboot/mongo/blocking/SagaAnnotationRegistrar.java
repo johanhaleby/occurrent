@@ -20,7 +20,10 @@ package org.occurrent.springboot.mongo.blocking;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.SagaInstances;
+import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
@@ -30,8 +33,12 @@ import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.lang.reflect.Method;
@@ -50,6 +57,8 @@ import java.util.List;
  * only.
  */
 class SagaAnnotationRegistrar {
+
+    private static final Logger log = LoggerFactory.getLogger(SagaAnnotationRegistrar.class);
 
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
@@ -99,7 +108,81 @@ class SagaAnnotationRegistrar {
         }
 
         startPositionSupport.applyStartupWorkarounds();
-        sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config));
+        SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config);
+        sagaSubscriptions.add(sagaSubscription);
+        publishSagaInstances(id, sagaSubscription);
+    }
+
+    /**
+     * Make the saga's {@link SagaInstances} reachable from the application, two ways: added to the
+     * {@link SagaInstancesRegistry} (typed, injectable, keyed by saga id) and published as a singleton named
+     * {@code sagaInstances-<id>}, matching the {@code saga-<id>} collection convention, for a {@code getBean} or
+     * {@code @Qualifier} lookup when the id is already known.
+     * <p>
+     * The two are independent on purpose. The registry is a bean defined during refresh, so it is populated whatever
+     * kind of context this is, while the singleton needs a {@link ConfigurableApplicationContext}. If that registration
+     * cannot happen, the registry still works.
+     */
+    private void publishSagaInstances(String id, SagaSubscription sagaSubscription) {
+        SagaInstances instances = sagaSubscription.instances();
+        addToSagaInstancesRegistry(id, instances);
+        registerSagaInstancesSingleton(id, instances);
+    }
+
+    // Resolved by its concrete type rather than the interface, because only the implementation can be written to: the
+    // public interface is read-only by design.
+    private void addToSagaInstancesRegistry(String id, SagaInstances instances) {
+        SagaInstancesRegistryImpl registry = applicationContext.getBeanProvider(SagaInstancesRegistryImpl.class).getIfAvailable();
+        if (registry != null) {
+            registry.register(id, instances);
+            return;
+        }
+        if (applicationContext.getBeanNamesForType(SagaInstancesRegistry.class).length > 0) {
+            // A SagaInstancesRegistry exists that Occurrent cannot write to, which can only mean the application
+            // replaced the auto-configured one. That bean would stay empty for the lifetime of the context, so every
+            // lookup through it would report no sagas at all. Fail at startup rather than serve an observation API that
+            // silently answers "nothing is running".
+            throw new IllegalStateException("A SagaInstancesRegistry bean is defined that Occurrent cannot populate, so it would stay empty forever and report no sagas. The registry is read-only for applications and is auto-configured; remove your own bean and inject SagaInstancesRegistry instead.");
+        }
+        // Unreachable through the wiring this library ships: the registry bean and the post-processor that runs this code
+        // are gated on the same occurrent.subscription.enabled property, so whenever a saga is registered at all, either
+        // the auto-configured registry or a user-supplied one exists (and the branch above rejects the latter). Kept
+        // rather than asserted, so the two conditions drifting apart in future degrades to a warning instead of an NPE,
+        // and because a hand-built harness can reach it. Must not fail a saga that is otherwise running fine.
+        log.warn("No SagaInstancesRegistry bean is available, so saga '{}' is not in one. Look it up as '{}' or use SagaSubscription.instances() instead.", id, sagaInstancesBeanName(id));
+    }
+
+    /**
+     * Publish the saga's {@link SagaInstances} under its own bean name. This registers a singleton rather than a bean
+     * definition because a {@code @Saga} factory can only run once its collaborators are wired, which is after the
+     * context has refreshed. This particular bean is therefore not available for constructor injection into another
+     * singleton; inject an {@code ObjectProvider<SagaInstances>}, look it up with
+     * {@code getBean(name, SagaInstances.class)}, or inject the {@link SagaInstancesRegistry}, which does exist during
+     * refresh. Registering per id rather than one bean of the type keeps two sagas from making a by-type injection
+     * ambiguous.
+     */
+    private void registerSagaInstancesSingleton(String id, SagaInstances instances) {
+        String beanName = sagaInstancesBeanName(id);
+        if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
+            // Every Spring Boot context is configurable, so this is only reachable from an exotic harness. The saga
+            // itself is running fine and both the registry and SagaSubscription.instances() still work, so this must
+            // not fail startup.
+            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext; use the SagaInstancesRegistry or SagaSubscription.instances() instead.", beanName);
+            return;
+        }
+        ConfigurableListableBeanFactory beanFactory = configurableContext.getBeanFactory();
+        if (beanFactory.containsBean(beanName)) {
+            // registerSingleton would throw from inside afterSingletonsInstantiated, which fails startup with a message
+            // that says nothing about sagas. The name is documented API, so a collision means two different things claim
+            // it; say which saga and which name rather than letting Spring report a bare duplicate-singleton error.
+            throw new IllegalStateException("Cannot publish the SagaInstances of saga '%s' as '%s' because a bean with that name already exists. Occurrent publishes each @Saga's SagaInstances under 'sagaInstances-<id>', so rename your bean or the saga.".formatted(id, beanName));
+        }
+        beanFactory.registerSingleton(beanName, instances);
+    }
+
+    /** The bean name the {@link SagaInstances} for {@code sagaId} is published under. */
+    static String sagaInstancesBeanName(String sagaId) {
+        return "sagaInstances-" + sagaId;
     }
 
     // Gate the saga timer poller on the shared competing-consumer lease so only one instance polls, mirroring the

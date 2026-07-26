@@ -30,7 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaEnvelope.Status;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaTimeout;
@@ -128,7 +128,7 @@ class SagaExecutionSupportTest {
 
     private static SagaEnvelope<OrderState> activeEnvelope(String sagaId, OrderState state, long version, List<TimerEntry> timers,
                                                             Map<String, Long> streamWatermarks, Long positionWatermark) {
-        return new SagaEnvelope<>(sagaId, state, Status.ACTIVE, version, timers, streamWatermarks, positionWatermark, NOW, NOW, null);
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.ACTIVE, version, timers, streamWatermarks, positionWatermark, NOW, NOW, null, null);
     }
 
     @Nested
@@ -142,7 +142,7 @@ class SagaExecutionSupportTest {
             assertAll(
                     () -> assertThat(outcome.processed()).isTrue(),
                     () -> assertThat(outcome.envelope().version()).isEqualTo(1),
-                    () -> assertThat(outcome.envelope().status()).isEqualTo(Status.ACTIVE),
+                    () -> assertThat(outcome.envelope().status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(outcome.envelope().state()).isEqualTo(new AwaitingPayment("o1")),
                     () -> assertThat(outcome.commands()).containsExactly(
                             new ReservePayment("o1", 100),
@@ -173,7 +173,7 @@ class SagaExecutionSupportTest {
     class TerminalInstance {
 
         private SagaEnvelope<OrderState> completed(OrderState state) {
-            return new SagaEnvelope<>("o1", state, Status.COMPLETED, 2, List.of(), Map.of(), null, NOW.minusSeconds(120), NOW.minusSeconds(60), NOW.minusSeconds(60));
+            return new SagaEnvelope<>("o1", state, SagaStatus.COMPLETED, 2, List.of(), Map.of(), null, NOW.minusSeconds(120), NOW.minusSeconds(60), NOW.minusSeconds(60), null);
         }
 
         @Test
@@ -277,7 +277,7 @@ class SagaExecutionSupportTest {
                     orderFulfillment(), "o1", current, SagaInput.event(new PaymentFailed("o1")), EventMeta.NONE, NOW);
 
             assertAll(
-                    () -> assertThat(outcome.envelope().status()).isEqualTo(Status.COMPLETED),
+                    () -> assertThat(outcome.envelope().status()).isEqualTo(SagaStatus.COMPLETED),
                     () -> assertThat(outcome.envelope().timers()).isEmpty(),
                     () -> assertThat(outcome.commands()).containsExactly(new CancelOrder("o1"))
             );

@@ -26,13 +26,17 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaEnvelope.Status;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.SagaStateStoreQueries;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Query;
@@ -67,7 +71,9 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * @param <S> the user state type
  */
 @NullMarked
-public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S> {
+public final class SpringMongoSagaStateStore<S extends @Nullable Object> implements SagaStateStore<S>, SagaStateStoreQueries<S> {
+
+    private static final Logger log = LoggerFactory.getLogger(SpringMongoSagaStateStore.class);
 
     private static final String ID = "_id";
     private static final String STATE = "state";
@@ -77,6 +83,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String TIMER_NAME = "name";
     private static final String TIMER_FIRES_AT = "firesAtEpochMilli";
     private static final String NEXT_TIMER_FIRES_AT = "nextTimerFiresAt";
+    private static final String CURRENT_STEP = "currentStep";
     private static final String STREAM_WATERMARKS = "streamWatermarks";
     private static final String POSITION_WATERMARK = "positionWatermark";
     private static final String CREATED_AT = "createdAt";
@@ -138,6 +145,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         // Safe: the converter only ever sees domain events read out of a FlowState, whose element type is erased anyway.
         this.cloudEventConverter = (CloudEventConverter<Object>) cloudEventConverter;
         mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(NEXT_TIMER_FIRES_AT)));
+        mongoOperations.getCollection(collectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(STATUS), Indexes.ascending(UPDATED_AT)));
     }
 
     @Override
@@ -168,13 +176,42 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     @Override
     public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
         Objects.requireNonNull(now, "now cannot be null");
-        Query query = Query.query(where(STATUS).is(Status.ACTIVE.name()).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
+        Query query = Query.query(where(STATUS).is(SagaStatus.ACTIVE.name()).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
                 .limit(limit);
         // Project only the fields the poller needs to decide which timers are due. This deliberately excludes the state
         // (a flow saga's received log can be large), so the poll never pays to decode it. The executor re-loads the full
         // document with find(sagaId) before it processes a timer, which is the authoritative read the fire acts on.
-        query.fields().include(ID).include(STATUS).include(TIMERS).include(NEXT_TIMER_FIRES_AT).include(VERSION);
+        // The timestamps and currentStep are included even though the poller ignores them: an envelope is also a
+        // SagaInstance, and every member of that view must be populated on any envelope a store hands back. They are
+        // three longs and a string, and decode no state, so the cost the exclusion above protects against is untouched.
+        projectEverySagaInstanceMember(query);
         return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
+    }
+
+    @Override
+    public List<SagaEnvelope<S>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+        Objects.requireNonNull(status, "status cannot be null");
+        Objects.requireNonNull(updatedBefore, "updatedBefore cannot be null");
+        if (limit < 1) {
+            // A Mongo limit of 0 means "no limit", so a caller passing 0 would get the whole collection instead of
+            // nothing. Reject it here rather than let that through as a surprise full scan.
+            throw new IllegalArgumentException("limit must be positive, was " + limit);
+        }
+        Query query = Query.query(where(STATUS).is(status.name()).and(UPDATED_AT).lt(updatedBefore.toEpochMilli()))
+                .with(Sort.by(Sort.Direction.ASC, UPDATED_AT))
+                .limit(limit);
+        // Projected exactly like the due-timer query: every SagaInstance member and no state. currentStep is a top-level
+        // field, so observing a flow saga never decodes its received log. That also means this query cannot fail on an
+        // instance whose state no longer decodes, because it never decodes any.
+        projectEverySagaInstanceMember(query);
+        return mongoOperations.find(query, Document.class, collectionName).stream().map(this::toEnvelope).toList();
+    }
+
+    // The fields backing SagaInstance, which is the whole observable surface of an instance: enough for both enumeration
+    // queries and deliberately excluding the state, whose decode is the expensive and failure-prone part.
+    private static void projectEverySagaInstanceMember(Query query) {
+        query.fields().include(ID).include(STATUS).include(VERSION).include(TIMERS).include(NEXT_TIMER_FIRES_AT)
+                .include(CURRENT_STEP).include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT);
     }
 
     @Override
@@ -197,6 +234,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         document.append(TIMERS, timers);
         envelope.earliestTimerFiresAtEpochMilli().ifPresent(next -> document.append(NEXT_TIMER_FIRES_AT, next));
+        // Denormalized beside nextTimerFiresAt and for the same reason: it lets a query answer SagaInstance.currentStep()
+        // without decoding the state, which for a flow saga means not decoding its received log.
+        if (envelope.currentStep() != null) {
+            document.append(CURRENT_STEP, envelope.currentStep());
+        }
         document.append(STREAM_WATERMARKS, new Document(new LinkedHashMap<>(envelope.streamWatermarks())));
         if (envelope.positionWatermark() != null) {
             document.append(POSITION_WATERMARK, envelope.positionWatermark());
@@ -248,9 +290,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private SagaEnvelope<S> toEnvelope(Document document) {
         String sagaId = document.getString(ID);
-        Status status = Status.valueOf(document.getString(STATUS));
-        long version = document.getLong(VERSION);
         S state = readState(document.get(STATE));
+        SagaStatus status = SagaStatus.valueOf(document.getString(STATUS));
+        long version = document.getLong(VERSION);
 
         List<TimerEntry> timers = new ArrayList<>();
         List<Document> timerDocuments = document.getList(TIMERS, Document.class, List.of());
@@ -267,8 +309,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         Long positionWatermark = document.containsKey(POSITION_WATERMARK) ? document.getLong(POSITION_WATERMARK) : null;
 
+        // currentStep is only honoured when the state was projected away; with a state present the envelope re-derives it.
         return new SagaEnvelope<>(sagaId, state, status, version, timers, streamWatermarks, positionWatermark,
-                readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT));
+                readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT),
+                document.getString(CURRENT_STEP));
     }
 
     @SuppressWarnings("unchecked")
