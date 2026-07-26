@@ -90,37 +90,23 @@ public final class FlowSaga {
         }
 
         /**
-         * Declares the event that starts an instance, leaving its correlation to {@link #correlateAll} or a separate
-         * {@link #correlate}. Required, can be set only once. {@code build()} fails if neither covers the start type.
+         * Declares the event that starts an instance. Required, can be set only once. Correlate it with
+         * {@link #correlate} or {@link #correlateAll} like any other event type, {@code build()} fails if neither
+         * covers it.
          */
         public <T extends E> Builder<E, C> startsOn(Class<T> type) {
-            return startsOn(type, null, event -> List.of());
-        }
-
-        /** Declares the event that starts an instance and how it correlates. Required, can be set only once. */
-        public <T extends E> Builder<E, C> startsOn(Class<T> type, Function<T, String> correlatedBy) {
-            requireNonNull(correlatedBy, "correlatedBy cannot be null");
-            return startsOn(type, correlatedBy, event -> List.of());
+            return startsOn(type, event -> List.of());
         }
 
         /**
-         * As {@link #startsOn(Class, Function)}, plus commands to issue when the instance starts. A {@code null}
-         * {@code correlatedBy} leaves the start event to be correlated by {@link #correlateAll}.
+         * As {@link #startsOn(Class)}, plus the commands to issue when the instance starts.
          */
         @SuppressWarnings("unchecked")
-        public <T extends E> Builder<E, C> startsOn(Class<T> type, @Nullable Function<T, String> correlatedBy, Function<T, List<C>> onStart) {
+        public <T extends E> Builder<E, C> startsOn(Class<T> type, Function<T, List<C>> onStart) {
             requireNonNull(type, "type cannot be null");
             requireNonNull(onStart, "onStart cannot be null");
             if (startType != null) {
                 throw new IllegalStateException("startsOn(...) has already been set and can only be set once");
-            }
-            if (correlatedBy != null) {
-                // startsOn also registers the correlation for its type; a prior correlate(type, ...) would be silently
-                // overwritten here, so reject it the same way correlate(...) rejects a duplicate.
-                if (correlators.containsKey(type)) {
-                    throw new IllegalStateException("correlate(...) has already been registered for " + type.getName());
-                }
-                correlators.put(type, (Function<E, @Nullable String>) correlatedBy);
             }
             startType = type;
             onStartCommands = (Function<E, List<C>>) onStart;
@@ -140,9 +126,9 @@ public final class FlowSaga {
         }
 
         /**
-         * Registers a fallback correlation used for any event type without its own {@link #correlate} or {@code startsOn}
-         * correlation. The common case is a sealed event hierarchy exposing a shared id, for example
-         * {@code correlateAll(OrderEvent::orderId)}. Can be set only once.
+         * Registers a fallback correlation used for any event type without its own {@link #correlate}. The common case
+         * is a sealed event hierarchy exposing a shared id, for example {@code correlateAll(OrderEvent::orderId)}. Can
+         * be set only once.
          */
         public Builder<E, C> correlateAll(Function<E, String> correlatedBy) {
             if (this.correlateAll != null) {
@@ -239,8 +225,11 @@ public final class FlowSaga {
                     new TypeDispatch<>(correlators);
             for (Class<? extends E> type : eventTypes) {
                 if (coverage.resolve(type) == null) {
-                    throw new IllegalStateException("event type " + type.getName() + " is used by a step but has no correlation; "
-                            + "register correlate(" + type.getSimpleName() + ".class, ...), declare it via startsOn(...), or add a correlateAll(...) fallback");
+                    // The start type reaches this the same way a step type does, since startsOn does not correlate, so
+                    // say which of the two it is rather than telling someone their start event is used by a step.
+                    String where = type.equals(startType) ? "starts the saga" : "is used by a step";
+                    throw new IllegalStateException("event type " + type.getName() + " " + where + " but has no correlation, "
+                            + "register correlate(" + type.getSimpleName() + ".class, ...) or add a correlateAll(...) fallback");
                 }
             }
         }
