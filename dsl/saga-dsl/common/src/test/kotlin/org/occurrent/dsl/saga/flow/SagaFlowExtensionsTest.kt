@@ -505,6 +505,50 @@ class SagaFlowExtensionsTest {
         }
     }
 
+    // --- Scenario E: historyWindow reaches the Java builder through the Kotlin block ------------------------------------
+
+    sealed interface WinEvent {
+        val id: String
+    }
+    data class Begin(override val id: String) : WinEvent
+    data class Tick(override val id: String) : WinEvent
+
+    sealed interface WinCommand
+    object Noop : WinCommand
+
+    /** A two-step flow that ping-pongs between "a" and "b" on every Tick, so every event drives a transition. */
+    private fun pingPong(historyWindow: Int): Saga<WinEvent, FlowState<WinEvent>, WinCommand> =
+        saga {
+            historyWindow(historyWindow)
+            correlateAll { it.id }
+            startsOn<Begin>()
+            step("a") { on<Tick>(then = transitionTo("b")) {} }
+            step("b") { on<Tick>(then = transitionTo("a")) {} }
+        }
+
+    private fun runTicks(saga: Saga<WinEvent, FlowState<WinEvent>, WinCommand>, ticks: Int): FlowState<WinEvent> {
+        var state = saga.evolve(saga.initialState(), SagaInput.event(Begin("w")))
+        repeat(ticks) { state = saga.evolve(state, SagaInput.event(Tick("w"))) }
+        return state
+    }
+
+    @Nested
+    inner class HistoryWindow {
+
+        @Test
+        fun `historyWindow set through the Kotlin block bounds the retained event count`() {
+            val saga = pingPong(3)
+
+            val atTen = runTicks(saga, 10).received().size
+            val atHundred = runTicks(saga, 100).received().size
+
+            assertAll(
+                { assertThat(atHundred).describedAs("constant once past the window").isEqualTo(atTen) },
+                { assertThat(atTen).describedAs("bounded by the window plus the pinned initiating event").isLessThanOrEqualTo(3 + 2) }
+            )
+        }
+    }
+
     // --- Build-time validation ------------------------------------------------------------------------------------
 
     sealed interface ValidationEvent

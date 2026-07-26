@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.snapshot
 
+import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.dsl.view.View
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.filter.Filter
@@ -52,6 +54,15 @@ class SnapshotViewBuilder<S, E : Any> @PublishedApi internal constructor(initial
     /** Registers the fold for event type [T]. */
     inline fun <reified T : E> on(noinline handler: (S, T) -> S) {
         delegate.on(T::class.java, BiFunction { s, e -> handler(s, e) })
+    }
+
+    /**
+     * Registers a metadata-aware fold for event type [T]: the fold sees the event's [EventMetadata] (stream id and
+     * version, global position, DCB tags, CloudEvent extensions) as well as the event. A rebuild from a query/replay
+     * that folds without metadata sees [EventMetadata.empty].
+     */
+    inline fun <reified T : E> on(noinline handler: (S, EventMetadata, T) -> S) {
+        delegate.on(T::class.java, View.Fold { s, metadata, e -> handler(s, metadata, e) })
     }
 
     /** Sets the schema version tagging the state this fold produces; bump it when the state shape changes. */
@@ -103,6 +114,12 @@ class DcbSnapshotViewBuilder<S, E : Any> @PublishedApi internal constructor(init
 
     /** Registers the fold for event type [T]. */
     inline fun <reified T : E> on(noinline handler: (S, T) -> S) = viewBuilder.on<T>(handler)
+
+    /**
+     * Registers a metadata-aware fold for event type [T]: the fold sees the event's [EventMetadata] as well as the
+     * event.
+     */
+    inline fun <reified T : E> on(noinline handler: (S, EventMetadata, T) -> S) = viewBuilder.on<T>(handler)
 
     /** Sets the schema version tagging the state this fold produces; bump it when the state shape changes. */
     fun schemaVersion(schemaVersion: Int) = viewBuilder.schemaVersion(schemaVersion)

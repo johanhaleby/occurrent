@@ -16,6 +16,8 @@
 
 package org.occurrent.command;
 
+import java.util.List;
+
 /**
  * The producer-facing port for issuing a command. A command producer, such as a saga or a policy, hands a command to a
  * dispatcher and stays ignorant of the write mechanics. The dispatcher owns the routing, deciding which stream the
@@ -28,6 +30,12 @@ package org.occurrent.command;
  * state save, or a compare-and-set retry). A dispatcher should therefore be idempotent, which an
  * {@code ApplicationService}-backed one is by construction, since it re-folds the authoritative stream and the target's
  * invariants reject a stale or already-applied command.
+ * <p>
+ * {@link #dispatchAll} is a seam a dispatcher may exploit, not a guarantee this interface provides: the default just
+ * loops over {@link #dispatch}, one command at a time, with no atomicity across the list. A dispatcher whose commands
+ * all target one stream or one decider can override it to write the whole batch in a single transaction, so a caller
+ * such as a saga executor never observes a partially dispatched reaction. This does not make dispatch exactly-once,
+ * the contract stays at-least-once.
  *
  * @param <C> the command type
  */
@@ -36,4 +44,16 @@ public interface CommandDispatcher<C> {
 
     /** Issue {@code command}. May be called more than once for the same logical command; must be idempotent. */
     void dispatch(C command);
+
+    /**
+     * Issue {@code commands} as a unit from the caller's point of view. The default forwards each command to
+     * {@link #dispatch} in order, so a plain lambda dispatcher gets this behaviour for free and a failure partway
+     * through still leaves the earlier commands dispatched. Override this to make the batch atomic, for example one
+     * transaction covering every command, when that is possible for the dispatcher's target.
+     */
+    default void dispatchAll(List<C> commands) {
+        for (C command : commands) {
+            dispatch(command);
+        }
+    }
 }

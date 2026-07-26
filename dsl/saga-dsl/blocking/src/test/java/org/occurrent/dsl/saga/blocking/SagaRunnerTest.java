@@ -499,6 +499,63 @@ class SagaRunnerTest {
     }
 
     @Nested
+    class DispatchAll {
+
+        /** Reacts to OrderPlaced with two commands in one list, unlike orderFulfillment's single-command reactions. */
+        private static Saga<OrderEvent, OrderState, OrderCommand> issuesTwoCommandsOnStart() {
+            return Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new Completed(e.orderId()))
+                    .react(OrderPlaced.class, (state, e) -> List.of(
+                            SagaEffect.issue(new ShipOrder(e.orderId())),
+                            SagaEffect.issue(new CancelOrder(e.orderId()))))
+                    .isTerminal(state -> true)
+                    .build();
+        }
+
+        private CloudEvent orderPlaced(String orderId) {
+            return converter.toCloudEvents(List.of(new OrderPlaced(UUID.randomUUID().toString(), orderId))).getFirst();
+        }
+
+        private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(CommandDispatcher<OrderCommand> dispatcher) {
+            return new SagaExecution<>(issuesTwoCommandsOnStart(), SagaStateStore.inMemory(), dispatcher, converter, SagaRunnerConfig.defaults());
+        }
+
+        @Test
+        void a_plain_lambda_dispatcher_still_receives_one_call_per_command_through_the_default() {
+            String orderId = "order-dispatch-all-1";
+            List<OrderCommand> received = new ArrayList<>();
+            CommandDispatcher<OrderCommand> dispatcher = received::add; // a lambda only implements dispatch, so dispatchAll's default loop applies.
+
+            execution(dispatcher).onCloudEvent(orderPlaced(orderId));
+
+            assertThat(received).containsExactly(new ShipOrder(orderId), new CancelOrder(orderId));
+        }
+
+        @Test
+        void a_dispatcher_overriding_dispatchAll_receives_the_reactions_whole_command_list_in_a_single_call() {
+            String orderId = "order-dispatch-all-2";
+            List<List<OrderCommand>> batches = new ArrayList<>();
+            CommandDispatcher<OrderCommand> dispatcher = new CommandDispatcher<>() {
+                @Override
+                public void dispatch(OrderCommand command) {
+                    throw new AssertionError("dispatch(C) must not be called once dispatchAll is overridden");
+                }
+
+                @Override
+                public void dispatchAll(List<OrderCommand> commands) {
+                    batches.add(commands);
+                }
+            };
+
+            execution(dispatcher).onCloudEvent(orderPlaced(orderId));
+
+            assertThat(batches).containsExactly(List.of(new ShipOrder(orderId), new CancelOrder(orderId)));
+        }
+    }
+
+    @Nested
     class TimerLeaseGating {
 
         private static final Duration FAST_POLL = Duration.ofMillis(30);

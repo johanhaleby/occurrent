@@ -78,8 +78,8 @@ public final class FlowSaga {
          * reaction, or a timeout reaction can read history through {@link ReceivedEvents}. The initiating event and the
          * current step's own events are always retained on top of this (a join must count over the current step's events),
          * so this only bounds the earlier history. The default is {@value FlowSagaImpl#DEFAULT_HISTORY_WINDOW}. Raise it for
-         * a guard that counts far across a self-looping step (for example a retry cap higher than the default); lower it to
-         * trim the persisted state of a long-running instance. Must be at least zero.
+         * a guard that counts far across a self-looping step (for example a retry cap higher than the default), and lower
+         * it to trim the persisted state of a long-running instance. Must be at least zero.
          */
         public Builder<E, C> historyWindow(int events) {
             if (events < 0) {

@@ -63,6 +63,17 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     internal val delegate: FlowSaga.Builder<E, C> = FlowSaga.builder()
 
     /**
+     * Sets how many received events are retained behind the current step's entry, and so how far back a guard, a join
+     * reaction, or a timeout reaction can read history through [ReceivedEvents]. The initiating event and the current
+     * step's own events are always retained on top of this, so this only bounds the earlier history. Raise it for a
+     * guard that counts far across a self-looping step, and lower it to trim the persisted state of a long-running
+     * instance. Must be at least zero.
+     */
+    fun historyWindow(events: Int) {
+        delegate.historyWindow(events)
+    }
+
+    /**
      * Declares the event type [T] that starts an instance, and optionally the commands to issue on start. Correlate [T]
      * with [correlate] or [correlateAll] like any other event type.
      */

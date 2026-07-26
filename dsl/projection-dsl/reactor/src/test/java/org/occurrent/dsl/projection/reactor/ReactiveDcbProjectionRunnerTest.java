@@ -49,6 +49,7 @@ import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -115,6 +116,29 @@ class ReactiveDcbProjectionRunnerTest {
         runner.project("alice-projection", dcbProjection, repository).waitUntilStarted().block();
 
         appendTagged(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "alice", "Alice"), "entity:alice");
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(repo).hasSize(1);
+            assertThat(repo.values()).containsExactly(1L);
+        });
+    }
+
+    @Test
+    void the_bifunction_overload_exposes_real_dcb_metadata_to_the_update_function() {
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        // This overload never calls dcbProjection.projection(), only the criteria, which scopes the subscription.
+        DcbProjection<Long, DomainEvent, String> dcbProjection = new DcbProjection<>(
+                Projection.<Long, DomainEvent, String>builder(0L).id(event -> "singleton").build(),
+                DcbCriteria.tags(Tag.parse("entity:bob")));
+        ReactiveDcbProjectionRunner<DomainEvent> runner = ReactiveDcbProjectionRunner.create(subscriptionModel, converter);
+        // getStreamVersion() throws on EventMetadata.empty(), so this only passes if real DCB metadata reaches the
+        // BiFunction instead of the plain, metadata-less subscribe path.
+        runner.project("bob-projection", dcbProjection, (metadata, event) -> {
+            repo.put(metadata.getStreamId(), metadata.getStreamVersion());
+            return Mono.empty();
+        }).waitUntilStarted().block();
+
+        appendTagged(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "bob", "Bob"), "entity:bob");
 
         await().atMost(ofSeconds(5)).untilAsserted(() -> {
             assertThat(repo).hasSize(1);

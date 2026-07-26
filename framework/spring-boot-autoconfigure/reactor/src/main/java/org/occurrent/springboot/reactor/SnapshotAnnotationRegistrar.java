@@ -39,6 +39,7 @@ import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
+import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 import reactor.core.publisher.Mono;
@@ -250,8 +251,7 @@ class SnapshotAnnotationRegistrar {
         boolean typeSet = storeType != Void.class;
         boolean nameSet = !storeName.isBlank();
         if (typeSet || nameSet) {
-            Object bean = typeSet && nameSet ? applicationContext.getBean(storeName, storeType)
-                    : typeSet ? applicationContext.getBean(storeType) : applicationContext.getBean(storeName);
+            Object bean = resolveReferencedReactiveSnapshotStore(storeType, storeName, typeSet, nameSet, id);
             if (!(bean instanceof ReactiveSnapshotStore<?>)) {
                 throw new IllegalArgumentException("@Snapshot '%s' store bean must be a ReactiveSnapshotStore, but was %s.".formatted(id, bean.getClass().getName()));
             }
@@ -282,6 +282,31 @@ class SnapshotAnnotationRegistrar {
                     "Declare a ReactiveSnapshotStore bean, or select one with store/storeName.").formatted(id));
         }
         return provider.createDefaultSnapshotStore(id, stateType);
+    }
+
+    private Object resolveReferencedReactiveSnapshotStore(Class<?> storeType, String storeName, boolean typeSet, boolean nameSet, String id) {
+        if (typeSet && nameSet) {
+            try {
+                return applicationContext.getBean(storeName, storeType);
+            } catch (BeansException e) {
+                throw new IllegalArgumentException("@Snapshot '%s' could not resolve a store bean named '%s' of type %s: %s".formatted(id, storeName, storeType.getName(), e.getMessage()), e);
+            }
+        }
+        if (typeSet) {
+            String[] names = applicationContext.getBeanNamesForType(storeType);
+            if (names.length == 0) {
+                throw new IllegalStateException("@Snapshot '%s' found no bean of type %s. Declare one, or leave store unset to resolve by convention.".formatted(id, storeType.getName()));
+            }
+            if (names.length > 1) {
+                throw new IllegalStateException("@Snapshot '%s' found %d beans of type %s (%s) and cannot pick one. Disambiguate with storeName = \"beanName\".".formatted(id, names.length, storeType.getName(), String.join(", ", names)));
+            }
+            return applicationContext.getBean(names[0]);
+        }
+        try {
+            return applicationContext.getBean(storeName);
+        } catch (BeansException e) {
+            throw new IllegalArgumentException("@Snapshot '%s' could not resolve a store bean named '%s': %s".formatted(id, storeName, e.getMessage()), e);
+        }
     }
 
     private static <E> Filter snapshotFilterFor(CloudEventConverter<E> converter, SnapshotView<?, E> snapshotView) {
