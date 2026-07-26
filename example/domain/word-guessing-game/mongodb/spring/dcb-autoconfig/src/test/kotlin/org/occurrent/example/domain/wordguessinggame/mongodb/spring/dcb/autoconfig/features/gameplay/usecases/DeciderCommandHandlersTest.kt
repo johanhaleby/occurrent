@@ -152,8 +152,12 @@ class DeciderCommandHandlersTest {
     private inline fun <reified E : GameEvent> events(criteria: DcbCriteria): List<E> =
         domainEventQueries.queryForList(criteria).filterIsInstance<E>()
 
+    // Every word needs at least five characters. The domain keeps two characters obfuscated, so a wrong guess
+    // reveals nothing once only two remain, and this test waits for a reveal after a wrong guess. StartGame draws
+    // the word at random and WordList requires at least four words, so the draw cannot be removed - keeping every
+    // word the same length makes it irrelevant instead. See WordHintCharacterRevelationEdgeCasesTest for the rule.
     private fun wordList(): WordList = WordList(
         WordCategory("test"),
-        listOf(Word("apple"), Word("banana"), Word("orange"), Word("pear"))
+        listOf(Word("apple"), Word("grape"), Word("mango"), Word("peach"))
     )
 }
