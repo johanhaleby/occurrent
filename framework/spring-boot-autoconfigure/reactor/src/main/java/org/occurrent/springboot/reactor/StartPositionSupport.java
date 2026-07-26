@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.reactor;
+package org.occurrent.springboot.reactor;
 
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
@@ -32,7 +33,6 @@ import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
-import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 
 /**
  * Start-position and startup logic for the reactive stack. The reactive catch-up model replays only by position (or,
@@ -50,7 +50,8 @@ class StartPositionSupport {
 
     void applyStartupWorkarounds() {
         // These are workarounds for https://github.com/spring-projects/spring-framework/issues/32904
-        applicationContext.getBean(ReactiveMongoOperations.class);
+        // Each store starter contributes the beans its own stack has to force into existence, this module knows none.
+        applicationContext.getBeanProvider(StartupWorkaround.class).forEach(StartupWorkaround::apply);
         try {
             applicationContext.getBean("springApplicationAdminRegistrar");
         } catch (NoSuchBeanDefinitionException ignored) {

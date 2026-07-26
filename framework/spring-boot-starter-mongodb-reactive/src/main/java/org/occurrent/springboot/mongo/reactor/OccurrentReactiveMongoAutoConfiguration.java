@@ -50,6 +50,10 @@ import org.occurrent.springboot.common.OnDcbEventStoreCapabilityCondition;
 import org.occurrent.springboot.common.OnDomainEventQueriesCapabilityCondition;
 import org.occurrent.springboot.common.OnMissingCloudEventConverterAndCloudEventTypeMapperCondition;
 import org.occurrent.springboot.common.OnStreamEventStoreCapabilityCondition;
+import org.occurrent.springboot.common.StartupWorkaround;
+import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
+import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationBeanPostProcessor;
+import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationConfiguration;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
@@ -69,6 +73,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.mongodb.autoconfigure.MongoReactiveAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
@@ -93,15 +98,26 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 @AutoConfiguration(after = MongoReactiveAutoConfiguration.class)
 @ConditionalOnClass({ReactorMongoEventStore.class, ReactorMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
-@Import(Jackson3CloudEventConverterConfiguration.class)
+@Import({Jackson3CloudEventConverterConfiguration.class, OccurrentReactiveAnnotationConfiguration.class})
 public class OccurrentReactiveMongoAutoConfiguration<E> {
 
     private static final Logger log = LoggerFactory.getLogger(OccurrentReactiveMongoAutoConfiguration.class);
 
+    /**
+     * The MongoDB half of the workaround for
+     * <a href="https://github.com/spring-projects/spring-framework/issues/32904">spring-framework#32904</a>: force
+     * {@link ReactiveMongoOperations} into existence before a subscription is started. The result is deliberately discarded.
+     */
     @Bean
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    static OccurrentReactiveAnnotationBeanPostProcessor occurrentReactiveAnnotationBeanPostProcessor() {
-        return new OccurrentReactiveAnnotationBeanPostProcessor();
+    StartupWorkaround occurrentReactiveMongoOperationsStartupWorkaround(ApplicationContext applicationContext) {
+        return () -> applicationContext.getBean(ReactiveMongoOperations.class);
+    }
+
+    /** The zero-config MongoDB snapshot store a {@code @Snapshot} falls back to when it declares none. */
+    @Bean
+    @ConditionalOnMissingBean(DefaultReactiveSnapshotStoreProvider.class)
+    DefaultReactiveSnapshotStoreProvider occurrentMongoDefaultReactiveSnapshotStoreProvider(ApplicationContext applicationContext) {
+        return new MongoReactiveSnapshotStoreProvider(applicationContext);
     }
 
     @Bean

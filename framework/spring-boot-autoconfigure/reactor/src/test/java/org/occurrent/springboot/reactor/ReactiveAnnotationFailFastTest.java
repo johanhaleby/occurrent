@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.reactor;
+package org.occurrent.springboot.reactor;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -37,7 +37,6 @@ import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
@@ -47,7 +46,7 @@ import static org.mockito.Mockito.mock;
 
 /**
  * Container-free {@link ApplicationContextRunner} fail-fast tests for the reactive annotation bean post-processor's
- * error/validation branches that the Docker-gated {@code Reactive*MongoTest}s don't exercise (those are the CI gate for
+ * error/validation branches that the Docker-gated {@code Reactive*MongoTest}s in the store starter don't exercise (those are the CI gate for
  * happy paths and Docker-dependent branches; these run with no Testcontainers, characterizing behavior that must
  * survive the {@code OccurrentReactiveAnnotationBeanPostProcessor} decomposition into package-private registrars).
  * Modeled on {@code DcbSubscriptionMalformedTagAnnotationTest} in the blocking stack's test package.
@@ -168,7 +167,7 @@ class ReactiveAnnotationFailFastTest {
     void a_snapshot_with_no_store_bean_and_no_concrete_state_type_fails_fast() {
         new ApplicationContextRunner()
                 .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(ConverterSubscribableAndMongoOperationsConfiguration.class, RawSnapshotViewConfiguration.class)
+                .withUserConfiguration(ConverterAndSubscribableConfiguration.class, RawSnapshotViewConfiguration.class)
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
@@ -336,24 +335,6 @@ class ReactiveAnnotationFailFastTest {
         @org.occurrent.annotation.Projection(id = "pushWrongFeedType", source = Source.PUSH, subscriptionModelName = "wrongFeed")
         Object factory() {
             return null;
-        }
-    }
-
-    @Configuration(proxyBeanMethods = false)
-    static class ConverterSubscribableAndMongoOperationsConfiguration {
-        @Bean
-        CloudEventConverter<TestEvent> cloudEventConverter() {
-            return testEventConverter();
-        }
-
-        @Bean
-        Subscribable subscribable() {
-            return mock(Subscribable.class);
-        }
-
-        @Bean
-        ReactiveMongoOperations reactiveMongoOperations() {
-            return mock(ReactiveMongoOperations.class);
         }
     }
 

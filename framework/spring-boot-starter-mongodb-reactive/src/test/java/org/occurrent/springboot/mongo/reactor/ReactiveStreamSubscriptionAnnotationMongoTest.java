@@ -53,7 +53,7 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Proves that both the {@link StreamSubscription} annotation and the deprecated {@link Subscription} alias wire a working
- * reactive stream subscription that receives appended events, processed by {@link OccurrentReactiveAnnotationBeanPostProcessor}.
+ * reactive stream subscription that receives appended events, processed by {@code OccurrentReactiveAnnotationBeanPostProcessor}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @SpringBootTest(

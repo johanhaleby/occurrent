@@ -30,5 +30,6 @@
     <modules>
         <module>common</module>
         <module>blocking</module>
+        <module>reactor</module>
     </modules>
 </project>

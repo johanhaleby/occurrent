@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.reactor;
+package org.occurrent.springboot.reactor;
 
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
@@ -28,7 +28,6 @@ import org.occurrent.dsl.snapshot.DcbSnapshotView;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
-import org.occurrent.dsl.snapshot.mongodb.spring.reactor.ReactiveSpringMongoSnapshotStore;
 import org.occurrent.dsl.snapshot.reactor.ReactiveSnapshotStore;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
@@ -40,7 +39,6 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.springframework.context.ApplicationContext;
-import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import reactor.core.publisher.Mono;
 import kotlin.jvm.functions.Function2;
 
@@ -251,9 +249,15 @@ class SnapshotAnnotationRegistrar {
         if (names.length > 1) {
             throw new IllegalStateException("@Snapshot '%s' found %d ReactiveSnapshotStore beans (%s) and cannot pick one. Name one with storeName = \"beanName\".".formatted(id, names.length, String.join(", ", names)));
         }
-        ReactiveMongoOperations mongoOperations = applicationContext.getBean(ReactiveMongoOperations.class);
+        // The state type is reflected first, so a factory that declares none reports that (the actionable fix) rather
+        // than a missing provider.
         Class<S> stateType = (Class<S>) reflectSnapshotStateType(factoryMethod, id);
-        return new ReactiveSpringMongoSnapshotStore<>(mongoOperations, stateType, "occurrent-snapshot-" + id);
+        DefaultReactiveSnapshotStoreProvider provider = applicationContext.getBeanProvider(DefaultReactiveSnapshotStoreProvider.class).getIfAvailable();
+        if (provider == null) {
+            throw new IllegalStateException(("@Snapshot '%s' found no ReactiveSnapshotStore bean and this starter contributes no zero-config default. " +
+                    "Declare a ReactiveSnapshotStore bean, or select one with store/storeName.").formatted(id));
+        }
+        return provider.createDefaultSnapshotStore(id, stateType);
     }
 
     private static <E> Filter snapshotFilterFor(CloudEventConverter<E> converter, SnapshotView<?, E> snapshotView) {
@@ -299,6 +303,6 @@ class SnapshotAnnotationRegistrar {
             }
         }
         throw new IllegalArgumentException(("@Snapshot '%s' needs a snapshot store: either name one with store or storeName (a ReactiveSnapshotStore bean), " +
-                "or declare the factory return type with a concrete state type (for example SnapshotView<MyState, MyEvent>) so the snapshot can default to MongoDB.").formatted(id));
+                "or declare the factory return type with a concrete state type (for example SnapshotView<MyState, MyEvent>) so the snapshot can use the store's zero-config default.").formatted(id));
     }
 }

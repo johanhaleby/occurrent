@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.reactor;
+package org.occurrent.springboot.reactor;
 
 import kotlin.jvm.functions.Function2;
 import org.occurrent.annotation.DcbSubscription;

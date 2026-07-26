@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.reactor;
+package org.occurrent.springboot.reactor;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.ResumeBehavior;
@@ -213,10 +213,11 @@ class ProjectionAnnotationRegistrar {
         return (Projection<S, E, ID>) raw;
     }
 
-    // Resolve the read-model store. On the reactive stack there is no zero-config Mongo default (the view DSL's
-    // materialization is blocking and a reactive Mongo store is a planned follow-up), so a store bean is required: a
+    // Resolve the read-model store. On the reactive stack there is no zero-config store default (the view DSL's
+    // materialization is blocking and a reactive store default is a planned follow-up), so a store bean is required: a
     // MaterializedView or a ViewStateRepository (any backend, driven reactively by the runner). Named by store() when
-    // set, otherwise the unique bean of either type.
+    // set, otherwise the unique bean of either type. Deliberately no DefaultProjectionStoreProvider seam: unlike the
+    // blocking stack there is nothing for a store starter to contribute yet.
     private Object resolveStore(org.occurrent.annotation.Projection annotation, String id) {
         Object referencedStore = resolveStoreBeanByReference(annotation, id);
         if (referencedStore != null) {
@@ -230,11 +231,11 @@ class ProjectionAnnotationRegistrar {
         if (repository != null) {
             return repository;
         }
-        throw new IllegalArgumentException(("@Projection '%s' has no read-model store. On the reactive stack, declare a MaterializedView or ViewStateRepository bean and point at it with store = SomeStore.class or storeName = \"beanName\" (or make it the only bean of its type). A zero-config reactive Mongo default is a planned follow-up, the blocking stack already has the Mongo default.").formatted(id));
+        throw new IllegalArgumentException(("@Projection '%s' has no read-model store. On the reactive stack, declare a MaterializedView or ViewStateRepository bean and point at it with store = SomeStore.class or storeName = \"beanName\" (or make it the only bean of its type). A zero-config reactive store default is a planned follow-up, the blocking stack already has one.").formatted(id));
     }
 
     // Validate a referenced store bean is a shape the reactive stack supports. Unlike the blocking stack there is no
-    // CrudRepository adapter or Mongo default here, so only a MaterializedView or ViewStateRepository is accepted.
+    // CrudRepository adapter or zero-config default here, so only a MaterializedView or ViewStateRepository is accepted.
     private Object requireReactiveStoreShape(Object bean, String id) {
         if (bean instanceof MaterializedView || bean instanceof ViewStateRepository) {
             return bean;
