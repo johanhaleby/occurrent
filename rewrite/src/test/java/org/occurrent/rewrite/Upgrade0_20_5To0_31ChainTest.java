@@ -26,11 +26,14 @@ import static org.openrewrite.java.Assertions.java;
 /**
  * Proves that a user upgrading straight from Occurrent 0.20.5, who runs both the {@code UpgradeToOccurrent_0_30} and
  * {@code UpgradeToOccurrent_0_31} umbrella recipes, lands on the final 0.31 package rather than stalling on the
- * intermediate 0.30 one. {@code OccurrentProperties} has a 0.30 rename (still 0.20.5 -> 0.30.0, {@code
+ * intermediate 0.30 one. There are two cases in the whole rewrite module where two independently-shipped umbrella
+ * recipes must compose for a type. {@code OccurrentProperties} has a 0.30 rename (still 0.20.5 -> 0.30.0, {@code
  * org.occurrent.springboot.mongo.blocking} -> {@code org.occurrent.springboot.mongo.common}) chained into a 0.31
- * rename (0.30.0 -> 0.31.0, {@code org.occurrent.springboot.mongo.common} -> {@code org.occurrent.springboot.common}),
- * so this is the one case in the whole rewrite module where two independently-shipped umbrella recipes must compose
- * for a type.
+ * rename (0.30.0 -> 0.31.0, {@code org.occurrent.springboot.mongo.common} -> {@code org.occurrent.springboot.common}).
+ * {@code EventMetadata} has the identical two-hop shape: a 0.30 rename (0.20.5 -> 0.30.0, {@code
+ * org.occurrent.dsl.subscription.blocking.EventMetadata} -> {@code org.occurrent.dsl.subscription.EventMetadata})
+ * chained into a 0.31 rename (0.30.0 -> 0.31.0, {@code org.occurrent.dsl.subscription.EventMetadata} -> {@code
+ * org.occurrent.cloudevents.EventMetadata}).
  *
  * <p>The same two-hop shape exists on paper for the Spring Boot autoconfigure module coordinate
  * ({@code MigrateCoordinates_0_30} maps {@code spring-boot-autoconfigure-mongodb-common} to
@@ -82,6 +85,39 @@ class Upgrade0_20_5To0_31ChainTest implements RewriteTest {
 
                         class Foo {
                             OccurrentProperties properties;
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void eventMetadataConvergesFromThe0_20_5PackageToTheFinal0_31PackageInOneInvocation() {
+        rewriteRun(
+                java(
+                        """
+                        package org.occurrent.dsl.subscription.blocking;
+                        public class EventMetadata {
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.subscription.blocking.EventMetadata;
+
+                        class Foo {
+                            EventMetadata metadata;
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.cloudevents.EventMetadata;
+
+                        class Foo {
+                            EventMetadata metadata;
                         }
                         """
                 )

@@ -98,7 +98,8 @@ class ReactiveAnnotationFailFastTest {
 
     @Test
     void a_beginning_of_time_stream_subscription_fails_fast_when_history_replay_is_not_supported() {
-        // No ReactorMongoEventStore bean at all, so streamHistoryReplaySupported() is false without needing a store.
+        // No bean that is both a PositionOrderedReader and an EventStore, so streamHistoryReplaySupported() is false
+        // without needing a store at all.
         new ApplicationContextRunner()
                 .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
                 .withUserConfiguration(ConverterConfiguration.class, BeginningOfTimeStreamSubscriberConfiguration.class)

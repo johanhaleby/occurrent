@@ -19,21 +19,26 @@ package org.occurrent.springboot.reactor;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 
 /**
- * Pins how {@link StartPositionSupport} picks the reader it asks about position support. It used to resolve the
- * concrete {@code ReactorMongoEventStore}, which made the lookup store-specific but also guaranteed a single
- * candidate. Resolving the store-neutral {@link PositionOrderedReader} widens it, because a
- * {@code @Projection(source = PUSH)} application declares its own reader bean, so two candidates are reachable in one
- * context and picking the wrong one silently changes whether history is replayed.
+ * Pins how {@link StartPositionSupport} picks the reader it asks about position support: the event store, not any reader
+ * that happens to be in the context. It used to resolve the concrete {@code ReactorMongoEventStore}, which made the
+ * lookup store-specific but also guaranteed a single candidate, so the store-neutral lookup has to reject a reader that
+ * is not the store and refuse to guess between two that are. Picking the wrong one silently changes whether history is
+ * replayed.
  * <p>
  * Container-free: the question is bean selection, so a mock reader answers it and a real MongoDB adds nothing.
  */
@@ -83,6 +88,41 @@ class StartPositionSupportReaderResolutionTest {
                     StartPositionSupport startPositionSupport = new StartPositionSupport(context);
 
                     assertThat(startPositionSupport.positionReplaySupported()).isFalse();
+                });
+    }
+
+    @Test
+    void two_event_stores_that_both_read_in_position_order_fail_loud_instead_of_picking_one() {
+        new ApplicationContextRunner()
+                .withBean("firstEventStore", PositionOrderedReader.class, () -> storeReader(true))
+                .withBean("secondEventStore", PositionOrderedReader.class, () -> storeReader(true))
+                .run(context -> {
+                    StartPositionSupport startPositionSupport = new StartPositionSupport(context);
+
+                    // Both write a position, so nothing here depends on writesPosition. The point is that picking by
+                    // registration order is a coin flip dressed up as a decision, so both names are reported instead.
+                    assertThatThrownBy(startPositionSupport::positionReplaySupported)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("firstEventStore")
+                            .hasMessageContaining("secondEventStore");
+                });
+    }
+
+    @Test
+    void a_store_that_writes_a_position_without_the_stream_capability_does_not_support_stream_history_replay() {
+        OccurrentProperties occurrentProperties = new OccurrentProperties();
+        occurrentProperties.getEventStore().setCapabilities(Set.of(EventStoreCapability.DCB));
+
+        new ApplicationContextRunner()
+                .withBean("eventStore", PositionOrderedReader.class, () -> storeReader(true))
+                .withBean(OccurrentProperties.class, () -> occurrentProperties)
+                .run(context -> {
+                    StartPositionSupport startPositionSupport = new StartPositionSupport(context);
+
+                    // A DCB-only store writes a position, so the reader alone says yes. Stream replay also needs stream
+                    // events to replay, which this store has none of.
+                    assertThat(startPositionSupport.positionReplaySupported()).isTrue();
+                    assertThat(startPositionSupport.streamHistoryReplaySupported()).isFalse();
                 });
     }
 

@@ -156,7 +156,7 @@ class SubscriptionAnnotationRegistrar {
             return Unit.INSTANCE;
         };
 
-        Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
+        Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
         // The synchronous subscription model has no lifecycle, start position, or background thread, so there is no
         // start position to resolve and nothing to wait for. Pass the default StartAt (the model ignores it) rather
         // than null to honor the Subscribable contract.

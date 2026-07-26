@@ -154,7 +154,9 @@ jobs:
           # Everything that talks to MongoDB through the driver rather than through Spring.
           - { name: mongodb-native,              paths: "eventstore/mongodb/native subscription/mongodb/native eventstore/api eventstore/mongodb/common subscription/mongodb/common" }
           # Listed per module, not as the framework aggregator, because the blocking starter is the
-          # single most expensive module in the build and has to sit alone.
+          # single most expensive module in the build. It shares the shard with framework/annotations and
+          # the framework/spring-boot-autoconfigure aggregate (common, blocking, reactor), both cheap
+          # enough to ride along without pushing the shard over budget.
           - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure" }
           - { name: dsl,                         paths: "dsl" }
           # misc is the deliberate junk drawer: whatever is too small to shard on its own. The

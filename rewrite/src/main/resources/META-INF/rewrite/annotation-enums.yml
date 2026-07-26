@@ -77,6 +77,26 @@ recipeList:
       newFullyQualifiedTypeName: org.occurrent.springboot.common.OccurrentProperties
       ignoreDefinition: true
   - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OccurrentProperties$ApplicationServiceProperties
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OccurrentProperties$ApplicationServiceProperties
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OccurrentProperties$CloudEventConverterProperties
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OccurrentProperties$CloudEventConverterProperties
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OccurrentProperties$EventStoreProperties
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OccurrentProperties$EventStoreProperties
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OccurrentProperties$StreamProperties
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OccurrentProperties$StreamProperties
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.OccurrentProperties$SubscriptionProperties
+      newFullyQualifiedTypeName: org.occurrent.springboot.common.OccurrentProperties$SubscriptionProperties
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.springboot.mongo.common.SubscriptionAnnotations
       newFullyQualifiedTypeName: org.occurrent.springboot.common.SubscriptionAnnotations
       ignoreDefinition: true

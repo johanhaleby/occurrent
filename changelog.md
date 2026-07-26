@@ -44,6 +44,11 @@
 * `EventMetadata` moves from `org.occurrent.dsl.subscription.EventMetadata` to `org.occurrent.cloudevents.EventMetadata`, and from a Kotlin `data class` to a plain Java class. A 0.30.0 caller referencing the old FQN, importing it, or using its Kotlin-only surface (reified `get<T>`, operator `get`, `copy`, all dropped) updates the reference. The typed accessors are unchanged in name and behavior. The `org.occurrent.UpgradeToOccurrent_0_31` OpenRewrite recipe rewrites every affected reference for you. See the [upgrade guide](doc/migration/upgrading-to-0.31.0.md) and [ADR 71](doc/architecture/decisions/0071-relocate-eventmetadata-to-cloudevents-extension.md).
   * Before: `import org.occurrent.dsl.subscription.EventMetadata`
   * After: `import org.occurrent.cloudevents.EventMetadata`
+* `OccurrentProperties` and the seven other public types in `org.occurrent.springboot.mongo.common` move to `org.occurrent.springboot.common`, and the autoconfigure artifact is renamed from `occurrent-mongodb-spring-boot-autoconfigure` to `occurrent-spring-boot-autoconfigure`. Property keys are unchanged. The `org.occurrent.UpgradeToOccurrent_0_31` OpenRewrite recipe rewrites every affected reference and the module coordinate for you. See the [upgrade guide](doc/migration/upgrading-to-0.31.0.md) and [ADR 72](doc/architecture/decisions/0072-store-neutral-spring-boot-annotation-modules.md).
+  * Before: `import org.occurrent.springboot.mongo.common.OccurrentProperties`
+  * After: `import org.occurrent.springboot.common.OccurrentProperties`
+  * Before artifactId: `occurrent-mongodb-spring-boot-autoconfigure`
+  * After artifactId: `occurrent-spring-boot-autoconfigure`
 
 ### 0.30.0 (2026-07-13)
 

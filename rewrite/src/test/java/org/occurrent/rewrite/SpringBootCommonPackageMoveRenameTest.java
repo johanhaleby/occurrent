@@ -68,6 +68,47 @@ class SpringBootCommonPackageMoveRenameTest extends AnnotationEnumRenamesRecipeT
         );
     }
 
+    // A ChangeType on the outer class does NOT rewrite references to its nested classes, verified by removing the
+    // nested entries and watching this fail with "expected to make a change but made no changes". So each nested type
+    // released in 0.30.0 carries its own entry. All five of those are singly nested, which is the case OpenRewrite
+    // requalifies correctly, by importing the outer type. Two levels of nesting does not survive the rewrite (the
+    // import is dropped and the reference left unqualified), but every doubly-nested property group in this class was
+    // added after 0.30.0, so no caller can name one and none gets an entry.
+    @Test
+    void nestedTypeOfOccurrentPropertiesMovesFromSpringbootMongoCommonToSpringbootCommonPackage() {
+        rewriteRun(
+                java(
+                        """
+                        package org.occurrent.springboot.mongo.common;
+                        public class OccurrentProperties {
+                            public static class SubscriptionProperties {
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.mongo.common.OccurrentProperties.SubscriptionProperties;
+
+                        class Foo {
+                            SubscriptionProperties properties;
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.springboot.common.OccurrentProperties;
+
+                        class Foo {
+                            OccurrentProperties.SubscriptionProperties properties;
+                        }
+                        """
+                )
+        );
+    }
+
     @Test
     void occurrentPropertiesMovesFromSpringbootMongoCommonToSpringbootCommonPackageInKotlin() {
         rewriteRun(

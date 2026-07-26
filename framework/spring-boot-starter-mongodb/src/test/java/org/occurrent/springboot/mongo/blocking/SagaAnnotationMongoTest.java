@@ -114,6 +114,16 @@ class SagaAnnotationMongoTest {
         });
     }
 
+    @Test
+    void stores_the_state_of_a_saga_that_declares_no_store_in_a_saga_prefixed_collection() {
+        // Pins the collection name, not just that state round-trips: renaming it would orphan every existing saga's
+        // state on upgrade, and observing state through the registry cannot see that.
+        applicationService.execute("order-3", events -> List.of(new OrderPlaced("order-3")));
+
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(mongoOperations.collectionExists("saga-order-fulfillment")).isTrue());
+    }
+
     private boolean hasLeaseDocument(String id) {
         return mongoOperations.getCollection("competing-consumer-locks").countDocuments(new Document("_id", id)) > 0;
     }

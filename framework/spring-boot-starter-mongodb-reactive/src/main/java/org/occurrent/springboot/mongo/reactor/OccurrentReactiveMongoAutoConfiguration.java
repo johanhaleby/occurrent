@@ -40,6 +40,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
+import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
@@ -52,8 +53,9 @@ import org.occurrent.springboot.common.OnMissingCloudEventConverterAndCloudEvent
 import org.occurrent.springboot.common.OnStreamEventStoreCapabilityCondition;
 import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
-import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationBeanPostProcessor;
+import org.occurrent.springboot.reactor.OccurrentReactorBeanNames;
 import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationConfiguration;
+import org.occurrent.springboot.reactor.PositionOrderedEventStores;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
@@ -113,9 +115,16 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         return () -> applicationContext.getBean(ReactiveMongoOperations.class);
     }
 
-    /** The zero-config MongoDB snapshot store a {@code @Snapshot} falls back to when it declares none. */
+    /**
+     * The zero-config MongoDB snapshot store a {@code @Snapshot} falls back to when it declares none.
+     * <p>
+     * {@code @Fallback} rather than {@code @ConditionalOnMissingBean}: this configuration is activated by
+     * {@code @EnableOccurrentReactive}'s plain {@code @Import}, so the condition can be evaluated before an application's own
+     * provider bean is registered, letting both through. A {@code @Fallback} bean is excluded at dependency-resolution
+     * time instead, which registration order cannot affect. Same reasoning as {@code occurrentTypeMapper()} below.
+     */
     @Bean
-    @ConditionalOnMissingBean(DefaultReactiveSnapshotStoreProvider.class)
+    @Fallback
     DefaultReactiveSnapshotStoreProvider occurrentMongoDefaultReactiveSnapshotStoreProvider(ApplicationContext applicationContext) {
         return new MongoReactiveSnapshotStoreProvider(applicationContext);
     }
@@ -181,29 +190,39 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public ReactorDurableSubscriptionModel occurrentDurableSubscriptionModel(ReactiveMongoOperations mongo, CheckpointStorage storage,
                                                                              OccurrentProperties occurrentProperties, ObjectProvider<DcbEventStore> dcbEventStore,
-                                                                             ObjectProvider<ReactorMongoEventStore> reactorEventStore) {
+                                                                             ApplicationContext applicationContext) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation(),
                 ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
-        // A combined store has one ReactorMongoEventStore bean that is both the DCB store and the position-ordered
-        // stream reader, so it fills both roles. DcbCriteria.all() and Filter.all() are shared by every subscription,
-        // which each narrow to their own query or filter in the consumer.
+        return new ReactorDurableSubscriptionModel(composeCatchupLayer(mongoSubscriptionModel, eventStoreProperties, dcbEventStore, applicationContext), storage);
+    }
+
+    /**
+     * Wraps {@code liveModel} in whatever catch-up model the store supports, or returns it unwrapped when the store
+     * supports no replay at all. Package-private rather than inlined above so the composition can be asserted without a
+     * running MongoDB.
+     */
+    static CheckpointAwareSubscriptionModel composeCatchupLayer(CheckpointAwareSubscriptionModel liveModel, EventStoreProperties eventStoreProperties,
+                                                                ObjectProvider<DcbEventStore> dcbEventStore, ApplicationContext applicationContext) {
+        // A combined store has one event store bean that is both the DCB store and the position-ordered stream reader,
+        // so it fills both roles. DcbCriteria.all() and Filter.all() are shared by every subscription, which each narrow
+        // to their own query or filter in the consumer.
         DcbEventStore dcbStore = eventStoreProperties.getCapabilities().contains(DCB) ? dcbEventStore.getIfAvailable() : null;
-        ReactorMongoEventStore streamStore = reactorEventStore.getIfAvailable();
+        // Resolved through the same neutral narrowing the annotation machinery's replay probe uses, so a user-supplied
+        // event store that reads in position order gets a catch-up layer instead of a probe that promises replay over a
+        // bare change stream.
+        PositionOrderedReader streamStore = PositionOrderedEventStores.find(applicationContext);
         // Stream catch-up needs the STREAM capability, not just a position. A DCB-only store also writes position, so
         // gating on writesPosition() alone would wrongly wire stream catch-up for it.
         boolean streamCatchup = eventStoreProperties.getCapabilities().contains(STREAM) && streamStore != null && streamStore.writesPosition();
-        final CheckpointAwareSubscriptionModel inner;
         if (dcbStore != null && streamCatchup) {
-            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, streamStore, dcbStore, DcbCriteria.all(), Filter.all());
+            return new ReactorCatchupSubscriptionModel(liveModel, streamStore, dcbStore, DcbCriteria.all(), Filter.all());
         } else if (dcbStore != null) {
-            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, dcbStore, DcbCriteria.all());
+            return new ReactorCatchupSubscriptionModel(liveModel, dcbStore, DcbCriteria.all());
         } else if (streamCatchup) {
-            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, streamStore, Filter.all());
-        } else {
-            inner = mongoSubscriptionModel;
+            return new ReactorCatchupSubscriptionModel(liveModel, streamStore, Filter.all());
         }
-        return new ReactorDurableSubscriptionModel(inner, storage);
+        return liveModel;
     }
 
     @Bean
@@ -270,8 +289,8 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      * so it is given a distinct bean name (and the asynchronous one is {@link Primary}); the annotation processor
      * resolves this one by name.
      */
-    @Bean(OccurrentReactiveAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
-    @ConditionalOnMissingBean(name = OccurrentReactiveAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
+    @Bean(OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
+    @ConditionalOnMissingBean(name = OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public Subscriptions<E> occurrentSynchronousSubscriptions(SynchronousSubscriptionModel synchronousSubscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         return new Subscriptions<>(synchronousSubscriptionModel, cloudEventConverter);

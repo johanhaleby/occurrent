@@ -51,7 +51,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.blocking.DefaultProjectionStoreProvider;
 import org.occurrent.springboot.blocking.DefaultSagaStateStoreProvider;
 import org.occurrent.springboot.blocking.DefaultSnapshotStoreProvider;
-import org.occurrent.springboot.blocking.OccurrentBlockingAnnotationBeanPostProcessor;
+import org.occurrent.springboot.blocking.OccurrentBlockingBeanNames;
 import org.occurrent.springboot.blocking.OccurrentBlockingAnnotationConfiguration;
 import org.occurrent.springboot.common.*;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
@@ -110,23 +110,30 @@ public class OccurrentMongoAutoConfiguration<E> {
         return () -> applicationContext.getBean(MongoOperations.class);
     }
 
-    /** The zero-config MongoDB read-model store a {@code @Projection} falls back to when it declares none. */
+    /**
+     * The zero-config MongoDB read-model store a {@code @Projection} falls back to when it declares none.
+     * <p>
+     * {@code @Fallback} rather than {@code @ConditionalOnMissingBean}: this configuration is activated by
+     * {@code @EnableOccurrent}'s plain {@code @Import}, so the condition can be evaluated before an application's own
+     * provider bean is registered, letting both through. A {@code @Fallback} bean is excluded at dependency-resolution
+     * time instead, which registration order cannot affect. Same reasoning as {@code occurrentTypeMapper()} below.
+     */
     @Bean
-    @ConditionalOnMissingBean(DefaultProjectionStoreProvider.class)
+    @Fallback
     DefaultProjectionStoreProvider occurrentMongoDefaultProjectionStoreProvider(ApplicationContext applicationContext) {
         return new MongoProjectionStoreProvider(applicationContext);
     }
 
-    /** The zero-config MongoDB snapshot store a {@code @Snapshot} falls back to when it declares none. */
+    /** The zero-config MongoDB snapshot store a {@code @Snapshot} falls back to when it declares none. {@code @Fallback} for the reason above. */
     @Bean
-    @ConditionalOnMissingBean(DefaultSnapshotStoreProvider.class)
+    @Fallback
     DefaultSnapshotStoreProvider occurrentMongoDefaultSnapshotStoreProvider(ApplicationContext applicationContext) {
         return new MongoSnapshotStoreProvider(applicationContext);
     }
 
-    /** The zero-config MongoDB saga state store a {@code @Saga} falls back to when it declares none. */
+    /** The zero-config MongoDB saga state store a {@code @Saga} falls back to when it declares none. {@code @Fallback} for the reason above. */
     @Bean
-    @ConditionalOnMissingBean(DefaultSagaStateStoreProvider.class)
+    @Fallback
     DefaultSagaStateStoreProvider occurrentMongoDefaultSagaStateStoreProvider(ApplicationContext applicationContext) {
         return new MongoSagaStateStoreProvider(applicationContext);
     }
@@ -293,8 +300,8 @@ public class OccurrentMongoAutoConfiguration<E> {
      * so it is given a distinct bean name (and the asynchronous one is {@link Primary}); the annotation processor
      * resolves this one by name.
      */
-    @Bean(OccurrentBlockingAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
-    @ConditionalOnMissingBean(name = OccurrentBlockingAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
+    @Bean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
+    @ConditionalOnMissingBean(name = OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public Subscriptions<E> occurrentSynchronousSubscriptionDsl(SynchronousSubscriptionModel synchronousSubscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         return new Subscriptions<>(synchronousSubscriptionModel, cloudEventConverter);
