@@ -23,6 +23,8 @@ import org.junit.jupiter.api.DisplayNameGenerator
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertAll
+import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.cloudevents.OccurrentCloudEventExtension
 import org.occurrent.dsl.saga.Saga
 import org.occurrent.dsl.saga.SagaEffect
 import org.occurrent.dsl.saga.SagaInput
@@ -545,6 +547,83 @@ class SagaFlowExtensionsTest {
             assertAll(
                 { assertThat(atHundred).describedAs("constant once past the window").isEqualTo(atTen) },
                 { assertThat(atTen).describedAs("bounded by the window plus the pinned initiating event").isLessThanOrEqualTo(3 + 2) }
+            )
+        }
+    }
+
+    // --- Scenario F: the metadata-aware `on` overload receives the delivered event's real metadata -------------------
+
+    sealed interface TicketEvent {
+        val ticketId: String
+    }
+
+    data class TicketOpened(override val ticketId: String) : TicketEvent
+    data class TicketEscalated(override val ticketId: String) : TicketEvent
+
+    sealed interface TicketCommand
+    data class Page(val ticketId: String, val streamId: String, val streamVersion: Long) : TicketCommand
+
+    private fun metadata(streamId: String, streamVersion: Long) = EventMetadata(
+        mapOf(
+            OccurrentCloudEventExtension.STREAM_ID to streamId,
+            OccurrentCloudEventExtension.STREAM_VERSION to streamVersion
+        )
+    )
+
+    private fun ticketPagingSaga(): Saga<TicketEvent, FlowState<TicketEvent>, TicketCommand> =
+        saga {
+            startsOn<TicketOpened>()
+            correlateAll { it.ticketId }
+            step("awaiting-escalation") {
+                on<TicketEscalated>(then = end) { metadata, escalated ->
+                    issue(Page(escalated.ticketId, metadata.streamId, metadata.streamVersion))
+                }
+            }
+        }
+
+    @Nested
+    inner class MetadataAwareOnOverload {
+
+        private val saga = ticketPagingSaga()
+
+        @Test
+        fun `the metadata-aware on overload receives the real stream id and version, not empty metadata`() {
+            val started = start(saga, TicketOpened("t1"))
+
+            val step = saga.step(
+                started.state(),
+                SagaInput.event(TicketEscalated("t1"), metadata("t1", 3L))
+            )
+
+            assertAll(
+                { assertThat(saga.isTerminal(step.state())).isTrue() },
+                { assertThat(step.effects()).containsExactly(SagaEffect.issue(Page("t1", "t1", 3L))) }
+            )
+        }
+
+        @Test
+        fun `the one-parameter on overload still binds to the event-only form when metadata is present on the input`() {
+            var sawEventOnlyCommand = false
+            val eventOnlySaga = saga<TicketEvent, TicketCommand> {
+                startsOn<TicketOpened>()
+                correlateAll { it.ticketId }
+                step("awaiting-escalation") {
+                    on<TicketEscalated>(then = end) { escalated ->
+                        sawEventOnlyCommand = true
+                        issue(Page(escalated.ticketId, "unused", -1L))
+                    }
+                }
+            }
+
+            val started = start(eventOnlySaga, TicketOpened("t2"))
+            val step = eventOnlySaga.step(
+                started.state(),
+                SagaInput.event(TicketEscalated("t2"), metadata("t2", 7L))
+            )
+
+            assertAll(
+                { assertThat(sawEventOnlyCommand).isTrue() },
+                { assertThat(step.effects()).containsExactly(SagaEffect.issue(Page("t2", "unused", -1L))) }
             )
         }
     }

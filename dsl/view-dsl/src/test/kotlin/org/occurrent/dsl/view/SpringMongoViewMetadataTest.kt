@@ -38,13 +38,54 @@ import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.MongoTemplate
 import org.springframework.data.mongodb.core.findById
 import org.springframework.data.mongodb.core.mapping.Document
+import org.springframework.data.repository.CrudRepository
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.mongodb.MongoDBContainer
+import java.util.Optional
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 @Document(collection = "stream-keyed-name-state")
 data class StreamKeyedNameState(@Id val streamId: String, val name: String, val streamVersion: Long)
+
+/**
+ * Fake used only for the CrudRepository-backed materialized(...) tests, so they don't need a Mongo repository bean.
+ * Keyed with an externally supplied id extractor since CrudRepository has no generic id accessor.
+ */
+class FakeCrudRepository<T : Any, ID : Any>(private val idOf: (T) -> ID) : CrudRepository<T, ID> {
+    val store = ConcurrentHashMap<ID, T>()
+    override fun <S : T> save(entity: S): S {
+        store[idOf(entity)] = entity
+        return entity
+    }
+
+    override fun <S : T> saveAll(entities: Iterable<S>): Iterable<S> = entities.onEach { save(it) }
+    override fun findById(id: ID): Optional<T> = Optional.ofNullable(store[id])
+    override fun existsById(id: ID): Boolean = store.containsKey(id)
+    override fun findAll(): Iterable<T> = store.values.toList()
+    override fun findAllById(ids: Iterable<ID>): Iterable<T> = ids.mapNotNull { store[it] }
+    override fun count(): Long = store.size.toLong()
+    override fun deleteById(id: ID) {
+        store.remove(id)
+    }
+
+    override fun delete(entity: T) {
+        store.values.remove(entity)
+    }
+
+    override fun deleteAllById(ids: Iterable<ID>) {
+        ids.forEach { store.remove(it) }
+    }
+
+    override fun deleteAll(entities: Iterable<T>) {
+        entities.forEach { store.values.remove(it) }
+    }
+
+    override fun deleteAll() {
+        store.clear()
+    }
+}
 
 private fun metadata(streamId: String, streamVersion: Long): EventMetadata {
     val data: Map<String, Any> = mapOf(
@@ -72,6 +113,15 @@ class SpringMongoViewMetadataTest {
             when (e) {
                 is NameDefined -> StreamKeyedNameState(m.getStreamId(), e.name, m.getStreamVersion())
                 is NameWasChanged -> s!!.copy(name = e.name, streamVersion = m.getStreamVersion())
+                else -> s
+            }
+        }
+
+        // Keyed from the event alone (VIEW_ID unrelated to metadata), but the fold still reads the metadata, so the
+        // event-only materialized(...) overload must carry it through rather than substitute EventMetadata.empty().
+        private val eventKeyedView: View<StreamKeyedNameState, DomainEvent> = view(StreamKeyedNameState("", "", -1L)) { s, m, e ->
+            when (e) {
+                is NameDefined -> StreamKeyedNameState(m.getStreamId(), e.name, m.getStreamVersion())
                 else -> s
             }
         }
@@ -130,5 +180,28 @@ class SpringMongoViewMetadataTest {
 
         assertThat(thrown).isInstanceOf(NullPointerException::class.java)
             .hasMessageContaining("streamId extension is absent")
+    }
+
+    @Test
+    fun `MongoOperations-backed event-only key still folds with the real metadata`() {
+        mongoOperations = mongoOperations()
+        val materializedView = eventKeyedView.materialized(mongoOperations) { e: DomainEvent -> e.userId() }
+        val streamId = UUID.randomUUID().toString()
+
+        materializedView.update(metadata(streamId, 3L), nameDefined(streamId, "Johan"))
+
+        val saved = mongoOperations.findById<StreamKeyedNameState>(streamId)
+        assertThat(saved).isEqualTo(StreamKeyedNameState(streamId, "Johan", 3L))
+    }
+
+    @Test
+    fun `CrudRepository-backed event-only key still folds with the real metadata`() {
+        val repository = FakeCrudRepository<StreamKeyedNameState, String> { it.streamId }
+        val materializedView = eventKeyedView.materialized(repository) { e: DomainEvent -> e.userId() }
+        val streamId = UUID.randomUUID().toString()
+
+        materializedView.update(metadata(streamId, 3L), nameDefined(streamId, "Johan"))
+
+        assertThat(repository.store[streamId]).isEqualTo(StreamKeyedNameState(streamId, "Johan", 3L))
     }
 }

@@ -61,6 +61,6 @@ inline fun <reified E : Any, reified E2 : Any> StreamSubscriptions<E>.updateView
     updateView(viewName, startAt) { metadata, e ->
         val e2 = converter(metadata, e)
         doBeforeUpdate(e2)
-        materializedView.update(e2)
+        materializedView.update(metadata, e2)
         doAfterUpdate(e2)
     }

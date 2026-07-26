@@ -20,11 +20,15 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
+import org.occurrent.dsl.view.View;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
+
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
@@ -86,8 +90,18 @@ public final class SnapshotViews<E> {
         SnapshotView<S, E> snapshotView = source.view();
         SnapshotSupport.Base<S> base = SnapshotSupport.resolveBase(store.findLatest(streamId), snapshotView.schemaVersion(), snapshotView.view()::initialState);
         EventStream<CloudEvent> eventStream = eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE);
-        S current = snapshotView.view().evolve(base.state(), converter.toDomainEvents(eventStream.events()));
+        S current = foldWithMetadata(snapshotView.view(), base.state(), eventStream.events().toList(), converter);
         return new Folded<>(current, eventStream.version());
+    }
+
+    // Folds a range one CloudEvent at a time so each event keeps its own metadata. View.evolve(state, List) folds through
+    // the two-argument evolve, which substitutes EventMetadata.empty(), and a metadata-reading fold cannot tolerate that.
+    private static <S extends @Nullable Object, E> S foldWithMetadata(View<S, E> view, S state, List<CloudEvent> cloudEvents, CloudEventConverter<E> converter) {
+        S result = state;
+        for (CloudEvent cloudEvent : cloudEvents) {
+            result = view.evolve(result, EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent));
+        }
+        return result;
     }
 
     private record Folded<S extends @Nullable Object>(S state, long version) {

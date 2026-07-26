@@ -16,13 +16,18 @@
 
 package org.occurrent.dsl.snapshot.reactor;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
+import org.occurrent.dsl.view.View;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import reactor.core.publisher.Mono;
+
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
@@ -86,8 +91,8 @@ public final class ReactiveSnapshotViews<E> {
         return Mono.defer(() -> ReactiveSnapshotSupport.resolveBase(store, streamId, snapshotView.schemaVersion(), snapshotView.view()::initialState).flatMap(base ->
                 eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE).flatMap(eventStream ->
                         eventStream.events()
-                                .map(converter::toDomainEvent)
-                                .reduce(requireNonNullState(base.state()), (state, event) -> requireNonNullState(snapshotView.view().evolve(state, event)))
+                                .collectList()
+                                .map(cloudEvents -> foldWithMetadata(snapshotView.view(), base.state(), cloudEvents, converter))
                                 .map(current -> new Folded<>(current, eventStream.version())))));
     }
 
@@ -96,6 +101,17 @@ public final class ReactiveSnapshotViews<E> {
     // nullable state.
     private static <S> S requireNonNullState(S state) {
         return requireNonNull(state, "The snapshot view folded to a null state, but a Mono cannot carry null. Use the blocking SnapshotViews for a nullable state.");
+    }
+
+    // Folds a range one CloudEvent at a time so each event keeps its own metadata. View.evolve(state, event) folds
+    // through the two-argument evolve, which substitutes EventMetadata.empty(), and a metadata-reading fold cannot
+    // tolerate that. Folded synchronously over an already-collected list, never blocking the reactive chain.
+    private static <S, E> S foldWithMetadata(View<S, E> view, S state, List<CloudEvent> cloudEvents, CloudEventConverter<E> converter) {
+        S result = requireNonNullState(state);
+        for (CloudEvent cloudEvent : cloudEvents) {
+            result = requireNonNullState(view.evolve(result, EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent)));
+        }
+        return result;
     }
 
     private record Folded<S>(S state, long version) {

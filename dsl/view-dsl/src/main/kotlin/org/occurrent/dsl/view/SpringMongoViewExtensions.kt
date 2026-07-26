@@ -69,6 +69,7 @@ inline fun <S_VIEW, reified S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>
     val metadataAware = materialized(mongoOperations, converter, config) { _: EventMetadata, e: E -> deriveViewIdFromEvent(e) }
     return object : MaterializedView<E> {
         override fun update(event: E) = metadataAware.update(event)
+        override fun update(metadata: EventMetadata, event: E) = metadataAware.update(metadata, event)
     }
 }
 
@@ -217,5 +218,7 @@ fun <S_VIEW, S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>.materialized(
     val view = this
     return object : MaterializedView<E> {
         override fun update(event: E) = updateFromRepository(deriveViewIdFromEvent(event), event, view, viewStateRepository)
+        override fun update(metadata: EventMetadata, event: E) =
+            updateFromRepository(deriveViewIdFromEvent(event), metadata, event, view, viewStateRepository)
     }
 }

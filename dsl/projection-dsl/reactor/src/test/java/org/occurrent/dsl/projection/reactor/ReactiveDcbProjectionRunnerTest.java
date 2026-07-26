@@ -33,7 +33,9 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
@@ -139,6 +141,37 @@ class ReactiveDcbProjectionRunnerTest {
         }).waitUntilStarted().block();
 
         appendTagged(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "bob", "Bob"), "entity:bob");
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(repo).hasSize(1);
+            assertThat(repo.values()).containsExactly(1L);
+        });
+    }
+
+    @Test
+    void the_materializedview_overload_folds_the_events_real_dcb_metadata_instead_of_empty_metadata() {
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        // Overridden by hand rather than built with MaterializedView.create, so update(EventMetadata, E) is the only
+        // path that can populate repo: getStreamId()/getStreamVersion() throw on EventMetadata.empty(), so this only
+        // succeeds if the runner carries real DCB metadata into the view instead of the plain, metadata-less path.
+        MaterializedView<DomainEvent> view = new MaterializedView<>() {
+            @Override
+            public void update(DomainEvent event) {
+                throw new AssertionError("expected the metadata-carrying update(EventMetadata, E) to be called, not update(E)");
+            }
+
+            @Override
+            public void update(EventMetadata metadata, DomainEvent event) {
+                repo.put(metadata.getStreamId(), metadata.getStreamVersion());
+            }
+        };
+        DcbProjection<Long, DomainEvent, String> dcbProjection = new DcbProjection<>(
+                Projection.<Long, DomainEvent, String>builder(0L).id(event -> "singleton").build(),
+                DcbCriteria.tags(Tag.parse("entity:carol")));
+        ReactiveDcbProjectionRunner<DomainEvent> runner = ReactiveDcbProjectionRunner.create(subscriptionModel, converter);
+        runner.project("carol-projection", dcbProjection, view).waitUntilStarted().block();
+
+        appendTagged(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "carol", "Carol"), "entity:carol");
 
         await().atMost(ofSeconds(5)).untilAsserted(() -> {
             assertThat(repo).hasSize(1);
