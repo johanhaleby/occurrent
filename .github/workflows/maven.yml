@@ -93,6 +93,13 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # javap reads the ryuk tag out of the Testcontainers jar. Runners ship a JDK, but relying on that
+      # would make ryuk quietly stop being mirrored if one ever did not, so ask for one explicitly.
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
       # Only to resolve the ryuk tag, which lives in the Testcontainers jar. A cache miss just means
       # ryuk is left out of the mirror and pulled from Docker Hub.
       - name: Restore Maven dependencies
@@ -299,13 +306,15 @@ jobs:
           from_mirror=0
           from_docker_hub=0
           while IFS= read -r image; do
-            if docker pull -q "$IMAGE_MIRROR/$image" >/dev/null 2>&1; then
+            # Keep the pull's own error. A failure here can be a missing image, but it can equally be a
+            # login problem or GHCR having a bad day, and the warning should not claim to know which.
+            if mirror_error=$(docker pull -q "$IMAGE_MIRROR/$image" 2>&1); then
               docker tag "$IMAGE_MIRROR/$image" "$image"
               echo "have $image from the mirror"
               from_mirror=$(( from_mirror + 1 ))
               continue
             fi
-            echo "::warning::The mirror does not serve $image, falling back to Docker Hub. Run the workflow manually to refresh the mirror."
+            echo "::warning::Could not pull $image from the mirror, falling back to Docker Hub. The mirror said: $(echo "$mirror_error" | tail -1)"
             pulled=0
             for attempt in 1 2 3; do
               if docker pull -q "$image" >/dev/null; then
