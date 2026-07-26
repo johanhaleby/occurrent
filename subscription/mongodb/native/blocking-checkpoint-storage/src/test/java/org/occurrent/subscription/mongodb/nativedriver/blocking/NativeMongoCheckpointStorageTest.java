@@ -105,6 +105,8 @@ public class NativeMongoCheckpointStorageTest {
     private ObjectMapper objectMapper;
     private MongoClient mongoClient;
     private MongoDatabase database;
+    private Thread.UncaughtExceptionHandler previousDefaultUncaughtExceptionHandler;
+    private boolean replacedDefaultUncaughtExceptionHandler;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -121,8 +123,43 @@ public class NativeMongoCheckpointStorageTest {
 
     @AfterEach
     void shutdown() {
-        subscriptionModel.shutdown();
-        mongoClient.close();
+        // Restored in a finally after the shutdown, rather than from a second @AfterEach, because JUnit does not
+        // promise an order between two of them, shutting down must still be covered by the handler, and a handler
+        // that swallows exceptions must never outlive this test even if shutting down throws.
+        try {
+            subscriptionModel.shutdown();
+            mongoClient.close();
+        } finally {
+            if (replacedDefaultUncaughtExceptionHandler) {
+                Thread.setDefaultUncaughtExceptionHandler(previousDefaultUncaughtExceptionHandler);
+                previousDefaultUncaughtExceptionHandler = null;
+                replacedDefaultUncaughtExceptionHandler = false;
+            }
+        }
+    }
+
+    // A consumer that throws kills the dispatcher thread when the retry strategy is none, since there is nothing
+    // left to restart it. The JVM's default handler then prints that stack trace, which GitHub Actions turns into
+    // an error annotation, so an otherwise green run reports errors and real ones get easier to miss.
+    // Anything other than the one exception the test asks for still reaches the handler that was installed before.
+    private void expectUncaughtException(Class<? extends Throwable> type, String message) {
+        Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        previousDefaultUncaughtExceptionHandler = previous;
+        replacedDefaultUncaughtExceptionHandler = true;
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            if (type.isInstance(throwable) && message.equals(throwable.getMessage())) {
+                return;
+            }
+            if (previous == null) {
+                // What the JVM itself would do. Handing this to the thread group instead would come straight back
+                // here, because the root group asks Thread.getDefaultUncaughtExceptionHandler for a handler and
+                // that is now this one, so an unexpected exception would recurse until the stack ran out.
+                System.err.print("Exception in thread \"" + thread.getName() + "\" ");
+                throwable.printStackTrace(System.err);
+            } else {
+                previous.uncaughtException(thread, throwable);
+            }
+        });
     }
 
     @Test
@@ -281,6 +318,7 @@ public class NativeMongoCheckpointStorageTest {
 
         // Disable retry
         subscriptionModel = newDurableSubscription("events", RFC_3339_STRING, RetryStrategy.none());
+        expectUncaughtException(IllegalArgumentException.class, "Expected");
 
         AtomicInteger counter = new AtomicInteger();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
