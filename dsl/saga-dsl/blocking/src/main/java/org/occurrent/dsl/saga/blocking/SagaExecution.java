@@ -52,8 +52,9 @@ import java.util.Set;
  * A command receiver must therefore be idempotent <em>and</em> tolerate that multiplicity, which is stronger than plain
  * at-least-once: the same input can legitimately dispatch the same command several times within one delivery.
  * <p>
- * A reaction's whole command list is dispatched through {@link CommandDispatcher#dispatchAll} in one call, not one
- * call per command.
+ * A reaction's whole command list is handed to {@link CommandDispatcher#dispatchAll} in one call. What that does with
+ * it is the dispatcher's business: the default still calls {@code dispatch} once per command, and only a dispatcher that
+ * overrides {@code dispatchAll} writes them together.
  */
 final class SagaExecution<E, S extends @Nullable Object, C> {
     private static final Logger log = LoggerFactory.getLogger(SagaExecution.class);
