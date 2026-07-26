@@ -567,6 +567,7 @@ class SagaFlowExtensionsTest {
                 }
             }.isInstanceOf(IllegalStateException::class.java)
                 .hasMessageContaining("Foo")
+                .hasMessageContaining("is used by a step")
         }
 
         @Test

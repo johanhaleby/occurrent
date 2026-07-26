@@ -253,6 +253,7 @@ class FlowSagaTest {
                     .build())
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("OrderPlaced")
+                    .hasMessageContaining("starts the saga")
                     .hasMessageContaining("correlateAll");
         }
     }

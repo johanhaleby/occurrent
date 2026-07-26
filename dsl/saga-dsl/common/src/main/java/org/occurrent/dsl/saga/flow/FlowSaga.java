@@ -225,7 +225,10 @@ public final class FlowSaga {
                     new TypeDispatch<>(correlators);
             for (Class<? extends E> type : eventTypes) {
                 if (coverage.resolve(type) == null) {
-                    throw new IllegalStateException("event type " + type.getName() + " is used by a step but has no correlation, "
+                    // The start type reaches this the same way a step type does, since startsOn does not correlate, so
+                    // say which of the two it is rather than telling someone their start event is used by a step.
+                    String where = type.equals(startType) ? "starts the saga" : "is used by a step";
+                    throw new IllegalStateException("event type " + type.getName() + " " + where + " but has no correlation, "
                             + "register correlate(" + type.getSimpleName() + ".class, ...) or add a correlateAll(...) fallback");
                 }
             }
