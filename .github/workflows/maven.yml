@@ -16,6 +16,11 @@ env:
   # upload/download-artifact). Unquoted expansion is intentional: the value word-splits into
   # separate mvn arguments.
   MVN: -B -ntp -Dmaven.repo.local=${{ github.workspace }}/.m2repo
+  # Budget for one shard's tests, in seconds. Roughly 20% over the slowest shard the split below
+  # targets, so ordinary runner variance stays quiet and a subtree that actually grew does not.
+  # Exceeding it warns, never fails: nothing here is close to the 20 minute shard timeout, and a
+  # timing gate that can redden an unrelated push would just get ignored.
+  SHARD_BUDGET_SECONDS: 240
 
 jobs:
   # Stage 1: compile and install every module artifact into the local repo, skipping tests.
@@ -94,9 +99,24 @@ jobs:
 
   # Stage 2: run each subtree's tests against the pre-built local repo, one shard per runner
   # (isolated Docker daemon). Within a shard, modules stay sequential (no -T) so the
-  # fixed-port-27017 MongoDB tests never collide. Shards are balanced by MEASURED test time from a
-  # recent CI run (approx seconds shown); the two long poles (subscription ~382s, eventstore
-  # ~242s) are split, the rest merged, so the slowest shard is ~150s of tests instead of ~382s.
+  # fixed-port-27017 MongoDB tests never collide.
+  #
+  # Shard count is pinned at 10 by the concurrency limit, not chosen for tidiness: this account's
+  # GitHub plan allows 20 concurrent jobs, and 10 shards x 2 JDKs is exactly 20. An 11th shard buys
+  # no parallelism, it makes one runner execute two shards back to back, and since every shard is
+  # over 100s that is slower than an imbalanced single wave. Rebalance by moving paths between
+  # shards, not by adding one. Shards run roughly slowest first so that if runners are scarce, the
+  # cheap shards are the ones that wait.
+  #
+  # Balance by measured test time, because the slowest shard sets the whole stage's wall clock.
+  # Measurements are deliberately NOT written down here: that is what went stale last time (#423).
+  # Instead every shard reports its own per-subtree timings to the run summary, and a shard over
+  # SHARD_BUDGET_SECONDS annotates the run, so the live numbers are always one click away and
+  # drift reports itself instead of waiting to be noticed.
+  #
+  # The floor is occurrent-mongodb-spring-boot-starter, ~155s inside a single Maven module. No
+  # arrangement of paths gets the slowest shard below that without splitting one module's tests by
+  # class, which would be the most stale-prone thing in this file.
   #
   # Use -f <subtree>/pom.xml, NOT -pl: -pl on an aggregator does not descend into its children and
   # would run zero tests. We do NOT pass -o: the build job's `install -DskipTests` does not resolve
@@ -113,21 +133,28 @@ jobs:
       matrix:
         java: [ 21, 25 ]
         shard:
+          # Everything reachable without Spring: both native-driver MongoDB stacks, the in-memory
+          # and API modules, and Redis.
+          - { name: mongodb-native,              paths: "eventstore/mongodb/native eventstore/api eventstore/inmemory eventstore/migration eventstore/mongodb/common subscription/mongodb/native subscription/mongodb/common subscription/redis" }
+          # misc is the deliberate junk drawer: whatever is too small to shard on its own. The
+          # reactive Spring Boot starter lives here rather than next to the blocking one because
+          # the blocking starter alone nearly fills a shard.
+          - { name: misc,                        paths: "application rewrite common deadline cloudevents-extension library framework/spring-boot-starter-mongodb-reactive" }
           - { name: eventstore-spring,           paths: "eventstore/mongodb/spring" }
-          - { name: eventstore-rest,             paths: "eventstore/api eventstore/inmemory eventstore/migration eventstore/mongodb/common eventstore/mongodb/native" }
-          - { name: subscription-mongodb-spring, paths: "subscription/mongodb/spring" }
-          - { name: subscription-mongodb-native, paths: "subscription/mongodb/native subscription/mongodb/common subscription/redis" }
-          - { name: subscription-util-blocking,  paths: "subscription/util/blocking subscription/synchronous/blocking subscription/push/blocking" }
-          - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor subscription/synchronous/reactor subscription/push/reactor" }
-          - { name: framework,                   paths: "framework" }
+          # Listed per module, not as the framework aggregator, because the blocking starter is the
+          # single most expensive module in the build and has to sit alone.
+          - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure-mongodb-common" }
+          - { name: dsl,                         paths: "dsl" }
           # example modules run real MongoDB replica-set containers with timing-sensitive
           # Awaitility subscription-catchup tests. A single example shard started 12 containers
           # sequentially on one runner, which tipped those waits over. Split by container load
           # (projection+forwarder ~5 vs domain ~7) to cut per-runner churn, keeping an in-run
           # retry as a backstop for residual timing flakiness.
-          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga", args: "-Dsurefire.rerunFailingTestsCount=2" }
           - { name: example-domain,              paths: "example/domain", args: "-Dsurefire.rerunFailingTestsCount=2" }
-          - { name: misc,                        paths: "dsl application rewrite common deadline cloudevents-extension library" }
+          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga", args: "-Dsurefire.rerunFailingTestsCount=2" }
+          - { name: subscription-util-blocking,  paths: "subscription/util/blocking subscription/synchronous/blocking subscription/push/blocking" }
+          - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor subscription/synchronous/reactor subscription/push/reactor" }
+          - { name: subscription-mongodb-spring, paths: "subscription/mongodb/spring" }
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.java }}
@@ -153,10 +180,29 @@ jobs:
           path: ${{ github.workspace }}/.m2repo/org/occurrent
       - name: Enable Testcontainers reuse on this runner
         run: echo "testcontainers.reuse.enable=true" > "$HOME/.testcontainers.properties"
+      # Each subtree is timed and reported to the run summary, so the shard balance can always be
+      # re-derived from the last green run instead of being measured by hand. Rows are appended as
+      # they complete rather than collected and written at the end, so a shard that fails partway
+      # still leaves the timings it did get behind.
       - name: Run shard tests
         run: |
+          {
+            echo "### ${{ matrix.shard.name }} (java-${{ matrix.java }})"
+            echo
+            echo "| subtree | seconds |"
+            echo "| --- | ---: |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          total=0
           for d in ${{ matrix.shard.paths }}; do
             echo "::group::mvn test -f $d/pom.xml"
+            start=$SECONDS
             mvn $MVN ${{ matrix.shard.args }} --fail-at-end -f "$d/pom.xml" test
+            elapsed=$(( SECONDS - start ))
+            total=$(( total + elapsed ))
+            echo "| \`$d\` | $elapsed |" >> "$GITHUB_STEP_SUMMARY"
             echo "::endgroup::"
           done
+          echo "| **shard total** | **$total** |" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$total" -gt "$SHARD_BUDGET_SECONDS" ]; then
+            echo "::warning::Shard ${{ matrix.shard.name }} spent ${total}s on tests, over the ${SHARD_BUDGET_SECONDS}s budget. The slowest shard sets the whole test stage's wall clock, so move a path to a cheaper shard. Per-subtree timings for every shard are in this run's summary."
+          fi
