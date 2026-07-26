@@ -29,7 +29,7 @@ import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore;
-import org.occurrent.springboot.mongo.common.OccurrentProperties;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;

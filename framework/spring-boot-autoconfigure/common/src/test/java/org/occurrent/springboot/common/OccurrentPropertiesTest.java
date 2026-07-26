@@ -15,12 +15,12 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.common;
+package org.occurrent.springboot.common;
 
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.springboot.mongo.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
+import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;

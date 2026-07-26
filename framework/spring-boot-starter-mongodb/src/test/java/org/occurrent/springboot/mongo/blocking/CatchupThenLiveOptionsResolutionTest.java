@@ -19,7 +19,7 @@ package org.occurrent.springboot.mongo.blocking;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.springboot.mongo.common.OccurrentProperties;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import static org.assertj.core.api.Assertions.assertThat;

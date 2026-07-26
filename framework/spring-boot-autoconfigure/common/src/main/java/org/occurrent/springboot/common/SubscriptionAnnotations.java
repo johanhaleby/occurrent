@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.common;
+package org.occurrent.springboot.common;
 
 import org.jspecify.annotations.NonNull;
 import org.occurrent.annotation.DcbSubscription;

@@ -15,6 +15,6 @@
  */
 
 @NullMarked
-package org.occurrent.springboot.mongo.common;
+package org.occurrent.springboot.common;
 
 import org.jspecify.annotations.NullMarked;

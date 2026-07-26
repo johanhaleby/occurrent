@@ -34,9 +34,9 @@ import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.mongo.common.OccurrentProperties;
-import org.occurrent.springboot.mongo.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
-import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
+import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
@@ -57,7 +57,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 
-import static org.occurrent.springboot.mongo.common.SubscriptionAnnotations.shouldWaitUntilStarted;
+import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
 
 /**
  * Scans a bean for {@link org.occurrent.annotation.Projection} factory methods in

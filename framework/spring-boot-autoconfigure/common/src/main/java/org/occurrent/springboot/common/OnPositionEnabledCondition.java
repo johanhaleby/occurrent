@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.common;
+package org.occurrent.springboot.common;
 
 import org.jspecify.annotations.NonNull;
 import org.occurrent.eventstore.api.EventStoreCapability;
@@ -27,14 +27,27 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
 
 import java.util.Set;
 
+import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
-public class OnStreamEventStoreCapabilityCondition implements Condition {
+/**
+ * Matches when the auto-configured event store writes a global position. That is the case when DCB is enabled (DCB
+ * always writes position) or when STREAM is enabled with {@code occurrent.event-store.stream.position} on (the
+ * default). Use it to gate beans that only make sense when the store writes position.
+ */
+public class OnPositionEnabledCondition implements Condition {
     @Override
     public boolean matches(ConditionContext context, @NonNull AnnotatedTypeMetadata metadata) {
-        Set<EventStoreCapability> capabilities = Binder.get(context.getEnvironment())
+        Binder binder = Binder.get(context.getEnvironment());
+        Set<EventStoreCapability> capabilities = binder
                 .bind("occurrent.event-store.capabilities", Bindable.setOf(EventStoreCapability.class))
                 .orElse(Set.of(STREAM));
-        return capabilities.contains(STREAM);
+        if (capabilities.contains(DCB)) {
+            return true;
+        }
+        boolean streamPositionEnabled = binder
+                .bind("occurrent.event-store.stream.position", Bindable.of(Boolean.class))
+                .orElse(Boolean.TRUE);
+        return capabilities.contains(STREAM) && streamPositionEnabled;
     }
 }

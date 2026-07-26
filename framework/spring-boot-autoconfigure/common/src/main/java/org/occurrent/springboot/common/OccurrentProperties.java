@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.common;
+package org.occurrent.springboot.common;
 
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;

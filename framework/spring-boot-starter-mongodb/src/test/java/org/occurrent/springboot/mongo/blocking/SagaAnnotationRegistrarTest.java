@@ -27,7 +27,7 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
-import org.occurrent.springboot.mongo.common.OccurrentProperties;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;

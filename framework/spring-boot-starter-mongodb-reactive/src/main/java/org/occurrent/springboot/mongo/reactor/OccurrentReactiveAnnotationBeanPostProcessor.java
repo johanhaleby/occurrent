@@ -22,7 +22,7 @@ import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
-import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.springframework.beans.BeansException;

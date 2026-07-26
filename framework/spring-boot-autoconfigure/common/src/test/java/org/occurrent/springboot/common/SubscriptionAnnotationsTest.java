@@ -15,14 +15,14 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.common;
+package org.occurrent.springboot.common;
 
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StreamId;
 import org.occurrent.annotation.StreamVersion;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.HandlerParameter;
-import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.HandlerParameterKind;
+import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
+import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
 
 import java.lang.reflect.Method;
 import java.util.List;

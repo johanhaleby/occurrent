@@ -37,7 +37,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;

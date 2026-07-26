@@ -57,7 +57,7 @@
         <!-- Occurrent -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-mongodb-spring-boot-autoconfigure</artifactId>
+            <artifactId>occurrent-spring-boot-autoconfigure</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

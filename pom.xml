@@ -557,6 +557,7 @@
                                 <excludeArtifact>eventstore-mongodb</excludeArtifact>
                                 <excludeArtifact>eventstore</excludeArtifact>
                                 <excludeArtifact>framework</excludeArtifact>
+                                <excludeArtifact>spring-boot-autoconfigure</excludeArtifact>
                                 <excludeArtifact>inmemory</excludeArtifact>
                                 <excludeArtifact>library</excludeArtifact>
                                 <excludeArtifact>module-dsl</excludeArtifact>

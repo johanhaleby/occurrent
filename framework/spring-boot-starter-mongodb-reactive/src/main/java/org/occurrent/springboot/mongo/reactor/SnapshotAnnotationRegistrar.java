@@ -35,7 +35,7 @@ import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.dsl.view.View;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
@@ -51,7 +51,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-import static org.occurrent.springboot.mongo.common.SubscriptionAnnotations.shouldWaitUntilStarted;
+import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
 /**

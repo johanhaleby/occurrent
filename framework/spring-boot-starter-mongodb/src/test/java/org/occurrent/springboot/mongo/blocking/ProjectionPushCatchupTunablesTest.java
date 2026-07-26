@@ -30,7 +30,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
-import org.occurrent.springboot.mongo.common.OccurrentProperties;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
