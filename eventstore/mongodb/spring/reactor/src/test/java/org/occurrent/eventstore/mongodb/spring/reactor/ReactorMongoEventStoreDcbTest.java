@@ -31,7 +31,9 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
@@ -518,6 +520,67 @@ class ReactorMongoEventStoreDcbTest {
 
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Transaction ownership (ADR 0070), the reactive half of the rule.
+    //
+    // Rather than race threads and hope for a conflict, these force one: the first insert fails with a retryable
+    // duplicate key, and the two tests differ only in who owns the transaction. Counting inserts shows whether the
+    // store retried, which is the behaviour under test.
+    // ---------------------------------------------------------------------------
+    @Test
+    void append_is_retried_when_the_store_owns_the_transaction() {
+        AtomicInteger inserts = new AtomicInteger();
+        ReactorMongoEventStore store = storeThatFailsFirstInsert(inserts);
+
+        store.append(List.of(taggedEvent("NameDefined", "owned:1"))).block();
+
+        assertThat(inserts.get())
+                .as("Owning the transaction, the store must retry the duplicate and commit on the second attempt")
+                .isEqualTo(2);
+    }
+
+    @Test
+    void append_is_not_retried_when_a_caller_owns_the_transaction() {
+        AtomicInteger inserts = new AtomicInteger();
+        ReactorMongoEventStore store = storeThatFailsFirstInsert(inserts);
+        TransactionalOperator outerTransaction = TransactionalOperator.create(transactionManager);
+
+        Throwable failure = catchThrowable(() -> store.append(List.of(taggedEvent("NameDefined", "notowned:1")))
+                .as(outerTransaction::transactional)
+                .block());
+
+        assertAll(
+                () -> assertThat(failure).as("The conflict must reach the caller rather than being retried away").isNotNull(),
+                () -> assertThat(inserts.get())
+                        .as("Joining someone else's transaction, the store must run the body once: a conflict has aborted that transaction and no further attempt could commit")
+                        .isEqualTo(1)
+        );
+    }
+
+    /**
+     * A store whose first event insert fails with a duplicate key, which the store treats as retryable, and which
+     * counts how many inserts it was asked for.
+     */
+    private ReactorMongoEventStore storeThatFailsFirstInsert(AtomicInteger inserts) {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcbreactor");
+        ReactiveMongoTemplate failingTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase())) {
+            @Override
+            public <T> Flux<T> insert(java.util.Collection<? extends T> batchToSave, String collectionName) {
+                if ("events".equals(collectionName) && inserts.incrementAndGet() == 1) {
+                    return Flux.error(new DuplicateKeyException("Simulated partition stream-version collision"));
+                }
+                return super.insert(batchToSave, collectionName);
+            }
+        };
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events")
+                .transactionConfig(transactionManager)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM, DCB)
+                .build();
+        return new ReactorMongoEventStore(failingTemplate, config);
     }
 
     private static CloudEvent event(String type) {

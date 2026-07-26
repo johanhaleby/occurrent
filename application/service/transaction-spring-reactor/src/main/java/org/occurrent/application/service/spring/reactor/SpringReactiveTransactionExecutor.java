@@ -61,12 +61,13 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * retry, which this stands in for, and the blocking {@code SpringTransactionExecutor}, so retry behaviour is
      * identical across the two stacks (ADR 0053). See ADR 0070.
      */
-    private static final Retry TRANSIENT_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
+    private static final Retry DEFAULT_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
             .maxBackoff(Duration.ofMillis(500))
             .filter(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException)
             .onRetryExhaustedThrow((spec, signal) -> signal.failure());
 
     private final TransactionalOperator transactionalOperator;
+    private final Retry conflictRetry;
 
     /**
      * Create an executor that runs work inside reactive transactions managed by the supplied
@@ -86,7 +87,45 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * @param transactionalOperator The transactional operator to run work through.
      */
     public SpringReactiveTransactionExecutor(TransactionalOperator transactionalOperator) {
+        this(transactionalOperator, DEFAULT_CONFLICT_RETRY);
+    }
+
+    /**
+     * Create an executor with your own conflict-retry policy, for callers who need a different budget or want to
+     * switch the retry off entirely with {@link Retry#max(long)} of zero.
+     * <p>
+     * Worth knowing before you widen it: the retry re-runs the whole unit of work, which with synchronous
+     * subscriptions includes the handlers, so a handler with a side effect outside the transaction can run more than
+     * once for one command.
+     *
+     * @param transactionManager The reactive transaction manager to use.
+     * @param conflictRetry      The retry spec to apply when this executor opens the transaction.
+     */
+    public SpringReactiveTransactionExecutor(ReactiveTransactionManager transactionManager, Retry conflictRetry) {
+        this(TransactionalOperator.create(Objects.requireNonNull(transactionManager, "transactionManager cannot be null")), conflictRetry);
+    }
+
+    /**
+     * Create an executor with both an already-configured {@link TransactionalOperator} and your own conflict-retry
+     * policy. See {@link #SpringReactiveTransactionExecutor(ReactiveTransactionManager, Retry)} for what the retry
+     * covers.
+     *
+     * @param transactionalOperator The transactional operator to run work through.
+     * @param conflictRetry         The retry spec to apply when this executor opens the transaction.
+     */
+    public SpringReactiveTransactionExecutor(TransactionalOperator transactionalOperator, Retry conflictRetry) {
         this.transactionalOperator = Objects.requireNonNull(transactionalOperator, "transactionalOperator cannot be null");
+        this.conflictRetry = Objects.requireNonNull(conflictRetry, "conflictRetry cannot be null");
+    }
+
+    /**
+     * The conflict-retry spec applied when this executor opens the transaction: 15 attempts with exponential backoff
+     * from 10ms to 500ms, matching the blocking executor and the event store's own transient-conflict retry.
+     *
+     * @return The default retry spec.
+     */
+    public static Retry defaultConflictRetry() {
+        return DEFAULT_CONFLICT_RETRY;
     }
 
     @Override
@@ -103,11 +142,11 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                         // A conflict aborts the whole transaction, which only its owner can start again, so run the
                         // action once and let the error reach that owner. See ADR 0070.
                         ? transaction
-                        : transaction.retryWhen(TRANSIENT_CONFLICT_RETRY));
+                        : transaction.retryWhen(conflictRetry));
     }
 
     @Override
     public String toString() {
-        return "SpringReactiveTransactionExecutor{transactionalOperator=" + transactionalOperator + "}";
+        return "SpringReactiveTransactionExecutor{transactionalOperator=" + transactionalOperator + ", conflictRetry=" + conflictRetry + "}";
     }
 }

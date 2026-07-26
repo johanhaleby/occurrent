@@ -64,12 +64,13 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * predicate would miss the most common conflict there is. A genuine integrity violation is therefore retried too,
      * which is wasteful rather than wrong since it fails the same way every attempt.
      */
-    private static final RetryStrategy TRANSIENT_CONFLICT_RETRY = RetryStrategy
+    private static final RetryStrategy DEFAULT_CONFLICT_RETRY = RetryStrategy
             .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
             .maxAttempts(15)
             .retryIf(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException);
 
     private final TransactionTemplate transactionTemplate;
+    private final RetryStrategy conflictRetry;
 
     /**
      * Create an executor that runs work inside transactions managed by the supplied
@@ -88,7 +89,45 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * @param transactionTemplate The transaction template to run work through.
      */
     public SpringTransactionExecutor(TransactionTemplate transactionTemplate) {
+        this(transactionTemplate, DEFAULT_CONFLICT_RETRY);
+    }
+
+    /**
+     * Create an executor with your own conflict-retry policy, for callers who need a different budget or want to
+     * switch the retry off entirely with {@link RetryStrategy#none()}.
+     * <p>
+     * Worth knowing before you widen it: the retry re-runs the whole unit of work, which with synchronous
+     * subscriptions includes the handlers, so a handler with a side effect outside the transaction can run more than
+     * once for one command.
+     *
+     * @param transactionManager The Spring transaction manager to use (for MongoDB, a {@code MongoTransactionManager}).
+     * @param conflictRetry      The retry policy to apply when this executor opens the transaction.
+     */
+    public SpringTransactionExecutor(PlatformTransactionManager transactionManager, RetryStrategy conflictRetry) {
+        this(new TransactionTemplate(Objects.requireNonNull(transactionManager, "transactionManager cannot be null")), conflictRetry);
+    }
+
+    /**
+     * Create an executor with both an already-configured {@link TransactionTemplate} and your own conflict-retry
+     * policy. See {@link #SpringTransactionExecutor(PlatformTransactionManager, RetryStrategy)} for what the retry
+     * covers.
+     *
+     * @param transactionTemplate The transaction template to run work through.
+     * @param conflictRetry       The retry policy to apply when this executor opens the transaction.
+     */
+    public SpringTransactionExecutor(TransactionTemplate transactionTemplate, RetryStrategy conflictRetry) {
         this.transactionTemplate = Objects.requireNonNull(transactionTemplate, "transactionTemplate cannot be null");
+        this.conflictRetry = Objects.requireNonNull(conflictRetry, "conflictRetry cannot be null");
+    }
+
+    /**
+     * The conflict-retry policy applied when this executor opens the transaction: 15 attempts with exponential
+     * backoff from 10ms to 500ms, matching the event store's own transient-conflict retry.
+     *
+     * @return The default retry policy.
+     */
+    public static RetryStrategy defaultConflictRetry() {
+        return DEFAULT_CONFLICT_RETRY;
     }
 
     @Override
@@ -100,11 +139,11 @@ public class SpringTransactionExecutor implements TransactionExecutor {
             // error reach that owner. See ADR 0070.
             return transactionTemplate.execute(status -> action.get());
         }
-        return TRANSIENT_CONFLICT_RETRY.execute(() -> transactionTemplate.execute(status -> action.get()));
+        return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.get()));
     }
 
     @Override
     public String toString() {
-        return "SpringTransactionExecutor{transactionTemplate=" + transactionTemplate + "}";
+        return "SpringTransactionExecutor{transactionTemplate=" + transactionTemplate + ", conflictRetry=" + conflictRetry + "}";
     }
 }
