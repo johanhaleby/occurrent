@@ -211,11 +211,20 @@ jobs:
           for d in ${{ matrix.shard.paths }}; do
             echo "::group::mvn test -f $d/pom.xml"
             start=$SECONDS
-            mvn $MVN ${{ matrix.shard.args }} --fail-at-end -f "$d/pom.xml" test
+            # Take the exit status by hand so a test failure does not abort the step here. Without
+            # this the step dies inside the group above, which leaves the group open and hides the
+            # Maven failure in a collapsed section.
+            status=0
+            mvn $MVN ${{ matrix.shard.args }} --fail-at-end -f "$d/pom.xml" test || status=$?
             elapsed=$(( SECONDS - start ))
+            echo "::endgroup::"
+            if [ "$status" -ne 0 ]; then
+              echo "| \`$d\` | $elapsed (failed) |" >> "$GITHUB_STEP_SUMMARY"
+              echo "shard-timing ${{ matrix.shard.name }} java-${{ matrix.java }} $d ${elapsed}s FAILED"
+              exit "$status"
+            fi
             total=$(( total + elapsed ))
             echo "| \`$d\` | $elapsed |" >> "$GITHUB_STEP_SUMMARY"
-            echo "::endgroup::"
             # Also on stdout, outside the collapsed group: the summary is the readable view, this is
             # the greppable one, so the numbers can be pulled from a run's logs without the UI.
             echo "shard-timing ${{ matrix.shard.name }} java-${{ matrix.java }} $d ${elapsed}s"
