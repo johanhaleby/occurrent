@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Characterizes the eager, per-bean validation the blocking annotation post-processor performs in
  * {@code postProcessBeforeInitialization}, before any subscription model or store is consulted, so it reproduces
- * without a running MongoDB (no Docker): a method carrying more than one subscription annotation is rejected, and a
+ * without a running store (no Docker): a method carrying more than one subscription annotation is rejected, and a
  * {@code @DcbSubscription} without an event parameter is rejected. Both must fail fast at context startup with the
  * exact user-facing message.
  */

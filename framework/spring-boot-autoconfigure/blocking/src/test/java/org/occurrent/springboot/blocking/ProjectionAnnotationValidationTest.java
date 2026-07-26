@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -42,7 +42,7 @@ import static org.mockito.Mockito.mock;
 
 /**
  * Characterizes the {@code @Projection} validation branches that fail fast before any subscription model or store is
- * consulted, so they reproduce without a running MongoDB (no Docker): the {@code source=PUSH} guards (no synchronous
+ * consulted, so they reproduce without a running store (no Docker): the {@code source=PUSH} guards (no synchronous
  * mode, no catch-up start knobs, no DcbProjection, and a feed bean that is neither a {@code PushSubscriptionModel} nor
  * a {@code DomainEventFeed}), and the convention-based store resolution failing when the factory return type carries no
  * concrete state type and no store bean exists. Each must fail fast at context startup with the exact message.
@@ -221,7 +221,7 @@ class ProjectionAnnotationValidationTest {
     @SuppressWarnings({"rawtypes", "unchecked"})
     static class RawReturnTypeProjection {
         // Raw return type on purpose: reflectStateType cannot read a concrete state type from it, so with no store
-        // bean the convention-based resolution must fail fast instead of defaulting to MongoDB.
+        // bean the convention-based resolution must fail fast instead of using the zero-config default.
         @Projection(id = "raw-return")
         org.occurrent.dsl.projection.Projection projection() {
             return countProjection();

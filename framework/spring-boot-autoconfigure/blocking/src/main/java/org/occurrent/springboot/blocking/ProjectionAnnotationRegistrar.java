@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
@@ -48,7 +48,6 @@ import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
-import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.repository.CrudRepository;
 
 import java.lang.reflect.Method;
@@ -216,7 +215,7 @@ class ProjectionAnnotationRegistrar {
 
     // Resolve the read-model store into a MaterializedView. Selected by store() type or storeName() when set, otherwise
     // the unique bean of type MaterializedView, then ViewStateRepository, then Spring Data CrudRepository (any backend),
-    // and finally a zero-config MongoDB default keyed by the projection's id function. All non-default options are first-class.
+    // and finally the zero-config default the store starter contributes. All non-default options are first-class.
     @SuppressWarnings("unchecked")
     private <E, S, ID> MaterializedView<E> resolveStore(org.occurrent.annotation.Projection annotation, Method factoryMethod, Projection<S, E, ID> projection, String id) {
         Object referencedStore = resolveStoreBeanByReference(annotation, id);
@@ -235,8 +234,20 @@ class ProjectionAnnotationRegistrar {
         if (crudRepository != null) {
             return Projections.materializedView(projection, crudBackedRepository((CrudRepository<S, ID>) crudRepository), id);
         }
-        // No candidate store bean of any type exists, so fall back to the zero-config MongoDB default.
-        return Projections.materializedView(projection, mongoBackedRepository((Class<S>) reflectStateType(factoryMethod, id)), id);
+        // No candidate store bean of any type exists, so fall back to the store starter's zero-config default. The
+        // state type is reflected first, so a factory that declares none reports that (the actionable fix) rather than
+        // a missing provider.
+        Class<S> stateType = (Class<S>) reflectStateType(factoryMethod, id);
+        return Projections.materializedView(projection, defaultProjectionStore(stateType, id), id);
+    }
+
+    private <S, ID> ViewStateRepository<S, ID> defaultProjectionStore(Class<S> stateType, String id) {
+        DefaultProjectionStoreProvider provider = applicationContext.getBeanProvider(DefaultProjectionStoreProvider.class).getIfAvailable();
+        if (provider == null) {
+            throw new IllegalStateException(("@Projection '%s' found no read-model store bean and this starter contributes no zero-config default. " +
+                    "Declare a MaterializedView, ViewStateRepository or CrudRepository bean, or select one with store/storeName.").formatted(id));
+        }
+        return provider.createDefaultProjectionStore(id, stateType);
     }
 
     // Resolve the store bean referenced by store() (bean type) or storeName() (bean name), or null when neither is set
@@ -275,8 +286,8 @@ class ProjectionAnnotationRegistrar {
     }
 
     // Returns the single bean of the given store type, or null when there is none so the caller tries the next type
-    // (and finally the MongoDB default). Throws when several beans of the type exist, since the application provided
-    // store beans but none is uniquely selectable, and silently materializing into MongoDB would hide that.
+    // (and finally the zero-config default). Throws when several beans of the type exist, since the application
+    // provided store beans but none is uniquely selectable, and silently materializing elsewhere would hide that.
     private Object uniqueStoreBeanOrThrow(Class<?> storeType, String id) {
         String[] names = applicationContext.getBeanNamesForType(storeType);
         if (names.length == 0) {
@@ -308,13 +319,6 @@ class ProjectionAnnotationRegistrar {
                 (instanceId, state) -> crudRepository.save(state));
     }
 
-    private <S, ID> ViewStateRepository<S, ID> mongoBackedRepository(Class<S> stateType) {
-        MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
-        return ViewStateRepository.create(
-                instanceId -> mongoOperations.findById(instanceId, stateType),
-                (instanceId, state) -> mongoOperations.save(state));
-    }
-
     private static Class<?> reflectStateType(Method factoryMethod, String id) {
         Type returnType = factoryMethod.getGenericReturnType();
         if (returnType instanceof ParameterizedType parameterizedType) {
@@ -330,7 +334,7 @@ class ProjectionAnnotationRegistrar {
             }
         }
         throw new IllegalArgumentException(("@Projection '%s' needs a read-model store: either name one with store=\"beanName\" (a MaterializedView, ViewStateRepository, or CrudRepository), " +
-                "or declare the factory return type with a concrete state type (for example Projection<MyView, MyEvent, String>) so the read model can default to MongoDB.").formatted(id));
+                "or declare the factory return type with a concrete state type (for example Projection<MyView, MyEvent, String>) so the read model can use the store's zero-config default.").formatted(id));
     }
 
     private static Object invokeFactory(Method method, Object bean) {

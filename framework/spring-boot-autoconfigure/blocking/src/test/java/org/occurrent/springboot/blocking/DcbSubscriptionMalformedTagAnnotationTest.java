@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;

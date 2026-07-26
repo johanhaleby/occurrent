@@ -58,6 +58,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-blocking-spring-boot-autoconfigure</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>

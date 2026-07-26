@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -42,7 +42,7 @@ import static org.mockito.Mockito.mock;
  * Characterizes the {@code @Snapshot} rejection of a {@code DcbSnapshotView} declared with {@code mode=SYNCHRONOUS}:
  * a DCB snapshot cannot be maintained synchronously, so it must fail fast at context startup with the exact message.
  * The rejection happens before any subscription is started, and a {@code SnapshotStore} bean is provided so the store
- * resolution succeeds without a MongoDB default, keeping the test container-free (no Docker).
+ * resolution succeeds without the zero-config default, keeping the test container-free (no Docker).
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SnapshotAnnotationValidationTest {

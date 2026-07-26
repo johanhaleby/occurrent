@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -28,13 +28,13 @@ import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.lang.reflect.Method;
 import java.net.URI;
@@ -48,8 +48,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * Characterizes {@link SagaAnnotationRegistrar} against a plain {@link ApplicationContext} that is not a
- * {@link ConfigurableApplicationContext} -- the one branch neither {@link SagaAnnotationMongoTest} nor
- * {@link SagaInstancesRegistryMongoTest} can reach, because every Spring Boot context (including
+ * {@link ConfigurableApplicationContext} -- the one branch neither {@code SagaAnnotationMongoTest} nor
+ * {@code SagaInstancesRegistryMongoTest} can reach, because every Spring Boot context (including
  * {@code ApplicationContextRunner}'s) is configurable. Only a hand-built mock context exercises it.
  * <p>
  * The saga must still register and run: {@link SagaInstancesRegistry} still gets populated, only the named
@@ -89,7 +89,10 @@ class SagaAnnotationRegistrarTest {
         when(applicationContext.getBean("sagaStateStore")).thenReturn(stateStore);
         when(applicationContext.getBeanNamesForType(CommandDispatcher.class)).thenReturn(new String[]{"dispatcher"});
         when(applicationContext.getBean("dispatcher")).thenReturn(dispatcher);
-        when(applicationContext.getBean(MongoOperations.class)).thenReturn(mock(MongoOperations.class));
+        // No store starter contributes a startup workaround here, so the mock hands back an empty provider.
+        @SuppressWarnings("unchecked")
+        ObjectProvider<StartupWorkaround> startupWorkaroundProvider = mock(ObjectProvider.class);
+        when(applicationContext.getBeanProvider(StartupWorkaround.class)).thenReturn(startupWorkaroundProvider);
         when(applicationContext.getBean("springApplicationAdminRegistrar")).thenThrow(new NoSuchBeanDefinitionException("springApplicationAdminRegistrar"));
         when(applicationContext.getBean(OccurrentProperties.class)).thenReturn(properties);
         when(applicationContext.getBeanProvider(SagaInstancesRegistryImpl.class)).thenReturn(registryProvider);

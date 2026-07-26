@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
@@ -27,8 +27,6 @@ import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
-import org.occurrent.dsl.saga.flow.FlowState;
-import org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -39,7 +37,6 @@ import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
@@ -116,8 +113,7 @@ class SagaAnnotationRegistrar {
     /**
      * Make the saga's {@link SagaInstances} reachable from the application, two ways: added to the
      * {@link SagaInstancesRegistry} (typed, injectable, keyed by saga id) and published as a singleton named
-     * {@code sagaInstances-<id>}, matching the {@code saga-<id>} collection convention, for a {@code getBean} or
-     * {@code @Qualifier} lookup when the id is already known.
+     * {@code sagaInstances-<id>}, for a {@code getBean} or {@code @Qualifier} lookup when the id is already known.
      * <p>
      * The two are independent on purpose. The registry is a bean defined during refresh, so it is populated whatever
      * kind of context this is, while the singleton needs a {@link ConfigurableApplicationContext}. If that registration
@@ -218,8 +214,8 @@ class SagaAnnotationRegistrar {
         }
     }
 
-    // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else a
-    // zero-config MongoDB store in a "saga-<id>" collection whose state type is read from the factory return type.
+    // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else the
+    // store starter's zero-config default, whose state type is read from the factory return type.
     @SuppressWarnings("unchecked")
     private <S> SagaStateStore<S> resolveSagaStateStore(org.occurrent.annotation.Saga annotation, Method factoryMethod, String id) {
         Class<?> storeType = annotation.store();
@@ -240,14 +236,15 @@ class SagaAnnotationRegistrar {
         if (names.length > 1) {
             throw new IllegalStateException("@Saga '%s' found %d SagaStateStore beans (%s) and cannot pick one. Name the store with storeName = \"beanName\".".formatted(id, names.length, String.join(", ", names)));
         }
-        MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
+        // The state type is reflected first, so a factory that declares none reports that (the actionable fix) rather
+        // than a missing provider.
         Class<S> stateType = (Class<S>) reflectSagaStateType(factoryMethod, id);
-        if (stateType == FlowState.class) {
-            // A flow saga's FlowState holds domain events, serialize them as CloudEvents (stable types) so they can move packages.
-            CloudEventConverter<?> converter = applicationContext.getBean(CloudEventConverter.class);
-            return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + id, stateType, converter);
+        DefaultSagaStateStoreProvider provider = applicationContext.getBeanProvider(DefaultSagaStateStoreProvider.class).getIfAvailable();
+        if (provider == null) {
+            throw new IllegalStateException(("@Saga '%s' found no SagaStateStore bean and this starter contributes no zero-config default. " +
+                    "Declare a SagaStateStore bean, or select one with store/storeName.").formatted(id));
         }
-        return new SpringMongoSagaStateStore<>(mongoOperations, "saga-" + id, stateType);
+        return provider.createDefaultSagaStateStore(id, stateType);
     }
 
     private Object resolveSagaStoreBeanByReference(Class<?> storeType, String storeName, boolean byType, boolean byName, String id) {
@@ -342,6 +339,6 @@ class SagaAnnotationRegistrar {
             }
         }
         throw new IllegalArgumentException(("@Saga '%s' needs a state store: either name one with store/storeName (a SagaStateStore), " +
-                "or declare the factory return type with a concrete state type (for example Saga<MyEvent, MyState, MyCommand>) so the store can default to MongoDB.").formatted(id));
+                "or declare the factory return type with a concrete state type (for example Saga<MyEvent, MyState, MyCommand>) so the state store can use the zero-config default.").formatted(id));
     }
 }

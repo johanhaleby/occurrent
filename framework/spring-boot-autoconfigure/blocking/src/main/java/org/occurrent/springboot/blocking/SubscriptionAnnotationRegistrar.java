@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;

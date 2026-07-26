@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -38,7 +38,7 @@ import static org.mockito.Mockito.mock;
 
 /**
  * Characterizes the {@code @Saga} validation branches that fail fast before the saga runner is started, so they
- * reproduce without a running MongoDB (no Docker): {@code startAt} combined with {@code startAtGlobalPosition} is
+ * reproduce without a running store (no Docker): {@code startAt} combined with {@code startAtGlobalPosition} is
  * rejected, a missing {@code CommandDispatcher} bean fails with actionable guidance, and an ambiguous store type fails
  * fast. Each must fail fast at context startup with the exact message.
  */

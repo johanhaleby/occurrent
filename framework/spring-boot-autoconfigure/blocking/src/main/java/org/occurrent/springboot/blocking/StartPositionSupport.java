@@ -15,12 +15,13 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import org.jspecify.annotations.NonNull;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
+import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -31,7 +32,6 @@ import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionMo
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
-import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -114,7 +114,8 @@ class StartPositionSupport {
 
     void applyStartupWorkarounds() {
         // These are workarounds for https://github.com/spring-projects/spring-framework/issues/32904
-        applicationContext.getBean(MongoOperations.class);
+        // Each store starter contributes the beans its own stack has to force into existence, this module knows none.
+        applicationContext.getBeanProvider(StartupWorkaround.class).forEach(StartupWorkaround::apply);
         try {
             applicationContext.getBean("springApplicationAdminRegistrar");
         } catch (NoSuchBeanDefinitionException ignored) {

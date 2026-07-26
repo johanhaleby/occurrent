@@ -38,9 +38,6 @@ import org.occurrent.command.annotation.AnnotationStreamIdResolver;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
-import org.occurrent.dsl.saga.SagaInstances;
-import org.occurrent.dsl.saga.SagaInstancesRegistry;
-import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.EventStoreCapability;
@@ -51,8 +48,14 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.springboot.blocking.DefaultProjectionStoreProvider;
+import org.occurrent.springboot.blocking.DefaultSagaStateStoreProvider;
+import org.occurrent.springboot.blocking.DefaultSnapshotStoreProvider;
+import org.occurrent.springboot.blocking.OccurrentBlockingAnnotationBeanPostProcessor;
+import org.occurrent.springboot.blocking.OccurrentBlockingAnnotationConfiguration;
 import org.occurrent.springboot.common.*;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
+import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -74,9 +77,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.mongodb.autoconfigure.MongoAutoConfiguration;
 import org.springframework.context.annotation.*;
+import org.springframework.context.ApplicationContext;
 import org.springframework.core.env.Environment;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.util.List;
@@ -92,36 +97,38 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @AutoConfiguration(after = MongoAutoConfiguration.class)
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
-@Import(Jackson3CloudEventConverterConfiguration.class)
+@Import({Jackson3CloudEventConverterConfiguration.class, OccurrentBlockingAnnotationConfiguration.class})
 public class OccurrentMongoAutoConfiguration<E> {
 
-    @Bean
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    static OccurrentBlockingAnnotationBeanPostProcessor occurrentBlockingAnnotationBeanPostProcessor() {
-        return new OccurrentBlockingAnnotationBeanPostProcessor();
-    }
-
     /**
-     * Lets an application observe the instances of every {@code @Saga} in the context. It is defined here, rather than
-     * registered as a singleton the way each saga's own {@link SagaInstances} is, so that it exists during refresh and
-     * can be constructor-injected. The {@code @Saga} registrar fills it in afterwards, which is why it is empty until
-     * the scan has run: a saga factory cannot be invoked before the beans it collaborates with are wired. See
-     * {@link SagaInstancesRegistry} for what that means for a caller.
-     * <p>
-     * Gated on the same property as the annotation post-processor that populates it, because it has nothing to hold
-     * when annotation processing is off. It is blocking-only, since {@code @Saga} is: the reactive starter has no saga
-     * registrar.
+     * The MongoDB half of the workaround for
+     * <a href="https://github.com/spring-projects/spring-framework/issues/32904">spring-framework#32904</a>: force
+     * {@link MongoOperations} into existence before a subscription is started. The result is deliberately discarded.
      */
     @Bean
-    @ConditionalOnMissingBean(SagaInstancesRegistry.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public SagaInstancesRegistryImpl occurrentSagaInstancesRegistry() {
-        // The declared return type is the implementation, not the SagaInstancesRegistry interface an application
-        // injects, so that the registrar's by-type lookup of the writable type matches from the bean definition rather
-        // than only once the singleton has been instantiated. Declaring the interface here happens to work today
-        // because population runs from afterSingletonsInstantiated, but it would silently start resolving nothing if
-        // this bean became @Lazy or population moved earlier, leaving an empty registry forever.
-        return new SagaInstancesRegistryImpl();
+    StartupWorkaround occurrentMongoOperationsStartupWorkaround(ApplicationContext applicationContext) {
+        return () -> applicationContext.getBean(MongoOperations.class);
+    }
+
+    /** The zero-config MongoDB read-model store a {@code @Projection} falls back to when it declares none. */
+    @Bean
+    @ConditionalOnMissingBean(DefaultProjectionStoreProvider.class)
+    DefaultProjectionStoreProvider occurrentMongoDefaultProjectionStoreProvider(ApplicationContext applicationContext) {
+        return new MongoProjectionStoreProvider(applicationContext);
+    }
+
+    /** The zero-config MongoDB snapshot store a {@code @Snapshot} falls back to when it declares none. */
+    @Bean
+    @ConditionalOnMissingBean(DefaultSnapshotStoreProvider.class)
+    DefaultSnapshotStoreProvider occurrentMongoDefaultSnapshotStoreProvider(ApplicationContext applicationContext) {
+        return new MongoSnapshotStoreProvider(applicationContext);
+    }
+
+    /** The zero-config MongoDB saga state store a {@code @Saga} falls back to when it declares none. */
+    @Bean
+    @ConditionalOnMissingBean(DefaultSagaStateStoreProvider.class)
+    DefaultSagaStateStoreProvider occurrentMongoDefaultSagaStateStoreProvider(ApplicationContext applicationContext) {
+        return new MongoSagaStateStoreProvider(applicationContext);
     }
 
     @Bean

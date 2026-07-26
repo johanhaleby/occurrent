@@ -524,6 +524,11 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-blocking-spring-boot-autoconfigure</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-mongodb-spring-boot-starter</artifactId>
                 <version>${project.version}</version>
             </dependency>

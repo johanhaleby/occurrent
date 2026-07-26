@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.blocking;
 
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
@@ -28,7 +28,6 @@ import org.occurrent.dsl.snapshot.DcbSnapshotView;
 import org.occurrent.dsl.snapshot.blocking.SnapshotStore;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
-import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.dsl.view.View;
@@ -42,7 +41,6 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.springframework.context.ApplicationContext;
-import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
@@ -229,9 +227,15 @@ class SnapshotAnnotationRegistrar {
         if (names.length > 1) {
             throw new IllegalStateException("@Snapshot '%s' found %d SnapshotStore beans (%s) and cannot pick one. Name one with storeName = \"beanName\".".formatted(id, names.length, String.join(", ", names)));
         }
-        MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
+        // The state type is reflected first, so a factory that declares none reports that (the actionable fix) rather
+        // than a missing provider.
         Class<S> stateType = (Class<S>) reflectSnapshotStateType(factoryMethod, id);
-        return new SpringMongoSnapshotStore<>(mongoOperations, stateType, "occurrent-snapshot-" + id);
+        DefaultSnapshotStoreProvider provider = applicationContext.getBeanProvider(DefaultSnapshotStoreProvider.class).getIfAvailable();
+        if (provider == null) {
+            throw new IllegalStateException(("@Snapshot '%s' found no SnapshotStore bean and this starter contributes no zero-config default. " +
+                    "Declare a SnapshotStore bean, or select one with store/storeName.").formatted(id));
+        }
+        return provider.createDefaultSnapshotStore(id, stateType);
     }
 
     private Object resolveReferencedSnapshotStore(Class<?> storeType, String storeName, boolean typeSet, boolean nameSet, String id) {
@@ -274,7 +278,7 @@ class SnapshotAnnotationRegistrar {
             }
         }
         throw new IllegalArgumentException(("@Snapshot '%s' needs a snapshot store: either name one with store or storeName (a SnapshotStore bean), " +
-                "or declare the factory return type with a concrete state type (for example SnapshotView<MyState, MyEvent>) so the snapshot can default to MongoDB.").formatted(id));
+                "or declare the factory return type with a concrete state type (for example SnapshotView<MyState, MyEvent>) so the snapshot can use the store's zero-config default.").formatted(id));
     }
 
     private static <E> Filter snapshotFilterFor(CloudEventConverter<E> converter, SnapshotView<?, E> snapshotView) {
