@@ -77,7 +77,7 @@ class ReactiveDcbProjectionRunnerTest {
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet().withReuse(true);
 
     @RegisterExtension
-    FlushMongoDBExtension flush = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".projectiondcbrunner"));
+    FlushMongoDBExtension flush = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl("projectiondcbrunner")));
 
     private ReactorMongoEventStore eventStore;
     private ReactorMongoSubscriptionModel subscriptionModel;
@@ -85,7 +85,7 @@ class ReactiveDcbProjectionRunnerTest {
 
     @BeforeEach
     void createInstances() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".projectiondcbrunner");
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("projectiondcbrunner"));
         MongoClient mongoClient = MongoClients.create(connectionString);
         ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         ReactiveMongoTransactionManager tx = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
