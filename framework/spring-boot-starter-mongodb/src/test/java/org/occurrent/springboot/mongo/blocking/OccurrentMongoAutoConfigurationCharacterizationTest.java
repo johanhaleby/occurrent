@@ -42,6 +42,7 @@ import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptio
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.NestedExceptionUtils;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
@@ -194,6 +195,46 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                     EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
 
                     assertThat(eventStoreConfig.streamPositionEnabled).isFalse();
+                });
+    }
+
+    @Test
+    void binds_the_catch_up_then_live_tunables_and_leaves_them_unset_when_no_property_is_given() {
+        contextRunner.run(context -> {
+            assertThat(context).hasNotFailed();
+            OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties tunables =
+                    context.getBean(OccurrentProperties.class).getSubscription().getCatchupThenLive();
+
+            assertThat(tunables.getDedupCacheSize()).isNull();
+            assertThat(tunables.getMaxBufferedEvents()).isNull();
+        });
+    }
+
+    @Test
+    void binds_the_catch_up_then_live_tunables_from_kebab_case_properties() {
+        contextRunner
+                .withPropertyValues(
+                        "occurrent.subscription.catchup-then-live.dedup-cache-size=50000",
+                        "occurrent.subscription.catchup-then-live.max-buffered-events=200000")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties tunables =
+                            context.getBean(OccurrentProperties.class).getSubscription().getCatchupThenLive();
+
+                    assertThat(tunables.getDedupCacheSize()).isEqualTo(50_000);
+                    assertThat(tunables.getMaxBufferedEvents()).isEqualTo(200_000);
+                });
+    }
+
+    @Test
+    void a_non_positive_catch_up_then_live_tunable_fails_the_context_instead_of_silently_using_the_default() {
+        contextRunner
+                .withPropertyValues("occurrent.subscription.catchup-then-live.max-buffered-events=0")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("occurrent.subscription.catchup-then-live.max-buffered-events");
                 });
     }
 

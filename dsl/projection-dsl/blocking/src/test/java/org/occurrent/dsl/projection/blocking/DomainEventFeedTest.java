@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.net.URI;
 import java.util.HashMap;
@@ -95,6 +96,27 @@ class DomainEventFeedTest {
         assertThat(secondAttempt).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("does not write positions")
                 .hasMessageNotContaining("already registered");
+    }
+
+    @Test
+    void handover_options_passed_to_the_constructor_reach_every_registered_projections_catch_up() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId, null, new CatchupThenLiveOptions(10, 2));
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        feed.register("counter", projection(), repository);
+
+        // Buffered before the catch-up runs, so the third one exceeds the cap of two. The message names the cap, which
+        // is what proves the constructor's options reached CatchupProjectionFeed rather than the defaults being used.
+        feed.accept(new Counted("l1"));
+        feed.accept(new Counted("l2"));
+        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("l3")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("buffer overflowed")
+                .hasMessageContaining("(cap 2)");
     }
 
     private static PositionOrderedReader readerThatDoesNotWritePosition(PositionOrderedReader delegate) {
