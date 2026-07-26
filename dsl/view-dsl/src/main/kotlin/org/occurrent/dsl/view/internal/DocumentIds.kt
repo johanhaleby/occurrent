@@ -30,7 +30,17 @@ import org.springframework.data.mongodb.core.MongoOperations
 fun <S : Any> requireMatchingDocumentId(mongoOperations: MongoOperations, stateType: Class<S>, state: S, resolvedId: Any) {
     val entity = mongoOperations.converter.mappingContext.getPersistentEntity(stateType) ?: return
     val documentId = entity.getIdentifierAccessor(state).identifier ?: return
-    if (documentId.javaClass == resolvedId.javaClass && documentId != resolvedId) {
+    val conversionService = mongoOperations.converter.conversionService
+    // Compare like with like. Spring Data converts the lookup id to the id property's type, so a hex String and the
+    // ObjectId it denotes are the same document. Convert first, then compare, so a genuine mismatch between two
+    // convertible types (a document id of 1L against a resolved 2) is still caught.
+    val comparable = when {
+        documentId.javaClass == resolvedId.javaClass -> resolvedId
+        conversionService.canConvert(resolvedId.javaClass, documentId.javaClass) ->
+            conversionService.convert(resolvedId, documentId.javaClass) ?: return
+        else -> return
+    }
+    if (documentId != comparable) {
         throw IllegalStateException("the stored document's @Id is " + documentId + " but the id resolved for this event "
                 + "is " + resolvedId + ", so reads and writes would use different documents and the read model would "
                 + "never accumulate. Make the fold set the document's @Id to the same value the id resolves to.")

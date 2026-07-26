@@ -104,4 +104,23 @@ class DocumentIdCoercionTest {
             requireMatchingDocumentId(mongoOperations, LongIdDoc::class.java, LongIdDoc(1L, "Johan"), 2L)
         }.isInstanceOf(IllegalStateException::class.java)
     }
+
+    @Test
+    fun `two ids of convertible types that denote different documents are rejected`() {
+        val mongoOperations = mongoOperations()
+
+        // The types differ, so a same-type-only check would miss this, but 1L and 2 really are different documents.
+        assertThatCode {
+            requireMatchingDocumentId(mongoOperations, LongIdDoc::class.java, LongIdDoc(1L, "Johan"), 2)
+        }.isInstanceOf(IllegalStateException::class.java)
+    }
+
+    @Test
+    fun `a hex String denoting a different ObjectId is rejected`() {
+        val mongoOperations = mongoOperations()
+
+        assertThatCode {
+            requireMatchingDocumentId(mongoOperations, ObjectIdDoc::class.java, ObjectIdDoc(ObjectId(), "Johan"), ObjectId().toHexString())
+        }.isInstanceOf(IllegalStateException::class.java)
+    }
 }
