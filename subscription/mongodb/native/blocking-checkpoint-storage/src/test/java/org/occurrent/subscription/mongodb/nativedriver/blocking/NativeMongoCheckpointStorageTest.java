@@ -123,14 +123,18 @@ public class NativeMongoCheckpointStorageTest {
 
     @AfterEach
     void shutdown() {
-        subscriptionModel.shutdown();
-        mongoClient.close();
-        // Restored after the shutdown above rather than from a second @AfterEach, because JUnit does not promise
-        // an order between two of them and shutting down must still be covered by the handler.
-        if (replacedDefaultUncaughtExceptionHandler) {
-            Thread.setDefaultUncaughtExceptionHandler(previousDefaultUncaughtExceptionHandler);
-            previousDefaultUncaughtExceptionHandler = null;
-            replacedDefaultUncaughtExceptionHandler = false;
+        // Restored in a finally after the shutdown, rather than from a second @AfterEach, because JUnit does not
+        // promise an order between two of them, shutting down must still be covered by the handler, and a handler
+        // that swallows exceptions must never outlive this test even if shutting down throws.
+        try {
+            subscriptionModel.shutdown();
+            mongoClient.close();
+        } finally {
+            if (replacedDefaultUncaughtExceptionHandler) {
+                Thread.setDefaultUncaughtExceptionHandler(previousDefaultUncaughtExceptionHandler);
+                previousDefaultUncaughtExceptionHandler = null;
+                replacedDefaultUncaughtExceptionHandler = false;
+            }
         }
     }
 
