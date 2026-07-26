@@ -143,18 +143,10 @@ class SnapshotAnnotationRegistrar {
                     if (eventVersion == base.version() + 1) {
                         newState = Mono.just(view.evolve(base.state(), metadata, event));
                     } else {
-                        // Folded per CloudEvent (not via the List-based evolve) so each event keeps its own metadata
-                        // rather than the whole range sharing EventMetadata.empty(), which a metadata-reading fold
-                        // cannot tolerate. The fold itself stays synchronous, inside map(), so nothing blocks.
+                        // The fold stays synchronous, inside map(), so nothing blocks the chain.
                         newState = eventStore.read(key, (int) base.version(), (int) (eventVersion - base.version()))
                                 .flatMap(es -> es.events().collectList())
-                                .map(cloudEvents -> {
-                                    S state = base.state();
-                                    for (CloudEvent cloudEvent : cloudEvents) {
-                                        state = view.evolve(state, EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent));
-                                    }
-                                    return state;
-                                });
+                                .map(cloudEvents -> foldWithMetadata(view, base.state(), cloudEvents, converter));
                     }
                     return newState.flatMap(state -> store.save(key, new Snapshot<>(state, eventVersion, schemaVersion)));
                 });
@@ -229,12 +221,7 @@ class SnapshotAnnotationRegistrar {
                     if (range.size() < everyNEvents) {
                         return Mono.<Void>empty(); // throttle: too few matching events since the last saved snapshot
                     }
-                    // Folded per CloudEvent so each event keeps its own metadata, matching the stream path above.
-                    S newState = base.state();
-                    for (CloudEvent rangeCloudEvent : range) {
-                        newState = view.evolve(newState, EventMetadata.from(rangeCloudEvent), converter.toDomainEvent(rangeCloudEvent));
-                    }
-                    return store.save(key, new Snapshot<>(newState, position, schemaVersion));
+                    return store.save(key, new Snapshot<>(foldWithMetadata(view, base.state(), range, converter), position, schemaVersion));
                 });
             });
         });
@@ -307,6 +294,16 @@ class SnapshotAnnotationRegistrar {
         } catch (BeansException e) {
             throw new IllegalArgumentException("@Snapshot '%s' could not resolve a store bean named '%s': %s".formatted(id, storeName, e.getMessage()), e);
         }
+    }
+
+    // Folds a range one CloudEvent at a time so each event keeps its own metadata. View.evolve(state, List) folds through
+    // the two-argument evolve, which substitutes EventMetadata.empty(), and a metadata-reading fold cannot tolerate that.
+    private static <S, E> S foldWithMetadata(View<S, E> view, S state, List<CloudEvent> cloudEvents, CloudEventConverter<E> converter) {
+        S result = state;
+        for (CloudEvent cloudEvent : cloudEvents) {
+            result = view.evolve(result, EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent));
+        }
+        return result;
     }
 
     private static <E> Filter snapshotFilterFor(CloudEventConverter<E> converter, SnapshotView<?, E> snapshotView) {

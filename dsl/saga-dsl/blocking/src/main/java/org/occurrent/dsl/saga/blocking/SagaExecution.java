@@ -52,11 +52,8 @@ import java.util.Set;
  * A command receiver must therefore be idempotent <em>and</em> tolerate that multiplicity, which is stronger than plain
  * at-least-once: the same input can legitimately dispatch the same command several times within one delivery.
  * <p>
- * A reaction's whole command list goes to the dispatcher through {@link CommandDispatcher#dispatchAll}, not one call per
- * command. The default implementation just loops, so a failure partway through the list still propagates before the
- * save, the earlier commands in that list stay dispatched, and there is no per-command progress marker: redelivery
- * re-enters the reaction from the top and re-dispatches all of it, including the commands that already succeeded. A
- * dispatcher backed by a single stream or decider can override {@code dispatchAll} to make the batch atomic instead.
+ * A reaction's whole command list is dispatched through {@link CommandDispatcher#dispatchAll} in one call, not one
+ * call per command.
  */
 final class SagaExecution<E, S extends @Nullable Object, C> {
     private static final Logger log = LoggerFactory.getLogger(SagaExecution.class);
@@ -146,10 +143,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         return null;
                     }
                     // Dispatch before saving so a command is never lost. A lost compare-and-set retries this whole body,
-                    // which re-dispatches the entire command list of this input (at-least-once, and up to maxCasAttempts
-                    // times). Command receivers must therefore be idempotent and tolerate that multiplicity, not merely
-                    // at-least-once. dispatchAll hands the whole list to the dispatcher as a unit, so a dispatcher that
-                    // can make it atomic (single stream, single decider) is free to do so.
+                    // re-dispatching the entire command list (at-least-once, up to maxCasAttempts times), so receivers
+                    // must be idempotent and tolerate that multiplicity.
                     dispatcher.dispatchAll(outcome.commands());
                     SagaEnvelope<S> envelope = outcome.envelope();
                     if (envelope != null && stateStore.compareAndSave(sagaId, envelope, outcome.expectedVersion())) {

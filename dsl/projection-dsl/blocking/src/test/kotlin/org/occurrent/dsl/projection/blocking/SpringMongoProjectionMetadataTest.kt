@@ -79,6 +79,21 @@ class SpringMongoProjectionMetadataTest {
         return MongoTemplate(mongoClient, connectionString.database!!)
     }
 
+    private data class Fixture(val mongoOperations: MongoOperations, val subscriptions: Subscriptions<DomainEvent>, val applicationService: GenericApplicationService<DomainEvent>)
+
+    private fun newFixture(): Fixture {
+        val mongoOperations = mongoOperations()
+        val converter = jacksonCloudEventConverter(ObjectMapper(), URI.create("urn:occurrent:test"), DomainEvent::eventId)
+        val eventStore = InMemoryEventStore()
+        val synchronousSubscriptions = SynchronousSubscriptionModel()
+        val subscriptions = Subscriptions(synchronousSubscriptions, converter)
+        val applicationService = GenericApplicationService.builder(eventStore, converter)
+            .synchronousSubscriptions(synchronousSubscriptions)
+            .transactionExecutor(TransactionExecutor.noTransaction())
+            .build()
+        return Fixture(mongoOperations, subscriptions, applicationService)
+    }
+
     // Keyed and folded from EventMetadata.getStreamId()/getStreamVersion(), which throw on empty metadata rather than
     // returning null, so a broken wiring that drops the metadata fails loudly instead of quietly matching by luck.
     private fun streamKeyedProjection() =
@@ -90,19 +105,10 @@ class SpringMongoProjectionMetadataTest {
 
     @Test
     fun `keys the materialized view by the event's stream id and folds with its stream version`() {
-        val mongoOperations = mongoOperations()
-        val converter = jacksonCloudEventConverter(ObjectMapper(), URI.create("urn:occurrent:test"), DomainEvent::eventId)
-        val eventStore = InMemoryEventStore()
-        val synchronousSubscriptions = SynchronousSubscriptionModel()
-        val subscriptions = Subscriptions(synchronousSubscriptions, converter)
+        val (mongoOperations, subscriptions, applicationService) = newFixture()
 
         // The Mongo-materializing project(...) overload under test: it must resolve and fold with the real metadata.
         subscriptions.project("stream-keyed-name", streamKeyedProjection(), mongoOperations)
-
-        val applicationService = GenericApplicationService.builder(eventStore, converter)
-            .synchronousSubscriptions(synchronousSubscriptions)
-            .transactionExecutor(TransactionExecutor.noTransaction())
-            .build()
 
         val userId = UUID.randomUUID().toString()
         applicationService.execute(userId) { _ -> listOf(NameDefined(UUID.randomUUID().toString(), Date(), userId, "Johan")) }
@@ -149,11 +155,7 @@ class SpringMongoProjectionMetadataTest {
 
     @Test
     fun `a single-instance projection still keys its one document by the subscription id`() {
-        val mongoOperations = mongoOperations()
-        val converter = jacksonCloudEventConverter(ObjectMapper(), URI.create("urn:occurrent:test"), DomainEvent::eventId)
-        val eventStore = InMemoryEventStore()
-        val synchronousSubscriptions = SynchronousSubscriptionModel()
-        val subscriptions = Subscriptions(synchronousSubscriptions, converter)
+        val (mongoOperations, subscriptions, applicationService) = newFixture()
 
         // The state carries "name-count" as its own @Id, because mongoOperations.save(state) derives the document id from
         // the state rather than from the key the repository was given. See the note on the assertion below.
@@ -161,11 +163,6 @@ class SpringMongoProjectionMetadataTest {
             on<NameDefined> { state, _ -> state.copy(count = state.count + 1) }
         }
         subscriptions.project("name-count", nameCount, mongoOperations)
-
-        val applicationService = GenericApplicationService.builder(eventStore, converter)
-            .synchronousSubscriptions(synchronousSubscriptions)
-            .transactionExecutor(TransactionExecutor.noTransaction())
-            .build()
 
         applicationService.execute(UUID.randomUUID().toString()) { _ ->
             listOf(NameDefined(UUID.randomUUID().toString(), Date(), "someone", "Johan"))

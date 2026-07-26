@@ -18,6 +18,7 @@
 package org.occurrent.dsl.view
 
 import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.dsl.view.internal.requireMatchingDocumentId
 import org.occurrent.retry.Backoff.exponential
 import org.occurrent.retry.RetryStrategy
 import org.springframework.dao.DuplicateKeyException
@@ -65,67 +66,9 @@ inline fun <S_VIEW, reified S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>
     config: SpringMongoViewConfig = SpringMongoViewConfig.config(),
     crossinline deriveViewIdFromEvent: (E) -> VIEW_ID
 ): MaterializedView<E> {
-    val (duplicateKeyHandling, optimisticLockingHandling) = config
-    val retryStrategy: RetryStrategy = RetryStrategy.retry()
-        .let { rs ->
-            if (optimisticLockingHandling is OptimisticLockingHandling.Retry) {
-                rs.backoff(exponential(optimisticLockingHandling.initial, optimisticLockingHandling.max, optimisticLockingHandling.multiplier))
-            } else {
-                rs
-            }
-        }
-        .retryIf { e ->
-            when (e) {
-                is OptimisticLockingFailureException -> optimisticLockingHandling is OptimisticLockingHandling.Retry
-                else -> false
-            }
-        }
-        .onError { e ->
-            when (e) {
-                is DuplicateKeyException -> if (duplicateKeyHandling is DuplicateKeyHandling.Ignore) {
-                    duplicateKeyHandling.onDuplicateKeyException(e)
-                }
-
-                is OptimisticLockingFailureException -> when (optimisticLockingHandling) {
-                    is OptimisticLockingHandling.Ignore -> {
-                        optimisticLockingHandling.onOptimisticLockingFailureException(e)
-                    }
-
-                    is OptimisticLockingHandling.Retry -> {
-                        optimisticLockingHandling.onOptimisticLockingFailureException(e)
-                    }
-
-                    else -> {}
-                }
-            }
-        }
-
-    val viewStateRepository = object : ViewStateRepository<S_VIEW, VIEW_ID> {
-        override fun findById(id: VIEW_ID): Optional<S_VIEW & Any> = Optional.ofNullable(mongoOperations.findById(id, S_DTO::class.java))
-            .map { dto -> converter.fromDTO(dto) }
-
-        override fun save(id: VIEW_ID, state: S_VIEW & Any) {
-            val dto = converter.toDTO(state)
-            requireMatchingDocumentId(mongoOperations, S_DTO::class.java, dto, id)
-            mongoOperations.save(dto)
-        }
-    }
-
-    val view = this
+    val metadataAware = materialized(mongoOperations, converter, config) { _: EventMetadata, e: E -> deriveViewIdFromEvent(e) }
     return object : MaterializedView<E> {
-        override fun update(event: E) {
-            try {
-                updateFromRepository(deriveViewIdFromEvent(event), event, view, viewStateRepository, retryStrategy)
-            } catch (e: DuplicateKeyException) {
-                if (duplicateKeyHandling is DuplicateKeyHandling.Rethrow) {
-                    throw e
-                }
-            } catch (e: OptimisticLockingFailureException) {
-                if (optimisticLockingHandling is OptimisticLockingHandling.Rethrow) {
-                    throw e
-                }
-            }
-        }
+        override fun update(event: E) = metadataAware.update(event)
     }
 }
 
@@ -211,7 +154,9 @@ inline fun <S_VIEW, reified S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>
             }
         }
 
-    val viewStateRepository = object : ViewStateRepository<S_VIEW, VIEW_ID> {
+    // Built by hand rather than through the viewStateRepository(find, save) factory, whose state type is bounded to Any
+    // and so cannot carry a nullable view state.
+    val stateRepository = object : ViewStateRepository<S_VIEW, VIEW_ID> {
         override fun findById(id: VIEW_ID): Optional<S_VIEW & Any> = Optional.ofNullable(mongoOperations.findById(id, S_DTO::class.java))
             .map { dto -> converter.fromDTO(dto) }
 
@@ -228,7 +173,7 @@ inline fun <S_VIEW, reified S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>
 
         override fun update(metadata: EventMetadata, event: E) {
             try {
-                updateFromRepository(deriveViewIdFromEvent(metadata, event), metadata, event, view, viewStateRepository, retryStrategy)
+                updateFromRepository(deriveViewIdFromEvent(metadata, event), metadata, event, view, stateRepository, retryStrategy)
             } catch (e: DuplicateKeyException) {
                 if (duplicateKeyHandling is DuplicateKeyHandling.Rethrow) {
                     throw e
@@ -272,22 +217,5 @@ fun <S_VIEW, S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>.materialized(
     val view = this
     return object : MaterializedView<E> {
         override fun update(event: E) = updateFromRepository(deriveViewIdFromEvent(event), event, view, viewStateRepository)
-    }
-}
-
-/**
- * Fails when the document's `@Id` differs from the view id derived for the event. Reads use the derived id and writes use
- * the document id Spring Data takes from the document, so when the two differ every update reads nothing back, folds from
- * the initial state, and saves a new document, leaving a view that silently never accumulates. A type Spring Data does
- * not map as a document is left alone, since saving it fails on its own terms.
- */
-@PublishedApi
-internal fun <S_DTO : Any> requireMatchingDocumentId(mongoOperations: MongoOperations, dtoType: Class<S_DTO>, dto: S_DTO, viewId: Any) {
-    val entity = mongoOperations.converter.mappingContext.getPersistentEntity(dtoType) ?: return
-    val documentId = entity.getIdentifierAccessor(dto).identifier
-    if (documentId != viewId) {
-        throw IllegalStateException("the view document's @Id is " + documentId + " but the view id derived for this event "
-                + "is " + viewId + ", so reads and writes would use different documents and the view would never "
-                + "accumulate. Derive the view id from the same value the document carries as its @Id.")
     }
 }

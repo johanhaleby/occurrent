@@ -22,6 +22,7 @@ import org.occurrent.dsl.projection.Projection
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.dsl.view.ViewStateRepository
+import org.occurrent.dsl.view.internal.requireMatchingDocumentId
 import org.occurrent.dsl.view.viewStateRepository
 import org.occurrent.subscription.DcbStartAt
 import org.occurrent.subscription.StartAt
@@ -44,23 +45,6 @@ inline fun <reified S : Any, ID : Any> mongoViewStateRepository(mongoOperations:
             mongoOperations.save(state)
         }
     )
-}
-
-/**
- * Fails when the view state's `@Id` differs from the id the projection resolved. Reads use the projection's id and writes
- * use the document id Spring Data takes from the state, so when the two differ every update reads nothing back, folds
- * from the initial state, and saves a new document, leaving a read model that silently never accumulates. A state type
- * Spring Data does not map as a document is left alone, since saving it fails on its own terms.
- */
-@PublishedApi
-internal fun <S : Any> requireMatchingDocumentId(mongoOperations: MongoOperations, stateType: Class<S>, state: S, projectionId: Any) {
-    val entity = mongoOperations.converter.mappingContext.getPersistentEntity(stateType) ?: return
-    val documentId = entity.getIdentifierAccessor(state).identifier
-    if (documentId != projectionId) {
-        throw IllegalStateException("the view state's @Id is " + documentId + " but the projection resolved the id "
-                + projectionId + ", so reads and writes would use different documents and the read model would never "
-                + "accumulate. Make the fold set the state's @Id to the same value the projection's id resolves to.")
-    }
 }
 
 /**

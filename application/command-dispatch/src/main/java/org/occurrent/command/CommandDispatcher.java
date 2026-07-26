@@ -31,11 +31,7 @@ import java.util.List;
  * {@code ApplicationService}-backed one is by construction, since it re-folds the authoritative stream and the target's
  * invariants reject a stale or already-applied command.
  * <p>
- * {@link #dispatchAll} is a seam a dispatcher may exploit, not a guarantee this interface provides: the default just
- * loops over {@link #dispatch}, one command at a time, with no atomicity across the list. A dispatcher whose commands
- * all target one stream or one decider can override it to write the whole batch in a single transaction, so a caller
- * such as a saga executor never observes a partially dispatched reaction. This does not make dispatch exactly-once,
- * the contract stays at-least-once.
+ * {@link #dispatchAll} is a seam a dispatcher may override for batch atomicity; see its javadoc.
  *
  * @param <C> the command type
  */
