@@ -90,12 +90,15 @@ class ReactorMongoEventStoreDcbTest {
     private ReactorMongoEventStore eventStore;
     private ReactiveMongoTemplate mongoTemplate;
     private ReactiveMongoTransactionManager transactionManager;
+    private MongoClient mongoClient;
+    private String databaseName;
 
     @BeforeEach
     void create_reactive_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcbreactor");
-        MongoClient mongoClient = MongoClients.create(connectionString);
-        mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
+        mongoTemplate = new ReactiveMongoTemplate(mongoClient, databaseName);
         transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         eventStore = storeWith(STREAM, DCB);
     }
@@ -564,8 +567,9 @@ class ReactorMongoEventStoreDcbTest {
      * counts how many inserts it was asked for.
      */
     private ReactorMongoEventStore storeThatFailsFirstInsert(AtomicInteger inserts) {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcbreactor");
-        ReactiveMongoTemplate failingTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase())) {
+        // Reuse the client and database this test class already connected to, so the failing template and the
+        // caller-owned transaction genuinely share one database.
+        ReactiveMongoTemplate failingTemplate = new ReactiveMongoTemplate(mongoClient, databaseName) {
             @Override
             public <T> Flux<T> insert(java.util.Collection<? extends T> batchToSave, String collectionName) {
                 if ("events".equals(collectionName) && inserts.incrementAndGet() == 1) {

@@ -109,12 +109,15 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
     private SpringMongoEventStore eventStore;
     private MongoTemplate mongoTemplate;
+    private MongoClient mongoClient;
+    private String databaseName;
     private static final String COLLECTION = "events";
 
     @BeforeEach
     void create_mongo_spring_blocking_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcb_concurrency");
-        MongoClient mongoClient = MongoClients.create(connectionString);
+        mongoClient = MongoClients.create(connectionString);
+        databaseName = requireNonNull(connectionString.getDatabase());
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(
                 new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
@@ -696,9 +699,9 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     }
 
     private MongoTransactionManager buildTransactionManager() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcb_concurrency");
-        MongoClient mongoClient = MongoClients.create(connectionString);
-        return new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        // Reuse the client and database this test class already connected to, rather than re-deriving them, so the
+        // caller's transaction manager and the store under test genuinely share one database.
+        return new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
     }
 
     /**
@@ -706,9 +709,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
      * contend, sharing the supplied transaction manager with the caller and counting each run of its transaction body.
      */
     private SpringMongoEventStore buildEventStoreOnSharedPartition(MongoTransactionManager txManager, AtomicInteger transactionBodyRuns) {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcb_concurrency");
-        MongoClient mongoClient = MongoClients.create(connectionString);
-        MongoTemplate template = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        MongoTemplate template = new MongoTemplate(mongoClient, databaseName);
         TransactionTemplate countingTemplate = new TransactionTemplate(txManager) {
             @Override
             public <T> T execute(TransactionCallback<T> action) {
