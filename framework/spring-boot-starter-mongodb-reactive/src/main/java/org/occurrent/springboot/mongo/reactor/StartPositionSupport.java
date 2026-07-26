@@ -19,8 +19,10 @@ package org.occurrent.springboot.mongo.reactor;
 
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
+import org.occurrent.eventstore.api.reactor.EventStore;
+import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.DcbStartAt;
@@ -56,20 +58,30 @@ class StartPositionSupport {
         // End workarounds
     }
 
+    // The event store's own reader. A @Projection(source = PUSH) application declares its own PositionOrderedReader
+    // bean, so the candidate is narrowed to the one that is also an EventStore, keeping the question about the store
+    // rather than about whatever else in the context can read in position order.
+    private @Nullable PositionOrderedReader eventStoreReader() {
+        return applicationContext.getBeanProvider(PositionOrderedReader.class).stream()
+                .filter(EventStore.class::isInstance)
+                .findFirst()
+                .orElse(null);
+    }
+
     // A capability-agnostic subscription replays over the unified global position, so replay is supported whenever the
     // store writes a position, regardless of which capabilities are enabled (unlike stream replay, which also requires
     // the STREAM capability).
     boolean positionReplaySupported() {
-        ReactorMongoEventStore eventStore = applicationContext.getBeanProvider(ReactorMongoEventStore.class).getIfAvailable();
-        return eventStore != null && eventStore.writesPosition();
+        PositionOrderedReader reader = eventStoreReader();
+        return reader != null && reader.writesPosition();
     }
 
     // A @StreamSubscription can replay history when the store has the STREAM capability and writes stream position,
     // which wires a catch-up model that replays stream filters by position. A combined STREAM+DCB store replays too. A
     // DCB-only store also writes position but has no stream events, so it does not support stream history replay.
     boolean streamHistoryReplaySupported() {
-        ReactorMongoEventStore eventStore = applicationContext.getBeanProvider(ReactorMongoEventStore.class).getIfAvailable();
-        if (eventStore == null || !eventStore.writesPosition()) {
+        PositionOrderedReader reader = eventStoreReader();
+        if (reader == null || !reader.writesPosition()) {
             return false;
         }
         OccurrentProperties occurrentProperties = applicationContext.getBean(OccurrentProperties.class);
