@@ -74,7 +74,9 @@ public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
     private static String defaultVersion() {
         String fromSystemProperty = System.getProperty("test.mongo.version");
         if (fromSystemProperty != null && !fromSystemProperty.isBlank()) {
-            return fromSystemProperty;
+            // Trimmed because an image name cannot contain spaces, and a padded -D value would otherwise only
+            // show up as a container creation failure.
+            return fromSystemProperty.trim();
         }
         // Surefire passes test.mongo.version for a Maven run. An IDE run gets nothing, so read the version the
         // build filtered into this resource rather than repeating it here, where it could drift from the pom.
@@ -88,6 +90,9 @@ public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
             if (version == null || version.isBlank()) {
                 throw new IllegalStateException(MONGO_VERSION_KEY + " is missing from " + VERSION_RESOURCE + ", so the Mongo version is unknown.");
             }
+            // Properties.load keeps trailing whitespace, and trimming before the check below means a padded
+            // placeholder is still recognised as unfiltered.
+            version = version.trim();
             if (version.startsWith("${")) {
                 throw new IllegalStateException(VERSION_RESOURCE + " was copied without Maven resource filtering, so it still holds " + version + ". Build test-support through Maven, or pass -Dtest.mongo.version.");
             }

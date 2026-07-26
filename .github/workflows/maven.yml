@@ -230,7 +230,11 @@ jobs:
               exit 0
             fi
             echo "::warning::Pull of $image failed, attempt $attempt of 3"
-            sleep $(( attempt * 5 ))
+            # No backoff after the last attempt, since the job is about to fail either way and the point is to
+            # fail fast.
+            if [ "$attempt" -lt 3 ]; then
+              sleep $(( attempt * 5 ))
+            fi
           done
           echo "::error::Could not pull $image from Docker Hub after 3 attempts. This is a registry problem, not a test failure."
           exit 1
