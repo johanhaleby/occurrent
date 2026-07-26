@@ -114,9 +114,16 @@ jobs:
   # SHARD_BUDGET_SECONDS annotates the run, so the live numbers are always one click away and
   # drift reports itself instead of waiting to be noticed.
   #
-  # The floor is occurrent-mongodb-spring-boot-starter, ~155s inside a single Maven module. No
-  # arrangement of paths gets the slowest shard below that without splitting one module's tests by
-  # class, which would be the most stale-prone thing in this file.
+  # The floor is occurrent-mongodb-spring-boot-starter: one Maven module, and the only unit here
+  # that cannot be divided without splitting a single module's tests by class, which would be the
+  # most stale-prone thing in this file. Any shard above it is a subtree that could be listed as
+  # its own paths instead, so if the floor ever needs chasing, look there first.
+  #
+  # Note that moving a subtree between shards can change what it costs: several of these boot a
+  # MongoDB container, and with Testcontainers reuse on, whichever one runs first on a runner pays
+  # for the container and the rest ride along. A subtree that is cheap next to a neighbour can get
+  # noticeably slower alone. Re-read the summary after moving anything, do not assume the old number
+  # travels with it.
   #
   # Use -f <subtree>/pom.xml, NOT -pl: -pl on an aggregator does not descend into its children and
   # would run zero tests. We do NOT pass -o: the build job's `install -DskipTests` does not resolve
@@ -133,28 +140,33 @@ jobs:
       matrix:
         java: [ 21, 25 ]
         shard:
-          # Everything reachable without Spring: both native-driver MongoDB stacks, the in-memory
-          # and API modules, and Redis.
-          - { name: mongodb-native,              paths: "eventstore/mongodb/native eventstore/api eventstore/inmemory eventstore/migration eventstore/mongodb/common subscription/mongodb/native subscription/mongodb/common subscription/redis" }
-          # misc is the deliberate junk drawer: whatever is too small to shard on its own. The
-          # reactive Spring Boot starter lives here rather than next to the blocking one because
-          # the blocking starter alone nearly fills a shard.
-          - { name: misc,                        paths: "application rewrite common deadline cloudevents-extension library framework/spring-boot-starter-mongodb-reactive" }
+          # A shard's name says what dominates it, not everything in it: filling 10 shards evenly
+          # means some carry a lodger from a subtree that had nowhere cheaper to go. That costs
+          # nothing for triage, because each subtree gets its own ::group:: in the log.
+          #
+          # `application` lodges here: it needs a MongoDB container anyway, so it starts cheaper
+          # next to a subtree that already booted one than it does in a shard of its own.
+          - { name: subscription-mongodb-spring, paths: "subscription/mongodb/spring application" }
           - { name: eventstore-spring,           paths: "eventstore/mongodb/spring" }
+          # Everything that talks to MongoDB through the driver rather than through Spring.
+          - { name: mongodb-native,              paths: "eventstore/mongodb/native subscription/mongodb/native eventstore/api eventstore/mongodb/common subscription/mongodb/common" }
           # Listed per module, not as the framework aggregator, because the blocking starter is the
           # single most expensive module in the build and has to sit alone.
           - { name: framework,                   paths: "framework/spring-boot-starter-mongodb framework/annotations framework/spring-boot-autoconfigure-mongodb-common" }
           - { name: dsl,                         paths: "dsl" }
+          # misc is the deliberate junk drawer: whatever is too small to shard on its own. The
+          # reactive Spring Boot starter is here because the blocking one nearly fills a shard by
+          # itself, so the two cannot share.
+          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension" }
           # example modules run real MongoDB replica-set containers with timing-sensitive
           # Awaitility subscription-catchup tests. A single example shard started 12 containers
           # sequentially on one runner, which tipped those waits over. Split by container load
           # (projection+forwarder ~5 vs domain ~7) to cut per-runner churn, keeping an in-run
           # retry as a backstop for residual timing flakiness.
           - { name: example-domain,              paths: "example/domain", args: "-Dsurefire.rerunFailingTestsCount=2" }
-          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga", args: "-Dsurefire.rerunFailingTestsCount=2" }
+          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga subscription/redis eventstore/migration eventstore/inmemory", args: "-Dsurefire.rerunFailingTestsCount=2" }
           - { name: subscription-util-blocking,  paths: "subscription/util/blocking subscription/synchronous/blocking subscription/push/blocking" }
           - { name: subscription-rest,           paths: "subscription/api subscription/core subscription/inmemory subscription/util/reactor subscription/synchronous/reactor subscription/push/reactor" }
-          - { name: subscription-mongodb-spring, paths: "subscription/mongodb/spring" }
     steps:
       - uses: actions/checkout@v4
       - name: Set up JDK ${{ matrix.java }}
