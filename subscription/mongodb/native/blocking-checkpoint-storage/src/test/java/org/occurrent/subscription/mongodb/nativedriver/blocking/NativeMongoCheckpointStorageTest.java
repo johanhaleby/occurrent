@@ -105,6 +105,8 @@ public class NativeMongoCheckpointStorageTest {
     private ObjectMapper objectMapper;
     private MongoClient mongoClient;
     private MongoDatabase database;
+    private Thread.UncaughtExceptionHandler previousDefaultUncaughtExceptionHandler;
+    private boolean replacedDefaultUncaughtExceptionHandler;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -123,6 +125,33 @@ public class NativeMongoCheckpointStorageTest {
     void shutdown() {
         subscriptionModel.shutdown();
         mongoClient.close();
+        // Restored after the shutdown above rather than from a second @AfterEach, because JUnit does not promise
+        // an order between two of them and shutting down must still be covered by the handler.
+        if (replacedDefaultUncaughtExceptionHandler) {
+            Thread.setDefaultUncaughtExceptionHandler(previousDefaultUncaughtExceptionHandler);
+            previousDefaultUncaughtExceptionHandler = null;
+            replacedDefaultUncaughtExceptionHandler = false;
+        }
+    }
+
+    // A consumer that throws kills the dispatcher thread when the retry strategy is none, since there is nothing
+    // left to restart it. The JVM's default handler then prints that stack trace, which GitHub Actions turns into
+    // an error annotation, so an otherwise green run reports errors and real ones get easier to miss.
+    // Anything other than the one exception the test asks for still reaches the handler that was installed before.
+    private void expectUncaughtException(Class<? extends Throwable> type, String message) {
+        Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        previousDefaultUncaughtExceptionHandler = previous;
+        replacedDefaultUncaughtExceptionHandler = true;
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            if (type.isInstance(throwable) && message.equals(throwable.getMessage())) {
+                return;
+            }
+            if (previous == null) {
+                thread.getThreadGroup().uncaughtException(thread, throwable);
+            } else {
+                previous.uncaughtException(thread, throwable);
+            }
+        });
     }
 
     @Test
@@ -281,6 +310,7 @@ public class NativeMongoCheckpointStorageTest {
 
         // Disable retry
         subscriptionModel = newDurableSubscription("events", RFC_3339_STRING, RetryStrategy.none());
+        expectUncaughtException(IllegalArgumentException.class, "Expected");
 
         AtomicInteger counter = new AtomicInteger();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
