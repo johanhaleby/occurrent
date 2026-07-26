@@ -163,7 +163,7 @@ class SubscriptionAnnotationRegistrar {
             return invokeMono(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
         };
 
-        Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentReactiveAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
+        Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
         // The synchronous subscription model has no lifecycle, start position, or background subscription, so there is
         // no start position to resolve and nothing to wait for.
         synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), StartAt.subscriptionModelDefault(), consumer);

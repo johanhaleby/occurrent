@@ -54,17 +54,29 @@ Storage conventions travel with the implementation. The `occurrent-snapshot-<id>
 
 The reactive `StartPositionSupport` decided whether history replay was possible by resolving `ReactorMongoEventStore` and calling `writesPosition()`. The store-neutral `PositionOrderedReader` already declares that method, so the capability is reachable without the concrete type.
 
-Resolve `PositionOrderedReader` and narrow to the candidate that is also an `EventStore`. Two details make that the right lookup rather than the obvious one. Resolving `EventStore` directly would be worse, because it is declared `@ConditionalOnMissingBean`, so a user-supplied store gives two candidates and `getIfAvailable()` throws. And resolving `PositionOrderedReader` without narrowing is ambiguous, because a `@Projection(source = PUSH)` application declares its own reader bean. Narrowing to the candidate that is also an `EventStore` reproduces the original "ask the store, not a feed" semantics store-neutrally.
+The rule is: ask the event store, not any reader that happens to be in the context. It lives in one place, `PositionOrderedEventStores.find(ApplicationContext)` in the reactor module, which is public precisely because it is a contract rather than a helper.
 
-This is the one part of the move that is not behavior-preserving: a user-supplied reactive `EventStore` implementing `PositionOrderedReader` now reports position replay as supported, where before only the Mongo store did. Such a store does write positions, so this is a fix.
+**Both the probe and the catch-up wiring must use it, and that is the load-bearing part.** A first attempt had the neutral probe answer "can history be replayed" through the capability while the store starter still composed its catch-up layer from the concrete `ReactorMongoEventStore`. Those two can disagree: a user-supplied reactive `EventStore` implementing `PositionOrderedReader` made the probe say yes while no `ReactorCatchupSubscriptionModel` was wired, so `startAt = BEGINNING` silently did not replay where it used to fail at startup. Fail-loud became fail-silent. `ReactiveCatchupLayerWiringTest` pins it, and reverting the wiring to the concrete lookup fails that test.
 
-### The post-processor becomes public, the registrars stay package-private
+So the seam obligation on a store starter is not just "contribute a `PositionOrderedReader` event store". It is: if your store answers the capability, your catch-up layer must be wired from the same answer.
 
-Each stack exposes exactly one public type, the bean-post-processor, which also carries the `SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME` constant the store starter needs. All four registrars and `StartPositionSupport` remain package-private, keeping the encapsulation #383 established.
+Resolution deliberately goes through bean *names* for `EventStore` and only then checks the `PositionOrderedReader` instance, so no unrelated reader bean is instantiated. Two candidates are handed to the container first, so `@Primary` and `@Fallback` still decide, and only a genuinely unresolvable pair throws, naming the beans. An earlier `getBeanProvider(...).stream()` version was wrong on all three counts: it force-created every matching bean while running mid-refresh, ignored `@Primary`, and silently took the first in registration order.
 
-The alternative was leaving the post-processor package-private and narrowing the `static @Bean` return type to `BeanPostProcessor`. That was tried and it works: Spring resolves `DisposableBean` from the created instance, not from the declared return type, so the destroy callback still fires. The concern that motivated the public type turned out to be unfounded.
+One behavior difference remains and is intended: a user-supplied reactive `EventStore` implementing `PositionOrderedReader` now reports replay as supported, where before only the Mongo store did. Such a store does write positions, and it now also gets the catch-up layer, so the capability and the wiring agree.
 
-Public is still the better choice, for a plainer reason. The store starter needs `SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME` from this class anyway, so the type is already part of the contract between the neutral module and a store starter. Making that explicit beats reaching a constant through a type the declaration pretends is something else.
+### The store-default seams use `@Fallback`, not `@ConditionalOnMissingBean`
+
+`@EnableOccurrent` activates the autoconfiguration through a plain `@Import`, and this repository already documents that `@ConditionalOnMissingBean` can then evaluate before a user's bean is registered and let both through. That is why `TagGenerator` and `CloudEventTypeMapper` use `@Fallback`. The four `Default*Provider` beans do the same, for the same reason.
+
+That makes two provider beans a legitimate state rather than an impossible one, so each resolution site catches `NoUniqueBeanDefinitionException` and reports the annotation, its id, the provider type and the candidate bean names. Without that, the carefully worded provider-absent message was unreachable on ambiguity and users got a bare Spring exception.
+
+### Everything stays package-private except the bean names
+
+The store starter needs one thing from the post-processor: the bean name of the synchronous subscription DSL. That is a constant, not a type, so it lives in `OccurrentBlockingBeanNames` / `OccurrentReactorBeanNames` and both post-processors, all four registrars and both `StartPositionSupport` classes stay package-private. The encapsulation #383 established survives intact.
+
+The complete public surface of the two per-stack modules is therefore: the four `Default*Provider` seams, the two bean-name holders, the two `Occurrent*AnnotationConfiguration` classes a starter imports, and `PositionOrderedEventStores`. Every one of those is something a store starter has to name. Nothing else is reachable.
+
+An earlier attempt made the post-processors public to carry that constant, reasoning that they were already part of the contract. That was more surface than the problem needed. A related worry, that a package-private post-processor declared by a `static @Bean` would lose its `DisposableBean` destroy callback and leak the saga timer poller, was tested and is unfounded: Spring resolves `DisposableBean` from the created instance, not from the declared return type. `AnnotationBeanPostProcessorDestroyCallbackTest` observes the callback directly rather than resting on that inference.
 
 ## Consequences
 

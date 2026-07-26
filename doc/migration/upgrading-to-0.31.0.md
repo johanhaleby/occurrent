@@ -44,13 +44,13 @@ a nested `ResumeBehavior`/`StartupMode`, for example `Subscription.ResumeBehavio
 `DcbSubscription.ResumeBehavior`, or `Projection.StartupMode`, to the shared top-level
 `org.occurrent.annotation.ResumeBehavior`/`org.occurrent.annotation.StartupMode`. It also rewrites
 `Subscription.StartPosition` and `DcbSubscription.DcbStartPosition` to the shared top-level
-`org.occurrent.annotation.StartPosition`. This covers a fully-qualified reference, an import, and a static import.
-It also composes `org.occurrent.MigrateCoordinates_0_31`, which renames the four checkpoint-storage dependency
-coordinates in your Maven and Gradle build files (see section 3), and rewrites every reference, import, and static
-import of `EventMetadata` from its old package to the new one (see section 4). It also rewrites the Spring Boot
+`org.occurrent.annotation.StartPosition`, and rewrites every reference, import, and static import of
+`EventMetadata` from its old package to the new one (see section 4). This same recipe also rewrites the Spring Boot
 annotation machinery (`OccurrentProperties` and friends) from `org.occurrent.springboot.mongo.common` to
-`org.occurrent.springboot.common`, and the module coordinate from `occurrent-mongodb-spring-boot-autoconfigure` to
-`occurrent-spring-boot-autoconfigure` (see section 5). Safe to run and commit without review.
+`org.occurrent.springboot.common` (see section 5). It also composes `org.occurrent.MigrateCoordinates_0_31`, which
+renames the four checkpoint-storage dependency coordinates (see section 3) and the Spring Boot autoconfigure
+module coordinate, from `occurrent-mongodb-spring-boot-autoconfigure` to `occurrent-spring-boot-autoconfigure`
+(see section 5), in your Maven and Gradle build files. Safe to run and commit without review.
 
 ## 2. What changed
 

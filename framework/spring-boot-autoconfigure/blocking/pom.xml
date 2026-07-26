@@ -105,6 +105,12 @@
             <artifactId>occurrent-subscription-catchup-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- TimeBasedCheckpoint lives here, not in catchup-blocking, even though both share the same package -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-stream-catchup-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-competing-consumer-blocking</artifactId>
@@ -133,6 +139,12 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-saga-dsl-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- View, MaterializedView and ViewStateRepository are the @Projection read-model store contracts -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-view-dsl</artifactId>
             <version>${project.version}</version>
         </dependency>
 

@@ -47,14 +47,7 @@ import java.util.Set;
  * registrars ({@link SubscriptionAnnotationRegistrar}, {@link ProjectionAnnotationRegistrar},
  * {@link SnapshotAnnotationRegistrar}, {@link SagaAnnotationRegistrar}) built on top of {@link StartPositionSupport}.
  */
-public class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton, DisposableBean {
-
-    /**
-     * The bean name of the synchronous {@code Subscriptions} DSL declared by the auto-configuration. Resolved by name
-     * (rather than by type) so it does not collide with the asynchronous {@code Subscriptions} bean, which is of the
-     * same type.
-     */
-    public static final String SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME = "occurrentSynchronousSubscriptionDsl";
+class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton, DisposableBean {
 
     private ApplicationContext applicationContext;
     // One shared duplicate-id registry across every registrar: all subscription ids are collected before projections,

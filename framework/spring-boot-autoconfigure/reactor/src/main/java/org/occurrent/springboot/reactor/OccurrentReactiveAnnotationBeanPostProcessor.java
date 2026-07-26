@@ -58,14 +58,7 @@ import java.util.Set;
  * registry, and delegates the actual annotation processing to the package-private collaborators built in
  * {@link #setApplicationContext}.
  */
-public class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton {
-
-    /**
-     * The bean name of the synchronous {@code Subscriptions} DSL declared by the auto-configuration. Resolved by name
-     * (rather than by type) so it does not collide with the asynchronous {@code Subscriptions} bean, which is of the
-     * same type.
-     */
-    public static final String SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME = "occurrentSynchronousSubscriptions";
+class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton {
 
     private ApplicationContext applicationContext;
 

@@ -47,6 +47,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.repository.CrudRepository;
 
@@ -125,7 +126,7 @@ class ProjectionAnnotationRegistrar {
             if (synchronous) {
                 // The synchronous subscription model is capability-neutral and applies no DCB criteria, so a DCB
                 // projection receives every synchronously dispatched event and the fold no-ops on unhandled types.
-                Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
+                Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
                 synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.subscriptionModelDefault(), false, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;
@@ -150,7 +151,7 @@ class ProjectionAnnotationRegistrar {
             };
             boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
             if (synchronous) {
-                Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
+                Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
                 synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), StartAt.subscriptionModelDefault(), false, consumer);
                 return;
             }
@@ -242,7 +243,16 @@ class ProjectionAnnotationRegistrar {
     }
 
     private <S, ID> ViewStateRepository<S, ID> defaultProjectionStore(Class<S> stateType, String id) {
-        DefaultProjectionStoreProvider provider = applicationContext.getBeanProvider(DefaultProjectionStoreProvider.class).getIfAvailable();
+        // getIfAvailable() applies @Primary and @Fallback resolution and only throws when the container genuinely
+        // cannot pick, so an ambiguous seam is reported with the annotation id rather than as a bare Spring failure.
+        final DefaultProjectionStoreProvider provider;
+        try {
+            provider = applicationContext.getBeanProvider(DefaultProjectionStoreProvider.class).getIfAvailable();
+        } catch (NoUniqueBeanDefinitionException e) {
+            String[] providerNames = applicationContext.getBeanNamesForType(DefaultProjectionStoreProvider.class);
+            throw new IllegalStateException(("@Projection '%s' found %d DefaultProjectionStoreProvider beans (%s) and cannot pick one to create the zero-config default read-model store. " +
+                    "Declare a MaterializedView, ViewStateRepository or CrudRepository bean, select one with store/storeName, or mark one provider @Primary.").formatted(id, providerNames.length, String.join(", ", providerNames)), e);
+        }
         if (provider == null) {
             throw new IllegalStateException(("@Projection '%s' found no read-model store bean and this starter contributes no zero-config default. " +
                     "Declare a MaterializedView, ViewStateRepository or CrudRepository bean, or select one with store/storeName.").formatted(id));

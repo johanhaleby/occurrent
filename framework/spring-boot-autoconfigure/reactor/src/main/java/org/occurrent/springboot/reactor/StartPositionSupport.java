@@ -21,7 +21,6 @@ import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
@@ -59,14 +58,10 @@ class StartPositionSupport {
         // End workarounds
     }
 
-    // The event store's own reader. A @Projection(source = PUSH) application declares its own PositionOrderedReader
-    // bean, so the candidate is narrowed to the one that is also an EventStore, keeping the question about the store
-    // rather than about whatever else in the context can read in position order.
+    // Ask the event store, not any reader that happens to be in the context. Shared with the store starter that decides
+    // whether to layer in a catch-up model, so the answer here can never promise a replay the wiring cannot perform.
     private @Nullable PositionOrderedReader eventStoreReader() {
-        return applicationContext.getBeanProvider(PositionOrderedReader.class).stream()
-                .filter(EventStore.class::isInstance)
-                .findFirst()
-                .orElse(null);
+        return PositionOrderedEventStores.find(applicationContext);
     }
 
     // A capability-agnostic subscription replays over the unified global position, so replay is supported whenever the

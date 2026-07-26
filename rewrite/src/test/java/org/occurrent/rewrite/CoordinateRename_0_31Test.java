@@ -19,13 +19,16 @@ import org.junit.jupiter.api.Test;
 import org.openrewrite.test.RecipeSpec;
 import org.openrewrite.test.RewriteTest;
 
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.openrewrite.maven.Assertions.pomXml;
 
 /**
  * Covers the {@code MigrateCoordinates_0_31} recipe: the 0.31.0 rename of the four subscription
- * checkpoint-storage artifacts from -position-storage to -checkpoint-storage. A renamed coordinate and an
- * unrelated Occurrent coordinate (left alone) are both exercised.
+ * checkpoint-storage artifacts from -position-storage to -checkpoint-storage, and the rename of the Spring Boot
+ * autoconfigure artifact from {@code occurrent-mongodb-spring-boot-autoconfigure} to
+ * {@code occurrent-spring-boot-autoconfigure}. A renamed coordinate and an unrelated Occurrent coordinate (left
+ * alone) are both exercised for each.
  */
 class CoordinateRename_0_31Test implements RewriteTest {
 

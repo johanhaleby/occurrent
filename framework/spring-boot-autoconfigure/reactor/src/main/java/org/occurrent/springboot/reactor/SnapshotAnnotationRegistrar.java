@@ -38,6 +38,7 @@ import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
+import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 import reactor.core.publisher.Mono;
 import kotlin.jvm.functions.Function2;
@@ -151,7 +152,7 @@ class SnapshotAnnotationRegistrar {
 
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         if (synchronous) {
-            Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentReactiveAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
+            Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
             synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), StartAt.subscriptionModelDefault(), consumer);
             return;
         }
@@ -252,7 +253,16 @@ class SnapshotAnnotationRegistrar {
         // The state type is reflected first, so a factory that declares none reports that (the actionable fix) rather
         // than a missing provider.
         Class<S> stateType = (Class<S>) reflectSnapshotStateType(factoryMethod, id);
-        DefaultReactiveSnapshotStoreProvider provider = applicationContext.getBeanProvider(DefaultReactiveSnapshotStoreProvider.class).getIfAvailable();
+        // getIfAvailable() applies @Primary and @Fallback resolution and only throws when the container genuinely
+        // cannot pick, so an ambiguous seam is reported with the annotation id rather than as a bare Spring failure.
+        final DefaultReactiveSnapshotStoreProvider provider;
+        try {
+            provider = applicationContext.getBeanProvider(DefaultReactiveSnapshotStoreProvider.class).getIfAvailable();
+        } catch (NoUniqueBeanDefinitionException e) {
+            String[] providerNames = applicationContext.getBeanNamesForType(DefaultReactiveSnapshotStoreProvider.class);
+            throw new IllegalStateException(("@Snapshot '%s' found %d DefaultReactiveSnapshotStoreProvider beans (%s) and cannot pick one to create the zero-config default snapshot store. " +
+                    "Declare a ReactiveSnapshotStore bean, select one with store/storeName, or mark one provider @Primary.").formatted(id, providerNames.length, String.join(", ", providerNames)), e);
+        }
         if (provider == null) {
             throw new IllegalStateException(("@Snapshot '%s' found no ReactiveSnapshotStore bean and this starter contributes no zero-config default. " +
                     "Declare a ReactiveSnapshotStore bean, or select one with store/storeName.").formatted(id));

@@ -35,6 +35,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 
@@ -239,7 +240,16 @@ class SagaAnnotationRegistrar {
         // The state type is reflected first, so a factory that declares none reports that (the actionable fix) rather
         // than a missing provider.
         Class<S> stateType = (Class<S>) reflectSagaStateType(factoryMethod, id);
-        DefaultSagaStateStoreProvider provider = applicationContext.getBeanProvider(DefaultSagaStateStoreProvider.class).getIfAvailable();
+        // getIfAvailable() applies @Primary and @Fallback resolution and only throws when the container genuinely
+        // cannot pick, so an ambiguous seam is reported with the annotation id rather than as a bare Spring failure.
+        final DefaultSagaStateStoreProvider provider;
+        try {
+            provider = applicationContext.getBeanProvider(DefaultSagaStateStoreProvider.class).getIfAvailable();
+        } catch (NoUniqueBeanDefinitionException e) {
+            String[] providerNames = applicationContext.getBeanNamesForType(DefaultSagaStateStoreProvider.class);
+            throw new IllegalStateException(("@Saga '%s' found %d DefaultSagaStateStoreProvider beans (%s) and cannot pick one to create the zero-config default saga state store. " +
+                    "Declare a SagaStateStore bean, select one with store/storeName, or mark one provider @Primary.").formatted(id, providerNames.length, String.join(", ", providerNames)), e);
+        }
         if (provider == null) {
             throw new IllegalStateException(("@Saga '%s' found no SagaStateStore bean and this starter contributes no zero-config default. " +
                     "Declare a SagaStateStore bean, or select one with store/storeName.").formatted(id));

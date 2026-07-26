@@ -27,9 +27,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Proves Spring actually calls {@code destroy} on the annotation post-processor when the context shuts down. That
- * method closes every {@code @Saga} timer poller, so if the callback stops firing a poller thread outlives the
- * context and nothing else in the suite notices.
+ * Proves the annotation post-processor is contributed by the store-neutral configuration, that the subscription kill
+ * switch removes it, and that Spring actually calls {@code destroy} on it when the context shuts down.
+ * <p>
+ * The destroy callback is what {@code SagaAnnotationRegistrar.close} hangs off, so a callback that stops firing leaves
+ * poller threads behind. That downstream effect is deliberately NOT asserted here: observing a real {@code @Saga} timer
+ * poller needs a running store, so it belongs to the Docker-gated tests in the store starter. What this file pins is
+ * the callback firing at all.
  * <p>
  * Worth pinning because moving the post-processor between modules changed how its bean is declared. An earlier
  * version of this test asserted the bean definition's recorded type implements {@code DisposableBean}, which turned
@@ -52,6 +56,23 @@ class AnnotationBeanPostProcessorDestroyCallbackTest {
 
         // ApplicationContextRunner closes the context once the lambda returns, so the callback lands after it.
         assertThat(postProcessor.destroyed).isTrue();
+    }
+
+    // The presence half of the pair below. Without it the absence test passes just as happily when the @Bean method is
+    // gone entirely, and the destroy test above registers its own instance so it proves nothing about the wiring.
+    @Test
+    void the_post_processor_is_contributed_by_default() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OccurrentBlockingAnnotationConfiguration.class))
+                .run(context -> assertThat(context).hasSingleBean(OccurrentBlockingAnnotationBeanPostProcessor.class));
+    }
+
+    @Test
+    void the_post_processor_is_contributed_when_subscriptions_are_explicitly_enabled() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OccurrentBlockingAnnotationConfiguration.class))
+                .withPropertyValues("occurrent.subscription.enabled=true")
+                .run(context -> assertThat(context).hasSingleBean(OccurrentBlockingAnnotationBeanPostProcessor.class));
     }
 
     @Test
