@@ -116,10 +116,10 @@ public class NativeMongoSubscriptionModelConfig {
      * Configure the maximum amount of time the server waits for new change-stream documents before returning an
      * (possibly empty) batch (maps to the underlying {@link com.mongodb.client.ChangeStreamIterable#maxAwaitTime(long, java.util.concurrent.TimeUnit)}).
      * A smaller value lowers delivery latency at the cost of more frequent {@code getMore} round-trips when the
-     * stream is idle; a larger value keeps an idle cursor waiting longer and reduces chatter.
+     * stream is idle. A larger value keeps an idle cursor waiting longer and reduces chatter.
      * <p>
      * If not configured, the MongoDB driver/server default is used (this is the behavior prior to this option
-     * existing). Values in the range 200 ms&ndash;1000 ms strike a reasonable balance between latency and resource
+     * existing). Values between 200 ms and 1000 ms strike a reasonable balance between latency and resource
      * usage for most workloads.
      *
      * @param maxAwaitTime The maximum wait time. Must be greater than {@code 0}.
