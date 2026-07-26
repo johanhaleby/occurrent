@@ -130,7 +130,7 @@ jobs:
             else
               echo "::warning::Could not push $image to the mirror. Check that the job has packages write permission."
             fi
-          done < <(.github/scripts/required-test-images.sh .)
+          done < <(bash .github/scripts/required-test-images.sh .)
 
   # Guard against silent coverage loss: every module that has tests must fall under exactly one
   # test shard's paths. Parses the shard paths straight out of this file (no separate list to
@@ -325,7 +325,7 @@ jobs:
             fi
             echo "have $image from Docker Hub"
             from_docker_hub=$(( from_docker_hub + 1 ))
-          done < <(.github/scripts/required-test-images.sh .)
+          done < <(bash .github/scripts/required-test-images.sh .)
           echo "images ready: $from_mirror from the mirror, $from_docker_hub from Docker Hub"
       # Each subtree is timed and reported to the run summary, so the shard balance can always be
       # re-derived from the last green run instead of being measured by hand. Rows are appended as

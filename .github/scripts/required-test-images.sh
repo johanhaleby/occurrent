@@ -31,16 +31,27 @@ fi
 
 # Ryuk, the Testcontainers reaper, pulled by almost every shard. Its tag exists only as a constant in
 # RyukContainer's bytecode: no properties resource carries it, and getRyukImage() reports the image
-# without a tag. So read it out of the resolved jar, and treat a miss as a fall back to Docker Hub,
-# which is what happens if a Testcontainers upgrade ever moves it.
+# without a tag. So read it out of the jar, and treat a miss as a fall back to Docker Hub, which is
+# what happens if a Testcontainers upgrade ever moves that constant.
+#
+# The jar path is built from the pinned version rather than by scanning for one. A local repository
+# commonly holds several Testcontainers versions, and picking by name would sort 1.20.6 above 1.20.12
+# and mirror the wrong ryuk tag. This way it is the version the build actually resolves.
+tc_version=$(grep -oE '<test-containers\.version>[^<]+' "$root/pom.xml" 2>/dev/null | sed 's/.*>//')
 ryuk_image=""
-ryuk_jar=$(find "$root/.m2repo" "$HOME/.m2/repository" -path '*org/testcontainers/testcontainers/*' -name 'testcontainers-*.jar' 2>/dev/null | sort | tail -1)
-if [ -n "$ryuk_jar" ]; then
-    ryuk_image=$(javap -c -constants -cp "$ryuk_jar" org.testcontainers.utility.RyukContainer 2>/dev/null \
-        | grep -oE 'testcontainers/ryuk:[0-9][0-9A-Za-z._-]*' | head -1)
+if [ -n "$tc_version" ]; then
+    for maven_repo in "$root/.m2repo" "$HOME/.m2/repository"; do
+        ryuk_jar="$maven_repo/org/testcontainers/testcontainers/$tc_version/testcontainers-$tc_version.jar"
+        [ -f "$ryuk_jar" ] || continue
+        ryuk_image=$(javap -c -constants -cp "$ryuk_jar" org.testcontainers.utility.RyukContainer 2>/dev/null \
+            | grep -oE 'testcontainers/ryuk:[0-9][0-9A-Za-z._-]*' | head -1)
+        [ -n "$ryuk_image" ] && break
+    done
 fi
 if [ -n "$ryuk_image" ]; then
     echo "$ryuk_image"
+elif [ -z "$tc_version" ]; then
+    echo "::warning::Could not read test-containers.version from pom.xml, so the ryuk image is not mirrored and will come from Docker Hub." >&2
 else
-    echo "::warning::Could not read the ryuk image tag from the Testcontainers jar, so it is not mirrored and will come from Docker Hub." >&2
+    echo "::warning::Could not read the ryuk image tag from the Testcontainers $tc_version jar, so it is not mirrored and will come from Docker Hub." >&2
 fi
