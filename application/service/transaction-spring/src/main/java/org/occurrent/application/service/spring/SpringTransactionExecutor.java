@@ -52,7 +52,7 @@ public class SpringTransactionExecutor implements TransactionExecutor {
 
     /**
      * Retries a conflict between concurrent appends, but only when this executor opened the transaction: the store
-     * joins that transaction and so cannot retry one itself, and only its owner can start a fresh one. See ADR 0070.
+     * joins that transaction and so cannot retry one itself, and only its owner can start a fresh one. See ADR 0074.
      * <p>
      * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
      * stands in for exactly that retry once the store has to give it up. Every append increments one global position
@@ -136,7 +136,7 @@ public class SpringTransactionExecutor implements TransactionExecutor {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
             // A transaction is already open, so the template joins it and this executor is not its owner. A conflict
             // aborts the whole transaction, which only its owner can start again, so run the action once and let the
-            // error reach that owner. See ADR 0070.
+            // error reach that owner. See ADR 0074.
             return transactionTemplate.execute(status -> action.get());
         }
         return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.get()));

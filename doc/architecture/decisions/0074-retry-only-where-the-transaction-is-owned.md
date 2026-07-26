@@ -1,4 +1,4 @@
-# 70. Retry a write conflict only where the transaction is owned
+# 74. Retry a write conflict only where the transaction is owned
 
 Date: 2026-07-26
 

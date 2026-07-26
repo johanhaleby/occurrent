@@ -611,7 +611,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     }
 
     // ---------------------------------------------------------------------------
-    // Transaction ownership (ADR 0070).
+    // Transaction ownership (ADR 0074).
     //
     // The store retries a transient conflict only when it opened the transaction. When a caller already has one open
     // the TransactionTemplate joins it, a conflict aborts that transaction, and every further attempt would fail on

@@ -534,7 +534,7 @@ class ReactorMongoEventStoreDcbTest {
     }
 
     // ---------------------------------------------------------------------------
-    // Transaction ownership (ADR 0070), the reactive half of the rule.
+    // Transaction ownership (ADR 0074), the reactive half of the rule.
     //
     // Rather than race threads and hope for a conflict, these force one: the first insert fails with a retryable
     // duplicate key, and the two tests differ only in who owns the transaction. Counting inserts shows whether the

@@ -61,7 +61,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * With a synchronous subscription registered, the DCB application service runs every command through a
  * {@code TransactionExecutor}, so the event store always joins a transaction it did not open and therefore stops
- * retrying a write conflict itself (ADR 0070). The retry has to come from the executor instead, and this is the only
+ * retrying a write conflict itself (ADR 0074). The retry has to come from the executor instead, and this is the only
  * test covering that combination against a real MongoDB transaction: the other synchronous-subscription tests use the
  * in-memory store, where none of this applies.
  * <p>

@@ -438,7 +438,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
      * Applies the retry spec only when this store owns the transaction. When one is already active the operator joins
      * it, a conflict aborts it, and every further attempt fails on its first read with {@code NoSuchTransaction}, so
      * retrying could never commit. Route every retry on the write path through here so the ownership check cannot be
-     * forgotten. See ADR 0070.
+     * forgotten. See ADR 0074.
      */
     private <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
         return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory())

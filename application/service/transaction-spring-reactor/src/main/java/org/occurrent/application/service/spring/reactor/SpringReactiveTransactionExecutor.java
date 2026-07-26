@@ -59,7 +59,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
      * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
      * be started again by whoever owns it. Attempt count and backoff match the event store's own transient-conflict
      * retry, which this stands in for, and the blocking {@code SpringTransactionExecutor}, so retry behaviour is
-     * identical across the two stacks (ADR 0053). See ADR 0070.
+     * identical across the two stacks (ADR 0053). See ADR 0074.
      */
     private static final Retry DEFAULT_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
             .maxBackoff(Duration.ofMillis(500))
@@ -143,7 +143,7 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                 .flatMap(ownedByCaller -> ownedByCaller
                         // A transaction is already open, so the operator joins it and this executor is not its owner.
                         // A conflict aborts the whole transaction, which only its owner can start again, so run the
-                        // action once and let the error reach that owner. See ADR 0070.
+                        // action once and let the error reach that owner. See ADR 0074.
                         ? transaction
                         : transaction.retryWhen(conflictRetry));
     }

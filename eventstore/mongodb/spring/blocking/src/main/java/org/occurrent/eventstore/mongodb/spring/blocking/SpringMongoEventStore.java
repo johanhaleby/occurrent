@@ -204,7 +204,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
         // Retried only when this store owns the transaction. Joined to a caller's transaction, a thrown
         // WriteConditionNotFulfilledException marks it rollback-only, so a further attempt would participate in a
-        // transaction whose inner commit is a no-op and could report a success the caller cannot keep. See ADR 0070.
+        // transaction whose inner commit is a no-op and could report a success the caller cannot keep. See ADR 0074.
         StreamVersionDiff streamVersion = retryOnlyWhenThisStoreOwnsTheTransaction(
                 RetryStrategy.retry().retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion()),
                 () -> transactionTemplate.execute(writeLogic));
@@ -409,7 +409,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * active the template joins it, a conflict aborts it, and every further attempt fails on its first read with
      * {@code NoSuchTransaction}, so retrying could never commit. Every retry on the write path goes through here, the
      * DCB append, the position counter's cold start, and the stream {@code write} condition retry, so none of them can
-     * be written without the check. See ADR 0070.
+     * be written without the check. See ADR 0074.
      */
     private static <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
         return TransactionSynchronizationManager.isActualTransactionActive() ? action.get() : retry.execute(action);
