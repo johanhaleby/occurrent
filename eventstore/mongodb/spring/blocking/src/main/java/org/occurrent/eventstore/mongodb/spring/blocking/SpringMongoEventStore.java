@@ -202,9 +202,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return new StreamVersionDiff(currentStreamVersion, newStreamVersion);
         };
 
-        StreamVersionDiff streamVersion = RetryStrategy.retry()
-                .retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion())
-                .execute(() -> transactionTemplate.execute(writeLogic));
+        // Retried only when this store owns the transaction. Joined to a caller's transaction, a thrown
+        // WriteConditionNotFulfilledException marks it rollback-only, so a further attempt would participate in a
+        // transaction whose inner commit is a no-op and could report a success the caller cannot keep. See ADR 0070.
+        StreamVersionDiff streamVersion = retryOnlyWhenThisStoreOwnsTheTransaction(
+                RetryStrategy.retry().retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion()),
+                () -> transactionTemplate.execute(writeLogic));
         return new WriteResult(streamId, streamVersion.oldStreamVersion, streamVersion.newStreamVersion);
     }
 
@@ -404,10 +407,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     /**
      * Runs the action, applying the retry strategy only when this store owns the transaction. When one is already
      * active the template joins it, a conflict aborts it, and every further attempt fails on its first read with
-     * {@code NoSuchTransaction}, so retrying could never commit. Both DCB retries go through here, the append itself
-     * and the position counter's cold start, so neither can be written without the check. The stream {@code write}
-     * retry above does not, and has the same weakness when nested, but it is long-released behaviour left alone
-     * deliberately rather than an oversight. See ADR 0070.
+     * {@code NoSuchTransaction}, so retrying could never commit. Every retry on the write path goes through here, the
+     * DCB append, the position counter's cold start, and the stream {@code write} condition retry, so none of them can
+     * be written without the check. See ADR 0070.
      */
     private static <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
         return TransactionSynchronizationManager.isActualTransactionActive() ? action.get() : retry.execute(action);

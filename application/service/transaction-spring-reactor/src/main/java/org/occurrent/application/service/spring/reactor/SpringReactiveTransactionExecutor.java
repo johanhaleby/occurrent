@@ -132,11 +132,14 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
         Objects.requireNonNull(action, "action cannot be null");
         Mono<T> transaction = Mono.defer(action).as(transactionalOperator::transactional);
-        // currentContext() signals an error when the subscriber context carries no transaction. Its exception type is
-        // private to Spring, so treat any error from it as "no transaction in context" rather than naming the class.
+        // currentContext() signals an error when the subscriber context carries no transaction. Spring keeps that
+        // exception type private, so match it by simple name rather than swallowing every error: anything else means
+        // we cannot tell who owns the transaction, and guessing "nobody" would restore the futile retry.
         return TransactionContextManager.currentContext()
                 .map(__ -> true)
-                .onErrorReturn(false)
+                .onErrorResume(throwable -> "NoTransactionInContextException".equals(throwable.getClass().getSimpleName())
+                        ? Mono.just(false)
+                        : Mono.error(throwable))
                 .flatMap(ownedByCaller -> ownedByCaller
                         // A transaction is already open, so the operator joins it and this executor is not its owner.
                         // A conflict aborts the whole transaction, which only its owner can start again, so run the
