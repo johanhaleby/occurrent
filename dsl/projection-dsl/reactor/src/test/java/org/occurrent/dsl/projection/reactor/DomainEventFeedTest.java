@@ -29,10 +29,14 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import reactor.test.StepVerifier;
+
 import java.net.URI;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -145,6 +149,29 @@ class DomainEventFeedTest {
         feed.accept(metadata("stream-1", 5L), new Counted("live")).block();
 
         assertThat(repo.get("stream-1")).isEqualTo(5L);
+    }
+
+    @Test
+    void handover_options_passed_to_the_constructor_reach_every_registered_projections_catch_up() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId, null, new CatchupThenLiveOptions(10, 2));
+
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        feed.register("counter", projection(), repository);
+
+        // Buffered before the catch-up runs, so the third one exceeds the cap of two. The message names the cap, which
+        // is what proves the constructor's options reached CatchupProjectionFeed rather than the defaults being used.
+        feed.accept(new Counted("l1")).subscribe();
+        feed.accept(new Counted("l2")).subscribe();
+        // verify(Duration) rather than verifyErrorSatisfies(): if the cap were not applied, this ack would stay pending
+        // until the catch-up drained it, so an unbounded verify would hang instead of failing.
+        StepVerifier.create(feed.accept(new Counted("l3")))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("buffer overflowed")
+                        .hasMessageContaining("(cap 2)"))
+                .verify(Duration.ofSeconds(5));
     }
 
     private static Projection<Long, Counted, String> positionKeyedProjection() {

@@ -36,8 +36,11 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.mongo.common.OccurrentProperties;
+import org.occurrent.springboot.mongo.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
@@ -176,7 +179,7 @@ class ProjectionAnnotationRegistrar {
         MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
         PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
         CheckpointStorage catchupMarker = applicationContext.getBean(CheckpointStorage.class);
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker, catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(model, converter) : ProjectionRunner.agnostic(model, converter);
         // The catch-up replay runs here, synchronously, then hands over to the live push feed.
@@ -341,5 +344,19 @@ class ProjectionAnnotationRegistrar {
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Failed to invoke @Projection factory %s#%s.".formatted(bean.getClass().getName(), method.getName()), e);
         }
+    }
+
+    // Unset knobs keep their own default, so setting one does not reset the other.
+    // Package-private for a direct unit test: resolution is easy to get subtly wrong and needs no Spring context.
+    static CatchupThenLiveOptions catchupThenLiveOptions(OccurrentProperties properties) {
+        CatchupThenLiveProperties configured = properties.getSubscription().getCatchupThenLive();
+        Integer dedupCacheSize = configured.getDedupCacheSize();
+        Integer maxBufferedEvents = configured.getMaxBufferedEvents();
+        if (dedupCacheSize == null && maxBufferedEvents == null) {
+            return CatchupThenLiveOptions.defaults();
+        }
+        return new CatchupThenLiveOptions(
+                dedupCacheSize == null ? CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE : dedupCacheSize,
+                maxBufferedEvents == null ? CatchupThenLiveOptions.DEFAULT_MAX_BUFFERED_EVENTS : maxBufferedEvents);
     }
 }

@@ -249,6 +249,11 @@ public class OccurrentProperties {
          */
         private boolean enabled = true;
 
+        /**
+         * Tuning for the catch-up-then-live handover used by a push-fed projection's bootstrap.
+         */
+        private CatchupThenLiveProperties catchupThenLive = new CatchupThenLiveProperties();
+
         public String getCollection() {
             return collection;
         }
@@ -271,6 +276,68 @@ public class OccurrentProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public CatchupThenLiveProperties getCatchupThenLive() {
+            return catchupThenLive;
+        }
+
+        public void setCatchupThenLive(CatchupThenLiveProperties catchupThenLive) {
+            this.catchupThenLive = catchupThenLive;
+        }
+
+        /**
+         * Tunes the catch-up-then-live subscription model that a {@code @Projection(source = PUSH)} is bootstrapped
+         * with: it replays history from the event store while buffering what the push feed delivers, then drains the
+         * buffer and goes live.
+         * <p>
+         * This applies to a projection fed by a {@code PushSubscriptionModel}. It does <strong>not</strong> reach a
+         * projection fed by a {@code DomainEventFeed}, because your application declares that bean itself, so you tune
+         * its catch-up by passing the options to its constructor instead.
+         * <p>
+         * Both values are unset by default, meaning the built-in defaults apply. Setting one leaves the other at its
+         * default.
+         */
+        public static class CatchupThenLiveProperties {
+
+            /**
+             * How many recently delivered event ids to retain so the replay-to-live overlap is de-duplicated exactly.
+             * Defaults to 10000. Beyond this window the at-least-once contract applies, so an idempotent fold absorbs a
+             * duplicate. Raise it only if a replay overlaps more live events than that and duplicate delivery is
+             * expensive for the read model.
+             */
+            private Integer dedupCacheSize;
+
+            /**
+             * A fail-loud ceiling on events buffered from the push feed while the replay runs, not a throttle. Defaults
+             * to 100000. Reaching it means the replay is not keeping up with the feed at all, so the overflow is
+             * reported rather than events being dropped or the buffer growing without bound. The blocking stack throws
+             * from the failing feed call, the reactor stack signals the error on that event's returned Mono. Raise it
+             * for a large history behind a busy feed.
+             */
+            private Integer maxBufferedEvents;
+
+            public Integer getDedupCacheSize() {
+                return dedupCacheSize;
+            }
+
+            public void setDedupCacheSize(Integer dedupCacheSize) {
+                if (dedupCacheSize != null && dedupCacheSize <= 0) {
+                    throw new IllegalArgumentException("occurrent.subscription.catchup-then-live.dedup-cache-size must be greater than zero");
+                }
+                this.dedupCacheSize = dedupCacheSize;
+            }
+
+            public Integer getMaxBufferedEvents() {
+                return maxBufferedEvents;
+            }
+
+            public void setMaxBufferedEvents(Integer maxBufferedEvents) {
+                if (maxBufferedEvents != null && maxBufferedEvents <= 0) {
+                    throw new IllegalArgumentException("occurrent.subscription.catchup-then-live.max-buffered-events must be greater than zero");
+                }
+                this.maxBufferedEvents = maxBufferedEvents;
+            }
         }
     }
 
