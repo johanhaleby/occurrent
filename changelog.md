@@ -1,4 +1,4 @@
-### Changelog next version
+### 0.31.0 (2026-07-26)
 
 #### Changes
 
