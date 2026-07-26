@@ -196,8 +196,44 @@ jobs:
         with:
           name: occurrent-m2-java${{ matrix.java }}
           path: ${{ github.workspace }}/.m2repo/org/occurrent
-      - name: Enable Testcontainers reuse on this runner
-        run: echo "testcontainers.reuse.enable=true" > "$HOME/.testcontainers.properties"
+      # Reuse lets the subtrees within a shard share a container instead of each booting its own. pull.timeout
+      # is lowered from its 120s default so an unreachable registry costs a bounded amount per test class.
+      # At the default, one blip cost ~292s per class, because the 120s pull deadline is paid again by the
+      # container-start retry, and that is what pushed a shard past its 20 minute timeout (#432).
+      - name: Configure Testcontainers on this runner
+        run: |
+          {
+            echo "testcontainers.reuse.enable=true"
+            echo "pull.timeout=60"
+          } > "$HOME/.testcontainers.properties"
+          cat "$HOME/.testcontainers.properties"
+      # Pull the Mongo image once here rather than letting every test class rediscover a broken registry for
+      # itself. Every shard starts a Mongo container and Mongo is pulled before anything else, so this sees a
+      # Docker Hub outage first and fails in under a minute saying so, instead of the run being cancelled 20
+      # minutes later with a timeout that reads like a hanging test. On a healthy run it costs a few seconds
+      # the first test would have paid anyway, and the tests then find the image already local.
+      #
+      # Only Mongo. The Redis tag lives in a test and ryuk's comes from the Testcontainers version, so listing
+      # them here would be a list that rots, and pull.timeout above already bounds whatever is not pre-pulled.
+      # The version is read from the pom so it cannot drift from what the tests ask for.
+      - name: Pre-pull the MongoDB test image
+        run: |
+          version=$(grep -oE '<integration-tests\.mongo\.version>[^<]+' pom.xml | sed 's/.*>//')
+          if [ -z "$version" ]; then
+            echo "::error::Could not read integration-tests.mongo.version from pom.xml, so the Mongo image to pre-pull is unknown. Was the property renamed?"
+            exit 1
+          fi
+          image="mongo:$version"
+          for attempt in 1 2 3; do
+            if docker pull -q "$image"; then
+              echo "have $image locally, tests will not pull it"
+              exit 0
+            fi
+            echo "::warning::Pull of $image failed, attempt $attempt of 3"
+            sleep $(( attempt * 5 ))
+          done
+          echo "::error::Could not pull $image from Docker Hub after 3 attempts. This is a registry problem, not a test failure."
+          exit 1
       # Each subtree is timed and reported to the run summary, so the shard balance can always be
       # re-derived from the last green run instead of being measured by hand. Rows are appended as
       # they complete rather than collected and written at the end, so a shard that fails partway

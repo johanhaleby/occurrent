@@ -26,7 +26,11 @@ import org.bson.Document;
 import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.time.Duration;
+import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -39,13 +43,15 @@ import java.util.concurrent.TimeUnit;
  * sees a ready primary. The check runs once per container start and costs a few milliseconds when healthy.
  * <p>
  * The image defaults to the {@code test.mongo.version} system property (the repository-wide test version),
- * falling back to {@code 8.0}.
+ * falling back to the version the build filtered into {@code occurrent-test-support.properties}.
  */
 public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
 
     private static final Duration READINESS_TIMEOUT = Duration.ofSeconds(60);
     private static final Duration POLL_INTERVAL = Duration.ofMillis(250);
     private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(2);
+    private static final String VERSION_RESOURCE = "occurrent-test-support.properties";
+    private static final String MONGO_VERSION_KEY = "mongo.version";
 
     /**
      * Create a container for the given {@code mongo:...} image, running as a single-node replica set.
@@ -58,10 +64,37 @@ public final class ReplicaSetReadyMongoDBContainer extends MongoDBContainer {
     }
 
     /**
-     * Create a container for the {@code test.mongo.version} system property, defaulting to {@code 8.0}.
+     * Create a container for the {@code test.mongo.version} system property, falling back to the version the
+     * build was compiled against when that property is absent, which is what an IDE run gets.
      */
     public static ReplicaSetReadyMongoDBContainer withDefaultVersion() {
-        return new ReplicaSetReadyMongoDBContainer("mongo:" + System.getProperty("test.mongo.version", "8.0"));
+        return new ReplicaSetReadyMongoDBContainer("mongo:" + defaultVersion());
+    }
+
+    private static String defaultVersion() {
+        String fromSystemProperty = System.getProperty("test.mongo.version");
+        if (fromSystemProperty != null && !fromSystemProperty.isBlank()) {
+            return fromSystemProperty;
+        }
+        // Surefire passes test.mongo.version for a Maven run. An IDE run gets nothing, so read the version the
+        // build filtered into this resource rather than repeating it here, where it could drift from the pom.
+        try (InputStream stream = ReplicaSetReadyMongoDBContainer.class.getResourceAsStream("/" + VERSION_RESOURCE)) {
+            if (stream == null) {
+                throw new IllegalStateException(VERSION_RESOURCE + " is missing from the classpath, so the Mongo version is unknown. Build test-support, or pass -Dtest.mongo.version.");
+            }
+            Properties properties = new Properties();
+            properties.load(stream);
+            String version = properties.getProperty(MONGO_VERSION_KEY);
+            if (version == null || version.isBlank()) {
+                throw new IllegalStateException(MONGO_VERSION_KEY + " is missing from " + VERSION_RESOURCE + ", so the Mongo version is unknown.");
+            }
+            if (version.startsWith("${")) {
+                throw new IllegalStateException(VERSION_RESOURCE + " was copied without Maven resource filtering, so it still holds " + version + ". Build test-support through Maven, or pass -Dtest.mongo.version.");
+            }
+            return version;
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to read " + VERSION_RESOURCE + " to determine the Mongo version", e);
+        }
     }
 
     @Override
