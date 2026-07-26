@@ -54,14 +54,15 @@ import java.util.function.Supplier;
 public class SpringReactiveTransactionExecutor implements ReactiveTransactionExecutor {
 
     /**
-     * Retries a transient conflict, such as two concurrent appends contending on the same partition stream or on the
+     * Retries a conflict between concurrent appends, such as two contending on the same partition stream or on the
      * global position counter, but only when this executor opened the transaction. The event store joins this
      * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
-     * be started again by whoever owns it. Attempt count and backoff match the blocking
-     * {@code SpringTransactionExecutor} so retry behaviour is identical across the two stacks (ADR 0053). See ADR 0070.
+     * be started again by whoever owns it. Attempt count and backoff match the event store's own transient-conflict
+     * retry, which this stands in for, and the blocking {@code SpringTransactionExecutor}, so retry behaviour is
+     * identical across the two stacks (ADR 0053). See ADR 0070.
      */
-    private static final Retry TRANSIENT_CONFLICT_RETRY = Retry.backoff(4, Duration.ofMillis(100))
-            .maxBackoff(Duration.ofSeconds(2))
+    private static final Retry TRANSIENT_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
+            .maxBackoff(Duration.ofMillis(500))
             .filter(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException)
             .onRetryExhaustedThrow((spec, signal) -> signal.failure());
 

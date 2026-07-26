@@ -54,14 +54,19 @@ public class SpringTransactionExecutor implements TransactionExecutor {
      * Retries a conflict between concurrent appends, but only when this executor opened the transaction: the store
      * joins that transaction and so cannot retry one itself, and only its owner can start a fresh one. See ADR 0070.
      * <p>
+     * The attempt count and backoff deliberately match the event store's own transient-conflict retry, because this
+     * stands in for exactly that retry once the store has to give it up. Every append increments one global position
+     * counter, so under concurrency the last writer can need to wait out all the others, and a smaller budget is not
+     * enough. Five attempts, borrowed from the unrelated append-condition retry, failed a six-way contention test.
+     * <p>
      * {@link DataIntegrityViolationException} is matched as well as {@link TransientDataAccessException} because
      * MongoDB labels a WriteConflict transient while Spring translates it to the non-transient type, so the obvious
      * predicate would miss the most common conflict there is. A genuine integrity violation is therefore retried too,
      * which is wasteful rather than wrong since it fails the same way every attempt.
      */
     private static final RetryStrategy TRANSIENT_CONFLICT_RETRY = RetryStrategy
-            .exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
-            .maxAttempts(5)
+            .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
+            .maxAttempts(15)
             .retryIf(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException);
 
     private final TransactionTemplate transactionTemplate;
