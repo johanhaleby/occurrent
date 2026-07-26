@@ -1,4 +1,4 @@
-# 67. Relocate EventMetadata to cloudevents-extension
+# 71. Relocate EventMetadata to cloudevents-extension
 
 Date: 2026-07-21
 

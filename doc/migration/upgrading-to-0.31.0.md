@@ -84,7 +84,7 @@ unified global or DCB position, so it stays nested and annotation-specific.
 The typed accessors you actually fold events with, `getStreamId()`, `getStreamVersion()`, `getPosition()`,
 `getData()`, the static `empty()`, and the static `from(CloudEvent)`, are unchanged in name and behavior, so this is
 otherwise a drop-in upgrade. `DcbEventMetadata` stays in `dsl/dcb-dsl/common` and only its import of `EventMetadata`
-changes. Rationale is in [ADR 67](../architecture/decisions/0067-relocate-eventmetadata-to-cloudevents-extension.md).
+changes. Rationale is in [ADR 71](../architecture/decisions/0071-relocate-eventmetadata-to-cloudevents-extension.md).
 
 ## 5. If the recipe cannot reach a reference
 
