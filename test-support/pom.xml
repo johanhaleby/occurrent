@@ -67,6 +67,27 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <resources>
+            <!-- Filtered so occurrent-test-support.properties carries the pom's Mongo version. The second block
+                 keeps every other resource unfiltered, since filtering would corrupt a binary one. -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>occurrent-test-support.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>occurrent-test-support.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
+    </build>
+
     <profiles>
         <profile>
             <id>release</id>
