@@ -59,7 +59,8 @@ class SagaFlowExtensionsTest {
 
     private fun closeAbandonedGameSaga(): Saga<GameEvent, FlowState<GameEvent>, GameCommand> =
         saga {
-            startsOn<GameCreated>({ it.gameId })
+            startsOn<GameCreated>()
+            correlate<GameCreated> { it.gameId }
             correlate<PlayerJoinedGame> { it.gameId }
             step("awaiting-first-player") {
                 on<PlayerJoinedGame>(then = end) {}
@@ -126,7 +127,8 @@ class SagaFlowExtensionsTest {
 
     private fun gameStartSaga(): Saga<LobbyEvent, FlowState<LobbyEvent>, LobbyCommand> =
         saga {
-            startsOn<LobbyOpened>({ it.gameId })
+            startsOn<LobbyOpened>()
+            correlate<LobbyOpened> { it.gameId }
             correlate<PlayerJoined> { it.gameId }
             correlate<FirstPlayerMadeMove> { it.gameId }
             step("awaiting-game-start") {
@@ -321,7 +323,7 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `startsOn without an explicit correlatedBy is correlated by correlateAll`() {
+        fun `the start event is correlated by correlateAll`() {
             val saga = minimalOrderSaga { correlateAll { it.orderId } }
 
             assertThat(saga.sagaId(OrderPlaced("o1", 100))).isEqualTo("o1")
@@ -450,7 +452,8 @@ class SagaFlowExtensionsTest {
      */
     private fun documentReviewSaga(): Saga<ReviewEvent, FlowState<ReviewEvent>, ReviewCommand> =
         saga {
-            startsOn<ReviewRequested>({ it.documentId })
+            startsOn<ReviewRequested>()
+            correlate<ReviewRequested> { it.documentId }
             correlate<Approved> { it.documentId }
             correlate<BudgetAssigned> { it.documentId }
             step("awaiting-approvals") {
@@ -518,7 +521,8 @@ class SagaFlowExtensionsTest {
         @Test
         fun `a single-expectation join builds and fulfils on that one event`() {
             val saga = saga<ValidationEvent, ValidationCommand> {
-                startsOn<Started>({ it.id })
+                startsOn<Started>()
+                correlate<Started> { it.id }
                 correlate<Foo> { it.id }
                 step("await-foo") {
                     join(expect<Foo>(), then = end) { r ->
@@ -540,7 +544,8 @@ class SagaFlowExtensionsTest {
         fun `a transitionTo target that is not a declared step fails to build`() {
             assertThatThrownBy {
                 saga<ValidationEvent, ValidationCommand> {
-                    startsOn<Started>({ it.id })
+                    startsOn<Started>()
+                    correlate<Started> { it.id }
                     correlate<Foo> { it.id }
                     step("first") {
                         on<Foo>(then = transitionTo("does-not-exist")) {}
@@ -554,7 +559,8 @@ class SagaFlowExtensionsTest {
         fun `an event type used in a step with no correlation fails to build naming the type`() {
             assertThatThrownBy {
                 saga<ValidationEvent, ValidationCommand> {
-                    startsOn<Started>({ it.id })
+                    startsOn<Started>()
+                    correlate<Started> { it.id }
                     step("first") {
                         on<Foo>(then = end) {}
                     }
@@ -567,7 +573,8 @@ class SagaFlowExtensionsTest {
         fun `a duplicate step name fails to build`() {
             assertThatThrownBy {
                 saga<ValidationEvent, ValidationCommand> {
-                    startsOn<Started>({ it.id })
+                    startsOn<Started>()
+                    correlate<Started> { it.id }
                     correlate<Foo> { it.id }
                     step("first") { on<Foo>(then = end) {} }
                     step("first") { on<Foo>(then = end) {} }
@@ -580,7 +587,8 @@ class SagaFlowExtensionsTest {
         fun `a step mixing a branch and a join fails immediately`() {
             assertThatThrownBy {
                 saga<ValidationEvent, ValidationCommand> {
-                    startsOn<Started>({ it.id })
+                    startsOn<Started>()
+                    correlate<Started> { it.id }
                     correlate<Foo> { it.id }
                     correlate<Bar> { it.id }
                     step("first") {
@@ -606,7 +614,8 @@ class SagaFlowExtensionsTest {
         fun `zero steps fails to build`() {
             assertThatThrownBy {
                 saga<ValidationEvent, ValidationCommand> {
-                    startsOn<Started>({ it.id })
+                    startsOn<Started>()
+                    correlate<Started> { it.id }
                 }
             }.isInstanceOf(IllegalStateException::class.java)
         }

@@ -41,7 +41,8 @@ class AbsoluteTimeoutFlowSagaTest {
     private val endsAt: Instant = Instant.parse("2026-07-19T18:00:00Z")
 
     private val auctionSaga: Saga<AuctionEvent, FlowState<AuctionEvent>, AuctionCommand> = saga {
-        startsOn<AuctionStarted>(correlatedBy = { it.auctionId })
+        startsOn<AuctionStarted>()
+        correlate<AuctionStarted> { it.auctionId }
         correlate<BidPlaced> { it.auctionId }
         step("bidding") {
             on<BidPlaced>(then = transitionTo("bidding")) { }

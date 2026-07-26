@@ -76,7 +76,8 @@ class FlowSagaTest {
 
     private static Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> orderFulfillmentSaga() {
         return FlowSaga.<OrderEvent, OrderCommand>builder()
-                .startsOn(OrderPlaced.class, OrderPlaced::orderId, o -> List.of(new ReservePayment(o.orderId(), o.amount())))
+                .startsOn(OrderPlaced.class, o -> List.of(new ReservePayment(o.orderId(), o.amount())))
+                .correlate(OrderPlaced.class, OrderPlaced::orderId)
                 .correlate(PaymentReserved.class, PaymentReserved::orderId)
                 .correlate(PaymentFailed.class, PaymentFailed::orderId)
                 .step("awaiting-payment", step -> step
@@ -107,7 +108,8 @@ class FlowSagaTest {
         void a_metadata_carrying_on_branch_receives_the_triggering_events_metadata() {
             AtomicReference<EventMetadata> seen = new AtomicReference<>();
             Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = FlowSaga.<OrderEvent, OrderCommand>builder()
-                    .startsOn(OrderPlaced.class, OrderPlaced::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .correlate(OrderPlaced.class, OrderPlaced::orderId)
                     .correlate(PaymentReserved.class, PaymentReserved::orderId)
                     .step("awaiting-payment", step -> step
                             .on(PaymentReserved.class, Continuation.end(), (metadata, p) -> {
@@ -234,21 +236,24 @@ class FlowSagaTest {
     class BuilderGuards {
 
         @Test
-        void startsOn_throws_when_the_type_was_already_registered_by_a_prior_correlate() {
-            FlowSaga.Builder<OrderEvent, OrderCommand> builder = FlowSaga.<OrderEvent, OrderCommand>builder()
-                    .correlate(OrderPlaced.class, OrderPlaced::orderId);
-
-            assertThatThrownBy(() -> builder.startsOn(OrderPlaced.class, OrderPlaced::orderId))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("correlate")
-                    .hasMessageContaining("OrderPlaced");
-        }
-
-        @Test
         void historyWindow_rejects_a_negative_value() {
             assertThatThrownBy(() -> FlowSaga.<OrderEvent, OrderCommand>builder().historyWindow(-1))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("historyWindow");
+        }
+
+        // startsOn no longer takes a correlation, so the start type is covered by correlate or correlateAll like any
+        // other type. Nothing else pins the start type specifically: the neighbouring case covers a type used by a step.
+        @Test
+        void build_throws_naming_the_start_type_when_nothing_correlates_it() {
+            assertThatThrownBy(() -> FlowSaga.<OrderEvent, OrderCommand>builder()
+                    .startsOn(OrderPlaced.class, o -> List.of(new ReservePayment(o.orderId(), o.amount())))
+                    .correlate(PaymentReserved.class, PaymentReserved::orderId)
+                    .step("awaiting-payment", step -> step.on(PaymentReserved.class, Continuation.end(), p -> List.of()))
+                    .build())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("OrderPlaced")
+                    .hasMessageContaining("correlateAll");
         }
     }
 
@@ -275,7 +280,8 @@ class FlowSagaTest {
         private static Saga<WinEvent, FlowState<WinEvent>, WinCommand> pingPong(int historyWindow) {
             return FlowSaga.<WinEvent, WinCommand>builder()
                     .historyWindow(historyWindow)
-                    .startsOn(Begin.class, Begin::id)
+                    .startsOn(Begin.class)
+                    .correlate(Begin.class, Begin::id)
                     .correlate(Tick.class, Tick::id)
                     .step("a", step -> step.on(Tick.class, Continuation.transitionTo("b"), t -> List.of()))
                     .step("b", step -> step.on(Tick.class, Continuation.transitionTo("a"), t -> List.of()))
@@ -296,7 +302,8 @@ class FlowSagaTest {
             // was entered: the current step's own events are never dropped mid-step, only earlier history is bounded.
             Saga<WinEvent, FlowState<WinEvent>, WinCommand> saga = FlowSaga.<WinEvent, WinCommand>builder()
                     .historyWindow(0)
-                    .startsOn(Begin.class, Begin::id)
+                    .startsOn(Begin.class)
+                    .correlate(Begin.class, Begin::id)
                     .correlate(Tick.class, Tick::id)
                     .step("wait", step -> step.join(List.of(Expectation.of(Tick.class, 3)), Continuation.end(), r -> List.of()))
                     .build();

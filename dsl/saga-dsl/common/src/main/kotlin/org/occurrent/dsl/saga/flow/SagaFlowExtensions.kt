@@ -63,15 +63,11 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     internal val delegate: FlowSaga.Builder<E, C> = FlowSaga.builder()
 
     /**
-     * Declares the event type [T] that starts an instance, optionally how it correlates, and optional commands to issue
-     * on start. A null [correlatedBy] leaves the start event to be correlated by [correlateAll].
+     * Declares the event type [T] that starts an instance, and optionally the commands to issue on start. Correlate [T]
+     * with [correlate] or [correlateAll] like any other event type.
      */
-    inline fun <reified T : E> startsOn(noinline correlatedBy: ((T) -> String)? = null, noinline onStart: FlowReactions<C>.(T) -> Unit = {}) {
-        delegate.startsOn(
-            T::class.java,
-            correlatedBy?.let { fn -> java.util.function.Function<T, String> { fn(it) } },
-            { event -> FlowReactions<C>().apply { onStart(event) }.build() }
-        )
+    inline fun <reified T : E> startsOn(noinline onStart: FlowReactions<C>.(T) -> Unit = {}) {
+        delegate.startsOn(T::class.java) { event -> FlowReactions<C>().apply { onStart(event) }.build() }
     }
 
     /** Registers how to correlate an event of type [T] to a saga instance. */
@@ -80,8 +76,8 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     }
 
     /**
-     * Registers a fallback correlation for any event type without its own [correlate] or `startsOn` correlation. The
-     * common case is a sealed event hierarchy exposing a shared id, for example `correlateAll { it.orderId }`.
+     * Registers a fallback correlation for any event type without its own [correlate]. The common case is a sealed
+     * event hierarchy exposing a shared id, for example `correlateAll { it.orderId }`.
      */
     fun correlateAll(correlatedBy: (E) -> String) {
         delegate.correlateAll { correlatedBy(it) }

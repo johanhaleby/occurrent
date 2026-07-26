@@ -508,7 +508,8 @@ class SpringMongoSagaStateStoreMongoTest {
 
     private static Saga<FlowEvent, FlowState<FlowEvent>, Object> flowSaga() {
         return FlowSaga.<FlowEvent, Object>builder()
-                .startsOn(FlowStarted.class, FlowStarted::id)
+                .startsOn(FlowStarted.class)
+                .correlate(FlowStarted.class, FlowStarted::id)
                 .correlate(FlowContinued.class, FlowContinued::id)
                 .step("started", step -> step.on(FlowContinued.class, Continuation.end(), c -> List.of()))
                 .build();
