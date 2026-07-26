@@ -161,7 +161,7 @@ class SagaEffects<C : Any> @PublishedApi internal constructor() {
      * Ends a reaction whose last statement is not one of the effect calls, for example a body that finishes on a
      * conditional. A trailing `if` without an `else` has type `Unit` and would not compile as the last expression.
      */
-    val noMore: SagaEffects<C>
+    val nothing: SagaEffects<C>
         get() = this
 
     @PublishedApi

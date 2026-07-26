@@ -77,7 +77,7 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
      * Declares the event type [T] that starts an instance, plus the commands to issue on start. Correlate [T] with
      * [correlate] or [correlateAll] like any other event type.
      */
-    inline fun <reified T : E> startsOn(noinline onStart: FlowReactions<C>.(T) -> FlowReactions<C> = { noMore }) {
+    inline fun <reified T : E> startsOn(noinline onStart: FlowReactions<C>.(T) -> FlowReactions<C> = { nothing }) {
         delegate.startsOn(T::class.java) { event -> FlowReactions<C>().apply { onStart(event) }.build() }
     }
 
@@ -136,7 +136,7 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     inline fun <reified T : E> on(
         then: Continuation,
         noinline onlyIf: ((T, ReceivedEvents<E>) -> Boolean)? = null,
-        noinline commands: FlowReactions<C>.(T) -> FlowReactions<C> = { noMore }
+        noinline commands: FlowReactions<C>.(T) -> FlowReactions<C> = { nothing }
     ) {
         val commandFn = Function<T, List<C>> { event -> FlowReactions<C>().apply { commands(event) }.build() }
         if (onlyIf == null) {
@@ -164,17 +164,17 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     }
 
     /** A join: wait until all [expecting] are met (counted since the step was entered), then issue commands and follow [then]. */
-    fun join(expecting: Expectation<E>, vararg more: Expectation<E>, then: Continuation, whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { noMore }) {
+    fun join(expecting: Expectation<E>, vararg more: Expectation<E>, then: Continuation, whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }) {
         delegate.join(listOf(expecting, *more), then) { received -> FlowReactions<C>().apply { whenFulfilled(received) }.build() }
     }
 
     /** A relative timeout: if it fires before the step completes, issue commands and follow [then]. */
-    fun timeout(after: Duration, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { noMore }) {
+    fun timeout(after: Duration, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }) {
         delegate.timeout(after, then) { received -> FlowReactions<C>().apply { onExpiry(received) }.build() }
     }
 
     /** An absolute, data-derived timeout: [at] is computed from the events received when the step is entered. */
-    fun timeout(at: (ReceivedEvents<E>) -> Instant, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { noMore }) {
+    fun timeout(at: (ReceivedEvents<E>) -> Instant, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }) {
         delegate.timeout({ received -> at(received) }, then, { received -> FlowReactions<C>().apply { onExpiry(received) }.build() })
     }
 }
@@ -201,7 +201,7 @@ class FlowReactions<C : Any> @PublishedApi internal constructor() {
      * which has type `Unit` and so cannot end the lambda on its own. A branch that issues nothing at all takes no
      * reaction lambda instead.
      */
-    val noMore: FlowReactions<C> get() = this
+    val nothing: FlowReactions<C> get() = this
 
     @PublishedApi
     internal fun build(): List<C> = commands.toList()

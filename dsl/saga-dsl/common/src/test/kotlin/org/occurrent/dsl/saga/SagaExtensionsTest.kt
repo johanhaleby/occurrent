@@ -136,7 +136,7 @@ class SagaExtensionsTest {
         }
 
         @Test
-        fun `a reaction that ends on a conditional compiles when terminated with noMore`() {
+        fun `a reaction that ends on a conditional compiles when terminated with nothing`() {
             val saga = saga<GameEvent, GameState?, GameCommand>(initialState = null) {
                 correlateAll { it.gameId }
                 startsOn<GameStarted>()
@@ -145,7 +145,7 @@ class SagaExtensionsTest {
                     if (e.gameId == "nonexistent") {
                         issue(NotifyPlayer(e.gameId, "started"))
                     }
-                    noMore
+                    nothing
                 }
             }
 

@@ -8,7 +8,7 @@ Accepted. Changes the unreleased Kotlin surface of the saga DSL (ADR 63). The Ja
 
 ## Context
 
-A Kotlin saga reaction collects its effects into a receiver and returns nothing. A core reaction is
+A Kotlin saga reaction collects its effects into a receiver and returns `Unit`. A core reaction is
 `SagaEffects<C>.(S, T) -> Unit` and a flow reaction is `FlowReactions<C>.(T) -> Unit`, so the body calls `issue(command)`
 for each command and the receiver accumulates them.
 
@@ -52,27 +52,35 @@ example, which was not edited at all. Reintroducing the bug into that example is
 OrderFulfillmentFlowSaga.kt:45:58 Return type mismatch: expected 'FlowReactions<OrderCommand>', actual 'ShipOrder'.
 ```
 
-**A body whose last statement is not an `issue(...)` ends with `noMore`.** That is the receiver itself under a name that
+**A body whose last statement is not an `issue(...)` ends with `nothing`.** That is the receiver itself under a name that
 reads better than `this`, and it is needed because a trailing `if` without an `else` has type `Unit`. A reaction with no
 commands at all takes no lambda instead, through the defaulted `on<T>(then = ...)` described below.
 
-`noMore` is a normal part of the vocabulary rather than an escape hatch. A reaction that issues a command in some cases
+`nothing` is a normal part of the vocabulary rather than an escape hatch. A reaction that issues a command in some cases
 and none in the others is an ordinary thing to write. An earlier draft called that case rare on the grounds that no
 reaction in this repository needs one, which was true and beside the point: this is a published library, so its own
 examples are not the population of what callers write. The four spellings that compile are an `if` with an `else` branch
-of `noMore`, a trailing `noMore` on its own line, a conditional followed by an unconditional command, and a `when` whose
-branches all end on a command or `noMore`.
+of `nothing`, a trailing `nothing` on its own line, a conditional followed by an unconditional command, and a `when` whose
+branches all end on a command or `nothing`.
 
-`nothing` and `nothingElse` were the alternatives considered. `nothing` reads best as an else branch and was very nearly
-chosen, but it overclaims: the branch still fires and still follows its continuation, and only the command list is empty,
-so `else nothing` invites the reading that the event is ignored and the flow does not advance. `noMore` scopes itself to
-the effects, which is the true claim, and it reads correctly both as an else branch and as a trailing line. Names in the
-continuation vocabulary (`done`, `stop`, `complete`) were excluded because a step already has `end`, `next` and
-`transitionTo` one line away, and `noCommands` or `noEffects` because the core DSL deals in effects and the flow DSL in
-commands, so neither word is neutral across the two.
+The name was a close call between `nothing`, `noMore` and `nothingElse`, and it went back and forth before settling.
+`nothing` wins the call site that should be the house style, the `if` with an `else` branch, where "otherwise nothing"
+is simply how you would say it. `noMore` and `nothingElse` both scope themselves more tightly to the effects, and both
+read better than `nothing` in the trailing position, after a line that already issued a command.
+
+The trailing position decided it, in the sense that it is the rarer of the two and the documentation leads with the
+`else` form. Names from the continuation vocabulary (`done`, `stop`, `complete`) were excluded outright, because a step
+already has `end`, `next` and `transitionTo` one line away and any of those would read as flow control. `noCommands` and
+`noEffects` were excluded because the core DSL deals in effects and the flow DSL in commands, so neither word is neutral
+across the two.
+
+The known weakness of `nothing` is that it can be read as "nothing happens here", when the branch does still fire and
+still follows its continuation, and only the command list is empty. The name does not carry that, so the documentation
+states it in the sentence that introduces the word. Anyone revisiting this should know it was decided on how the common
+call site reads, not on the word being unambiguous.
 
 **A flow branch with no commands takes no lambda.** The event-only `on`, `startsOn`, `join` and `timeout` default their
-reaction to `{ noMore }`, so a step that only advances reads `on<PlayerJoined>(then = end)`. The metadata-carrying
+reaction to `{ nothing }`, so a step that only advances reads `on<PlayerJoined>(then = end)`. The metadata-carrying
 siblings keep their lambda required, because defaulting both would make the no-lambda call match two candidates with
 neither more specific.
 
@@ -124,8 +132,8 @@ make the two tabs disagree about how many ways there are to write a reaction.
 - A Kotlin reaction that produces a command and discards it is a compile error rather than a saga that silently does
   nothing at runtime.
 - Correct reactions are unaffected, so this is close to a no-op for the tests, the documentation and the example. Only a
-  body ending in a conditional needs the new `noMore`.
-- One new word enters the vocabulary, `noMore`. That is the price of the compile error, and it is a loud cost: a body
+  body ending in a conditional needs the new `nothing`.
+- One new word enters the vocabulary, `nothing`. That is the price of the compile error, and it is a loud cost: a body
   that needs it and omits it does not compile, rather than misbehaving later.
 - `SagaEffects` and `FlowReactions` both stay, with their mutable lists, and every method returns the receiver. Chaining
   becomes available as a side effect, so `issue(cmd).cancelTimeout("payment")` reads as well as two statements.
