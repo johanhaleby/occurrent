@@ -151,7 +151,11 @@ public class NativeMongoCheckpointStorageTest {
                 return;
             }
             if (previous == null) {
-                thread.getThreadGroup().uncaughtException(thread, throwable);
+                // What the JVM itself would do. Handing this to the thread group instead would come straight back
+                // here, because the root group asks Thread.getDefaultUncaughtExceptionHandler for a handler and
+                // that is now this one, so an unexpected exception would recurse until the stack ran out.
+                System.err.print("Exception in thread \"" + thread.getName() + "\" ");
+                throwable.printStackTrace(System.err);
             } else {
                 previous.uncaughtException(thread, throwable);
             }
