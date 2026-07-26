@@ -45,6 +45,10 @@ public interface TransactionExecutor {
      * @param action The unit of work to run.
      * @param <T>    The result type produced by the action.
      * @return The value returned by the action.
+     * @implSpec An implementation that opens a transaction is responsible for retrying a write conflict, because the
+     * event store joins that transaction and an aborted transaction can only be started again by whoever began it. An
+     * implementation that joins a transaction someone else opened must run the action once and let the conflict reach
+     * that owner. See ADR 0070.
      */
     <T> T inTransaction(Supplier<T> action);
 

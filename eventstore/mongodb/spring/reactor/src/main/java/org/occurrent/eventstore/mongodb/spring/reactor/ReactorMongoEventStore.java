@@ -113,6 +113,14 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private static final Logger LOGGER = LoggerFactory.getLogger(ReactorMongoEventStore.class);
     private static final String ID = "_id";
 
+    private static final Retry TRANSIENT_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
+            .maxBackoff(Duration.ofMillis(500))
+            .filter(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
+            .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+
+    private static final Retry COLD_START_COUNTER_RETRY = Retry.fixedDelay(5, Duration.ofMillis(20))
+            .filter(ReactorMongoEventStore::isDuplicateKeyError);
+
     private final ReactiveMongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
     private final String dcbPositionCollectionName;
@@ -350,16 +358,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
             // DuplicateKeyException from two transactions first-creating the same conflict marker at once. A
             // DcbAppendConditionNotFulfilledException and a DuplicateCloudEventException are deliberately not retried.
-            //
-            // Retry only when this store owns the transaction. If an outer transaction is already active the operator
-            // joins it, a conflict aborts that transaction, and every further attempt would fail on the first read with
-            // NoSuchTransaction, so run the body once and let the owner retry at its own boundary. See ADR 0070.
-            return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory())
-                    .flatMap(ownedByCaller -> ownedByCaller
-                            ? transaction
-                            : transaction.retryWhen(Retry.backoff(15, Duration.ofMillis(10)).maxBackoff(Duration.ofMillis(500))
-                            .filter(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
-                            .onRetryExhaustedThrow((spec, signal) -> signal.failure())));
+            return retryOnlyWhenThisStoreOwnsTheTransaction(transaction, TRANSIENT_CONFLICT_RETRY);
         });
     }
 
@@ -430,7 +429,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .map(updated -> ((Number) updated.get(DcbMarkerModel.COUNTER_POSITION)).longValue() - eventCount + 1)
                 // Cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert it
                 // and all but one get a duplicate key. On retry the document exists and the upsert becomes an update.
-                .retryWhen(Retry.fixedDelay(5, Duration.ofMillis(20)).filter(ReactorMongoEventStore::isDuplicateKeyError));
+                // Like the append retry this only runs when the store owns the transaction, because a duplicate inside
+                // a joined transaction aborts it and no further attempt could commit.
+                .transform(reserve -> retryOnlyWhenThisStoreOwnsTheTransaction(reserve, COLD_START_COUNTER_RETRY));
+    }
+
+    /**
+     * Applies the retry spec only when this store owns the transaction. When one is already active the operator joins
+     * it, a conflict aborts it, and every further attempt fails on its first read with {@code NoSuchTransaction}, so
+     * retrying could never commit. Route every retry on the write path through here so the ownership check cannot be
+     * forgotten. See ADR 0070.
+     */
+    private <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
+        return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory())
+                .flatMap(ownedByCaller -> ownedByCaller ? action : action.retryWhen(retry));
     }
 
     /**

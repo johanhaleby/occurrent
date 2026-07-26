@@ -397,12 +397,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         long firstPosition = reservePositions(eventsToAppend.size());
         long lastPosition = firstPosition + eventsToAppend.size() - 1;
 
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            // Someone else owns this transaction, so a conflict aborts it and no retry here could ever commit. Run the
-            // body once and let the transient error reach the owner, which has to retry at its own boundary. See ADR 0070.
-            return appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition);
-        }
-        return executeWithTransientRetry(() -> appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition));
+        return retryOnlyWhenThisStoreOwnsTheTransaction(TRANSIENT_CONFLICT_RETRY,
+                () -> appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition));
+    }
+
+    /**
+     * Runs the action, applying the retry strategy only when this store owns the transaction. When one is already
+     * active the template joins it, a conflict aborts it, and every further attempt fails on its first read with
+     * {@code NoSuchTransaction}, so retrying could never commit. Route every retry on the write path through here so
+     * the ownership check cannot be forgotten. See ADR 0070.
+     */
+    private static <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
+        return TransactionSynchronizationManager.isActualTransactionActive() ? action.get() : retry.execute(action);
     }
 
     private DcbAppendResult appendDcbInTransaction(String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition) {
@@ -425,27 +431,27 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     /**
-     * Retry the append transaction on a MongoDB {@code TransientTransactionError} (the error label is present when two
-     * transactions conflict, e.g. a write-write conflict on a shared marker). The full cause chain is walked because
-     * Spring wraps the {@link MongoException}. {@link DcbAppendConditionNotFulfilledException} is deliberately NOT
-     * retried here: it propagates to the application service, which re-reads and retries the whole command.
+     * Retries the append transaction on a MongoDB {@code TransientTransactionError} (the error label is present when
+     * two transactions conflict, e.g. a write-write conflict on a shared marker). The full cause chain is walked
+     * because Spring wraps the {@link MongoException}. {@link DcbAppendConditionNotFulfilledException} is deliberately
+     * NOT retried here: it propagates to the application service, which re-reads and retries the whole command.
      * <p>
-     * This applies only when the store owns the transaction. If an outer transaction is already active the
-     * {@code TransactionTemplate} joins it, a conflict aborts that transaction, and every further attempt would fail
-     * on the first read with {@code NoSuchTransaction}, so the caller runs the body once instead. See ADR 0070.
+     * Exponential backoff with generous attempts, since several appends placed in the same partition stream serialize
+     * on stream_version, so the last writer can need to retry past all the others before it commits. A
+     * DuplicateKeyException is retried too: it is either two transactions first-creating the same conflict marker at
+     * once, or two disjoint DCB boundaries hashing to the same partition stream and losing on the unique
+     * streamid+streamversion index, and both are safe to rerun. A genuine duplicate CloudEvent is translated to a
+     * domain exception in insertAllDcb and never reaches here.
      */
-    private static <T> T executeWithTransientRetry(Supplier<T> action) {
-        // Exponential backoff with generous attempts, since several appends placed in the same partition stream
-        // serialize on stream_version, so the last writer can need to retry past all the others before it commits.
-        // Retry a transient transaction conflict, and also a DuplicateKeyException. That duplicate is either two
-        // transactions first-creating the same conflict marker at once, or two disjoint DCB boundaries hashing to
-        // the same partition stream and losing on the unique streamid+streamversion index. Both are safe to rerun.
-        // A genuine duplicate CloudEvent is translated to a domain exception in insertAllDcb and never reaches here.
-        return RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
-                .maxAttempts(15)
-                .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
-                .execute(action);
-    }
+    private static final RetryStrategy TRANSIENT_CONFLICT_RETRY = RetryStrategy
+            .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
+            .maxAttempts(15)
+            .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable));
+
+    private static final RetryStrategy COLD_START_COUNTER_RETRY = RetryStrategy.retry()
+            .backoff(Backoff.fixed(20))
+            .maxAttempts(5)
+            .retryIf(SpringMongoEventStore::isDuplicateKeyError);
 
     private static boolean isTransientTransactionError(Throwable throwable) {
         // Bounded walk so a cyclic cause chain (self-cause or a longer A -> B -> A cycle) cannot spin forever.
@@ -568,12 +574,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
-        // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update.
-        return RetryStrategy.retry()
-                .backoff(Backoff.fixed(20))
-                .maxAttempts(5)
-                .retryIf(SpringMongoEventStore::isDuplicateKeyError)
-                .execute(() -> {
+        // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update. Like
+        // the append retry this only runs when the store owns the transaction, because a duplicate inside a joined
+        // transaction aborts it and no further attempt could commit.
+        return retryOnlyWhenThisStoreOwnsTheTransaction(COLD_START_COUNTER_RETRY,
+                () -> {
                     Query query = new Query(where(ID).is(DcbMarkerModel.POSITION_DOCUMENT_ID));
                     Update update = new Update().inc(DcbMarkerModel.COUNTER_POSITION, eventCount);
                     FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);

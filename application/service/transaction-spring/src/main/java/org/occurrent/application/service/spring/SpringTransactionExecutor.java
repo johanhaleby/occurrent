@@ -51,22 +51,13 @@ import java.util.function.Supplier;
 public class SpringTransactionExecutor implements TransactionExecutor {
 
     /**
-     * Retries a conflict between concurrent appends, such as two contending on the same partition stream or on the
-     * global position counter, but only when this executor opened the transaction. The event store joins this
-     * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
-     * be started again by whoever owns it. Attempt count and backoff match the DCB application service's default
-     * append-condition retry, so the two conflict retries behave comparably. See ADR 0070.
+     * Retries a conflict between concurrent appends, but only when this executor opened the transaction: the store
+     * joins that transaction and so cannot retry one itself, and only its owner can start a fresh one. See ADR 0070.
      * <p>
-     * The two exception types mirror the two categories the event store itself treats as safe to rerun, a transient
-     * transaction conflict and a duplicate key. They are matched through Spring's translated types because this module
-     * is storage-neutral and cannot inspect a driver-specific error label. MongoDB's WriteConflict is worth calling
-     * out: the server labels it {@code TransientTransactionError}, yet Spring translates it to
-     * {@link DataIntegrityViolationException}, which is a <em>non-transient</em> type, so matching only
-     * {@link TransientDataAccessException} would miss the most common conflict of all.
-     * <p>
-     * The cost of going through the translated types is that a genuine integrity violation, say a synchronous
-     * subscription handler hitting a unique index, is retried too. That is wasteful rather than wrong, since it fails
-     * the same way on every attempt and then propagates.
+     * {@link DataIntegrityViolationException} is matched as well as {@link TransientDataAccessException} because
+     * MongoDB labels a WriteConflict transient while Spring translates it to the non-transient type, so the obvious
+     * predicate would miss the most common conflict there is. A genuine integrity violation is therefore retried too,
+     * which is wasteful rather than wrong since it fails the same way every attempt.
      */
     private static final RetryStrategy TRANSIENT_CONFLICT_RETRY = RetryStrategy
             .exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)

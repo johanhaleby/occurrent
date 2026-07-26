@@ -42,6 +42,10 @@ public interface ReactiveTransactionExecutor {
      * @param action Supplies the reactive unit of work.
      * @param <T>    The result type.
      * @return A {@link Mono} that runs the action, optionally transactionally.
+     * @implSpec An implementation that opens a transaction is responsible for retrying a write conflict, because the
+     * event store joins that transaction and an aborted transaction can only be started again by whoever began it. An
+     * implementation that joins a transaction someone else opened must run the action once and let the conflict reach
+     * that owner. See ADR 0070.
      */
     <T> Mono<T> inTransaction(Supplier<Mono<T>> action);
 
