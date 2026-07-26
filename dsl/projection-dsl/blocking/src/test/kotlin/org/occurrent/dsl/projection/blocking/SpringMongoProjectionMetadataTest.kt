@@ -65,7 +65,7 @@ data class NameCount(@Id val key: String, val count: Int)
 class SpringMongoProjectionMetadataTest {
 
     @RegisterExtension
-    val flushMongoDBExtension: FlushMongoDBExtension = FlushMongoDBExtension(ConnectionString(mongoDBContainer.replicaSetUrl))
+    val flushMongoDBExtension: FlushMongoDBExtension = FlushMongoDBExtension(ConnectionString(mongoDBContainer.getReplicaSetUrl("spring-mongo-projection-metadata-test")))
 
     companion object {
         @Suppress("unused")
@@ -74,7 +74,7 @@ class SpringMongoProjectionMetadataTest {
     }
 
     private fun mongoOperations(): MongoOperations {
-        val connectionString = ConnectionString(mongoDBContainer.replicaSetUrl + ".spring-mongo-projection-metadata-test")
+        val connectionString = ConnectionString(mongoDBContainer.getReplicaSetUrl("spring-mongo-projection-metadata-test"))
         val mongoClient = MongoClients.create(connectionString)
         return MongoTemplate(mongoClient, connectionString.database!!)
     }

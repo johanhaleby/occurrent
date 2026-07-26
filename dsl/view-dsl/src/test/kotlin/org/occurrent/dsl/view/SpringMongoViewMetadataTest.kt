@@ -78,12 +78,12 @@ class SpringMongoViewMetadataTest {
     }
 
     @RegisterExtension
-    val flushMongoDBExtension: FlushMongoDBExtension = FlushMongoDBExtension(ConnectionString(mongoDBContainer.replicaSetUrl))
+    val flushMongoDBExtension: FlushMongoDBExtension = FlushMongoDBExtension(ConnectionString(mongoDBContainer.getReplicaSetUrl("stream-keyed-events")))
 
     lateinit var mongoOperations: MongoOperations
 
     private fun mongoOperations(): MongoOperations {
-        val connectionString = ConnectionString(mongoDBContainer.replicaSetUrl + ".stream-keyed-events")
+        val connectionString = ConnectionString(mongoDBContainer.getReplicaSetUrl("stream-keyed-events"))
         val mongoClient = MongoClients.create(connectionString)
         return MongoTemplate(mongoClient, connectionString.database!!)
     }

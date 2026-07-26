@@ -76,7 +76,7 @@ class DcbSubscriptionsProjectionExtensionsTest {
     }
 
     @RegisterExtension
-    val flush = FlushMongoDBExtension(ConnectionString(mongoDBContainer.replicaSetUrl + ".projectiondcbextensions"))
+    val flush = FlushMongoDBExtension(ConnectionString(mongoDBContainer.getReplicaSetUrl("projectiondcbextensions")))
 
     private lateinit var eventStore: ReactorMongoEventStore
     private lateinit var subscriptionModel: ReactorMongoSubscriptionModel
@@ -85,7 +85,7 @@ class DcbSubscriptionsProjectionExtensionsTest {
 
     @BeforeEach
     fun createInstances() {
-        val connectionString = ConnectionString(mongoDBContainer.replicaSetUrl + ".projectiondcbextensions")
+        val connectionString = ConnectionString(mongoDBContainer.getReplicaSetUrl("projectiondcbextensions"))
         val mongoClient = MongoClients.create(connectionString)
         val mongoTemplate = ReactiveMongoTemplate(mongoClient, connectionString.database!!)
         val tx = ReactiveMongoTransactionManager(SimpleReactiveMongoDatabaseFactory(mongoClient, connectionString.database!!))
