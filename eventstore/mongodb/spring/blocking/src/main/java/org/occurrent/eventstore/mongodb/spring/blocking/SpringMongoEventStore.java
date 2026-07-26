@@ -404,8 +404,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     /**
      * Runs the action, applying the retry strategy only when this store owns the transaction. When one is already
      * active the template joins it, a conflict aborts it, and every further attempt fails on its first read with
-     * {@code NoSuchTransaction}, so retrying could never commit. Route every retry on the write path through here so
-     * the ownership check cannot be forgotten. See ADR 0070.
+     * {@code NoSuchTransaction}, so retrying could never commit. Both DCB retries go through here, the append itself
+     * and the position counter's cold start, so neither can be written without the check. The stream {@code write}
+     * retry above does not, and has the same weakness when nested, but it is long-released behaviour left alone
+     * deliberately rather than an oversight. See ADR 0070.
      */
     private static <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
         return TransactionSynchronizationManager.isActualTransactionActive() ? action.get() : retry.execute(action);
