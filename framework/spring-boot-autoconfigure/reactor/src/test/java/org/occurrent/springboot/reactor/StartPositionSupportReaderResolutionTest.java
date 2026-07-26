@@ -95,12 +95,12 @@ class StartPositionSupportReaderResolutionTest {
     void two_event_stores_that_both_read_in_position_order_fail_loud_instead_of_picking_one() {
         new ApplicationContextRunner()
                 .withBean("firstEventStore", PositionOrderedReader.class, () -> storeReader(true))
-                .withBean("secondEventStore", PositionOrderedReader.class, () -> storeReader(false))
+                .withBean("secondEventStore", PositionOrderedReader.class, () -> storeReader(true))
                 .run(context -> {
                     StartPositionSupport startPositionSupport = new StartPositionSupport(context);
 
-                    // Registration order would have answered true from the first store, which is a coin flip dressed up
-                    // as a decision, so both names are reported instead.
+                    // Both write a position, so nothing here depends on writesPosition. The point is that picking by
+                    // registration order is a coin flip dressed up as a decision, so both names are reported instead.
                     assertThatThrownBy(startPositionSupport::positionReplaySupported)
                             .isInstanceOf(IllegalStateException.class)
                             .hasMessageContaining("firstEventStore")
