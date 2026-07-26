@@ -110,9 +110,12 @@ jobs:
   #
   # Balance by measured test time, because the slowest shard sets the whole stage's wall clock.
   # Measurements are deliberately NOT written down here: that is what went stale last time (#423).
-  # Instead every shard reports its own per-subtree timings to the run summary, and a shard over
-  # SHARD_BUDGET_SECONDS annotates the run, so the live numbers are always one click away and
-  # drift reports itself instead of waiting to be noticed.
+  # Instead every shard reports its own per-subtree timings to the run summary and, as
+  # `shard-timing` lines, to its log, and a shard over SHARD_BUDGET_SECONDS annotates the run. So
+  # the live numbers are always one click away, drift reports itself instead of waiting to be
+  # noticed, and the whole picture is one command:
+  #
+  #   gh run view <run-id> --log | grep shard-timing
   #
   # The floor is occurrent-mongodb-spring-boot-starter: one Maven module, and the only unit here
   # that cannot be divided without splitting a single module's tests by class, which would be the
@@ -213,8 +216,12 @@ jobs:
             total=$(( total + elapsed ))
             echo "| \`$d\` | $elapsed |" >> "$GITHUB_STEP_SUMMARY"
             echo "::endgroup::"
+            # Also on stdout, outside the collapsed group: the summary is the readable view, this is
+            # the greppable one, so the numbers can be pulled from a run's logs without the UI.
+            echo "shard-timing ${{ matrix.shard.name }} java-${{ matrix.java }} $d ${elapsed}s"
           done
           echo "| **shard total** | **$total** |" >> "$GITHUB_STEP_SUMMARY"
+          echo "shard-timing ${{ matrix.shard.name }} java-${{ matrix.java }} TOTAL ${total}s budget ${SHARD_BUDGET_SECONDS}s"
           if [ "$total" -gt "$SHARD_BUDGET_SECONDS" ]; then
             echo "::warning::Shard ${{ matrix.shard.name }} spent ${total}s on tests, over the ${SHARD_BUDGET_SECONDS}s budget. The slowest shard sets the whole test stage's wall clock, so move a path to a cheaper shard. Per-subtree timings for every shard are in this run's summary."
           fi
