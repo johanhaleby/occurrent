@@ -112,11 +112,11 @@ public class SpringMongoSubscriptionModelConfig {
      * Configure the maximum amount of time the server waits for new change-stream documents before returning a
      * (possibly empty) batch. This maps to the {@code maxAwaitTime} of the underlying MongoDB change stream (set
      * on Spring Data's {@code ChangeStreamRequestOptions}). A smaller value lowers delivery latency at the cost of
-     * more frequent {@code getMore} round-trips when the stream is idle; a larger value keeps an idle cursor
+     * more frequent {@code getMore} round-trips when the stream is idle. A larger value keeps an idle cursor
      * waiting longer and reduces chatter.
      * <p>
      * If not configured, the MongoDB driver/server default is used (this is the behavior prior to this option
-     * existing). Values in the range 200 ms&ndash;1000 ms strike a reasonable balance between latency and resource
+     * existing). Values between 200 ms and 1000 ms strike a reasonable balance between latency and resource
      * usage for most workloads.
      * <p>
      * Note that, unlike the {@code NativeMongoSubscriptionModel}, this model does <em>not</em> expose a

@@ -1,12 +1,13 @@
 # Upgrading to Occurrent 0.31.0
 
-0.31.0 has three breaking changes. First, the `ResumeBehavior` and `StartupMode` enums move out of `@Subscription`,
+0.31.0 has four breaking changes. First, the `ResumeBehavior` and `StartupMode` enums move out of `@Subscription`,
 `@StreamSubscription`, `@DcbSubscription`, and `@Projection` and become shared top-level types. `Subscription.StartPosition`
 and `DcbSubscription.DcbStartPosition` move the same way, to a shared top-level `org.occurrent.annotation.StartPosition`
 (the constants are unchanged). Second, the four subscription checkpoint-storage modules are renamed from
 `-position-storage` to `-checkpoint-storage`. Third, `EventMetadata` moves from `org.occurrent.dsl.subscription.EventMetadata`
-to `org.occurrent.cloudevents.EventMetadata` and is rewritten from a Kotlin `data class` to a plain Java class. One
-OpenRewrite recipe handles all three rewrites for you.
+to `org.occurrent.cloudevents.EventMetadata` and is rewritten from a Kotlin `data class` to a plain Java class. Fourth,
+the Spring Boot annotation machinery moves from `org.occurrent.springboot.mongo.common` to `org.occurrent.springboot.common`,
+with a matching module coordinate rename. One OpenRewrite recipe handles all four rewrites for you.
 
 ## 1. Run the recipe
 
@@ -46,7 +47,10 @@ a nested `ResumeBehavior`/`StartupMode`, for example `Subscription.ResumeBehavio
 `org.occurrent.annotation.StartPosition`. This covers a fully-qualified reference, an import, and a static import.
 It also composes `org.occurrent.MigrateCoordinates_0_31`, which renames the four checkpoint-storage dependency
 coordinates in your Maven and Gradle build files (see section 3), and rewrites every reference, import, and static
-import of `EventMetadata` from its old package to the new one (see section 4). Safe to run and commit without review.
+import of `EventMetadata` from its old package to the new one (see section 4). It also rewrites the Spring Boot
+annotation machinery (`OccurrentProperties` and friends) from `org.occurrent.springboot.mongo.common` to
+`org.occurrent.springboot.common`, and the module coordinate from `occurrent-mongodb-spring-boot-autoconfigure` to
+`occurrent-spring-boot-autoconfigure` (see section 5). Safe to run and commit without review.
 
 ## 2. What changed
 
@@ -84,9 +88,26 @@ unified global or DCB position, so it stays nested and annotation-specific.
 The typed accessors you actually fold events with, `getStreamId()`, `getStreamVersion()`, `getPosition()`,
 `getData()`, the static `empty()`, and the static `from(CloudEvent)`, are unchanged in name and behavior, so this is
 otherwise a drop-in upgrade. `DcbEventMetadata` stays in `dsl/dcb-dsl/common` and only its import of `EventMetadata`
-changes. Rationale is in [ADR 67](../architecture/decisions/0067-relocate-eventmetadata-to-cloudevents-extension.md).
+changes. Rationale is in [ADR 71](../architecture/decisions/0071-relocate-eventmetadata-to-cloudevents-extension.md).
 
-## 5. If the recipe cannot reach a reference
+## 5. Spring Boot annotation machinery moves to a store-neutral module
+
+The Spring Boot annotation machinery moves from `org.occurrent.springboot.mongo.common` to
+`org.occurrent.springboot.common`: `OccurrentProperties`, `SubscriptionAnnotations`,
+`Jackson3CloudEventConverterConfiguration`, and the five autoconfiguration conditions
+(`OnDcbEventStoreCapabilityCondition`, `OnDomainEventQueriesCapabilityCondition`,
+`OnMissingCloudEventConverterAndCloudEventTypeMapperCondition`, `OnPositionEnabledCondition`, and
+`OnStreamEventStoreCapabilityCondition`). The module coordinate moves the same way, from
+`org.occurrent:occurrent-mongodb-spring-boot-autoconfigure` to `org.occurrent:occurrent-spring-boot-autoconfigure`.
+None of this was ever MongoDB-specific, it only lived in the MongoDB autoconfigure module because that was the only
+store with Spring Boot support at the time (issue #409).
+
+Property keys are unchanged. `OccurrentProperties` is annotated with a hard-coded
+`@ConfigurationProperties(prefix = "occurrent")`, so no `application.yml` edit is needed and IDE completion still
+works. The types themselves are identical apart from their package, so this is otherwise a drop-in upgrade. The
+recipe from section 1 rewrites the type references and the module coordinate for Maven and Gradle.
+
+## 6. If the recipe cannot reach a reference
 
 The recipe rewrites source references it can see. A reference produced only in a compiled `.class` from 0.30.0
 (a binary dependency, not source you can run the recipe over) needs a rebuild against 0.31.0 instead, since the

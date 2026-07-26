@@ -1,0 +1,435 @@
+/*
+ *
+ *  Copyright 2021 Johan Haleby
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+package org.occurrent.springboot.common;
+
+import org.occurrent.eventstore.api.EventStoreCapability;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.net.URI;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
+import java.util.Set;
+
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
+
+@ConfigurationProperties(prefix = "occurrent")
+public class OccurrentProperties {
+    private static final String DEFAULT_MONGO_EVENTS_COLLECTION = "events";
+
+    /**
+     * Event Store Configuration (see <a href="https://occurrent.org/documentation#eventstore">docs</a>)
+     */
+    private EventStoreProperties eventStore = new EventStoreProperties();
+    /**
+     * Subscription Configuration (see <a href="https://occurrent.org/documentation#subscriptions">docs</a>)
+     */
+    private SubscriptionProperties subscription = new SubscriptionProperties();
+
+    /**
+     * CloudEventConverter Configuration (see <a href="https://occurrent.org/documentation#cloudevent-conversion">docs</a>)
+     */
+    private CloudEventConverterProperties cloudEventConverter = new CloudEventConverterProperties();
+
+    /**
+     * Application Service Configuration (see <a href="https://occurrent.org/documentation#application-service">docs</a>)
+     */
+    private ApplicationServiceProperties applicationService = new ApplicationServiceProperties();
+
+    /**
+     * Saga Configuration (the {@code @Saga} process manager, blocking stack only)
+     */
+    private SagaProperties saga = new SagaProperties();
+
+
+    public static class ApplicationServiceProperties {
+
+        /**
+         * Configure whether to enable the default retry strategy for the application service.
+         * If enabled, the GenericApplicationService will use a retry strategy for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
+         * each retry, if a write-condition-not-fulfilled exception is caught. It will, by default, only retry 5 times before giving up, rethrowing the original exception.
+         */
+        private boolean enableDefaultRetryStrategy = true;
+
+        private boolean enabled;
+
+        public boolean isEnableDefaultRetryStrategy() {
+            return enableDefaultRetryStrategy;
+        }
+
+        public void setEnableDefaultRetryStrategy(boolean enableDefaultRetryStrategy) {
+            this.enableDefaultRetryStrategy = enableDefaultRetryStrategy;
+        }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+    }
+
+    public static class CloudEventConverterProperties {
+
+        /**
+         * Specify the source that'll be used in cloud event converter
+         * <p>
+         * You can regard the “source” attribute as the “stream type” or a “category” for certain streams. For example, if you’re creating a game, you may have two kinds of aggregates in your bounded context, a “game” and a “player”.
+         * You can regard these as two different sources (categories). These are represented as URN’s, for example the “game” may have the source “urn:mycompany:mygame:game” and “player” may have “urn:mycompany:mygame:player”.
+         * This allows, for example, subscriptions to subscribe to all events related to any player (by using a subscription filter for the source attribute).
+         */
+        private URI cloudEventSource;
+
+        /**
+         * Truncate the cloud event time to this precision, for example {@code millis}. Use this when the event store uses
+         * {@code TimeRepresentation.DATE}, which cannot store sub-millisecond precision (a common issue since
+         * {@code Instant.now()} carries nanoseconds on modern JVMs). When unset and the event store
+         * {@code time-representation} is {@code DATE}, the converter defaults to {@code MILLIS} so that the common case
+         * works without configuration. Has no effect when left unset with {@code RFC_3339_STRING}.
+         */
+        private ChronoUnit timePrecision;
+
+        public URI getCloudEventSource() {
+            return cloudEventSource;
+        }
+
+        public void setCloudEventSource(URI cloudEventSource) {
+            this.cloudEventSource = cloudEventSource;
+        }
+
+        public ChronoUnit getTimePrecision() {
+            return timePrecision;
+        }
+
+        public void setTimePrecision(ChronoUnit timePrecision) {
+            this.timePrecision = timePrecision;
+        }
+    }
+
+    public static class EventStoreProperties {
+
+        /**
+         * The collection where events are stored
+         */
+        private String collection = DEFAULT_MONGO_EVENTS_COLLECTION;
+
+        /**
+         * Choose how to represent time in the cloud events
+         */
+        private TimeRepresentation timeRepresentation = TimeRepresentation.DATE;
+
+        /**
+         * The event-store capabilities to enable.
+         * <p>
+         * Defaults to stream-based event sourcing. Add {@link EventStoreCapability#DCB}
+         * to enable Dynamic Consistency Boundary infrastructure and APIs.
+         */
+        private Set<EventStoreCapability> capabilities = Set.of(STREAM);
+
+        /**
+         * Stream event-store configuration.
+         */
+        private StreamProperties stream = new StreamProperties();
+
+        /**
+         * If the event store should be enabled (i.e. created as Spring Bean)
+         * <p>
+         * Typically you only want to disable this if you don't need an event store for this application,
+         * typically if another application are writing events to the store, and you only want to have subscriptions
+         * in this application.
+         * </p>
+         * <p>
+         * Note that settings this to {@code false} also disables the creation of an ApplicationService
+         * and a DomainEventQueries instance.
+         * </p>
+         */
+        private boolean enabled = true;
+
+        public String getCollection() {
+            return collection;
+        }
+
+        public void setCollection(String collection) {
+            this.collection = collection;
+        }
+
+        public TimeRepresentation getTimeRepresentation() {
+            return timeRepresentation;
+        }
+
+        public void setTimeRepresentation(TimeRepresentation timeRepresentation) {
+            this.timeRepresentation = timeRepresentation;
+        }
+
+        public Set<EventStoreCapability> getCapabilities() {
+            return capabilities;
+        }
+
+        public void setCapabilities(Set<EventStoreCapability> capabilities) {
+            if (capabilities == null || capabilities.isEmpty()) {
+                throw new IllegalArgumentException("occurrent.event-store.capabilities must contain at least one capability");
+            }
+            this.capabilities = Set.copyOf(capabilities);
+        }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public StreamProperties getStream() {
+            return stream;
+        }
+
+        public void setStream(StreamProperties stream) {
+            this.stream = stream;
+        }
+    }
+
+    public static class StreamProperties {
+
+        /**
+         * Whether stream-written events carry a global, monotonic position. On by default when unset. Set to
+         * {@code false} to opt a STREAM-only store out of writing position. Set to {@code true} to enable it
+         * explicitly, which keeps it on even for an existing store whose events have not been backfilled. When unset,
+         * the store may turn position off at startup if it finds such a collection. {@link EventStoreCapability#DCB}
+         * always writes position regardless of this setting, and a combined STREAM+DCB store always writes position.
+         */
+        private Boolean position;
+
+        public Boolean getPosition() {
+            return position;
+        }
+
+        public void setPosition(Boolean position) {
+            this.position = position;
+        }
+    }
+
+    public static class SubscriptionProperties {
+        /**
+         * The collection into which checkpoints will be stored
+         */
+        private String collection = "subscriptions";
+
+        /**
+         * If there’s not enough history available in the MongoDB oplog to resume a subscription created from a SpringMongoSubscriptionModel, you can configure it to restart the subscription from the current time automatically.
+         * This is only of concern when an application is restarted, and the subscriptions are configured to start from a position in the oplog that is no longer available. It’s disabled by default since it might not be 100% safe
+         * (meaning that you can miss some events when the subscription is restarted). It’s not 100% safe if you run subscriptions in a different process than the event store, and you have lots of writes happening to the event store.
+         * It’s safe if you run the subscription in the same process as the writes to the event store if you make sure that the subscription is started before you accept writes to the event store on startup.
+         */
+        private boolean restartOnChangeStreamHistoryLost = true;
+
+        /**
+         * Toggles whether subscriptions should be enabled (i.e. created and instantiated as Spring Bean).
+         * <p>
+         * Typically you only want to disable this if you don't need subscriptions or
+         * if you're subscriptions are running on another node.
+         * </p>
+         */
+        private boolean enabled = true;
+
+        /**
+         * Tuning for the catch-up-then-live handover used by a push-fed projection's bootstrap.
+         */
+        private CatchupThenLiveProperties catchupThenLive = new CatchupThenLiveProperties();
+
+        public String getCollection() {
+            return collection;
+        }
+
+        public void setCollection(String collection) {
+            this.collection = collection;
+        }
+
+        public boolean isRestartOnChangeStreamHistoryLost() {
+            return restartOnChangeStreamHistoryLost;
+        }
+
+        public void setRestartOnChangeStreamHistoryLost(boolean restartOnChangeStreamHistoryLost) {
+            this.restartOnChangeStreamHistoryLost = restartOnChangeStreamHistoryLost;
+        }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public CatchupThenLiveProperties getCatchupThenLive() {
+            return catchupThenLive;
+        }
+
+        public void setCatchupThenLive(CatchupThenLiveProperties catchupThenLive) {
+            this.catchupThenLive = catchupThenLive;
+        }
+
+        /**
+         * Tunes the catch-up-then-live subscription model that a {@code @Projection(source = PUSH)} is bootstrapped
+         * with: it replays history from the event store while buffering what the push feed delivers, then drains the
+         * buffer and goes live.
+         * <p>
+         * This applies to a projection fed by a {@code PushSubscriptionModel}. It does <strong>not</strong> reach a
+         * projection fed by a {@code DomainEventFeed}, because your application declares that bean itself, so you tune
+         * its catch-up by passing the options to its constructor instead.
+         * <p>
+         * Both values are unset by default, meaning the built-in defaults apply. Setting one leaves the other at its
+         * default.
+         */
+        public static class CatchupThenLiveProperties {
+
+            /**
+             * How many recently delivered event ids to retain so the replay-to-live overlap is de-duplicated exactly.
+             * Defaults to 10000. Beyond this window the at-least-once contract applies, so an idempotent fold absorbs a
+             * duplicate. Raise it only if a replay overlaps more live events than that and duplicate delivery is
+             * expensive for the read model.
+             */
+            private Integer dedupCacheSize;
+
+            /**
+             * A fail-loud ceiling on events buffered from the push feed while the replay runs, not a throttle. Defaults
+             * to 100000. Reaching it means the replay is not keeping up with the feed at all, so the overflow is
+             * reported rather than events being dropped or the buffer growing without bound. The blocking stack throws
+             * from the failing feed call, the reactor stack signals the error on that event's returned Mono. Raise it
+             * for a large history behind a busy feed.
+             */
+            private Integer maxBufferedEvents;
+
+            public Integer getDedupCacheSize() {
+                return dedupCacheSize;
+            }
+
+            public void setDedupCacheSize(Integer dedupCacheSize) {
+                if (dedupCacheSize != null && dedupCacheSize <= 0) {
+                    throw new IllegalArgumentException("occurrent.subscription.catchup-then-live.dedup-cache-size must be greater than zero");
+                }
+                this.dedupCacheSize = dedupCacheSize;
+            }
+
+            public Integer getMaxBufferedEvents() {
+                return maxBufferedEvents;
+            }
+
+            public void setMaxBufferedEvents(Integer maxBufferedEvents) {
+                if (maxBufferedEvents != null && maxBufferedEvents <= 0) {
+                    throw new IllegalArgumentException("occurrent.subscription.catchup-then-live.max-buffered-events must be greater than zero");
+                }
+                this.maxBufferedEvents = maxBufferedEvents;
+            }
+        }
+    }
+
+    public EventStoreProperties getEventStore() {
+        return eventStore;
+    }
+
+    public void setEventStore(EventStoreProperties eventStore) {
+        this.eventStore = eventStore;
+    }
+
+    public SubscriptionProperties getSubscription() {
+        return subscription;
+    }
+
+    public void setSubscription(SubscriptionProperties subscription) {
+        this.subscription = subscription;
+    }
+
+    public CloudEventConverterProperties getCloudEventConverter() {
+        return cloudEventConverter;
+    }
+
+    public void setCloudEventConverter(CloudEventConverterProperties cloudEventConverter) {
+        this.cloudEventConverter = cloudEventConverter;
+    }
+
+    public ApplicationServiceProperties getApplicationService() {
+        return applicationService;
+    }
+
+    public void setApplicationService(ApplicationServiceProperties applicationService) {
+        this.applicationService = applicationService;
+    }
+
+    public SagaProperties getSaga() {
+        return saga;
+    }
+
+    public void setSaga(SagaProperties saga) {
+        this.saga = saga;
+    }
+
+    public static class SagaProperties {
+
+        /**
+         * How often a saga's timer poller queries its state store for due timeouts. Defaults to 15 seconds, matching
+         * {@code SagaRunnerConfig.defaults()} and JobRunr's default. The interval only bounds how late a due timer
+         * fires, and saga timeouts run at a minutes-to-days timescale, so a shorter interval mostly adds empty queries.
+         * Lower it only when you rely on short timeouts firing promptly.
+         */
+        private Duration timerPollInterval = Duration.ofSeconds(15);
+
+        /**
+         * Competing-consumer (leader-election) configuration for the saga timer poller.
+         */
+        private CompetingConsumerProperties competingConsumer = new CompetingConsumerProperties();
+
+        public Duration getTimerPollInterval() {
+            return timerPollInterval;
+        }
+
+        public void setTimerPollInterval(Duration timerPollInterval) {
+            this.timerPollInterval = timerPollInterval;
+        }
+
+        public CompetingConsumerProperties getCompetingConsumer() {
+            return competingConsumer;
+        }
+
+        public void setCompetingConsumer(CompetingConsumerProperties competingConsumer) {
+            this.competingConsumer = competingConsumer;
+        }
+
+        public static class CompetingConsumerProperties {
+
+            /**
+             * Whether to gate the saga timer poller with the shared competing-consumer lease so only one instance polls
+             * for due timers in a multi-instance deployment, mirroring the competing-consumer subscription model.
+             * Enabled by default. When disabled (or when no competing-consumer strategy is available, for example with
+             * subscriptions disabled) every instance runs its own poller, which stays correct but multiplies the query
+             * load against the state store.
+             */
+            private boolean enabled = true;
+
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean enabled) {
+                this.enabled = enabled;
+            }
+        }
+    }
+}

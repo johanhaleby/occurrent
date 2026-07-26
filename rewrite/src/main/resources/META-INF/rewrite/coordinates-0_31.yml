@@ -21,8 +21,15 @@ description: >-
   Renames the four subscription checkpoint-storage artifacts from their -position-storage coordinates to
   -checkpoint-storage under the unchanged org.occurrent groupId, so the module coordinate matches the
   CheckpointStorage type it ships (the type family was renamed from SubscriptionPosition to Checkpoint in
-  0.30.0, see ADR 46, but the module coordinates were not). Covers Maven and Gradle build files.
+  0.30.0, see ADR 46, but the module coordinates were not). Also renames the Spring Boot autoconfigure
+  artifact from occurrent-mongodb-spring-boot-autoconfigure to occurrent-spring-boot-autoconfigure, since the
+  annotation machinery it ships is no longer MongoDB-specific. Covers Maven and Gradle build files.
 recipeList:
+  - org.openrewrite.maven.ChangeDependencyGroupIdAndArtifactId:
+      oldGroupId: org.occurrent
+      oldArtifactId: occurrent-mongodb-spring-boot-autoconfigure
+      newGroupId: org.occurrent
+      newArtifactId: occurrent-spring-boot-autoconfigure
   - org.openrewrite.maven.ChangeDependencyGroupIdAndArtifactId:
       oldGroupId: org.occurrent
       oldArtifactId: occurrent-subscription-mongodb-native-blocking-position-storage
@@ -43,6 +50,11 @@ recipeList:
       oldArtifactId: occurrent-subscription-redis-spring-blocking-position-storage
       newGroupId: org.occurrent
       newArtifactId: occurrent-subscription-redis-spring-blocking-checkpoint-storage
+  - org.openrewrite.gradle.ChangeDependency:
+      oldGroupId: org.occurrent
+      oldArtifactId: occurrent-mongodb-spring-boot-autoconfigure
+      newGroupId: org.occurrent
+      newArtifactId: occurrent-spring-boot-autoconfigure
   - org.openrewrite.gradle.ChangeDependency:
       oldGroupId: org.occurrent
       oldArtifactId: occurrent-subscription-mongodb-native-blocking-position-storage

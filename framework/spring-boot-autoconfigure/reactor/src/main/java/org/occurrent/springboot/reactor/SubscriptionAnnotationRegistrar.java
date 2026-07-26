@@ -1,0 +1,233 @@
+/*
+ *
+ *  Copyright 2026 Johan Haleby
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+package org.occurrent.springboot.reactor;
+
+import kotlin.jvm.functions.Function2;
+import org.occurrent.annotation.DcbSubscription;
+import org.occurrent.annotation.StreamSubscription;
+import org.occurrent.annotation.StreamSubscription.StartPosition;
+import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.SynchronousSubscription;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.dcb.DcbEventMetadata;
+import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
+import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
+import org.occurrent.dsl.subscription.reactor.Subscriptions;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.filter.Filter;
+import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.DcbStartAt;
+import org.occurrent.subscription.StartAt;
+import org.springframework.context.ApplicationContext;
+import org.springframework.core.annotation.AnnotationUtils;
+import reactor.core.publisher.Mono;
+
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.function.BiFunction;
+import java.util.stream.Stream;
+
+import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
+import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
+
+/**
+ * Scans a bean for {@link Subscription}, {@link StreamSubscription}, {@link DcbSubscription} and
+ * {@link SynchronousSubscription} annotations in {@code postProcessBeforeInitialization} and wires each one up. The
+ * stack-neutral reflection and event-type resolution is shared with the blocking processor through
+ * {@link SubscriptionAnnotations}; the reactive-specific start-position logic lives in {@link StartPositionSupport}.
+ */
+class SubscriptionAnnotationRegistrar {
+
+    private final ApplicationContext applicationContext;
+    private final StartPositionSupport startPositionSupport;
+
+    SubscriptionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
+        this.applicationContext = applicationContext;
+        this.startPositionSupport = startPositionSupport;
+    }
+
+    Object postProcessBeforeInitialization(Object bean, String beanName) {
+        Class<?> managedBeanClass = bean.getClass();
+        for (Method method : managedBeanClass.getDeclaredMethods()) {
+            StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
+            Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
+            DcbSubscription dcbSubscription = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
+            SynchronousSubscription synchronousSubscription = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
+            long annotationCount = Stream.of(streamSubscription, subscription, dcbSubscription, synchronousSubscription).filter(Objects::nonNull).count();
+            if (annotationCount > 1) {
+                throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription, use only one.".formatted(bean.getClass().getName(), method.getName()));
+            }
+            if (streamSubscription != null) {
+                processSubscribeAnnotation(bean, method, StreamSubscriptionDefinition.from(streamSubscription));
+            } else if (subscription != null) {
+                processAgnosticSubscribeAnnotation(bean, method, subscription);
+            } else if (dcbSubscription != null) {
+                processDcbSubscribeAnnotation(bean, method, dcbSubscription);
+            } else if (synchronousSubscription != null) {
+                processSynchronousSubscribeAnnotation(beanName, bean, method, synchronousSubscription);
+            }
+        }
+        return bean;
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E> void processSubscribeAnnotation(Object bean, Method method, StreamSubscriptionDefinition subscription) {
+        String id = subscription.id();
+        SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, subscription.eventTypes(), subscription.annotationName(), applicationContext.getBean(CloudEventConverter.class));
+        List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
+        Filter filter = resolved.filter();
+
+        boolean streamHistoryReplaySupported = startPositionSupport.streamHistoryReplaySupported();
+        StartAt startAt = startPositionSupport.generateStreamStartAt(subscription, streamHistoryReplaySupported);
+
+        Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
+                invokeMono(method, bean, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+
+        boolean shouldWaitUntilStarted = shouldWaitUntilStarted(subscription.startAt() == StartPosition.BEGINNING_OF_TIME && streamHistoryReplaySupported, subscription.startupMode());
+        StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
+
+        startPositionSupport.applyStartupWorkarounds();
+
+        var result = streamSubscriptions.subscribe(id, filter(filter), startAt, consumer);
+        if (shouldWaitUntilStarted) {
+            result.waitUntilStarted().block();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Subscription annotation) {
+        String id = annotation.id();
+        SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@Subscription", applicationContext.getBean(CloudEventConverter.class));
+        List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
+        Filter filter = resolved.filter();
+
+        Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
+                invokeMono(method, bean, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+
+        long startAtGlobalPosition = annotation.startAtGlobalPosition();
+        if (startAtGlobalPosition >= 0 && annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT) {
+            throw new IllegalArgumentException("Specify either startAt or startAtGlobalPosition for @Subscription '%s', not both.".formatted(id));
+        }
+        boolean replaysHistory = startAtGlobalPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
+        if (replaysHistory && !startPositionSupport.positionReplaySupported()) {
+            throw new IllegalArgumentException(("@Subscription '%s' asks to replay history (BEGINNING or startAtGlobalPosition), but this store does not write a global position, so the reactive " +
+                    "position-based catch-up cannot replay. Use startAt = NOW or DEFAULT.").formatted(id));
+        }
+        StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), startAtGlobalPosition, annotation.resumeBehavior());
+        boolean shouldWaitUntilStarted = shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
+
+        startPositionSupport.applyStartupWorkarounds();
+
+        var result = subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, consumer);
+        if (shouldWaitUntilStarted) {
+            result.waitUntilStarted().block();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E> void processSynchronousSubscribeAnnotation(String beanName, Object bean, Method method, SynchronousSubscription annotation) {
+        String id = annotation.id();
+        SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@SynchronousSubscription", applicationContext.getBean(CloudEventConverter.class));
+        List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
+        Filter filter = resolved.filter();
+
+        // Resolve the handler from the ApplicationContext lazily, at dispatch time, rather than closing over the raw
+        // bean instance captured here. This BeanPostProcessor runs in postProcessBeforeInitialization, before Spring
+        // wraps the bean in its AOP proxy, so the instance handed to us is the raw target. Invoking through it would
+        // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
+        // so a handler-side @Transactional is honored when the synchronous handler is invoked.
+        Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) -> {
+            Object target = applicationContext.getBean(beanName);
+            return invokeMono(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+        };
+
+        Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentReactiveAnnotationBeanPostProcessor.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
+        // The synchronous subscription model has no lifecycle, start position, or background subscription, so there is
+        // no start position to resolve and nothing to wait for.
+        synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), StartAt.subscriptionModelDefault(), consumer);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E> void processDcbSubscribeAnnotation(Object bean, Method method, DcbSubscription annotation) {
+        String id = annotation.id();
+        final DcbCriteria criteria;
+        final List<SubscriptionAnnotations.HandlerParameter> parameters;
+        if (method.getParameterCount() >= 1) {
+            CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
+            parameters = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isDcbMetadataParameter, false);
+            Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameters);
+            List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@DcbSubscription");
+            List<String> cloudEventTypes = domainEventTypesToSubscribeTo.stream().map(cloudEventConverter::getCloudEventType).toList();
+            List<Tag> tags = new ArrayList<>();
+            for (String tag : annotation.tags()) {
+                try {
+                    tags.add(Tag.parse(tag));
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalArgumentException("@DcbSubscription(id=\"%s\") has a malformed tag \"%s\": %s".formatted(id, tag, e.getMessage()), e);
+                }
+            }
+            criteria = SubscriptionAnnotations.buildDcbCriteria(cloudEventTypes, tags);
+        } else {
+            throw new IllegalArgumentException("A @DcbSubscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
+        }
+
+        BiFunction<DcbEventMetadata, E, Mono<Void>> consumer = (dcbMetadata, event) -> {
+            boolean hasDcbEventMetadataParam = parameters.stream().anyMatch(p -> p.type() == DcbEventMetadata.class);
+            Object metadataArgument = hasDcbEventMetadataParam ? dcbMetadata : dcbMetadata.eventMetadata();
+            return invokeMono(method, bean, SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
+        };
+
+        long startAtDcbPosition = annotation.startAtDcbPosition();
+        if (startAtDcbPosition >= 0 && annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT) {
+            throw new IllegalArgumentException("Specify either startAt or startAtDcbPosition for @DcbSubscription '%s', not both.".formatted(id));
+        }
+        DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), startAtDcbPosition, annotation.resumeBehavior());
+        boolean replaysHistory = startAtDcbPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
+        boolean shouldWaitUntilStarted = shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
+
+        startPositionSupport.applyStartupWorkarounds();
+
+        var subscription = dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer);
+        if (shouldWaitUntilStarted) {
+            subscription.waitUntilStarted().block();
+        }
+    }
+
+    // Invokes the annotated method for a delivered event. The method is expected to return a Mono<Void> (a null or
+    // non-Mono return, for example a void method, is treated as an already-completed action).
+    private static Mono<Void> invokeMono(Method method, Object bean, Object[] arguments) {
+        try {
+            method.setAccessible(true);
+            Object result = method.invoke(bean, arguments);
+            if (result instanceof Mono<?> mono) {
+                return mono.then();
+            }
+            return Mono.empty();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
