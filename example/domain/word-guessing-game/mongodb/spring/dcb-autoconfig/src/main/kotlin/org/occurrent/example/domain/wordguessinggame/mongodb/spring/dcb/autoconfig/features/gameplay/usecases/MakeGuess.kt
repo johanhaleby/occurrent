@@ -27,10 +27,10 @@ import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
 import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
 import org.occurrent.example.domain.wordguessinggame.writemodel.Word
 import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.TransientDataAccessException
 import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Service
-import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
 @Service
@@ -39,8 +39,7 @@ class MakeGuess(
     private val dcbDecider: DcbDecider<WordGuessingGameCommand, WordGuessingGameState, GameEvent>
 ) {
 
-    @Transactional
-    @Retryable(include = [DcbAppendConditionNotFulfilledException::class, DataIntegrityViolationException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
+    @Retryable(include = [DcbAppendConditionNotFulfilledException::class, DataIntegrityViolationException::class, TransientDataAccessException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(gameId: GameId, timeOfGuess: Timestamp, playerId: PlayerId, word: Word) {
         applicationService.execute(
             WordGuessingGameCommand.GuessWord(

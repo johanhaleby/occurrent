@@ -57,6 +57,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.ReactiveMongoDatabaseUtils;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
@@ -111,6 +112,14 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ReactorMongoEventStore.class);
     private static final String ID = "_id";
+
+    private static final Retry TRANSIENT_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
+            .maxBackoff(Duration.ofMillis(500))
+            .filter(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
+            .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+
+    private static final Retry COLD_START_COUNTER_RETRY = Retry.fixedDelay(5, Duration.ofMillis(20))
+            .filter(ReactorMongoEventStore::isDuplicateKeyError);
 
     private final ReactiveMongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -321,10 +330,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
         int eventCount = eventsToAppend.size();
 
-        // Reserve the position block once, outside the transaction. The counter findAndModify is a single atomic
-        // document update that MongoDB serializes without raising a transaction conflict. The reserved block is reused
-        // across transient-transaction-error retries, a doomed or condition-failed append abandons it, so position
-        // may have gaps (DCB permits this, see ADR 0021).
+        // Reserve the position block once, before the transaction body. When this store owns the transaction the
+        // counter findAndModify runs outside it, as a single atomic document update MongoDB serializes without raising
+        // a transaction conflict, and the reserved block is reused across transient-transaction-error retries. When an
+        // outer transaction is already active the operator joins it, so the counter update joins it too and the counter
+        // document becomes a conflict point shared by every concurrent append in that transaction. Either way a doomed
+        // or condition-failed append abandons its block, so position may have gaps (DCB permits this, see ADR 0021).
         return reservePositions(eventCount).flatMap(firstPosition -> {
             long lastPosition = firstPosition + eventCount - 1;
             Mono<DcbAppendResult> transaction = transactionalOperator.transactional(
@@ -347,9 +358,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
             // DuplicateKeyException from two transactions first-creating the same conflict marker at once. A
             // DcbAppendConditionNotFulfilledException and a DuplicateCloudEventException are deliberately not retried.
-            return transaction.retryWhen(Retry.backoff(15, Duration.ofMillis(10)).maxBackoff(Duration.ofMillis(500))
-                    .filter(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
-                    .onRetryExhaustedThrow((spec, signal) -> signal.failure()));
+            return retryOnlyWhenThisStoreOwnsTheTransaction(transaction, TRANSIENT_CONFLICT_RETRY);
         });
     }
 
@@ -420,7 +429,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .map(updated -> ((Number) updated.get(DcbMarkerModel.COUNTER_POSITION)).longValue() - eventCount + 1)
                 // Cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert it
                 // and all but one get a duplicate key. On retry the document exists and the upsert becomes an update.
-                .retryWhen(Retry.fixedDelay(5, Duration.ofMillis(20)).filter(ReactorMongoEventStore::isDuplicateKeyError));
+                // Like the append retry this only runs when the store owns the transaction, because a duplicate inside
+                // a joined transaction aborts it and no further attempt could commit.
+                .transform(reserve -> retryOnlyWhenThisStoreOwnsTheTransaction(reserve, COLD_START_COUNTER_RETRY));
+    }
+
+    /**
+     * Applies the retry spec only when this store owns the transaction. When one is already active the operator joins
+     * it, a conflict aborts it, and every further attempt fails on its first read with {@code NoSuchTransaction}, so
+     * retrying could never commit. Route every retry on the write path through here so the ownership check cannot be
+     * forgotten. See ADR 0070.
+     */
+    private <T> Mono<T> retryOnlyWhenThisStoreOwnsTheTransaction(Mono<T> action, Retry retry) {
+        return ReactiveMongoDatabaseUtils.isTransactionActive(mongoTemplate.getMongoDatabaseFactory())
+                .flatMap(transactionAlreadyActive -> transactionAlreadyActive ? action : action.retryWhen(retry));
     }
 
     /**

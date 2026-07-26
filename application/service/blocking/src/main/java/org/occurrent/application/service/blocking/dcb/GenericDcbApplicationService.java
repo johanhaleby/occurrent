@@ -167,6 +167,8 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             };
             // Only open the transaction executor when synchronous dispatch must commit atomically with the append.
             // Without synchronous subscriptions the append keeps exactly its prior semantics and no transaction overhead.
+            // The store joins whatever transaction this opens and so cannot retry a transient conflict itself. Retrying
+            // that belongs to whoever owns the transaction, which is the TransactionExecutor, not this service. See ADR 0070.
             return dispatchSynchronously ? transactionExecutor.inTransaction(readDecideAppend) : readDecideAppend.get();
         });
 

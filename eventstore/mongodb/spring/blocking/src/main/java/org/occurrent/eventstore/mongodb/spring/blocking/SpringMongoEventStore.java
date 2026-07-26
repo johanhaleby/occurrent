@@ -57,6 +57,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.net.URI;
@@ -201,9 +202,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return new StreamVersionDiff(currentStreamVersion, newStreamVersion);
         };
 
-        StreamVersionDiff streamVersion = RetryStrategy.retry()
-                .retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion())
-                .execute(() -> transactionTemplate.execute(writeLogic));
+        // Retried only when this store owns the transaction. Joined to a caller's transaction, a thrown
+        // WriteConditionNotFulfilledException marks it rollback-only, so a further attempt would participate in a
+        // transaction whose inner commit is a no-op and could report a success the caller cannot keep. See ADR 0070.
+        StreamVersionDiff streamVersion = retryOnlyWhenThisStoreOwnsTheTransaction(
+                RetryStrategy.retry().retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion()),
+                () -> transactionTemplate.execute(writeLogic));
         return new WriteResult(streamId, streamVersion.oldStreamVersion, streamVersion.newStreamVersion);
     }
 
@@ -386,14 +390,33 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
-        // Reserve the position block once, outside the transaction. The counter findAndModify is a single atomic
-        // document update that MongoDB serializes without raising a transaction conflict. The reserved block is reused
-        // across transient-transaction-error retries; a doomed or condition-failed append abandons it, so position
-        // may have gaps (DCB permits this, see ADR 0021).
+        // Reserve the position block once, before the transaction body. When this store owns the transaction the
+        // counter findAndModify runs outside it, as a single atomic document update MongoDB serializes without raising
+        // a transaction conflict, and the reserved block is reused across transient-transaction-error retries. When an
+        // outer transaction is already active the template joins it, so the counter update joins it too and the
+        // counter document becomes a conflict point shared by every concurrent append in that transaction. Either way
+        // a doomed or condition-failed append abandons its block, so position may have gaps (DCB permits this, see
+        // ADR 0021).
         long firstPosition = reservePositions(eventsToAppend.size());
         long lastPosition = firstPosition + eventsToAppend.size() - 1;
 
-        return executeWithTransientRetry(() -> requireNonNull(transactionTemplate.execute(transactionStatus -> {
+        return retryOnlyWhenThisStoreOwnsTheTransaction(TRANSIENT_CONFLICT_RETRY,
+                () -> appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition));
+    }
+
+    /**
+     * Runs the action, applying the retry strategy only when this store owns the transaction. When one is already
+     * active the template joins it, a conflict aborts it, and every further attempt fails on its first read with
+     * {@code NoSuchTransaction}, so retrying could never commit. Every retry on the write path goes through here, the
+     * DCB append, the position counter's cold start, and the stream {@code write} condition retry, so none of them can
+     * be written without the check. See ADR 0070.
+     */
+    private static <T> T retryOnlyWhenThisStoreOwnsTheTransaction(RetryStrategy retry, Supplier<T> action) {
+        return TransactionSynchronizationManager.isActualTransactionActive() ? action.get() : retry.execute(action);
+    }
+
+    private DcbAppendResult appendDcbInTransaction(String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition) {
+        return requireNonNull(transactionTemplate.execute(transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
             if (condition != null) {
                 enforceAppendCondition(condition, eventsToAppend, lastPosition);
@@ -408,27 +431,31 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition);
             insertAllDcb(streamId, currentStreamVersion, documents);
             return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size());
-        })));
+        }));
     }
 
     /**
-     * Retry the append transaction on a MongoDB {@code TransientTransactionError} (the error label is present when two
-     * transactions conflict, e.g. a write-write conflict on a shared marker). The full cause chain is walked because
-     * Spring wraps the {@link MongoException}. {@link DcbAppendConditionNotFulfilledException} is deliberately NOT
-     * retried here: it propagates to the application service, which re-reads and retries the whole command.
+     * Retries the append transaction on a MongoDB {@code TransientTransactionError} (the error label is present when
+     * two transactions conflict, e.g. a write-write conflict on a shared marker). The full cause chain is walked
+     * because Spring wraps the {@link MongoException}. {@link DcbAppendConditionNotFulfilledException} is deliberately
+     * NOT retried here: it propagates to the application service, which re-reads and retries the whole command.
+     * <p>
+     * Exponential backoff with generous attempts, since several appends placed in the same partition stream serialize
+     * on stream_version, so the last writer can need to retry past all the others before it commits. A
+     * DuplicateKeyException is retried too: it is either two transactions first-creating the same conflict marker at
+     * once, or two disjoint DCB boundaries hashing to the same partition stream and losing on the unique
+     * streamid+streamversion index, and both are safe to rerun. A genuine duplicate CloudEvent is translated to a
+     * domain exception in insertAllDcb and never reaches here.
      */
-    private static <T> T executeWithTransientRetry(Supplier<T> action) {
-        // Exponential backoff with generous attempts, since several appends placed in the same partition stream
-        // serialize on stream_version, so the last writer can need to retry past all the others before it commits.
-        // Retry a transient transaction conflict, and also a DuplicateKeyException. That duplicate is either two
-        // transactions first-creating the same conflict marker at once, or two disjoint DCB boundaries hashing to
-        // the same partition stream and losing on the unique streamid+streamversion index. Both are safe to rerun.
-        // A genuine duplicate CloudEvent is translated to a domain exception in insertAllDcb and never reaches here.
-        return RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
-                .maxAttempts(15)
-                .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
-                .execute(action);
-    }
+    private static final RetryStrategy TRANSIENT_CONFLICT_RETRY = RetryStrategy
+            .exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
+            .maxAttempts(15)
+            .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable));
+
+    private static final RetryStrategy COLD_START_COUNTER_RETRY = RetryStrategy.retry()
+            .backoff(Backoff.fixed(20))
+            .maxAttempts(5)
+            .retryIf(SpringMongoEventStore::isDuplicateKeyError);
 
     private static boolean isTransientTransactionError(Throwable throwable) {
         // Bounded walk so a cyclic cause chain (self-cause or a longer A -> B -> A cycle) cannot spin forever.
@@ -551,12 +578,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
-        // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update.
-        return RetryStrategy.retry()
-                .backoff(Backoff.fixed(20))
-                .maxAttempts(5)
-                .retryIf(SpringMongoEventStore::isDuplicateKeyError)
-                .execute(() -> {
+        // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update. Like
+        // the append retry this only runs when the store owns the transaction, because a duplicate inside a joined
+        // transaction aborts it and no further attempt could commit.
+        return retryOnlyWhenThisStoreOwnsTheTransaction(COLD_START_COUNTER_RETRY,
+                () -> {
                     Query query = new Query(where(ID).is(DcbMarkerModel.POSITION_DOCUMENT_ID));
                     Update update = new Update().inc(DcbMarkerModel.COUNTER_POSITION, eventCount);
                     FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
