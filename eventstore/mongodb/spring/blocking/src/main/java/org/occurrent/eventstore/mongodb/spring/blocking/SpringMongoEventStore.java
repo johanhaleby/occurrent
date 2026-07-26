@@ -57,6 +57,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.net.URI;
@@ -386,14 +387,26 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
-        // Reserve the position block once, outside the transaction. The counter findAndModify is a single atomic
-        // document update that MongoDB serializes without raising a transaction conflict. The reserved block is reused
-        // across transient-transaction-error retries; a doomed or condition-failed append abandons it, so position
-        // may have gaps (DCB permits this, see ADR 0021).
+        // Reserve the position block once, before the transaction body. When this store owns the transaction the
+        // counter findAndModify runs outside it, as a single atomic document update MongoDB serializes without raising
+        // a transaction conflict, and the reserved block is reused across transient-transaction-error retries. When an
+        // outer transaction is already active the template joins it, so the counter update joins it too and the
+        // counter document becomes a conflict point shared by every concurrent append in that transaction. Either way
+        // a doomed or condition-failed append abandons its block, so position may have gaps (DCB permits this, see
+        // ADR 0021).
         long firstPosition = reservePositions(eventsToAppend.size());
         long lastPosition = firstPosition + eventsToAppend.size() - 1;
 
-        return executeWithTransientRetry(() -> requireNonNull(transactionTemplate.execute(transactionStatus -> {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            // Someone else owns this transaction, so a conflict aborts it and no retry here could ever commit. Run the
+            // body once and let the transient error reach the owner, which has to retry at its own boundary. See ADR 0070.
+            return appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition);
+        }
+        return executeWithTransientRetry(() -> appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition));
+    }
+
+    private DcbAppendResult appendDcbInTransaction(String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition) {
+        return requireNonNull(transactionTemplate.execute(transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
             if (condition != null) {
                 enforceAppendCondition(condition, eventsToAppend, lastPosition);
@@ -408,7 +421,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition);
             insertAllDcb(streamId, currentStreamVersion, documents);
             return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size());
-        })));
+        }));
     }
 
     /**
@@ -416,6 +429,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * transactions conflict, e.g. a write-write conflict on a shared marker). The full cause chain is walked because
      * Spring wraps the {@link MongoException}. {@link DcbAppendConditionNotFulfilledException} is deliberately NOT
      * retried here: it propagates to the application service, which re-reads and retries the whole command.
+     * <p>
+     * This applies only when the store owns the transaction. If an outer transaction is already active the
+     * {@code TransactionTemplate} joins it, a conflict aborts that transaction, and every further attempt would fail
+     * on the first read with {@code NoSuchTransaction}, so the caller runs the body once instead. See ADR 0070.
      */
     private static <T> T executeWithTransientRetry(Supplier<T> action) {
         // Exponential backoff with generous attempts, since several appends placed in the same partition stream

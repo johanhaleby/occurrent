@@ -34,9 +34,13 @@ import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -593,6 +597,129 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                     .as("Disjoint boundary %s must have exactly its one committed event readable", tag)
                     .hasSize(1);
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Transaction ownership (ADR 0070).
+    //
+    // The store retries a transient conflict only when it opened the transaction. When a caller already has one open
+    // the TransactionTemplate joins it, a conflict aborts that transaction, and every further attempt would fail on
+    // the first read with NoSuchTransaction, so retrying there burns attempts on a transaction that can never commit.
+    // These two tests pin both halves: the store runs the body exactly once when it does not own the transaction, and
+    // a caller that retries at its own boundary still gets every append committed.
+    // ---------------------------------------------------------------------------
+    @Test
+    void append_inside_a_caller_owned_transaction_runs_once_instead_of_retrying() throws Exception {
+        int threadCount = 6;
+        AtomicInteger transactionBodyRuns = new AtomicInteger(0);
+        MongoTransactionManager txManager = buildTransactionManager();
+        SpringMongoEventStore store = buildEventStoreOnSharedPartition(txManager, transactionBodyRuns);
+
+        List<Throwable> failures = runAppendsInOuterTransaction(store, txManager, threadCount, "ownedbycaller", 1);
+
+        // The store must not retry, so it can never run its transaction body more times than there were appends.
+        // Without the ownership check each losing append would run it up to 15 more times. Some appends never reach
+        // the body at all: inside a caller-owned transaction the position-counter reservation joins that transaction
+        // too, so a conflict often aborts there first, which is why this is an upper bound rather than an equality.
+        assertThat(transactionBodyRuns.get())
+                .as("The store must not retry its transaction body when it does not own the transaction")
+                .isPositive()
+                .isLessThanOrEqualTo(threadCount);
+        // Contention on a single partition means at least one append loses, and the failure must be one the caller can
+        // recognise as worth retrying. Note that MongoDB's WriteConflict carries the TransientTransactionError label
+        // yet Spring translates it to DataIntegrityViolationException, a non-transient type, so both count here.
+        assertThat(failures)
+                .as("A losing append inside a caller-owned transaction must surface a retryable conflict")
+                .isNotEmpty()
+                .allSatisfy(failure -> assertThat(hasRetryableConflictCause(failure)).isTrue());
+    }
+
+    @Test
+    void appends_in_caller_owned_transactions_all_commit_when_the_caller_retries_at_its_own_boundary() throws Exception {
+        int threadCount = 6;
+        MongoTransactionManager txManager = buildTransactionManager();
+        SpringMongoEventStore store = buildEventStoreOnSharedPartition(txManager, new AtomicInteger());
+
+        // Retrying the whole transaction, rather than the append inside it, is the remedy the store's behaviour asks
+        // for: each attempt gets a fresh transaction.
+        List<Throwable> failures = runAppendsInOuterTransaction(store, txManager, threadCount, "callerretries", 20);
+
+        assertThat(failures)
+                .as("Retrying at the caller's own transaction boundary must let every append commit")
+                .isEmpty();
+    }
+
+    private List<Throwable> runAppendsInOuterTransaction(SpringMongoEventStore store, MongoTransactionManager txManager, int threadCount, String tagPrefix, int maxAttempts) throws Exception {
+        CyclicBarrier barrier = new CyclicBarrier(threadCount);
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        List<Throwable> failures = new CopyOnWriteArrayList<>();
+        List<Future<Void>> futures = new ArrayList<>();
+
+        for (int t = 0; t < threadCount; t++) {
+            final String distinctTag = tagPrefix + ":t" + t;
+            final String distinctType = "OuterTransactionEvent-" + tagPrefix + "-t" + t;
+            futures.add(pool.submit(() -> {
+                barrier.await();
+                Throwable lastFailure = null;
+                for (int attempt = 0; attempt < maxAttempts; attempt++) {
+                    try {
+                        // A fresh TransactionTemplate per attempt, so each attempt opens its own transaction.
+                        new TransactionTemplate(txManager).execute(status -> store.append(List.of(taggedEvent(distinctType, distinctTag))));
+                        return null;
+                    } catch (Throwable e) {
+                        lastFailure = e;
+                    }
+                }
+                failures.add(lastFailure);
+                return null;
+            }));
+        }
+
+        pool.shutdown();
+        for (Future<Void> f : futures) {
+            f.get();
+        }
+        return failures;
+    }
+
+    private static boolean hasRetryableConflictCause(Throwable throwable) {
+        for (Throwable cause = throwable; cause != null; cause = cause.getCause()) {
+            if (cause instanceof TransientDataAccessException || cause instanceof DataIntegrityViolationException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private MongoTransactionManager buildTransactionManager() {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcb_concurrency");
+        MongoClient mongoClient = MongoClients.create(connectionString);
+        return new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+    }
+
+    /**
+     * A store forced onto one partition stream, so concurrent appends to disjoint boundaries deterministically
+     * contend, sharing the supplied transaction manager with the caller and counting each run of its transaction body.
+     */
+    private SpringMongoEventStore buildEventStoreOnSharedPartition(MongoTransactionManager txManager, AtomicInteger transactionBodyRuns) {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcb_concurrency");
+        MongoClient mongoClient = MongoClients.create(connectionString);
+        MongoTemplate template = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        TransactionTemplate countingTemplate = new TransactionTemplate(txManager) {
+            @Override
+            public <T> T execute(TransactionCallback<T> action) {
+                transactionBodyRuns.incrementAndGet();
+                return super.execute(action);
+            }
+        };
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .eventStoreCollectionName(COLLECTION)
+                .transactionConfig(countingTemplate)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM, DCB)
+                .dcbStreamIdGenerator(tags -> "shared:partition:stream")
+                .build();
+        return new SpringMongoEventStore(template, config);
     }
 
     private SpringMongoEventStore buildEventStoreWithStreamIdGenerator(DcbStreamIdGenerator streamIdGenerator) {

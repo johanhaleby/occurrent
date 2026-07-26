@@ -18,9 +18,15 @@ package org.occurrent.application.service.spring.reactor;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.reactor.ReactiveTransactionExecutor;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.ReactiveTransactionManager;
+import org.springframework.transaction.reactive.TransactionContextManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+
+import java.time.Duration;
 
 import java.util.Objects;
 import java.util.function.Supplier;
@@ -46,6 +52,18 @@ import java.util.function.Supplier;
  */
 @NullMarked
 public class SpringReactiveTransactionExecutor implements ReactiveTransactionExecutor {
+
+    /**
+     * Retries a transient conflict, such as two concurrent appends contending on the same partition stream or on the
+     * global position counter, but only when this executor opened the transaction. The event store joins this
+     * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
+     * be started again by whoever owns it. Attempt count and backoff match the blocking
+     * {@code SpringTransactionExecutor} so retry behaviour is identical across the two stacks (ADR 0053). See ADR 0070.
+     */
+    private static final Retry TRANSIENT_CONFLICT_RETRY = Retry.backoff(4, Duration.ofMillis(100))
+            .maxBackoff(Duration.ofSeconds(2))
+            .filter(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException)
+            .onRetryExhaustedThrow((spec, signal) -> signal.failure());
 
     private final TransactionalOperator transactionalOperator;
 
@@ -73,7 +91,18 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     @Override
     public <T> Mono<T> inTransaction(Supplier<Mono<T>> action) {
         Objects.requireNonNull(action, "action cannot be null");
-        return Mono.defer(action).as(transactionalOperator::transactional);
+        Mono<T> transaction = Mono.defer(action).as(transactionalOperator::transactional);
+        // currentContext() signals an error when the subscriber context carries no transaction. Its exception type is
+        // private to Spring, so treat any error from it as "no transaction in context" rather than naming the class.
+        return TransactionContextManager.currentContext()
+                .map(__ -> true)
+                .onErrorReturn(false)
+                .flatMap(ownedByCaller -> ownedByCaller
+                        // A transaction is already open, so the operator joins it and this executor is not its owner.
+                        // A conflict aborts the whole transaction, which only its owner can start again, so run the
+                        // action once and let the error reach that owner. See ADR 0070.
+                        ? transaction
+                        : transaction.retryWhen(TRANSIENT_CONFLICT_RETRY));
     }
 
     @Override

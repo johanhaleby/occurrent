@@ -18,9 +18,14 @@ package org.occurrent.application.service.spring;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.blocking.TransactionExecutor;
+import org.occurrent.retry.RetryStrategy;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.util.Objects;
 import java.util.function.Supplier;
 
@@ -44,6 +49,29 @@ import java.util.function.Supplier;
  */
 @NullMarked
 public class SpringTransactionExecutor implements TransactionExecutor {
+
+    /**
+     * Retries a conflict between concurrent appends, such as two contending on the same partition stream or on the
+     * global position counter, but only when this executor opened the transaction. The event store joins this
+     * transaction rather than opening its own, so it cannot retry a conflict itself: an aborted transaction can only
+     * be started again by whoever owns it. Attempt count and backoff match the DCB application service's default
+     * append-condition retry, so the two conflict retries behave comparably. See ADR 0070.
+     * <p>
+     * The two exception types mirror the two categories the event store itself treats as safe to rerun, a transient
+     * transaction conflict and a duplicate key. They are matched through Spring's translated types because this module
+     * is storage-neutral and cannot inspect a driver-specific error label. MongoDB's WriteConflict is worth calling
+     * out: the server labels it {@code TransientTransactionError}, yet Spring translates it to
+     * {@link DataIntegrityViolationException}, which is a <em>non-transient</em> type, so matching only
+     * {@link TransientDataAccessException} would miss the most common conflict of all.
+     * <p>
+     * The cost of going through the translated types is that a genuine integrity violation, say a synchronous
+     * subscription handler hitting a unique index, is retried too. That is wasteful rather than wrong, since it fails
+     * the same way on every attempt and then propagates.
+     */
+    private static final RetryStrategy TRANSIENT_CONFLICT_RETRY = RetryStrategy
+            .exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
+            .maxAttempts(5)
+            .retryIf(throwable -> throwable instanceof TransientDataAccessException || throwable instanceof DataIntegrityViolationException);
 
     private final TransactionTemplate transactionTemplate;
 
@@ -70,7 +98,13 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     @Override
     public <T> T inTransaction(Supplier<T> action) {
         Objects.requireNonNull(action, "action cannot be null");
-        return transactionTemplate.execute(status -> action.get());
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            // A transaction is already open, so the template joins it and this executor is not its owner. A conflict
+            // aborts the whole transaction, which only its owner can start again, so run the action once and let the
+            // error reach that owner. See ADR 0070.
+            return transactionTemplate.execute(status -> action.get());
+        }
+        return TRANSIENT_CONFLICT_RETRY.execute(() -> transactionTemplate.execute(status -> action.get()));
     }
 
     @Override
