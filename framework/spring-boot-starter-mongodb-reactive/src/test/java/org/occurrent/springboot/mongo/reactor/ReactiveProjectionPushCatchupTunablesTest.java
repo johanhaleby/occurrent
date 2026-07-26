@@ -66,7 +66,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactiveProjectionPushCatchupTunablesTest {
 
-    // Static because the recording bean outlives no context but the assertion happens after the runner closes it.
+    // Static so the reader bean, which the runner builds per context, can record into the same list the test
+    // asserts on. Cleared before each test, since the list survives between them.
     private static final List<Throwable> ACK_FAILURES = new CopyOnWriteArrayList<>();
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()

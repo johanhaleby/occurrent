@@ -310,8 +310,10 @@ public class OccurrentProperties {
 
             /**
              * A fail-loud ceiling on events buffered from the push feed while the replay runs, not a throttle. Defaults
-             * to 100000. Reaching it means the replay is not keeping up with the feed at all, so the catch-up throws
-             * rather than dropping events or growing without bound. Raise it for a large history behind a busy feed.
+             * to 100000. Reaching it means the replay is not keeping up with the feed at all, so the overflow is
+             * reported rather than events being dropped or the buffer growing without bound. The blocking stack throws
+             * from the failing feed call, the reactor stack signals the error on that event's returned Mono. Raise it
+             * for a large history behind a busy feed.
              */
             private Integer maxBufferedEvents;
 
