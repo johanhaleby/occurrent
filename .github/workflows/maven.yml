@@ -4,6 +4,8 @@ on:
   push:
     paths-ignore:
       - '**/*.md'
+  # So the image mirror can be refreshed by hand instead of waiting for a push to notice a gap.
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref so pushes don't queue up behind stale builds.
 concurrency:
@@ -21,6 +23,10 @@ env:
   # Exceeding it warns, never fails: nothing here is close to the 20 minute shard timeout, and a
   # timing gate that can redden an unrelated push would just get ignored.
   SHARD_BUDGET_SECONDS: 240
+  # Private mirror of the Docker Hub images the tests need, so a Docker Hub outage cannot fail a run.
+  # Images keep their Docker Hub repository and tag under this prefix, so mongo:8.0 is mirrored as
+  # <prefix>/mongo:8.0.
+  IMAGE_MIRROR: ghcr.io/${{ github.repository_owner }}/occurrent-ci
 
 jobs:
   # Stage 1: compile and install every module artifact into the local repo, skipping tests.
@@ -66,6 +72,65 @@ jobs:
           path: ${{ github.workspace }}/.m2repo/org/occurrent
           retention-days: 1
           if-no-files-found: error
+
+  # Keep a private mirror of the images the tests need, so a Docker Hub outage stops being able to
+  # fail a run. #432 made an outage cheap and legible but left the dependency, and it cost us runs 4
+  # times in one morning.
+  #
+  # This never blocks the pipeline. continue-on-error here, plus the fall back in the shards, means a
+  # cold or broken mirror only costs a warning and the tests pull from Docker Hub as they did before.
+  # That is why the shards do not use Testcontainers' hub.image.name.prefix: it rewrites every Docker
+  # Hub image with no per-image opt-out and no fallback, so a mirror that lags a version bump would
+  # fail the run outright. Pulling from the mirror and retagging to the Docker Hub name leaves the
+  # tests finding the image locally, which is what they already do after a pre-pull.
+  mirror-images:
+    name: mirror test images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      # Only to resolve the ryuk tag, which lives in the Testcontainers jar. A cache miss just means
+      # ryuk is left out of the mirror and pulled from Docker Hub.
+      - name: Restore Maven dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.m2repo
+            !${{ github.workspace }}/.m2repo/org/occurrent
+          key: ${{ runner.os }}-m2deps-java21-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-m2deps-java21-
+            ${{ runner.os }}-m2deps-
+      - name: Log in to the mirror
+        run: echo '${{ github.token }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+      - name: Copy any image the mirror is missing
+        run: |
+          while IFS= read -r image; do
+            target="$IMAGE_MIRROR/$image"
+            # Presence is checked by pulling rather than with `docker manifest inspect`, which reported a
+            # miss for images a registry demonstrably served when this was tested. An always-missing check
+            # would quietly make this job pull from Docker Hub on every run, which is the dependency the
+            # mirror exists to remove.
+            if docker pull -q "$target" >/dev/null 2>&1; then
+              echo "mirror already serves $image"
+              continue
+            fi
+            echo "mirror is missing $image, copying it from Docker Hub"
+            if ! docker pull -q "$image" >/dev/null; then
+              echo "::warning::Could not pull $image from Docker Hub, so the mirror still lacks it and the shards will fall back."
+              continue
+            fi
+            docker tag "$image" "$target"
+            if docker push -q "$target" >/dev/null; then
+              echo "mirrored $image"
+            else
+              echo "::warning::Could not push $image to the mirror. Check that the job has packages write permission."
+            fi
+          done < <(.github/scripts/required-test-images.sh .)
 
   # Guard against silent coverage loss: every module that has tests must fall under exactly one
   # test shard's paths. Parses the shard paths straight out of this file (no separate list to
@@ -135,9 +200,16 @@ jobs:
   # project artifacts still supply the bulk; only genuinely missing artifacts fall back to network.
   test:
     name: test (${{ matrix.shard.name }}, java-${{ matrix.java }})
-    needs: build
+    # mirror-images is continue-on-error, so waiting on it costs nothing when it fails. It only means
+    # the mirror has been given its chance to fill before any shard reads from it.
+    needs: [ build, mirror-images ]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+      # download-artifact reads this run's artifacts through the Actions API.
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -207,37 +279,54 @@ jobs:
             echo "pull.timeout=60"
           } > "$HOME/.testcontainers.properties"
           cat "$HOME/.testcontainers.properties"
-      # Pull the Mongo image once here rather than letting every test class rediscover a broken registry for
-      # itself. Every shard starts a Mongo container and Mongo is pulled before anything else, so this sees a
-      # Docker Hub outage first and fails in under a minute saying so, instead of the run being cancelled 20
-      # minutes later with a timeout that reads like a hanging test. On a healthy run it costs a few seconds
-      # the first test would have paid anyway, and the tests then find the image already local.
+      # A failed login is not fatal. Every image then misses in the mirror and falls back to Docker Hub,
+      # which is the behaviour this repo had before the mirror existed.
+      - name: Log in to the mirror
+        continue-on-error: true
+        run: echo '${{ github.token }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+      # Put every image the tests need on this runner before any test can look for one, so no test class
+      # ever rediscovers a broken registry for itself. Preferred order is the mirror, then Docker Hub.
       #
-      # Only Mongo. The Redis tag lives in a test and ryuk's comes from the Testcontainers version, so listing
-      # them here would be a list that rots, and pull.timeout above already bounds whatever is not pre-pulled.
-      # The version is read from the pom so it cannot drift from what the tests ask for.
-      - name: Pre-pull the MongoDB test image
+      # Pulling from the mirror and retagging to the Docker Hub name is what lets the mirror be optional:
+      # the tests keep asking for mongo:8.0 and find it locally either way, so a mirror that lags a
+      # version bump costs a Docker Hub pull rather than a red run.
+      #
+      # Falling back still fails the job when Docker Hub cannot serve the image either, and that is the
+      # point of #432: about a minute, with an error that names the registry, instead of ~292s per test
+      # class and a run cancelled at the 20 minute timeout.
+      - name: Pre-pull the test container images
         run: |
-          version=$(grep -oE '<integration-tests\.mongo\.version>[^<]+' pom.xml | sed 's/.*>//')
-          if [ -z "$version" ]; then
-            echo "::error::Could not read integration-tests.mongo.version from pom.xml, so the Mongo image to pre-pull is unknown. Was the property renamed?"
-            exit 1
-          fi
-          image="mongo:$version"
-          for attempt in 1 2 3; do
-            if docker pull -q "$image"; then
-              echo "have $image locally, tests will not pull it"
-              exit 0
+          from_mirror=0
+          from_docker_hub=0
+          while IFS= read -r image; do
+            if docker pull -q "$IMAGE_MIRROR/$image" >/dev/null 2>&1; then
+              docker tag "$IMAGE_MIRROR/$image" "$image"
+              echo "have $image from the mirror"
+              from_mirror=$(( from_mirror + 1 ))
+              continue
             fi
-            echo "::warning::Pull of $image failed, attempt $attempt of 3"
-            # No backoff after the last attempt, since the job is about to fail either way and the point is to
-            # fail fast.
-            if [ "$attempt" -lt 3 ]; then
-              sleep $(( attempt * 5 ))
+            echo "::warning::The mirror does not serve $image, falling back to Docker Hub. Run the workflow manually to refresh the mirror."
+            pulled=0
+            for attempt in 1 2 3; do
+              if docker pull -q "$image" >/dev/null; then
+                pulled=1
+                break
+              fi
+              echo "::warning::Pull of $image from Docker Hub failed, attempt $attempt of 3"
+              # No backoff after the last attempt, since the job is about to fail either way and the point
+              # is to fail fast.
+              if [ "$attempt" -lt 3 ]; then
+                sleep $(( attempt * 5 ))
+              fi
+            done
+            if [ "$pulled" -eq 0 ]; then
+              echo "::error::Could not pull $image from the mirror or from Docker Hub after 3 attempts. This is a registry problem, not a test failure."
+              exit 1
             fi
-          done
-          echo "::error::Could not pull $image from Docker Hub after 3 attempts. This is a registry problem, not a test failure."
-          exit 1
+            echo "have $image from Docker Hub"
+            from_docker_hub=$(( from_docker_hub + 1 ))
+          done < <(.github/scripts/required-test-images.sh .)
+          echo "images ready: $from_mirror from the mirror, $from_docker_hub from Docker Hub"
       # Each subtree is timed and reported to the run summary, so the shard balance can always be
       # re-derived from the last green run instead of being measured by hand. Rows are appended as
       # they complete rather than collected and written at the end, so a shard that fails partway
