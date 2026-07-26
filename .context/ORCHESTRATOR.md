@@ -167,7 +167,7 @@ Build/verify: `rtk mvn -Drevision=0.30.0-SNAPSHOT -pl rewrite -am test`. **Real-
 
 Use `rtk <command>` wherever `rtk` supports it; raw shell only when unsupported. Managed dependency versions live in the root `pom.xml` `<properties>` and imported BOMs (Spring Boot, Reactor, MongoDB driver, Jackson 3, CloudEvents, JobRunr); do not duplicate them here.
 
-CI: `.github/workflows/maven.yml` runs `mvn -B package --file pom.xml` on Temurin Java 21 and 25, with Testcontainers reuse via `$HOME/.testcontainers.properties`.
+CI: `.github/workflows/maven.yml` builds once per JDK (`install -DskipTests`, Temurin 21 and 25) and then runs the tests as 10 shards per JDK, with Testcontainers reuse via `$HOME/.testcontainers.properties`. Shard count is pinned at 10 because the account's GitHub plan allows 20 concurrent jobs; rebalance by moving paths between shards, never by adding one. Each shard reports its per-subtree timings to the run summary and as `shard-timing` log lines, and warns when it exceeds `SHARD_BUDGET_SECONDS`, so a shard that grew says so instead of quietly stretching the run; read them with `gh run view <run-id> --log | grep shard-timing`. Costs are not additive: with Testcontainers reuse the first subtree to boot MongoDB on a runner pays for the container and its neighbours ride along, so a subtree's time changes when it moves shard.
 
 Local patterns:
 
