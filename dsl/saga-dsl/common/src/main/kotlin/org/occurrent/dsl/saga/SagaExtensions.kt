@@ -86,12 +86,12 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
 
     /** Registers the reaction for event type [T], given the post-evolve state. */
     inline fun <reified T : E> react(noinline react: SagaEffects<C>.(S, T) -> SagaEffects<C>) {
-        delegate.react(T::class.java, BiFunction { s, e -> SagaEffects<C>().apply { react(s, e) }.build() })
+        delegate.react(T::class.java, BiFunction { s, e -> SagaEffects<C>().react(s, e).build() })
     }
 
     /** Registers the metadata-carrying reaction for event type [T]: the reaction also receives the event's delivery [EventMetadata]. */
     inline fun <reified T : E> react(noinline react: SagaEffects<C>.(S, EventMetadata, T) -> SagaEffects<C>) {
-        delegate.react(T::class.java, Saga.EventReactor<S, T, C> { s, m, e -> SagaEffects<C>().apply { react(s, m, e) }.build() })
+        delegate.react(T::class.java, Saga.EventReactor<S, T, C> { s, m, e -> SagaEffects<C>().react(s, m, e).build() })
     }
 
     /** Registers the fold for the timer named [timerName]. */
@@ -101,12 +101,12 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
 
     /** Registers the reaction for the timer named [timerName], given the post-evolve state. */
     fun reactOnTimeout(timerName: String, react: SagaEffects<C>.(S, SagaTimeout) -> SagaEffects<C>) {
-        delegate.reactOnTimeout(timerName, BiFunction { s, t -> SagaEffects<C>().apply { react(s, t) }.build() })
+        delegate.reactOnTimeout(timerName, BiFunction { s, t -> SagaEffects<C>().react(s, t).build() })
     }
 
     /** Effects to run once when a start event creates the instance. Can be set only once. */
     fun onStart(react: SagaEffects<C>.(S, E) -> SagaEffects<C>) {
-        delegate.onStart(BiFunction { s, e -> SagaEffects<C>().apply { react(s, e) }.build() })
+        delegate.onStart(BiFunction { s, e -> SagaEffects<C>().react(s, e).build() })
     }
 
     /**
@@ -114,7 +114,7 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
      * set only once.
      */
     fun onStart(react: SagaEffects<C>.(S, EventMetadata, E) -> SagaEffects<C>) {
-        delegate.onStart(Saga.EventReactor<S, E, C> { s, m, e -> SagaEffects<C>().apply { react(s, m, e) }.build() })
+        delegate.onStart(Saga.EventReactor<S, E, C> { s, m, e -> SagaEffects<C>().react(s, m, e).build() })
     }
 
     /** The terminal predicate. Can be set only once. */
