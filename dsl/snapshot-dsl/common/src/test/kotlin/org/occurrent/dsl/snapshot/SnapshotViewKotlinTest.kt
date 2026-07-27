@@ -18,12 +18,22 @@ package org.occurrent.dsl.snapshot
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.cloudevents.OccurrentCloudEventExtension
 
 class SnapshotViewKotlinTest {
 
     sealed interface LedgerEvent
     data class Deposited(val amount: Int) : LedgerEvent
     data class Withdrawn(val amount: Int) : LedgerEvent
+
+    private fun metadata(streamId: String, streamVersion: Long): EventMetadata =
+        EventMetadata(
+            mapOf(
+                OccurrentCloudEventExtension.STREAM_ID to streamId,
+                OccurrentCloudEventExtension.STREAM_VERSION to streamVersion,
+            )
+        )
 
     @Test
     fun `snapshotView dsl builds a folding view with a schema version`() {
@@ -36,5 +46,27 @@ class SnapshotViewKotlinTest {
         assertThat(view.schemaVersion()).isEqualTo(3)
         assertThat(view.eventTypes()).containsExactlyInAnyOrder(Deposited::class.java, Withdrawn::class.java)
         assertThat(view.view().evolve(listOf(Deposited(100), Withdrawn(40)))).isEqualTo(60)
+    }
+
+    @Test
+    fun `snapshotView dsl registers a metadata-aware fold that receives the real event metadata`() {
+        val view = snapshotView<String, LedgerEvent>(initialState = "") {
+            on<Deposited> { _, metadata, _ -> "${metadata.streamId}@${metadata.streamVersion}" }
+        }
+
+        val state = view.view().evolve("", metadata("stream-1", 7L), Deposited(100))
+
+        assertThat(state).isEqualTo("stream-1@7")
+    }
+
+    @Test
+    fun `dcbSnapshotView dsl registers a metadata-aware fold that receives the real event metadata`() {
+        val dcbView = dcbSnapshotView<String, LedgerEvent>(initialState = "") {
+            on<Deposited> { _, metadata, _ -> "${metadata.streamId}@${metadata.streamVersion}" }
+        }
+
+        val state = dcbView.snapshotView().view().evolve("", metadata("stream-1", 7L), Deposited(100))
+
+        assertThat(state).isEqualTo("stream-1@7")
     }
 }

@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.projection.reactor
 
+import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions
 import org.occurrent.dsl.dcb.reactor.subscribeDcb
@@ -39,6 +40,13 @@ import reactor.core.publisher.Mono
  */
 fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, update: (E) -> Mono<Void>, startAt: DcbStartAt? = null): Subscription =
     subscribeDcb(subscriptionId, dcbProjection.criteria(), startAt) { e -> update(e) }
+
+/**
+ * As the [update] overload above, but [update] also sees the delivering event's [EventMetadata], for a caller that owns
+ * the reactive load-evolve-save but still needs the stream id, stream version, or other metadata.
+ */
+fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: DcbStartAt? = null): Subscription =
+    subscribeDcbWithMetadata(subscriptionId, dcbProjection.criteria(), startAt) { dcbMetadata, e -> update(dcbMetadata.eventMetadata(), e) }
 
 /**
  * Runs [dcbProjection] as an asynchronous, subscription-fed DCB read model materialized into the blocking [repository]

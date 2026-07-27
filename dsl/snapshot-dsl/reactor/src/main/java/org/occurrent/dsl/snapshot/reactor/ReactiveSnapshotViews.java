@@ -16,13 +16,16 @@
 
 package org.occurrent.dsl.snapshot.reactor;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.snapshot.Snapshot;
 import org.occurrent.dsl.snapshot.internal.SnapshotSupport;
 import org.occurrent.dsl.snapshot.SnapshotView;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import reactor.core.publisher.Mono;
+
 
 import static java.util.Objects.requireNonNull;
 
@@ -86,8 +89,9 @@ public final class ReactiveSnapshotViews<E> {
         return Mono.defer(() -> ReactiveSnapshotSupport.resolveBase(store, streamId, snapshotView.schemaVersion(), snapshotView.view()::initialState).flatMap(base ->
                 eventStore.read(streamId, SnapshotSupport.requireInt(base.version(), "the snapshot base stream version"), Integer.MAX_VALUE).flatMap(eventStream ->
                         eventStream.events()
-                                .map(converter::toDomainEvent)
-                                .reduce(requireNonNullState(base.state()), (state, event) -> requireNonNullState(snapshotView.view().evolve(state, event)))
+                                // Reduced per CloudEvent rather than over a collected list, so the tail is not buffered.
+                                .reduce(requireNonNullState(base.state()), (state, cloudEvent) ->
+                                        requireNonNullState(snapshotView.view().evolve(state, EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent))))
                                 .map(current -> new Folded<>(current, eventStream.version())))));
     }
 

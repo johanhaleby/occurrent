@@ -150,6 +150,23 @@ class SnapshotViewsTest {
 
             assertThat(store.findLatest(streamId)).contains(existing);
         }
+
+        @Test
+        void folds_each_event_with_its_own_stream_version_instead_of_empty_metadata() {
+            String streamId = UUID.randomUUID().toString();
+            applicationService.execute(streamId, events -> List.of(new NameDefined(UUID.randomUUID().toString(), time, "name", "Jane")));
+            applicationService.execute(streamId, events -> List.of(new NameWasChanged(UUID.randomUUID().toString(), time, "name", "Janet")));
+            SnapshotView<Long, DomainEvent> streamVersionView = SnapshotView.<Long, DomainEvent>builder(0L)
+                    .on(NameDefined.class, (state, metadata, event) -> metadata.getStreamVersion())
+                    .on(NameWasChanged.class, (state, metadata, event) -> metadata.getStreamVersion())
+                    .schemaVersion(1)
+                    .build();
+            SnapshotViews<DomainEvent> views = SnapshotViews.create(eventStore, converter);
+
+            Long streamVersion = views.readState(streamId, SnapshotViewSource.from(streamVersionView, SnapshotStore.inMemory()));
+
+            assertThat(streamVersion).isEqualTo(2L);
+        }
     }
 
     @Nested

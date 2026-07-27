@@ -92,6 +92,24 @@ public final class ReactiveDcbProjectionRunner<E> {
     }
 
     /**
+     * Subscribes with the given id and applies {@code update} for every event matching the projection's DCB criteria.
+     * The metadata-carrying sibling of {@link #project(String, DcbProjection, Function)}, for a caller that owns the
+     * reactive load-evolve-save but still needs the delivering event's {@link EventMetadata}.
+     */
+    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, BiFunction<EventMetadata, E, Mono<Void>> update) {
+        return project(subscriptionId, dcbProjection, update, null);
+    }
+
+    /**
+     * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
+     * and applies {@code update} for every event matching the projection's DCB criteria, exposing the event's
+     * {@link EventMetadata}.
+     */
+    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable DcbStartAt startAt) {
+        return projectWithMetadata(subscriptionId, dcbProjection, update, startAt);
+    }
+
+    /**
      * Subscribes with the given id and materializes {@code dcbProjection} into the blocking {@code repository} (scheduled
      * on {@code boundedElastic}), skipping events whose id resolves to {@code null}.
      */

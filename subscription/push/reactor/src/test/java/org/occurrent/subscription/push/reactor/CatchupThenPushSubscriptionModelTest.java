@@ -151,6 +151,18 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
+    void a_non_default_start_at_is_rejected() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(Flux::empty, 0);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        Throwable thrown = catchThrowable(() ->
+                model.subscribe("proj", null, StartAt.now(), ce -> Mono.empty()));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("always replays a projection's history from the beginning");
+    }
+
+    @Test
     void a_dcb_subscription_filter_cannot_be_replayed() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         PositionOrderedReader reader = reader(Flux::empty, 0);

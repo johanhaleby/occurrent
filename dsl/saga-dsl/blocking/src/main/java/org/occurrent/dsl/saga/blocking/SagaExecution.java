@@ -51,6 +51,10 @@ import java.util.Set;
  * single input can re-dispatch its entire command list up to {@code maxCasAttempts} times (see {@link SagaRunnerConfig}).
  * A command receiver must therefore be idempotent <em>and</em> tolerate that multiplicity, which is stronger than plain
  * at-least-once: the same input can legitimately dispatch the same command several times within one delivery.
+ * <p>
+ * A reaction's whole command list is handed to {@link CommandDispatcher#dispatchAll} in one call. What that does with
+ * it is the dispatcher's business: the default still calls {@code dispatch} once per command, and only a dispatcher that
+ * overrides {@code dispatchAll} writes them together.
  */
 final class SagaExecution<E, S extends @Nullable Object, C> {
     private static final Logger log = LoggerFactory.getLogger(SagaExecution.class);
@@ -140,12 +144,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         return null;
                     }
                     // Dispatch before saving so a command is never lost. A lost compare-and-set retries this whole body,
-                    // which re-dispatches the entire command list of this input (at-least-once, and up to maxCasAttempts
-                    // times). Command receivers must therefore be idempotent and tolerate that multiplicity, not merely
-                    // at-least-once.
-                    for (C command : outcome.commands()) {
-                        dispatcher.dispatch(command);
-                    }
+                    // re-dispatching the entire command list (at-least-once, up to maxCasAttempts times), so receivers
+                    // must be idempotent and tolerate that multiplicity.
+                    dispatcher.dispatchAll(outcome.commands());
                     SagaEnvelope<S> envelope = outcome.envelope();
                     if (envelope != null && stateStore.compareAndSave(sagaId, envelope, outcome.expectedVersion())) {
                         return null;

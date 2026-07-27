@@ -339,6 +339,32 @@ class ReactiveAnnotationFailFastTest {
         }
     }
 
+    @Test
+    void a_snapshot_with_an_ambiguous_store_type_fails_fast() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(ConverterAndSubscribableConfiguration.class, AmbiguousStoreSnapshotConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("Disambiguate with storeName");
+                });
+    }
+
+    @Test
+    void a_snapshot_with_an_unresolvable_store_name_fails_fast() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(ConverterAndSubscribableConfiguration.class, MissingNamedStoreSnapshotConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("could not resolve a store bean named 'missingSnapshotStore'");
+                });
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class RawSnapshotViewConfiguration {
         @Bean
@@ -350,6 +376,49 @@ class ReactiveAnnotationFailFastTest {
     static class RawSnapshotViewHolder {
         @SuppressWarnings("rawtypes")
         @Snapshot(id = "rawSnapshotView")
+        SnapshotView factory() {
+            return mock(SnapshotView.class);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class AmbiguousStoreSnapshotConfiguration {
+        @Bean
+        AmbiguousStoreSnapshotHolder ambiguousStoreSnapshotHolder() {
+            return new AmbiguousStoreSnapshotHolder();
+        }
+
+        // Two beans of the referenced store type so resolution cannot pick one.
+        @Bean
+        String storeA() {
+            return "a";
+        }
+
+        @Bean
+        String storeB() {
+            return "b";
+        }
+    }
+
+    static class AmbiguousStoreSnapshotHolder {
+        @SuppressWarnings("rawtypes")
+        @Snapshot(id = "ambiguousStoreSnapshot", store = String.class)
+        SnapshotView factory() {
+            return mock(SnapshotView.class);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class MissingNamedStoreSnapshotConfiguration {
+        @Bean
+        MissingNamedStoreSnapshotHolder missingNamedStoreSnapshotHolder() {
+            return new MissingNamedStoreSnapshotHolder();
+        }
+    }
+
+    static class MissingNamedStoreSnapshotHolder {
+        @SuppressWarnings("rawtypes")
+        @Snapshot(id = "missingNamedStoreSnapshot", storeName = "missingSnapshotStore")
         SnapshotView factory() {
             return mock(SnapshotView.class);
         }

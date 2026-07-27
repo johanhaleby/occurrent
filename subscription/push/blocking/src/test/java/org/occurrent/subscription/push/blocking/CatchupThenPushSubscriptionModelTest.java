@@ -165,6 +165,19 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
+    void a_non_default_start_at_is_rejected() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = readerThatOnFirstElementPushes(List.of(), null, feed);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        Throwable thrown = catchThrowable(() ->
+                model.subscribe("proj", null, StartAt.now(), ce -> {
+                }));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("always replays a projection's history from the beginning");
+    }
+
+    @Test
     void a_catch_up_failure_makes_the_live_feed_fail_fast() {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
         PositionOrderedReader failingReader = failingReader();

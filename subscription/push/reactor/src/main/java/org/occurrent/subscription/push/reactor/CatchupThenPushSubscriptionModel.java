@@ -87,6 +87,9 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
+        if (!startAt.isDefault()) {
+            throw new IllegalArgumentException(HandoverMessages.NON_DEFAULT_START_AT_NOT_SUPPORTED);
+        }
         // Fail fast on a filter that cannot be replayed, before registering anything on the live feed.
         Filter replayFilter = ReplayFilters.replayFilterFor(filter);
 
