@@ -17,6 +17,7 @@
 
 package org.occurrent.springboot.blocking;
 
+import io.cloudevents.CloudEvent;
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -135,10 +136,15 @@ class SnapshotAnnotationRegistrar {
             }
             S newState;
             if (eventVersion == base.version() + 1) {
-                newState = snapshotView.view().evolve(base.state(), event);
+                newState = snapshotView.view().evolve(base.state(), metadata, event);
             } else {
-                List<E> range = converter.toDomainEvents(eventStore.read(key, Math.toIntExact(base.version()), Math.toIntExact(eventVersion - base.version())).events()).toList();
-                newState = snapshotView.view().evolve(base.state(), range);
+                // Folded per CloudEvent (not via the List-based evolve) so each event keeps its own metadata rather than
+                // the whole range sharing EventMetadata.empty(), which a metadata-reading fold cannot tolerate.
+                S state = base.state();
+                for (CloudEvent rangeCloudEvent : eventStore.read(key, Math.toIntExact(base.version()), Math.toIntExact(eventVersion - base.version())).eventList()) {
+                    state = snapshotView.view().evolve(state, EventMetadata.from(rangeCloudEvent), converter.toDomainEvent(rangeCloudEvent));
+                }
+                newState = state;
             }
             store.save(key, new org.occurrent.dsl.snapshot.Snapshot<>(newState, eventVersion, schemaVersion));
             return Unit.INSTANCE;
@@ -195,11 +201,15 @@ class SnapshotAnnotationRegistrar {
             if (position - base.version() < everyNEvents) {
                 return; // throttle before reading, matching events cannot exceed the position gap since the snapshot
             }
-            List<E> range = converter.toDomainEvents(dcbEventStore.read(criteria, DcbReadOptions.between(base.version(), position)).stream()).toList();
+            List<CloudEvent> range = dcbEventStore.read(criteria, DcbReadOptions.between(base.version(), position)).events();
             if (range.size() < everyNEvents) {
                 return; // throttle: too few matching events since the last saved snapshot
             }
-            S newState = view.evolve(base.state(), range);
+            // Folded per CloudEvent so each event keeps its own metadata, matching the stream path above.
+            S newState = base.state();
+            for (CloudEvent rangeCloudEvent : range) {
+                newState = view.evolve(newState, EventMetadata.from(rangeCloudEvent), converter.toDomainEvent(rangeCloudEvent));
+            }
             store.save(key, new org.occurrent.dsl.snapshot.Snapshot<>(newState, position, schemaVersion));
         });
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
