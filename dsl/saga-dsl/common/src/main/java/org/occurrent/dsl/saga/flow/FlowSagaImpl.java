@@ -53,7 +53,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     static final int DEFAULT_HISTORY_WINDOW = 100;
 
     private final Class<? extends E> startType;
-    private final Function<E, List<C>> onStartCommands;
+    private final BiFunction<EventMetadata, E, List<C>> onStartCommands;
     private final List<CompiledStep<E, C>> steps;
     private final Map<String, Integer> stepIndex;
     private final Map<String, CompiledStep<E, C>> stepsByName;
@@ -66,7 +66,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private final int historyWindow;
 
     FlowSagaImpl(Class<? extends E> startType,
-                 Function<E, List<C>> onStartCommands,
+                 BiFunction<EventMetadata, E, List<C>> onStartCommands,
                  List<CompiledStep<E, C>> steps,
                  Map<String, Integer> stepIndex,
                  Map<String, CompiledStep<E, C>> stepsByName,
@@ -250,7 +250,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     @Override
     public List<SagaEffect<C>> onStart(FlowState<E> state, EventMetadata metadata, E startEvent) {
         List<SagaEffect<C>> effects = new ArrayList<>();
-        for (C command : onStartCommands.apply(startEvent)) {
+        for (C command : onStartCommands.apply(metadata, startEvent)) {
             effects.add(SagaEffect.issue(command));
         }
         armTimeoutIfAny(effects, state.currentStep(), ReceivedEvents.of(state.received()));

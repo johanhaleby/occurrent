@@ -58,10 +58,20 @@ public final class StepBuilder<E, C> {
         return on(type, (BiPredicate<T, ReceivedEvents<E>>) null, then, commands);
     }
 
+    /** Adds a branch that issues no commands: on an event of {@code type}, just follow {@code then}. */
+    public <T extends E> StepBuilder<E, C> on(Class<T> type, Continuation then) {
+        return on(type, then, (T event) -> List.of());
+    }
+
     /** Adds a guarded branch: it matches only when {@code onlyIf} is also true for the event and events received so far. */
     public <T extends E> StepBuilder<E, C> on(Class<T> type, @Nullable BiPredicate<T, ReceivedEvents<E>> onlyIf, Continuation then, Function<T, List<C>> commands) {
         requireNonNull(commands, "commands cannot be null");
         return on(type, onlyIf, then, (metadata, event) -> commands.apply(event));
+    }
+
+    /** Adds a guarded branch that issues no commands, following {@code then} only when {@code onlyIf} matches. */
+    public <T extends E> StepBuilder<E, C> on(Class<T> type, @Nullable BiPredicate<T, ReceivedEvents<E>> onlyIf, Continuation then) {
+        return on(type, onlyIf, then, (T event) -> List.of());
     }
 
     /**
@@ -103,6 +113,11 @@ public final class StepBuilder<E, C> {
         return this;
     }
 
+    /** As {@link #join(List, Continuation, Function)}, but issues no commands when fulfilled. */
+    public StepBuilder<E, C> join(List<Expectation<E>> expecting, Continuation then) {
+        return join(expecting, then, events -> List.of());
+    }
+
     /** Sets a relative timeout: if it fires before the step completes, run {@code onExpiry} and follow {@code then}. */
     public StepBuilder<E, C> timeout(Duration after, Continuation then, Function<ReceivedEvents<E>, List<C>> onExpiry) {
         requireNonNull(after, "after cannot be null");
@@ -112,6 +127,11 @@ public final class StepBuilder<E, C> {
         return this;
     }
 
+    /** As {@link #timeout(Duration, Continuation, Function)}, but issues no commands on expiry. */
+    public StepBuilder<E, C> timeout(Duration after, Continuation then) {
+        return timeout(after, then, events -> List.of());
+    }
+
     /** Sets an absolute, data-derived timeout: {@code at} is computed from the events received so far when the step is entered. */
     public StepBuilder<E, C> timeout(Function<ReceivedEvents<E>, Instant> at, Continuation then, Function<ReceivedEvents<E>, List<C>> onExpiry) {
         requireNonNull(at, "at cannot be null");
@@ -119,6 +139,11 @@ public final class StepBuilder<E, C> {
         requireNonNull(onExpiry, "onExpiry cannot be null");
         setTimeout(new TimeoutSpec<>(null, at, onExpiry, then));
         return this;
+    }
+
+    /** As {@link #timeout(Function, Continuation, Function)}, but issues no commands on expiry. */
+    public StepBuilder<E, C> timeout(Function<ReceivedEvents<E>, Instant> at, Continuation then) {
+        return timeout(at, then, events -> List.of());
     }
 
     private void setTimeout(TimeoutSpec<E, C> spec) {

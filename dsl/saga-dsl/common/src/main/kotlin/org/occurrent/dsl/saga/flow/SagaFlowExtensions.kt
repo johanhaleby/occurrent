@@ -74,11 +74,18 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     }
 
     /**
-     * Declares the event type [T] that starts an instance, and optionally the commands to issue on start. Correlate [T]
-     * with [correlate] or [correlateAll] like any other event type.
+     * Declares the event type [T] that starts an instance, and optionally the commands to issue on start. Correlate [T] with
+     * [correlate] or [correlateAll] like any other event type.
      */
-    inline fun <reified T : E> startsOn(noinline onStart: FlowReactions<C>.(T) -> Unit = {}) {
-        delegate.startsOn(T::class.java) { event -> FlowReactions<C>().apply { onStart(event) }.build() }
+    inline fun <reified T : E> startsOn(noinline onStart: FlowReactions<C>.(T) -> FlowReactions<C> = { nothing }) {
+        delegate.startsOn(T::class.java) { event -> FlowReactions<C>().onStart(event).build() }
+    }
+
+    /** As [startsOn], but the start reaction also sees the starting event's [EventMetadata]. */
+    inline fun <reified T : E> startsOn(noinline onStart: FlowReactions<C>.(EventMetadata, T) -> FlowReactions<C>) {
+        delegate.startsOn(T::class.java, BiFunction { metadata, event: T ->
+            FlowReactions<C>().onStart(metadata, event).build()
+        })
     }
 
     /** Registers how to correlate an event of type [T] to a saga instance. */
@@ -119,13 +126,19 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     /** An expectation of [count] events of type [T], for a [join]. */
     inline fun <reified T : E> expect(count: Int = 1): Expectation<E> = Expectation(T::class.java, count)
 
-    /** A branch: on an event of type [T] (optionally only when [onlyIf] is true), issue commands and follow [then]. */
+    /**
+     * A branch: on an event of type [T] (optionally only when [onlyIf] is true), issue commands and follow [then].
+     * Omit the reaction entirely for a branch that issues nothing and only advances the flow.
+     *
+     * The reaction defaults here rather than living on a separate no-reaction overload, because a two-parameter trailing
+     * lambda would then be ambiguous between that overload's [onlyIf] and the metadata-carrying reaction below.
+     */
     inline fun <reified T : E> on(
         then: Continuation,
         noinline onlyIf: ((T, ReceivedEvents<E>) -> Boolean)? = null,
-        noinline commands: FlowReactions<C>.(T) -> Unit
+        noinline commands: FlowReactions<C>.(T) -> FlowReactions<C> = { nothing }
     ) {
-        val commandFn = Function<T, List<C>> { event -> FlowReactions<C>().apply { commands(event) }.build() }
+        val commandFn = Function<T, List<C>> { event -> FlowReactions<C>().commands(event).build() }
         if (onlyIf == null) {
             delegate.on(T::class.java, then, commandFn)
         } else {
@@ -140,9 +153,9 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     inline fun <reified T : E> on(
         then: Continuation,
         noinline onlyIf: ((T, ReceivedEvents<E>) -> Boolean)? = null,
-        noinline commands: FlowReactions<C>.(EventMetadata, T) -> Unit
+        noinline commands: FlowReactions<C>.(EventMetadata, T) -> FlowReactions<C>
     ) {
-        val commandFn = BiFunction<EventMetadata, T, List<C>> { metadata, event -> FlowReactions<C>().apply { commands(metadata, event) }.build() }
+        val commandFn = BiFunction<EventMetadata, T, List<C>> { metadata, event -> FlowReactions<C>().commands(metadata, event).build() }
         if (onlyIf == null) {
             delegate.on(T::class.java, then, commandFn)
         } else {
@@ -151,30 +164,37 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     }
 
     /** A join: wait until all [expecting] are met (counted since the step was entered), then issue commands and follow [then]. */
-    fun join(expecting: Expectation<E>, vararg more: Expectation<E>, then: Continuation, whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
-        delegate.join(listOf(expecting, *more), then) { received -> FlowReactions<C>().apply { whenFulfilled(received) }.build() }
+    fun join(expecting: Expectation<E>, vararg more: Expectation<E>, then: Continuation, whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }) {
+        delegate.join(listOf(expecting, *more), then) { received -> FlowReactions<C>().whenFulfilled(received).build() }
     }
 
     /** A relative timeout: if it fires before the step completes, issue commands and follow [then]. */
-    fun timeout(after: Duration, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
-        delegate.timeout(after, then) { received -> FlowReactions<C>().apply { onExpiry(received) }.build() }
+    fun timeout(after: Duration, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }) {
+        delegate.timeout(after, then) { received -> FlowReactions<C>().onExpiry(received).build() }
     }
 
     /** An absolute, data-derived timeout: [at] is computed from the events received when the step is entered. */
-    fun timeout(at: (ReceivedEvents<E>) -> Instant, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> Unit) {
-        delegate.timeout({ received -> at(received) }, then, { received -> FlowReactions<C>().apply { onExpiry(received) }.build() })
+    fun timeout(at: (ReceivedEvents<E>) -> Instant, then: Continuation, onExpiry: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }) {
+        delegate.timeout({ received -> at(received) }, then, { received -> FlowReactions<C>().onExpiry(received).build() })
     }
 }
 
-/** Collects the commands a flow reaction issues, in call order. Flow steps manage timeouts declaratively, so this only issues commands. */
+/**
+ * Collects the commands a flow reaction issues, in call order. Flow steps manage timeouts declaratively, so this only
+ * issues commands.
+ *
+ * [issue] returns the receiver, which is what a reaction lambda must return. That is what makes a produced but
+ * discarded command a compile error rather than a saga that silently does nothing.
+ */
 class FlowReactions<C : Any> @PublishedApi internal constructor() {
     @PublishedApi
     internal val commands: MutableList<C> = mutableListOf()
 
     /** Issue [command]. */
-    fun issue(command: C) {
-        commands += command
-    }
+    fun issue(command: C): FlowReactions<C> = apply { commands += command }
+
+    /** Closes a reaction that does not end on an [issue], such as one finishing on an `if` without an `else`. */
+    val nothing: FlowReactions<C> get() = this
 
     @PublishedApi
     internal fun build(): List<C> = commands.toList()

@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga.flow;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.Branch;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.ChoiceBody;
@@ -30,6 +31,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -63,7 +65,7 @@ public final class FlowSaga {
      */
     public static final class Builder<E, C> {
         private @Nullable Class<? extends E> startType;
-        private Function<E, List<C>> onStartCommands = event -> List.of();
+        private BiFunction<EventMetadata, E, List<C>> onStartCommands = (metadata, event) -> List.of();
         private final Map<Class<?>, Function<E, @Nullable String>> correlators = new LinkedHashMap<>();
         private @Nullable Function<E, @Nullable String> correlateAll;
         private final List<CompiledStep<E, C>> steps = new ArrayList<>();
@@ -101,15 +103,26 @@ public final class FlowSaga {
         /**
          * As {@link #startsOn(Class)}, plus the commands to issue when the instance starts.
          */
-        @SuppressWarnings("unchecked")
         public <T extends E> Builder<E, C> startsOn(Class<T> type, Function<T, List<C>> onStart) {
+            requireNonNull(type, "type cannot be null");
+            requireNonNull(onStart, "onStart cannot be null");
+            return startsOn(type, (metadata, event) -> onStart.apply(event));
+        }
+
+        /**
+         * As {@link #startsOn(Class, Function)}, plus the start event's delivery {@link EventMetadata} (stream id and
+         * version, global position, CloudEvent extensions), for when the start reaction needs a correlation-adjacent
+         * value the event itself does not carry.
+         */
+        @SuppressWarnings("unchecked")
+        public <T extends E> Builder<E, C> startsOn(Class<T> type, BiFunction<EventMetadata, T, List<C>> onStart) {
             requireNonNull(type, "type cannot be null");
             requireNonNull(onStart, "onStart cannot be null");
             if (startType != null) {
                 throw new IllegalStateException("startsOn(...) has already been set and can only be set once");
             }
             startType = type;
-            onStartCommands = (Function<E, List<C>>) onStart;
+            onStartCommands = (BiFunction<EventMetadata, E, List<C>>) onStart;
             return this;
         }
 
