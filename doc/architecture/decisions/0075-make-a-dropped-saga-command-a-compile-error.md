@@ -4,7 +4,7 @@ Date: 2026-07-26
 
 ## Status
 
-Accepted. Changes the unreleased Kotlin surface of the saga DSL (ADR 63). The Java builders are unchanged.
+Accepted. Changes the unreleased Kotlin surface of the saga DSL (ADR 63). Java is extended additively, with no-commands overloads on `StepBuilder` and a metadata-carrying `startsOn`, but the compile-error behaviour itself is Kotlin-only.
 
 ## Context
 
