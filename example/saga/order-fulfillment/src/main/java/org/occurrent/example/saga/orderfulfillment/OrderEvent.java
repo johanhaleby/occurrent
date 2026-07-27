@@ -19,7 +19,7 @@ package org.occurrent.example.saga.orderfulfillment;
 /**
  * The order-fulfillment domain's events. Every permitted type is top-level (not nested), so the reflection-based
  * CloudEvent type mapper can resolve each one from its simple name. {@link OrderShipped} and {@link OrderCancelled} are
- * never written by the saga itself, they are written by the command dispatchers in this example, standing in for the
+ * never written by the saga itself. They are written by the command dispatchers in this example, standing in for the
  * shipping and cancellation services that would react to {@link org.occurrent.example.saga.orderfulfillment.ShipOrder}
  * and {@link org.occurrent.example.saga.orderfulfillment.CancelOrder} in a real system.
  */

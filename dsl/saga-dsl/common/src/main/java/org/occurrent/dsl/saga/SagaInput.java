@@ -41,7 +41,7 @@ public sealed interface SagaInput<E> {
     /**
      * A domain event delivered to the saga, together with its delivery {@link EventMetadata} (stream id and version,
      * global position, and any CloudEvent extensions). A runner that has a CloudEvent builds this with
-     * {@link EventMetadata#from}, the event-only {@link #event(Object)} factory carries {@link #NO_METADATA}.
+     * {@link EventMetadata#from}. The event-only {@link #event(Object)} factory carries {@link #NO_METADATA}.
      */
     record Event<E>(E event, EventMetadata metadata) implements SagaInput<E> {
         public Event {

@@ -45,7 +45,7 @@ data class InvoiceCreated(val eventId: UUID, val occurredAt: Instant, val number
  *    observed at read time, not just the one returned event, so the append still fails if any `InvoiceCreated` (not
  *    just the last one this call saw) was committed after the read (see ADR 0056).
  * <p>
- * A conflict throws [org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException], the caller decides
+ * A conflict throws [org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException]. The caller decides
  * whether to retry (a retry re-reads the now-current last number, so retrying still produces a gapless sequence, see
  * the test).
  */

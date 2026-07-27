@@ -81,7 +81,7 @@ data class AccountClosed(override val eventId: UUID, override val occurredAt: In
 data class UsernameChanged(override val eventId: UUID, override val occurredAt: Instant, val accountId: UUID, val oldUsername: String, val newUsername: String) : UsernameEvent
 
 /**
- * Because [criteria] scopes the read to one username's tag, the sets below only ever contain that single value, the
+ * Because [criteria] scopes the read to one username's tag, the sets below only ever contain that single value. The
  * shape is a map/set anyway (like [org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentState])
  * because [evolve] doesn't know which username [decide] is asking about.
  */

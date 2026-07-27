@@ -16,7 +16,7 @@
 
 /**
  * Internal implementation types for the flow saga layer. These are {@code public} only because a state store lives in a
- * separate module and must construct and read them, they are not part of the public API and may change or be removed at
+ * separate module and must construct and read them. They are not part of the public API and may change or be removed at
  * any time. End users author flow sagas through {@code org.occurrent.dsl.saga.flow} and never reference this package.
  */
 @NullMarked

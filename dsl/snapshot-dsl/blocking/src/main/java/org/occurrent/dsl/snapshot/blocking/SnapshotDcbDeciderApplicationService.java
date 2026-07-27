@@ -54,7 +54,7 @@ import java.util.function.Function;
  * {@code maybeSaveBestEffort}) when the decision actually appended events, since a no-op decision returns no
  * {@link DcbAppendResult} to key the save on. {@link SnapshotDeciderApplicationService} instead saves unconditionally
  * after every execute, because a stream write always has a {@code WriteResult} to advance the base from, whether or
- * not new events were appended. Either way a missed save only costs a longer replay on the next execute, it is never
+ * not new events were appended. Either way a missed save only costs a longer replay on the next execute. It is never
  * a correctness issue.
  *
  * @param <E> the event type

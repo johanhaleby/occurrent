@@ -20,7 +20,7 @@ import org.occurrent.dsl.projection.Projection;
 
 /**
  * A stream/agnostic read model built with the Java handler builder. Each order becomes one {@link OrderStatusView} keyed
- * by its id, the registered handler types are what the runner subscribes to, so there is no separate event-type list to
+ * by its id. The registered handler types are what the runner subscribes to, so there is no separate event-type list to
  * keep in sync.
  */
 public final class OrderStatusProjection {
