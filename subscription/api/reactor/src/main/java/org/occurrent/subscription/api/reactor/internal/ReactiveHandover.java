@@ -56,7 +56,7 @@ import java.util.function.Supplier;
  * payloads are drained. Both are internally consistent: a blocking {@code accept} call returns before its payload is
  * folded during the catch-up window, whereas here a live payload's {@code accept} {@link Mono} completes only once
  * its fold has actually run (including payloads buffered during the replay), even though the catch-up-done signal
- * itself already fired. Neither ordering is "fixed" by this extraction, both are preserved as-is.
+ * itself already fired. Neither ordering is "fixed" by this extraction. Both are preserved as-is.
  */
 @NullMarked
 public final class ReactiveHandover<T> {

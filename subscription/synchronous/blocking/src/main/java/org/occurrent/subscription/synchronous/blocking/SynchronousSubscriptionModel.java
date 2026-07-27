@@ -36,7 +36,7 @@ import java.util.function.Consumer;
  * <p>
  * Unlike the asynchronous {@code SubscriptionModel}s, this model has no lifecycle, start position, checkpoint,
  * catch-up, or replay: it only ever reacts to events fed to it here and now. The register-and-route machinery
- * lives in {@link RegisteringSubscribable}, this model adds the application-service dispatch entry point. For an
+ * lives in {@link RegisteringSubscribable}. This model adds the application-service dispatch entry point. For an
  * externally driven push feed (RabbitMQ, Kafka, ...) use {@code PushSubscriptionModel} instead.
  */
 @NullMarked

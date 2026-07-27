@@ -182,7 +182,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
 
     /**
      * A type-safe builder that assembles a {@link View} from per-event-type handlers and records which event types were
-     * registered. Not thread-safe, build one, configure it, and call {@link #build()} once.
+     * registered. Not thread-safe. Build one, configure it, and call {@link #build()} once.
      */
     public static final class Builder<S extends @Nullable Object, E, ID> {
         private final S initialState;

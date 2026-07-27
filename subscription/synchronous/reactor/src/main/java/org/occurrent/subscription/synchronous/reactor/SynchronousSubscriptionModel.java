@@ -36,7 +36,7 @@ import java.util.List;
  * matches, invoking them in registration order and sequentially (the next handler does not start until the previous
  * one's {@link Mono} completes). A handler error propagates, so under a reactive transaction it rolls the write back.
  * <p>
- * The register-and-route machinery lives in {@link RegisteringSubscribable}, this model adds the application-service
+ * The register-and-route machinery lives in {@link RegisteringSubscribable}. This model adds the application-service
  * dispatch entry point. For an externally driven push feed (RabbitMQ, Kafka, ...) use {@code PushSubscriptionModel}.
  */
 @NullMarked
