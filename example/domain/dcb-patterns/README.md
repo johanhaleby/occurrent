@@ -55,7 +55,7 @@ A `DcbDecider`'s `evolve` folds every event the boundary criteria matches, on ev
 right cost for a boundary that stays small (one username, one product, one sign-up), and the wrong cost for
 a boundary that is, by construction, every invoice ever created: folding thousands of `InvoiceCreated`
 events just to find the last one is O(n) for no reason. `InvoiceService` instead reads only the single
-highest-position `InvoiceCreated` event with `DcbReadOptions.backwardsLimited(1)`, in one round trip, and
+highest-position `InvoiceCreated` event with `DcbReadOptions.fromBeginning().backwards().limit(1)`, in one round trip, and
 still appends under a `DcbAppendCondition` scoped to `DcbCriteria.type("InvoiceCreated")` qualified by that
 read's consistency token - the token reflects the *whole* matching set observed at read time, not just the
 one event returned, so the append still fails if any `InvoiceCreated` (not only the last one this call

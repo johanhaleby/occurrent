@@ -257,8 +257,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     long highWatermark = tokenAndHighWatermark.getT2();
                     long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
                     Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
-                    boolean backward = options.direction() == DcbReadOptions.Direction.BACKWARD && options.limit().isPresent();
+                    boolean backward = options.direction() == DcbReadOptions.Direction.BACKWARD;
                     mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
+                    mongoQuery.skip(options.skip());
                     options.limit().ifPresent(mongoQuery::limit);
                     Flux<CloudEvent> cloudEvents = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
                             .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));

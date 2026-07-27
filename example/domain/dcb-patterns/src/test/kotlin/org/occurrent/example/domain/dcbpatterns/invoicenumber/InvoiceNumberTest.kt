@@ -59,7 +59,10 @@ class InvoiceNumberTest {
 
         // Both "requests" read the store's last-invoice position before either appends: this is the read InvoiceService
         // does internally in createInvoice, replayed here by hand so we can hold on to the stale token.
-        val staleRead = eventStore.read(DcbCriteria.type("InvoiceCreated"), DcbReadOptions.backwardsLimited(1))
+        val staleRead = eventStore.read(
+            DcbCriteria.type("InvoiceCreated"),
+            DcbReadOptions.fromBeginning().backwards().limit(1)
+        )
         val staleLastNumber = converter.toDomainEvent(staleRead.events().last()).number
         val staleNextNumber = staleLastNumber + 1
 

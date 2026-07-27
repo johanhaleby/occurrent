@@ -53,7 +53,8 @@ public interface DcbEventStore {
     }
 
     /**
-     * Returns whether any DCB event matches {@code criteria} within the position window of {@code options}.
+     * Returns whether any DCB event matches {@code criteria} within the position range of {@code options}.
+     * Direction, skip, and limit are ignored.
      * <p>
      * The default implementation reads the matching events; implementations should override it with a more
      * efficient existence check.
@@ -61,7 +62,7 @@ public interface DcbEventStore {
     default boolean exists(DcbCriteria criteria, DcbReadOptions options) {
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return !read(criteria, options).events().isEmpty();
+        return !read(criteria, new DcbReadOptions(options.positionRange())).events().isEmpty();
     }
 
     /**
@@ -72,7 +73,8 @@ public interface DcbEventStore {
     }
 
     /**
-     * Returns the number of DCB events matching {@code criteria} within the position window of {@code options}.
+     * Returns the number of DCB events matching {@code criteria} within the position range of {@code options}.
+     * Direction, skip, and limit are ignored.
      * <p>
      * The default implementation reads the matching events; implementations should override it with a more
      * efficient count.
@@ -80,7 +82,7 @@ public interface DcbEventStore {
     default long count(DcbCriteria criteria, DcbReadOptions options) {
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return read(criteria, options).events().size();
+        return read(criteria, new DcbReadOptions(options.positionRange())).events().size();
     }
 
     /**
