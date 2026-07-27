@@ -182,7 +182,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
 
     /**
      * A type-safe builder that assembles a {@link View} from per-event-type handlers and records which event types were
-     * registered. Not thread-safe; build one, configure it, and call {@link #build()} once.
+     * registered. Not thread-safe. Build one, configure it, and call {@link #build()} once.
      */
     public static final class Builder<S extends @Nullable Object, E, ID> {
         private final S initialState;
@@ -279,7 +279,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         /**
          * Registers a metadata-aware fold for one event type: the fold sees the event's {@link EventMetadata} (stream id
          * and version, global position, DCB tags, CloudEvent extensions) as well as the event. The metadata-less
-         * counterpart to {@link #on(Class, BiFunction)}; the same type-resolution and replacement rules apply, and the
+         * counterpart to {@link #on(Class, BiFunction)}, the same type-resolution and replacement rules apply, and the
          * registered type joins {@link Projection#eventTypes()}. On the metadata-less query/replay path the fold sees
          * {@link EventMetadata#empty()}.
          *
@@ -299,7 +299,7 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         /**
          * Sets an explicit selector that overrides the event-type-derived one. Use it to select on more than event type
          * (subject, source, data, time). A filter broader than the registered handlers is safe (the fold no-ops on
-         * events it does not handle); a filter narrower than the handlers deliberately starves those handlers. Can be
+         * events it does not handle). A filter narrower than the handlers deliberately starves those handlers. Can be
          * set only once.
          */
         public Builder<S, E, ID> filter(Filter filter) {

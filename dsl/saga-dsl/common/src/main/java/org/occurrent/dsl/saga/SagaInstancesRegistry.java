@@ -26,7 +26,7 @@ import java.util.Set;
  * <p>
  * On the Spring stack the {@code @Saga} registrar fills this in, and each saga's {@link SagaInstances} is also published
  * under its own bean name so a {@code getBean} or {@code @Qualifier} lookup reaches it directly. The two paths are
- * equivalent; this one is typed and injectable, the named singleton is convenient when the id is already known.
+ * equivalent, this one is typed and injectable, the named singleton is convenient when the id is already known.
  * <p>
  * Like {@link SagaInstances}, this is read-only. Registering a saga is the framework's job and has no legitimate caller
  * in an application, so the method that does it is not on this interface at all: it lives on the implementation in
@@ -40,7 +40,7 @@ import java.util.Set;
  * <p>
  * In practice this is not a constraint, because anything that observes a saga instance runs in response to a request, a
  * schedule or a health check, all of which happen long after refresh. Injecting this registry into a constructor is
- * fine; <em>reading</em> it from a constructor is not.
+ * fine, <em>reading</em> it from a constructor is not.
  *
  * @see SagaInstances
  */

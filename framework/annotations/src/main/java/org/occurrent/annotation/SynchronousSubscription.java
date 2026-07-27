@@ -76,7 +76,7 @@ public @interface SynchronousSubscription {
 
     /**
      * Specify event types to subscribe to. Works exactly like {@link Subscription#eventTypes()}: when empty, the event
-     * type is derived from the handler's event parameter (expanding a sealed type to its permitted subtypes);
+     * type is derived from the handler's event parameter (expanding a sealed type to its permitted subtypes),
      * otherwise the listed types are matched and must be assignable to the declared event parameter.
      */
     Class<?>[] eventTypes() default {};

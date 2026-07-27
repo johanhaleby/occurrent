@@ -110,7 +110,7 @@ public final class SnapshotView<S extends @Nullable Object, E> {
     }
 
     /**
-     * A type-safe builder that assembles a {@link View} from per-event-type handlers. Not thread-safe; build one,
+     * A type-safe builder that assembles a {@link View} from per-event-type handlers. Not thread-safe. Build one,
      * configure it, and call {@link #build()} once. {@code schemaVersion} defaults to {@code 1} until set.
      */
     public static final class Builder<S extends @Nullable Object, E> {
@@ -146,7 +146,7 @@ public final class SnapshotView<S extends @Nullable Object, E> {
 
         /**
          * Registers a metadata-aware fold for one event type: the fold sees the event's {@link EventMetadata} as well as
-         * the event. The metadata-less counterpart to {@link #on(Class, BiFunction)}; the same type-resolution and
+         * the event. The metadata-less counterpart to {@link #on(Class, BiFunction)}, the same type-resolution and
          * replacement rules apply, and the registered type joins {@link SnapshotView#eventTypes()}. Snapshot rebuilds
          * that fold from a query/replay see {@link EventMetadata#empty()}.
          *

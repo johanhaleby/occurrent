@@ -51,7 +51,7 @@ public final class Projections {
      * A {@link MaterializedView} for a keyed projection: loads, evolves, and saves the view state through
      * {@code repository}, keyed by the projection's {@link Projection#id() id}. An event whose id resolves to
      * {@code null} is skipped (no load or save), so a projection can safely see events that map to no keyed instance.
-     * Throws if the projection is single-instance (it has no id function); use
+     * Throws if the projection is single-instance (it has no id function). Use
      * {@link #materializedView(Projection, ViewStateRepository, String)} with the single-instance key for those.
      * <p>
      * This does a plain read, fold, and save with no optimistic-locking retry of its own. A failed update is still
@@ -145,7 +145,7 @@ public final class Projections {
      * strongly-consistent, query-driven counterpart to the subscription-fed {@code project(subscriptionId, projection,
      * ...)} runners. Uses the projection's explicit {@link Projection#filter() filter} if set, else its handled
      * {@link Projection#eventTypes() event types} (empty means "all events"). Only valid for a single-instance
-     * (singleton) projection; a keyed projection throws, since folding every instance into one blended state on demand
+     * (singleton) projection. A keyed projection throws, since folding every instance into one blended state on demand
      * would produce a nonsense result. Use {@link #project(Projection, DomainEventQueries, Object)} with an
      * {@code instanceId} for a keyed projection.
      */

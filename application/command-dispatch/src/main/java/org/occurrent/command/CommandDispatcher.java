@@ -31,7 +31,7 @@ import java.util.List;
  * {@code ApplicationService}-backed one is by construction, since it re-folds the authoritative stream and the target's
  * invariants reject a stale or already-applied command.
  * <p>
- * {@link #dispatchAll} is a seam a dispatcher may override for batch atomicity; see its javadoc.
+ * {@link #dispatchAll} is a seam a dispatcher may override for batch atomicity, see its javadoc.
  *
  * @param <C> the command type
  */

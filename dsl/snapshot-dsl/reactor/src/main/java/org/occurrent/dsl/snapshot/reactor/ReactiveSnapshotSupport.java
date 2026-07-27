@@ -67,7 +67,7 @@ final class ReactiveSnapshotSupport {
      * failing save. The command's events have already committed by the time this runs, so nothing after the commit may
      * surface as a command failure.
      *
-     * @param decisionSupplier supplies the decision to save; evaluated at most once, inside the best-effort boundary
+     * @param decisionSupplier supplies the decision to save, evaluated at most once, inside the best-effort boundary
      */
     static <S extends @Nullable Object, E> Mono<Void> maybeSaveBestEffort(ReactiveSnapshotStore<S> store, String key, int schemaVersion,
                                                                           SnapshotPolicy<S, E> policy, Supplier<? extends SnapshotDecision<S, E>> decisionSupplier) {

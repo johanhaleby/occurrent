@@ -33,9 +33,9 @@ import java.util.function.Function;
  * {@code from(...)} factory and pass it to a {@link ReactiveSnapshotDcbDeciderApplicationService}, built once and reused.
  * <p>
  * The default key function is the canonical rendering of the {@link DcbCriteria}
- * ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}); use
+ * ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}), use
  * {@link #from(DcbDecider, ReactiveSnapshotStore, SnapshotOptions, Function)} to override it. The spec holds the
- * {@link ReactiveSnapshotStore}, so it is not a pure value; it stays inert and the executor performs all I/O.
+ * {@link ReactiveSnapshotStore}, so it is not a pure value. It stays inert and the executor performs all I/O.
  * <p>
  * The key is a function of the {@link DcbCriteria}, not of the decider. The criteria carries the per-instance identity
  * (the decider is a per-type constant reused across instances), and a change to it is the signal to rebuild a stale

@@ -32,7 +32,7 @@ import java.util.List;
  * {@code findWithDueTimers} may return its instances in any order at all, while {@link #findByStatus} must return them
  * ascending by {@code updatedAt}. A store that cannot index or sort on that field can still satisfy the core contract.
  * <p>
- * {@link SagaInstances} needs this only to enumerate; a by-id lookup works against any store. Calling
+ * {@link SagaInstances} needs this only to enumerate. A by-id lookup works against any store. Calling
  * {@link SagaInstances#findByStatus(SagaStatus, Instant, int)} on a store that does not implement this fails fast.
  *
  * @param <S> the user state type
@@ -41,8 +41,8 @@ public interface SagaStateStoreQueries<S extends @Nullable Object> {
 
     /**
      * Instances with {@code status} whose {@link SagaEnvelope#updatedAt()} is strictly before {@code updatedBefore},
-     * least recently updated first, at most {@code limit} of them. This is what {@link SagaInstances} enumerates over,
-     * so every store must agree on the contract:
+     * least recently updated first, at most {@code limit} of them. This is what {@link SagaInstances} enumerates over.
+     * Every store must agree on the contract:
      * <ul>
      *   <li>{@code updatedBefore} is <em>exclusive</em>. Pass the current time to mean "every instance in this status",
      *       or {@code now} minus a threshold to mean "every instance that has gone quiet for longer than that". The
@@ -65,12 +65,12 @@ public interface SagaStateStoreQueries<S extends @Nullable Object> {
      * It need not carry the saga's {@code state}, which is not part of that view: a store is expected to answer this
      * without reading state at all, so that enumeration costs the same whether an instance carries one event of history
      * or a hundred. {@link SagaEnvelope#state()} may therefore be {@code null} on these results even for a healthy
-     * instance; use {@link SagaStateStore#find(String)} when the state itself is wanted.
+     * instance. Use {@link SagaStateStore#find(String)} when the state itself is wanted.
      * <p>
      * A useful consequence: because observation reads no state, an instance whose state can no longer be decoded (a
      * received event whose class was renamed away, say) is still reported with its lifecycle intact, rather than making
      * the whole enumeration throw at the exact moment someone is looking into what went wrong. {@code find(sagaId)} does
-     * still fail loudly on such an instance, which is correct: the executor loads one in order to fold and save it.
+     * still fail loudly on such an instance, which is correct. The executor loads one in order to fold and save it.
      *
      * @throws IllegalArgumentException if {@code limit} is not positive
      */

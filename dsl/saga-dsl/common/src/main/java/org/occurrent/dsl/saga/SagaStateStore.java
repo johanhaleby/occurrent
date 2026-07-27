@@ -59,7 +59,7 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * that make the instance absorbing. If the event source can still redeliver an event this instance already consumed (a
      * subscription replay, a redelivery after a crash, an at-least-once feed), a delete that races that redelivery lets the
      * event recreate the instance from its start event and run the process a second time. Delete an instance only once its
-     * source can no longer redeliver any of its events; until then let a TTL expire it, so a late redelivery still finds
+     * source can no longer redeliver any of its events, until then let a TTL expire it, so a late redelivery still finds
      * the terminal instance and is skipped rather than resurrecting it.
      */
     void delete(String sagaId);

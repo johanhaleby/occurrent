@@ -18,7 +18,7 @@
 package org.occurrent.annotation;
 
 /**
- * Specifies the capability scope for a non-DCB read model. Shared by {@link Projection} and {@link Snapshot}; consulted
+ * Specifies the capability scope for a non-DCB read model. Shared by {@link Projection} and {@link Snapshot}, consulted
  * only for their non-DCB descriptors, since a DCB descriptor always uses the DCB path regardless of this attribute.
  */
 public enum Capability {

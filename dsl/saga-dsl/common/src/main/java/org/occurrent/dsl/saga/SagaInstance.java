@@ -33,7 +33,7 @@ import java.time.Instant;
  * delivery and means nothing outside it.
  * <p>
  * Note that {@link SagaEnvelope} implements this interface but stays the {@link SagaStateStore} type, so it still
- * exposes everything the executor needs. This interface narrows what an observing caller is handed; it does not put
+ * exposes everything the executor needs. This interface narrows what an observing caller is handed. It does not put
  * the envelope's own components out of reach.
  */
 public interface SagaInstance {

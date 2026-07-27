@@ -28,7 +28,7 @@ import java.util.UUID
 /**
  * Pattern: honor a displayed price for a short grace period after it changes. A shopper who loaded the product page
  * a moment before the price changed should not be rejected at checkout just because the price ticked over in the
- * meantime; [PlacePriceOrder.displayedPrice] is accepted if it was the live price at any point within
+ * meantime. [PlacePriceOrder.displayedPrice] is accepted if it was the live price at any point within
  * [ProductPricePolicy.GRACE_PERIOD] of [PlacePriceOrder.orderedAt].
  * <p>
  * Time is entirely in the payload: [ProductPriceChanged.changedAt] and [PlacePriceOrder.orderedAt] are plain

@@ -19,7 +19,7 @@ package org.occurrent.command;
 /**
  * Derives the target stream id from a command, the routing key a {@link CommandDispatcher} uses to pick the stream a
  * command's resulting events are appended to. It is the stream-side counterpart of the DCB {@code TagGenerator} (which
- * derives a tag-based boundary from an event); a stream write is keyed by a single stream id rather than a set of tags.
+ * derives a tag-based boundary from an event). A stream write is keyed by a single stream id rather than a set of tags.
  * <p>
  * This is a {@code String}-returning {@link java.util.function.Function} with a name, so a plain lambda or method
  * reference such as {@code OrderCommand::orderId} is a valid resolver, and an annotation-driven implementation can be

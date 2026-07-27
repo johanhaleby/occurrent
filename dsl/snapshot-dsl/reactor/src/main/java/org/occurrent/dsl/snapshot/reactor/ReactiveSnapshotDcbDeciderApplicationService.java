@@ -44,7 +44,7 @@ import java.util.function.Function;
  * <p>
  * Because DCB has no stream id, the snapshot is keyed by the decider's read boundary. By default the key is a canonical,
  * order-insensitive rendering of the {@link DcbCriteria} that {@link DcbDecider#criteriaFor(List)} resolves for the
- * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}); the spec's key function overrides it. The snapshot's
+ * commands ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}), the spec's key function overrides it. The snapshot's
  * version is the global DCB position the append landed at ({@link DcbAppendResult#lastSequencePosition()}), and the
  * resume read still captures the whole boundary's consistency token, so the append condition is unaffected and a stale
  * snapshot only lengthens the tail. It loads one snapshot per execute, and costs nothing when no snapshot is used.
@@ -57,7 +57,7 @@ import java.util.function.Function;
  * appended events, since a no-op decision has no {@link DcbAppendResult} to key the save on.
  * {@link ReactiveSnapshotDeciderApplicationService} instead saves unconditionally after every execute, because a
  * stream write always has a {@code WriteResult} to advance the base from, whether or not new events were appended.
- * Either way a missed save only costs a longer replay on the next execute; it is never a correctness issue.
+ * Either way a missed save only costs a longer replay on the next execute. It is never a correctness issue.
  *
  * @param <E> the event type
  */

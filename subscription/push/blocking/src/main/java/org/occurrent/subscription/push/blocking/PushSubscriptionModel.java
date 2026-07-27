@@ -36,7 +36,7 @@ import java.util.function.Consumer;
  * the caller, so the listener can decide whether to acknowledge or redeliver.
  * <p>
  * Occurrent stays transport-neutral: this model has no dependency on any broker. The pushed events must carry the
- * Occurrent cloud-event extensions the handlers rely on (at minimum {@code streamid} and {@code streamversion}; add
+ * Occurrent cloud-event extensions the handlers rely on (at minimum {@code streamid} and {@code streamversion}, add
  * {@code position} when a catch-up model reads them). Forward the stored cloud event as CloudEvents JSON and
  * reconstruct it on the listener side.
  * <p>

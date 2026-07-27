@@ -49,7 +49,7 @@ import static java.util.Objects.requireNonNull;
  * resolver, so reuse a single instance across commands rather than constructing one per command. The scanner is
  * thread-safe and the cached members are immutable, so an instance is safe to share concurrently.
  * <p>
- * A custom annotation type must be annotated with {@code @Retention(RUNTIME)} and needs no elements; the annotation is
+ * A custom annotation type must be annotated with {@code @Retention(RUNTIME)} and needs no elements. The annotation is
  * a marker, and the member's value alone is the stream id.
  *
  * @param <C> the command type
@@ -70,7 +70,7 @@ public final class AnnotationStreamIdResolver<C> implements StreamIdResolver<C> 
     /**
      * Create a resolver that scans for {@code annotationType}.
      *
-     * @param annotationType the marker annotation to scan for; must be {@code @Retention(RUNTIME)}
+     * @param annotationType the marker annotation to scan for, must be {@code @Retention(RUNTIME)}
      */
     public AnnotationStreamIdResolver(Class<? extends Annotation> annotationType) {
         this.scanner = new AnnotatedMemberScanner(annotationType);

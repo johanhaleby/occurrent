@@ -166,7 +166,7 @@ public final class Projections {
      * Folds the events {@code projection} selects, read on demand, into its view state: the strongly-consistent,
      * query-driven counterpart to the subscription-fed {@code project(subscriptionId, projection, ...)} runners. The
      * returned {@link Mono} emits the folded state, or completes empty when that state is {@code null}. Only valid for
-     * a single-instance (singleton) projection; a keyed projection errors, since folding every instance into one
+     * a single-instance (singleton) projection. A keyed projection errors, since folding every instance into one
      * blended state on demand would produce a nonsense result. Use {@link #project(Projection, DomainEventQueries, Object)}
      * with an {@code instanceId} for a keyed projection.
      */

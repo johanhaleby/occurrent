@@ -35,8 +35,8 @@ import java.util.List;
  * and reaction over {@link OrderSagaState}. See {@code org.occurrent.example.saga.orderfulfillment.flow} for the same
  * process expressed with the declarative flow DSL instead.
  * <p>
- * The process: {@code OrderPlaced} reserves payment and arms a payment timeout; {@code PaymentReserved} ships the order
- * and clears the timeout; {@code PaymentFailed} cancels the order and clears the timeout; the payment timeout firing
+ * The process: {@code OrderPlaced} reserves payment and arms a payment timeout, {@code PaymentReserved} ships the order
+ * and clears the timeout, {@code PaymentFailed} cancels the order and clears the timeout, the payment timeout firing
  * (nobody having reserved or failed the payment in time) also cancels the order.
  */
 public final class OrderFulfillmentSaga {

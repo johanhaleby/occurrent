@@ -33,7 +33,7 @@ import java.util.function.Function;
  * reused across every aggregate.
  * <p>
  * Because DCB has no stream id, the snapshot is keyed by the decider's read boundary. The default key function is a
- * canonical, order-insensitive rendering of the {@link DcbCriteria} ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)});
+ * canonical, order-insensitive rendering of the {@link DcbCriteria} ({@link DcbSnapshotKeys#canonicalKey(DcbCriteria)}),
  * use {@link #from(DcbDecider, SnapshotStore, SnapshotOptions, Function)} to override it.
  * <p>
  * The key is a function of the {@link DcbCriteria}, not of the decider. The criteria carries the per-instance identity

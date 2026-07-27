@@ -43,7 +43,7 @@ fun currentNameProjection(): Projection<CurrentName?, NameEvent, String> =
     }
 
 /**
- * The same fold, but with an explicit [Filter] selector. A projection can select on more than event type; here it
+ * The same fold, but with an explicit [Filter] selector. A projection can select on more than event type. Here it
  * subscribes only to events whose CloudEvent subject is [userId] (the demo maps each event's subject to its user id),
  * so a single-user read model ignores everyone else's events server-side rather than folding-then-discarding them.
  */

@@ -29,7 +29,7 @@ import java.util.Objects;
  * aggregate with {@link #from(Decider, ReactiveSnapshotStore, SnapshotOptions)} and pass it to a
  * {@link ReactiveSnapshotDeciderApplicationService}, which is built once around the application service and reused.
  * <p>
- * The spec holds the {@link ReactiveSnapshotStore}, an I/O collaborator, so it is not a pure value; it stays inert and
+ * The spec holds the {@link ReactiveSnapshotStore}, an I/O collaborator, so it is not a pure value. It stays inert and
  * the {@link ReactiveSnapshotDeciderApplicationService} performs all reads and writes.
  *
  * @param decider the decision logic and its fold

@@ -44,7 +44,7 @@ import java.lang.annotation.*;
  * <p>
  * The method must return a descriptor: a {@code Projection} for capability-agnostic or stream-based
  * read models, or a {@code DcbProjection} for DCB-scoped models. The {@link #capability()} attribute
- * is consulted only for non-DCB descriptors; a DCB descriptor enforces the DCB path.
+ * is consulted only for non-DCB descriptors. A DCB descriptor enforces the DCB path.
  * </p>
  *
  * <h4>Mode and Startup Behavior</h4>
@@ -153,7 +153,7 @@ public @interface Projection {
      * Where the projection reads its events from. {@link Source#EVENT_STORE} (the default) uses the framework's
      * asynchronous catch-up and durable subscription models. {@link Source#PUSH} feeds the projection from an external
      * push feed (RabbitMQ, Kafka, ...) instead, wrapped in a replay-then-push catch-up. Select the feed bean
-     * with {@link #subscriptionModel()} or {@link #subscriptionModelName()}; its type decides how live events are
+     * with {@link #subscriptionModel()} or {@link #subscriptionModelName()}. Its type decides how live events are
      * delivered (a {@code PushSubscriptionModel} delivers CloudEvents, a {@code DomainEventFeed} delivers domain events
      * directly). Push source is mutually exclusive with {@link Mode#SYNCHRONOUS} and with the catch-up start knobs
      * ({@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, {@link #startupMode()}), since
