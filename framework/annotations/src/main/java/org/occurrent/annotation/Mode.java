@@ -22,7 +22,7 @@ package org.occurrent.annotation;
  */
 public enum Mode {
     /**
-     * Events are processed asynchronously; the read model is eventually consistent with the command model.
+     * Events are processed asynchronously, the read model is eventually consistent with the command model.
      */
     ASYNC,
     /**

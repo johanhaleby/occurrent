@@ -58,7 +58,7 @@ import java.util.stream.Stream;
  * <p>
  * Contract (see ADR 62): catch-up is Occurrent's job, live-resume is the broker's (acknowledge after {@code accept}
  * returns). No live position watermark is kept, so delivery is at-least-once and the fold must be idempotent. The
- * de-dup cache and the live buffer are bounded; the buffer fails loud on overflow. The "acknowledge after processing"
+ * de-dup cache and the live buffer are bounded, the buffer fails loud on overflow. The "acknowledge after processing"
  * guarantee holds for the live phase. During the catch-up window {@link #accept(Object)} buffers the event and returns
  * before it is folded, so a message may be acknowledged before it is applied. That is safe because the marker is written
  * only after the drain, so a crash mid-catch-up re-replays the whole history from the store, the backstop for any event
@@ -136,7 +136,7 @@ public final class CatchupProjectionFeed<E> {
     /**
      * Create a feed driving an existing {@link MaterializedView} (for example one built with the view DSL's
      * {@code materialized(...)} with its own retry/locking policy). {@code replayFilter} selects which stored events to
-     * replay; use {@link Filter#all()} to replay everything and let the fold ignore unhandled types.
+     * replay, use {@link Filter#all()} to replay everything and let the fold ignore unhandled types.
      */
     public static <E> CatchupProjectionFeed<E> create(
             String id, MaterializedView<E> view, Filter replayFilter,

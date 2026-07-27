@@ -32,7 +32,7 @@ import kotlin.reflect.KClass
  * [CloudEventTypeMapper] (or [CloudEventConverter]). This builder resolves each supplied class to that type string
  * through [CloudEventTypeGetter.getCloudEventType], so the criteria match the same string the events were written with.
  *
- * Java callers use the `Class`-based [type] and [types]; Kotlin callers can use the reified [type] / [types] (the base
+ * Java callers use the `Class`-based [type] and [types]. Kotlin callers can use the reified [type] / [types] (the base
  * event type is inferred from the builder), or the [KClass] forms. The tag- and combinator-oriented methods ([tags],
  * [tagsAnyOf], [all], [anyOf]) are thin passthroughs to [DcbCriteria].
  *
@@ -108,9 +108,9 @@ class DcbCriteriaBuilder<E : Any> private constructor(
     inline fun <reified E1 : E> type(): DcbCriterion = type(E1::class.java)
 
     /**
-     * Reified two-type criterion (any-of); the base event type is inferred from the builder.
+     * Reified two-type criterion (any-of), the base event type is inferred from the builder.
      *
-     * The `@JvmName` only disambiguates the JVM signature from the three-type overload (both erase to `types()`); Kotlin
+     * The `@JvmName` only disambiguates the JVM signature from the three-type overload (both erase to `types()`), Kotlin
      * callers still write `types<A, B>()`.
      */
     @JvmName("types2")

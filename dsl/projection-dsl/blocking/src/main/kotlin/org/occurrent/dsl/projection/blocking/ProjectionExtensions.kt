@@ -75,7 +75,7 @@ fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String
  * Folds the events [projection] selects, read on demand, into its view state and returns it: the strongly-consistent,
  * query-driven counterpart to the subscription-fed [Subscriptions.project]. Uses the projection's explicit filter if
  * set, else its handled event types (empty means "all events"). Only valid for a single-instance (singleton)
- * projection; a keyed projection throws, since folding every instance into one blended state on demand would produce
+ * projection. A keyed projection throws, since folding every instance into one blended state on demand would produce
  * a nonsense result. Use [project] with an `instanceId` for a keyed projection.
  */
 fun <S, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<S, E, ID>): S {

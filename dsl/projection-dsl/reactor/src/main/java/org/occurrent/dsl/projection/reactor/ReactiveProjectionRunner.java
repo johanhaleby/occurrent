@@ -52,7 +52,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * The read model is updated through a reactive {@code (E) -> Mono<Void>} update. Supply one directly for a genuinely
  * reactive store, or use the {@link ViewStateRepository}/{@link MaterializedView} overloads to drive a blocking view
- * store from the reactive pipeline (scheduled on {@code boundedElastic}; see {@link Projections}).
+ * store from the reactive pipeline (scheduled on {@code boundedElastic}, see {@link Projections}).
  *
  * @param <E> the domain event type
  */

@@ -16,7 +16,7 @@
 
 /**
  * Internal implementation types for the view layer. These are {@code public} only because the view and projection DSL
- * modules must call them across module boundaries from {@code inline} functions; they are not part of the public API
+ * modules must call them across module boundaries from {@code inline} functions, they are not part of the public API
  * and may change or be removed at any time. End users work with {@code org.occurrent.dsl.view} and never reference this
  * package.
  */

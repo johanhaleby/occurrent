@@ -35,7 +35,7 @@ import reactor.core.publisher.Mono;
  * returned {@link Mono}, so the listener can decide whether to acknowledge or redeliver.
  * <p>
  * Occurrent stays transport-neutral: this model has no dependency on any broker. The pushed events must carry the
- * Occurrent cloud-event extensions the handlers rely on (at minimum {@code streamid} and {@code streamversion}; add
+ * Occurrent cloud-event extensions the handlers rely on (at minimum {@code streamid} and {@code streamversion}, add
  * {@code position} when a catch-up model reads them). The shared register-and-route machinery lives in
  * {@link RegisteringSubscribable}.
  */

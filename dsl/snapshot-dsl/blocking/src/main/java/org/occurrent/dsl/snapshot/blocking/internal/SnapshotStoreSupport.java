@@ -77,10 +77,10 @@ public final class SnapshotStoreSupport {
      * Best-effort variant of {@link #maybeSave} that builds the {@link SnapshotDecision} inside the try, so the
      * arithmetic that assembles it (for example {@code SnapshotSupport.requireInt} narrowing {@code eventsSinceSnapshot})
      * is also swallowed on failure rather than thrown. The command's events have already committed by the time the
-     * executor calls this, so an exception escaping here would surface a committed command as a failure; building the
+     * executor calls this, so an exception escaping here would surface a committed command as a failure. Building the
      * decision lazily keeps every step after the commit best-effort.
      *
-     * @param decisionSupplier supplies the decision to save; evaluated at most once, inside the best-effort boundary
+     * @param decisionSupplier supplies the decision to save, evaluated at most once, inside the best-effort boundary
      * @return {@code true} if a snapshot was written, {@code false} if the policy declined it or anything after the
      * commit (the decision build or the save) failed
      */

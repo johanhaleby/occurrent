@@ -30,7 +30,7 @@ import static java.util.Objects.requireNonNull;
  * bounded window (the initiating event, always present, plus the current step's events and a configurable carry-over of
  * earlier ones, see the flow builder's {@code historyWindow}), so counts and lookups here span that window. A retry guard
  * such as {@code count(PaymentFailed.class) < 3} works as long as its threshold fits inside the window, which the default
- * comfortably covers; a guard that must count far beyond it needs a wider {@code historyWindow}. {@link #initiating()} is
+ * comfortably covers, a guard that must count far beyond it needs a wider {@code historyWindow}. {@link #initiating()} is
  * the exception, it always returns the start event even after the window has moved past it. A {@code join} step's own
  * fulfilment is counted separately, over the events received since it was entered.
  *

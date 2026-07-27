@@ -153,7 +153,7 @@ class SagaAnnotationRegistrar {
      * Publish the saga's {@link SagaInstances} under its own bean name. This registers a singleton rather than a bean
      * definition because a {@code @Saga} factory can only run once its collaborators are wired, which is after the
      * context has refreshed. This particular bean is therefore not available for constructor injection into another
-     * singleton; inject an {@code ObjectProvider<SagaInstances>}, look it up with
+     * singleton, inject an {@code ObjectProvider<SagaInstances>}, look it up with
      * {@code getBean(name, SagaInstances.class)}, or inject the {@link SagaInstancesRegistry}, which does exist during
      * refresh. Registering per id rather than one bean of the type keeps two sagas from making a by-type injection
      * ambiguous.

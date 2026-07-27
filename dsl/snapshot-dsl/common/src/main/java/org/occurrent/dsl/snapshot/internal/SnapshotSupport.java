@@ -59,7 +59,7 @@ public final class SnapshotSupport {
     /**
      * Resolves the {@link Base} to resume from. Returns the snapshot's state and version when {@code loaded} is present,
      * its {@link Snapshot#schemaVersion()} equals {@code expectedSchemaVersion}, and its version is at or below
-     * {@code observedHead}; otherwise the {@code initialState} at version {@code 0}. A schema mismatch is treated as no
+     * {@code observedHead}, otherwise the {@code initialState} at version {@code 0}. A schema mismatch is treated as no
      * snapshot so a changed state shape falls back to a full replay rather than being read into the new shape.
      * <p>
      * The {@code observedHead} guard is the safety net for a reset stream: if the stream was truncated below the snapshot,

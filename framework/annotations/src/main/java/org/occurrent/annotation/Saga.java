@@ -43,7 +43,7 @@ import java.lang.annotation.*;
  * The method may live on any Spring bean: a {@code @Bean} in a {@code @Configuration}, or a method on a
  * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @Saga}.
  * <p>
- * The two input paths fail differently. A failing event propagates to the subscription, which redelivers and retries;
+ * The two input paths fail differently. A failing event propagates to the subscription, which redelivers and retries,
  * since that subscription is a single ordered channel shared by every instance of this saga, an event that keeps failing
  * blocks the events behind it (head-of-line blocking) until it clears. A failing timeout is caught per instance, logged,
  * and left due for the next poll, so it never blocks other instances. Commands are dispatched before the state is saved

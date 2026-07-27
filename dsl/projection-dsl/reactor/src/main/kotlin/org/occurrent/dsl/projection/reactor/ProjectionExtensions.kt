@@ -120,9 +120,9 @@ private fun <E : Any> StreamSubscriptions<E>.projectWithMetadata(subscriptionId:
 /**
  * Folds the events [projection] selects, read on demand, into its view state: the strongly-consistent, query-driven
  * counterpart to the subscription-fed [Subscriptions.project]. The returned [Mono] emits the folded state, or completes
- * empty when that state is `null` (Reactor cannot carry a `null` value, so the state type is constrained to be non-null;
+ * empty when that state is `null` (Reactor cannot carry a `null` value, so the state type is constrained to be non-null,
  * a nullable-state read model should use the blocking pull or model absence explicitly). Only valid for a
- * single-instance (singleton) projection; a keyed projection errors, since folding every instance into one blended
+ * single-instance (singleton) projection. A keyed projection errors, since folding every instance into one blended
  * state on demand would produce a nonsense result. Use [project] with an `instanceId` for a keyed projection.
  */
 fun <S : Any, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<S, E, ID>): Mono<S> {

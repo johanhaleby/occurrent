@@ -31,7 +31,7 @@ import static java.util.Objects.requireNonNull;
  *
  * @param timerPollInterval how often to poll for due timers
  * @param timerBatchLimit   the maximum number of due instances fired per poll
- * @param maxCasAttempts    the maximum compare-and-set attempts for one input before failing; also the maximum number of
+ * @param maxCasAttempts    the maximum compare-and-set attempts for one input before failing, also the maximum number of
  *                          times that input's commands can be re-dispatched
  */
 public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts) {

@@ -55,7 +55,7 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
  * Scans a bean for {@link Subscription}, {@link StreamSubscription}, {@link DcbSubscription} and
  * {@link SynchronousSubscription} annotations in {@code postProcessBeforeInitialization} and wires each one up. The
  * stack-neutral reflection and event-type resolution is shared with the blocking processor through
- * {@link SubscriptionAnnotations}; the reactive-specific start-position logic lives in {@link StartPositionSupport}.
+ * {@link SubscriptionAnnotations}, the reactive-specific start-position logic lives in {@link StartPositionSupport}.
  */
 class SubscriptionAnnotationRegistrar {
 
