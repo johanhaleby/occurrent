@@ -38,8 +38,9 @@ data class InvoiceCreated(val eventId: UUID, val occurredAt: Instant, val number
  * forever.
  * <p>
  * Instead this talks to the [DcbEventStore] directly:
- * 1. [DcbReadOptions.backwardsLimited] reads only the single highest-position `InvoiceCreated` event in one round
- *    trip, instead of folding every invoice ever created, to learn the last number issued.
+ * 1. [DcbReadOptions.fromBeginning] combined with [DcbReadOptions.backwards] and [DcbReadOptions.limit] reads only
+ *    the single highest-position `InvoiceCreated` event in one round trip, instead of folding every invoice ever
+ *    created, to learn the last number issued.
  * 2. The append condition is still [DcbCriteria.type] scoped to `InvoiceCreated`, guarded by the read's
  *    [org.occurrent.eventstore.api.dcb.DcbEventStream.consistencyToken]. The token reflects the whole matching set
  *    observed at read time, not just the one returned event, so the append still fails if any `InvoiceCreated` (not
@@ -54,7 +55,10 @@ class InvoiceService(
     private val converter: CloudEventConverter<InvoiceCreated>
 ) {
     fun createInvoice(occurredAt: Instant): Int {
-        val stream = eventStore.read(DcbCriteria.type(INVOICE_CREATED_TYPE), DcbReadOptions.backwardsLimited(1))
+        val stream = eventStore.read(
+            DcbCriteria.type(INVOICE_CREATED_TYPE),
+            DcbReadOptions.fromBeginning().backwards().limit(1)
+        )
         val lastNumber = stream.events().lastOrNull()?.let { converter.toDomainEvent(it).number } ?: 0
         val nextNumber = lastNumber + 1
 

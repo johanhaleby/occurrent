@@ -229,17 +229,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         long highWatermark = currentPosition();
         long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
         Query mongoQuery = toDcbMongoQuery(criteria, options.afterPosition().orElse(0), upperBound);
-        // BACKWARD with a limit fetches the highest-position matches directly from Mongo (descending sort + limit),
-        // then reverses to ascending order before building the stream. All other cases are already ascending.
-        boolean backwardLimited = options.direction() == DcbReadOptions.Direction.BACKWARD && options.limit().isPresent();
-        mongoQuery.with(Sort.by(backwardLimited ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
+        boolean backward = options.direction() == DcbReadOptions.Direction.BACKWARD;
+        mongoQuery.with(Sort.by(backward ? Sort.Direction.DESC : Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
+        if (options.skip() > 0) {
+            mongoQuery.skip(options.skip());
+        }
         if (options.limit().isPresent()) {
             mongoQuery.limit(options.limit().getAsInt());
         }
         List<CloudEvent> events = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
                 .collect(Collectors.toCollection(ArrayList::new));
-        if (backwardLimited) {
+        if (backward) {
             Collections.reverse(events);
         }
         return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(consistencyTokenValue));

@@ -62,7 +62,8 @@ public interface DcbEventStore {
     }
 
     /**
-     * Returns whether any DCB event matches {@code criteria} within the position window of {@code options}.
+     * Returns whether any DCB event matches {@code criteria} within the position range of {@code options}.
+     * Direction, skip, and limit are ignored.
      * <p>
      * The default implementation reads the matching events. Implementations should override it with a more efficient
      * existence check.
@@ -70,7 +71,7 @@ public interface DcbEventStore {
     default Mono<Boolean> exists(DcbCriteria criteria, DcbReadOptions options) {
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return read(criteria, options).map(stream -> !stream.events().isEmpty());
+        return read(criteria, new DcbReadOptions(options.positionRange())).map(stream -> !stream.events().isEmpty());
     }
 
     /**
@@ -81,7 +82,8 @@ public interface DcbEventStore {
     }
 
     /**
-     * Returns the number of DCB events matching {@code criteria} within the position window of {@code options}.
+     * Returns the number of DCB events matching {@code criteria} within the position range of {@code options}.
+     * Direction, skip, and limit are ignored.
      * <p>
      * The default implementation reads the matching events. Implementations should override it with a more efficient
      * count.
@@ -89,7 +91,7 @@ public interface DcbEventStore {
     default Mono<Long> count(DcbCriteria criteria, DcbReadOptions options) {
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return read(criteria, options).map(stream -> (long) stream.events().size());
+        return read(criteria, new DcbReadOptions(options.positionRange())).map(stream -> (long) stream.events().size());
     }
 
     /**

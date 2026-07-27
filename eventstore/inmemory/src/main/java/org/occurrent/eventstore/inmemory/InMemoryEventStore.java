@@ -281,43 +281,57 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                     .sorted(Comparator.comparingLong(InMemoryEventStore::position))
                     .toList();
             // highWatermark (the store head) is the consistency boundary and is deliberately independent of the
-            // direction/limit page, so a limited read still guards an append against any later matching event.
-            return new DcbEventStream(applyDirectionAndLimit(matchingEvents, options), highWatermark);
+            // direction, skip, and limit selection, so a partial read still protects an append from later matches.
+            return new DcbEventStream(applySelection(matchingEvents, options), highWatermark);
         }
     }
 
-    // Selects which end of the ascending match list the limit keeps, then returns it still in ascending order.
-    private static List<CloudEvent> applyDirectionAndLimit(List<CloudEvent> ascendingMatches, DcbReadOptions options) {
-        if (options.limit().isEmpty()) {
-            return ascendingMatches;
+    private static List<CloudEvent> applySelection(List<CloudEvent> ascendingMatches, DcbReadOptions options) {
+        int available = Math.max(0, ascendingMatches.size() - options.skip());
+        int selected = Math.min(options.limit().orElse(available), available);
+        if (selected == 0) {
+            return List.of();
         }
-        int limit = Math.min(options.limit().getAsInt(), ascendingMatches.size());
-        return switch (options.direction()) {
-            case FORWARD -> ascendingMatches.subList(0, limit);
-            case BACKWARD -> ascendingMatches.subList(ascendingMatches.size() - limit, ascendingMatches.size());
-        };
+        int fromIndex = options.direction() == DcbReadOptions.Direction.FORWARD
+                ? options.skip()
+                : ascendingMatches.size() - options.skip() - selected;
+        return ascendingMatches.subList(fromIndex, fromIndex + selected);
     }
 
     @Override
     public boolean exists(DcbCriteria criteria) {
+        return exists(criteria, DcbReadOptions.fromBeginning());
+    }
+
+    @Override
+    public boolean exists(DcbCriteria criteria, DcbReadOptions options) {
         requireNonNull(criteria, "Criteria cannot be null");
+        requireNonNull(options, "Read options cannot be null");
         synchronized (state) {
-            return matchingDcbEvents(criteria).findAny().isPresent();
+            return matchingDcbEvents(criteria, options.positionRange()).findAny().isPresent();
         }
     }
 
     @Override
     public long count(DcbCriteria criteria) {
+        return count(criteria, DcbReadOptions.fromBeginning());
+    }
+
+    @Override
+    public long count(DcbCriteria criteria, DcbReadOptions options) {
         requireNonNull(criteria, "Criteria cannot be null");
+        requireNonNull(options, "Read options cannot be null");
         synchronized (state) {
-            return matchingDcbEvents(criteria).count();
+            return matchingDcbEvents(criteria, options.positionRange()).count();
         }
     }
 
-    private Stream<CloudEvent> matchingDcbEvents(DcbCriteria criteria) {
+    private Stream<CloudEvent> matchingDcbEvents(DcbCriteria criteria, PositionRange positionRange) {
         long highWatermark = nextPosition.get() - 1;
+        long afterPosition = positionRange.afterPosition().orElse(0);
+        long upperBound = Math.min(highWatermark, positionRange.upToPosition().orElse(highWatermark));
         return allEvents()
-                .filter(event -> position(event) > 0 && position(event) <= highWatermark)
+                .filter(event -> position(event) > afterPosition && position(event) <= upperBound)
                 .filter(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, criteria));
     }
 

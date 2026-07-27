@@ -20,11 +20,14 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.occurrent.eventstore.api.PositionRange;
 
 import java.net.URI;
 import java.util.Arrays;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -168,6 +171,70 @@ class DcbApiTest {
         assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbCriteria.all(), DcbConsistencyToken.of(-1)))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Consistency token value cannot be negative");
+    }
+
+    @Test
+    void read_options_compose_direction_skip_and_limit() {
+        DcbReadOptions options = DcbReadOptions.afterPosition(10)
+                .backwards()
+                .skip(2)
+                .limit(3);
+
+        assertThat(options.positionRange()).isEqualTo(PositionRange.afterPosition(10));
+        assertThat(options.direction()).isEqualTo(DcbReadOptions.Direction.BACKWARD);
+        assertThat(options.skip()).isEqualTo(2);
+        assertThat(options.limit()).hasValue(3);
+        assertThat(options.forwards())
+                .isEqualTo(new DcbReadOptions(PositionRange.afterPosition(10), DcbReadOptions.Direction.FORWARD, 2, OptionalInt.of(3)));
+    }
+
+    @Test
+    void read_options_preserve_the_position_range_and_three_argument_constructors() {
+        PositionRange positionRange = PositionRange.between(2, 8);
+
+        assertThat(new DcbReadOptions(positionRange))
+                .isEqualTo(new DcbReadOptions(positionRange, DcbReadOptions.Direction.FORWARD, 0, OptionalInt.empty()));
+        assertThat(new DcbReadOptions(positionRange, DcbReadOptions.Direction.BACKWARD, OptionalInt.of(4)))
+                .isEqualTo(new DcbReadOptions(positionRange, DcbReadOptions.Direction.BACKWARD, 0, OptionalInt.of(4)));
+    }
+
+    @Test
+    void read_options_reject_invalid_skip_and_limit() {
+        assertThatThrownBy(() -> DcbReadOptions.fromBeginning().skip(-1))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Skip cannot be negative");
+        assertThatThrownBy(() -> DcbReadOptions.fromBeginning().limit(0))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Limit must be greater than 0");
+    }
+
+    @Test
+    void default_exists_and_count_use_only_criteria_and_position_range() {
+        AtomicInteger reads = new AtomicInteger();
+        DcbEventStore eventStore = new DcbEventStore() {
+            @Override
+            public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+                reads.incrementAndGet();
+                assertThat(criteria).isEqualTo(DcbCriteria.all());
+                assertThat(options).isEqualTo(DcbReadOptions.afterPosition(4));
+                return new DcbEventStream(List.of(cloudEvent("First"), cloudEvent("Second")), 6);
+            }
+
+            @Override
+            public DcbAppendResult append(List<io.cloudevents.CloudEvent> events) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public DcbAppendResult append(List<io.cloudevents.CloudEvent> events, DcbAppendCondition condition) {
+                throw new UnsupportedOperationException();
+            }
+        };
+        DcbReadOptions selection = DcbReadOptions.afterPosition(4).backwards().skip(10).limit(1);
+
+        assertThat(eventStore.exists(DcbCriteria.all(), selection)).isTrue();
+        assertThat(eventStore.count(DcbCriteria.all(), selection)).isEqualTo(2);
+        assertThat(reads).hasValue(2);
     }
 
     @Test

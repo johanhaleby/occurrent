@@ -75,7 +75,7 @@ class InMemoryEventStoreDcbTest {
     }
 
     @Test
-    void direction_and_limit_select_matches_without_changing_ascending_order_or_the_token() {
+    void direction_skip_and_limit_select_matches_without_changing_ascending_order_or_the_token() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         for (int i = 0; i < 5; i++) {
             eventStore.append(List.of(taggedEvent("E", "seq:1")));
@@ -84,21 +84,28 @@ class InMemoryEventStoreDcbTest {
         List<String> all = ids(eventStore.read(criteria));
         assertThat(all).hasSize(5);
 
-        // forward limit keeps the lowest-position matches, ascending
-        assertThat(ids(eventStore.read(criteria, DcbReadOptions.fromBeginning().forwards().limit(2))))
-                .containsExactly(all.get(0), all.get(1));
-        // backwardsLimited(1) returns the single highest-position match
-        assertThat(ids(eventStore.read(criteria, DcbReadOptions.backwardsLimited(1))))
-                .containsExactly(all.get(4));
-        // backwardsLimited(n) returns the highest n, still ascending
-        assertThat(ids(eventStore.read(criteria, DcbReadOptions.backwardsLimited(3))))
-                .containsExactly(all.get(2), all.get(3), all.get(4));
-        // a limit larger than the match count returns all
-        assertThat(ids(eventStore.read(criteria, DcbReadOptions.backwardsLimited(99)))).isEqualTo(all);
+        assertThat(ids(eventStore.read(criteria, DcbReadOptions.fromBeginning().forwards().skip(1).limit(2))))
+                .containsExactly(all.get(1), all.get(2));
+        assertThat(ids(eventStore.read(criteria, DcbReadOptions.fromBeginning().backwards().skip(1).limit(2))))
+                .containsExactly(all.get(2), all.get(3));
+        assertThat(ids(eventStore.read(criteria, DcbReadOptions.fromBeginning().backwards().skip(99)))).isEmpty();
+        assertThat(ids(eventStore.read(criteria, DcbReadOptions.fromBeginning().backwards().limit(99)))).isEqualTo(all);
 
-        // the invariant: direction/limit never change the consistency token (it reflects the whole matching set)
-        assertThat(eventStore.read(criteria, DcbReadOptions.backwardsLimited(1)).consistencyToken())
+        assertThat(eventStore.read(criteria, DcbReadOptions.fromBeginning().backwards().skip(1).limit(1)).consistencyToken())
                 .isEqualTo(eventStore.read(criteria).consistencyToken());
+    }
+
+    @Test
+    void exists_and_count_ignore_direction_skip_and_limit() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append(List.of(taggedEvent("E", "t:1")));
+        eventStore.append(List.of(taggedEvent("E", "t:1")));
+        eventStore.append(List.of(taggedEvent("E", "t:1")));
+        DcbReadOptions options = DcbReadOptions.afterPosition(1).backwards().skip(99).limit(1);
+
+        assertThat(eventStore.read(tags(tag("t:1")), options).events()).isEmpty();
+        assertThat(eventStore.exists(tags(tag("t:1")), options)).isTrue();
+        assertThat(eventStore.count(tags(tag("t:1")), options)).isEqualTo(2);
     }
 
     private static List<String> ids(DcbEventStream stream) {
