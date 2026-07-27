@@ -101,7 +101,7 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
     }
 
     /**
-     * Returns a copy of these options that keep the highest-position (newest) matches when a {@code limit} is set
+     * Returns a copy of these options that select matching events from the highest-position (newest) end
      * (see {@link Direction#BACKWARD}). The returned events are always in ascending position order regardless.
      */
     public DcbReadOptions backwards() {
@@ -109,7 +109,7 @@ public record DcbReadOptions(PositionRange positionRange, Direction direction, i
     }
 
     /**
-     * Returns a copy of these options that keep the lowest-position (oldest) matches when a {@code limit} is set
+     * Returns a copy of these options that select matching events from the lowest-position (oldest) end
      * (see {@link Direction#FORWARD}). The returned events are always in ascending position order regardless.
      */
     public DcbReadOptions forwards() {
