@@ -191,16 +191,9 @@ class FlowReactions<C : Any> @PublishedApi internal constructor() {
     internal val commands: MutableList<C> = mutableListOf()
 
     /** Issue [command]. */
-    fun issue(command: C): FlowReactions<C> {
-        commands += command
-        return this
-    }
+    fun issue(command: C): FlowReactions<C> = apply { commands += command }
 
-    /**
-     * Ends a reaction whose last statement is not an [issue], typically one finishing on an `if` without an `else`,
-     * which has type `Unit` and so cannot end the lambda on its own. A branch that issues nothing at all takes no
-     * reaction lambda instead.
-     */
+    /** Closes a reaction that does not end on an [issue], such as one finishing on an `if` without an `else`. */
     val nothing: FlowReactions<C> get() = this
 
     @PublishedApi

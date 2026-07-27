@@ -104,6 +104,7 @@ public final class FlowSaga {
          * As {@link #startsOn(Class)}, plus the commands to issue when the instance starts.
          */
         public <T extends E> Builder<E, C> startsOn(Class<T> type, Function<T, List<C>> onStart) {
+            requireNonNull(type, "type cannot be null");
             requireNonNull(onStart, "onStart cannot be null");
             return startsOn(type, (metadata, event) -> onStart.apply(event));
         }

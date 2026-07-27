@@ -134,35 +134,19 @@ class SagaEffects<C : Any> @PublishedApi internal constructor() {
     internal val effects: MutableList<SagaEffect<C>> = mutableListOf()
 
     /** Issue [command]. */
-    fun issue(command: C): SagaEffects<C> {
-        effects += SagaEffect.issue(command)
-        return this
-    }
+    fun issue(command: C): SagaEffects<C> = apply { effects += SagaEffect.issue(command) }
 
     /** Start (or restart) the timer named [timerName] to fire once [after] has elapsed. */
-    fun startTimeout(timerName: String, after: Duration): SagaEffects<C> {
-        effects += SagaEffect.startTimeout(timerName, after)
-        return this
-    }
+    fun startTimeout(timerName: String, after: Duration): SagaEffects<C> = apply { effects += SagaEffect.startTimeout(timerName, after) }
 
     /** Start (or restart) the timer named [timerName] to fire at [at]. */
-    fun startTimeoutAt(timerName: String, at: Instant): SagaEffects<C> {
-        effects += SagaEffect.startTimeoutAt(timerName, at)
-        return this
-    }
+    fun startTimeoutAt(timerName: String, at: Instant): SagaEffects<C> = apply { effects += SagaEffect.startTimeoutAt(timerName, at) }
 
     /** Cancel the timer named [timerName]. */
-    fun cancelTimeout(timerName: String): SagaEffects<C> {
-        effects += SagaEffect.cancelTimeout(timerName)
-        return this
-    }
+    fun cancelTimeout(timerName: String): SagaEffects<C> = apply { effects += SagaEffect.cancelTimeout(timerName) }
 
-    /**
-     * Ends a reaction whose last statement is not one of the effect calls, for example a body that finishes on a
-     * conditional. A trailing `if` without an `else` has type `Unit` and would not compile as the last expression.
-     */
-    val nothing: SagaEffects<C>
-        get() = this
+    /** Closes a reaction that does not end on an effect call, such as one finishing on an `if` without an `else`. */
+    val nothing: SagaEffects<C> get() = this
 
     @PublishedApi
     internal fun build(): List<SagaEffect<C>> = effects.toList()
