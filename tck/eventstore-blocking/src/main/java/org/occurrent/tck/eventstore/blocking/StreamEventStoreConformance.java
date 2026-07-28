@@ -160,7 +160,7 @@ public abstract class StreamEventStoreConformance extends EventStoreConformance 
     }
 
     @Test
-    void gives_back_every_cloud_event_attribute_and_the_payload_unchanged() {
+    void gives_back_every_cloud_event_attribute_and_the_payload_content_unchanged() {
         CloudEvent written = ConformanceEvents.event("event-1", DEFINED, "a-subject");
 
         eventStore().write(STREAM_ID, List.of(written));

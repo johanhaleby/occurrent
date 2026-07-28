@@ -137,10 +137,15 @@ public final class ConformanceEvents {
 
     /**
      * The ids of the supplied events, in order.
+     * <p>
+     * Closes the stream once it has been read. {@code EventStoreQueries.query(..)} can hand back a stream sitting on a
+     * database cursor, so a suite calling {@code idsOf(query(..))} would otherwise leak one per assertion.
      */
     public static List<String> idsOf(Stream<CloudEvent> events) {
         requireNonNull(events, "events cannot be null");
-        return events.map(CloudEvent::getId).toList();
+        try (Stream<CloudEvent> toRead = events) {
+            return toRead.map(CloudEvent::getId).toList();
+        }
     }
 
     /**

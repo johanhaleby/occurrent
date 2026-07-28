@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 
@@ -93,6 +94,11 @@ class EventStoreConformanceGuardsTest {
 
             @Override
             public ReadEventStreamWithFilter filteredReader() {
+                return NoopStore.INSTANCE;
+            }
+
+            @Override
+            public PositionOrderedReader positionOrderedReader() {
                 return NoopStore.INSTANCE;
             }
             // dcbEventStore() deliberately left at its default
@@ -191,6 +197,11 @@ class EventStoreConformanceGuardsTest {
 
         @Override
         public ReadEventStreamWithFilter filteredReader() {
+            return NoopStore.INSTANCE;
+        }
+
+        @Override
+        public PositionOrderedReader positionOrderedReader() {
             return NoopStore.INSTANCE;
         }
     }

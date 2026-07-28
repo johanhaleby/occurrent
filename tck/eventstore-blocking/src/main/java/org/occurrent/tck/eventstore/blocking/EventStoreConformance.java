@@ -103,6 +103,9 @@ public abstract class EventStoreConformance {
             created.queries();
             created.operations();
             created.filteredReader();
+            // Every store owes an answer here, even one that does not write positions, so a fixture that forgot to
+            // wire it should say so now rather than in whichever later suite happens to ask first.
+            created.positionOrderedReader();
         }
         if (required.contains(EventStoreCapability.DCB)) {
             created.dcbEventStore();

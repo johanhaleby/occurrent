@@ -109,17 +109,18 @@ public final class BlockingEventStoreOverReactive
 
     @Override
     public WriteResult write(String streamId, List<CloudEvent> events) {
-        return block(eventStore.write(streamId, Flux.fromIterable(events)));
+        return blockRequiringAValue(eventStore.write(streamId, Flux.fromIterable(events)), "write(String, Flux)");
     }
 
     @Override
     public WriteResult write(String streamId, WriteCondition writeCondition, List<CloudEvent> events) {
-        return block(eventStore.write(streamId, writeCondition, Flux.fromIterable(events)));
+        return blockRequiringAValue(eventStore.write(streamId, writeCondition, Flux.fromIterable(events)),
+                "write(String, WriteCondition, Flux)");
     }
 
     @Override
     public boolean exists(String streamId) {
-        return Boolean.TRUE.equals(block(eventStore.exists(streamId)));
+        return blockRequiringAValue(eventStore.exists(streamId), "exists(String)");
     }
 
     // ReadEventStreamWithFilter
@@ -138,13 +139,12 @@ public final class BlockingEventStoreOverReactive
 
     @Override
     public long count(Filter filter) {
-        Long count = block(queries.count(filter));
-        return count == null ? 0L : count;
+        return blockRequiringAValue(queries.count(filter), "count(Filter)");
     }
 
     @Override
     public boolean exists(Filter filter) {
-        return Boolean.TRUE.equals(block(queries.exists(filter)));
+        return blockRequiringAValue(queries.exists(filter), "exists(Filter)");
     }
 
     // EventStoreOperations
@@ -178,8 +178,7 @@ public final class BlockingEventStoreOverReactive
 
     @Override
     public long currentPosition() {
-        Long position = block(positionOrderedReader.currentPosition());
-        return position == null ? 0L : position;
+        return blockRequiringAValue(positionOrderedReader.currentPosition(), "currentPosition()");
     }
 
     @Override
@@ -225,5 +224,22 @@ public final class BlockingEventStoreOverReactive
 
     private static <T> @Nullable T block(Mono<T> mono) {
         return mono.block();
+    }
+
+    /**
+     * Blocks on a {@code Mono} that the contract says always emits, and fails loudly when it completes empty instead.
+     * <p>
+     * Coercing an empty completion into {@code 0} or {@code false} would let a reactive store that never emits pass
+     * the conformance suites, which is the one outcome a TCK must not allow. The suites are the only caller, so
+     * throwing here turns that bug into a failing test naming the method that misbehaved.
+     */
+    private static <T> T blockRequiringAValue(Mono<T> mono, String method) {
+        T value = mono.block();
+        if (value == null) {
+            throw new IllegalStateException("The reactive event store completed empty from " + method
+                    + " instead of emitting a value. That method is documented to always emit, so an empty completion "
+                    + "is a bug in the store rather than something this bridge should turn into a default value.");
+        }
+        return value;
     }
 }
