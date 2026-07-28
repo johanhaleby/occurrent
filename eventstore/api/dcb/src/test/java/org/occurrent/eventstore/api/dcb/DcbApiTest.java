@@ -268,6 +268,18 @@ class DcbApiTest {
         assertThat(exception.getMessage()).isEqualTo("conflict");
     }
 
+    // Every Occurrent event store produces this message, so it is composed here rather than at each store's throw site.
+    @Test
+    void append_condition_not_fulfilled_exception_composes_the_standard_message() {
+        DcbAppendCondition condition = DcbAppendCondition.wholeStoreLock();
+
+        DcbAppendConditionNotFulfilledException exception = new DcbAppendConditionNotFulfilledException(condition, 7);
+
+        assertThat(exception.appendCondition()).isEqualTo(condition);
+        assertThat(exception.currentPosition()).isEqualTo(7);
+        assertThat(exception.getMessage()).isEqualTo("Append condition was not fulfilled.");
+    }
+
     private static io.cloudevents.CloudEvent cloudEvent() {
         return cloudEvent("type");
     }

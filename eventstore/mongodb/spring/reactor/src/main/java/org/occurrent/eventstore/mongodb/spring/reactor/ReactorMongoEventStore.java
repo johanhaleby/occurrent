@@ -379,7 +379,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         return conflictMono.flatMap(conflict -> {
             if (conflict) {
-                return currentPosition().flatMap(position -> Mono.<Void>error(new DcbAppendConditionNotFulfilledException(condition, position, "Append condition was not fulfilled.")));
+                return currentPosition().flatMap(position -> Mono.<Void>error(new DcbAppendConditionNotFulfilledException(condition, position)));
             }
             // Increment a marker per key for the union of the query's keys and the appended events' keys. Always
             // increment the query's markers so a concurrent matching append is serialized even when this append's own
@@ -989,7 +989,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (isFulfilled(currentStreamVersion, writeCondition)) {
             result = Mono.just(currentStreamVersion);
         } else {
-            result = Mono.error(new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion)));
+            result = Mono.error(new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition));
         }
         return result;
     }
