@@ -122,6 +122,18 @@ class DcbSubscriptionModelAdapterTest {
                 .hasMessageContaining(SubscriptionModelLifeCycle.class.getSimpleName());
     }
 
+    @Test
+    void cancel_subscription_throws_when_the_delegate_only_supports_the_narrower_cancellable_subscriptions_capability() {
+        // A register-only model such as a push model now implements CancellableSubscriptions rather than the full
+        // SubscriptionModelLifeCycle, so it must still fail this gate: named DCB cancellation needs start/stop/pause too.
+        RecordingCancellableOnlySubscriptionModel delegate = new RecordingCancellableOnlySubscriptionModel();
+        DcbSubscriptionModel adapter = DcbSubscriptionModel.from(delegate);
+
+        assertThatThrownBy(() -> adapter.cancelSubscription("sub-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(SubscriptionModelLifeCycle.class.getSimpleName());
+    }
+
     private static CloudEvent dcbEvent(String type, long position, String... tags) {
         return OccurrentCloudEventExtension.withPosition(DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList()), position);
     }
@@ -220,6 +232,26 @@ class DcbSubscriptionModelAdapterTest {
         @Override
         public void cancelSubscription(String subscriptionId) {
             cancelledSubscriptionIds.add(subscriptionId);
+        }
+    }
+
+    // A register-only model (like a push model): implements Subscribable and the narrower CancellableSubscriptions,
+    // not the full SubscriptionModelLifeCycle, so it has nothing to start, stop, or pause.
+    private static final class RecordingCancellableOnlySubscriptionModel implements SubscriptionModel, Subscribable, CancellableSubscriptions {
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            throw new UnsupportedOperationException("Not used by this test");
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            throw new UnsupportedOperationException("Not used by this test");
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            throw new UnsupportedOperationException("Not used by this test");
         }
     }
 }

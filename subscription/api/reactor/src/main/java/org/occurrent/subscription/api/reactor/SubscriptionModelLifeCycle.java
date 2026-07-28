@@ -23,10 +23,11 @@ import org.jspecify.annotations.NullMarked;
  * {@code SubscriptionModelLifeCycle}. These methods return synchronously, updating in-memory bookkeeping (which
  * named subscriptions are running, paused, or gone) without waiting for the asynchronous I/O that starting or
  * stopping a subscription can trigger in the background, which is why they return {@code void} rather than a
- * {@code Mono}/{@code Flux}.
+ * {@code Mono}/{@code Flux}. Cancellation lives in {@link CancellableSubscriptions}, which this extends, because a
+ * register-only model can cancel a subscription without having anything to start, stop, or pause.
  */
 @NullMarked
-public interface SubscriptionModelLifeCycle {
+public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
 
     /**
      * Temporarily stop the subscription model so that none of its subscriptions will receive any events.
@@ -93,12 +94,6 @@ public interface SubscriptionModelLifeCycle {
      * @throws IllegalArgumentException If subscription is not running
      */
     void pauseSubscription(String subscriptionId);
-
-    /**
-     * Cancel a subscription and forget it. You cannot restart it from its current position again. Cancelling a
-     * subscription id that is unknown or already cancelled is a no-op.
-     */
-    void cancelSubscription(String subscriptionId);
 
     /**
      * Shutdown the subscription model and dispose all subscriptions (they can be resumed later if you start from a durable checkpoint).

@@ -20,7 +20,7 @@ displayName: Upgrade to Occurrent 0.31.0
 description: >-
   Migrates an application from Occurrent 0.30.0 to 0.31.0. Applies the mechanical type renames for the
   ResumeBehavior and StartupMode enums, which moved from being nested inside the Subscription, StreamSubscription,
-  DcbSubscription, and Projection annotations to top-level types in org.occurrent.annotation. Also applies the
+  and DcbSubscription annotations to top-level types in org.occurrent.annotation. Also applies the
   Subscription.StartPosition and DcbSubscription.DcbStartPosition move to the shared top-level
   org.occurrent.annotation.StartPosition. Also rewrites every reference, import, and static import of
   EventMetadata from org.occurrent.dsl.subscription.EventMetadata to org.occurrent.cloudevents.EventMetadata.

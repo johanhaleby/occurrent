@@ -174,6 +174,12 @@ public final class DomainEventFeed<E> {
     /**
      * Run the one-time catch-up of every registered projection. The returned {@link Mono} completes once every
      * projection has caught up and gone live.
+     * <p>
+     * An error on the returned {@link Mono} is terminal for the whole feed, so let it reach the caller and do not
+     * start the application. The projection that failed rejects every later event, and because the projections are
+     * fed in registration order, one that failed early blocks the ones behind it. Unlike a subscription model, the
+     * feed does not drop the failed projection: the application asked for it, so running on without it is worse than
+     * not running. Fix the cause and build a new feed.
      */
     public Mono<Void> catchUpAll() {
         return Flux.fromIterable(feeds).concatMap(CatchupProjectionFeed::catchUp).then();

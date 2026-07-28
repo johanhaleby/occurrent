@@ -323,3 +323,39 @@ The reactor feed also gains the defaults-taking metadata-aware factory it was mi
 metadata-aware path existed only in the int-pair form, so `reactor/DomainEventFeed` had to hand-write both default
 constants while the plain-`Function` path three methods above it called a clean defaults-taking form. The API penalised
 the path callers should use.
+
+## Amendment (2026-07-28): a failed catch-up releases its registration, and cancellation becomes its own capability
+
+Both stacks register the handover on the live feed before running the replay, which is deliberate and stays: it is what
+captures an event committing during the replay instead of losing it in the gap between the replay head and going live.
+A catch-up failure never released that registration, and `RegisteringSubscribable` had no way to release one, since
+`subscriptionIds` and `registrations` were append-only. Two things followed. The subscription id could never be reused,
+so retrying the same projection hit `Subscription <id> is already registered`. And because `route` is an unguarded loop
+over the registrations in order, the dead handler rethrew its stored `catchUpFailure` on every later event and starved
+every handler behind it, including a healthy subscription with a different id.
+
+`route` keeps its unguarded loop. A push source needs a handler error to reach it so it can decide whether to nack, and
+`a_throwing_handler_propagates_to_the_caller` pins that.
+
+**Cancellation moved into `CancellableSubscriptions`,** a one-method capability that `SubscriptionModelLifeCycle` now
+extends, so `RegisteringSubscribable` implements the narrow one. Two alternatives were rejected. A bare
+`cancelSubscription` method on `RegisteringSubscribable` would have been a lookalike, carrying the same name and
+signature as the interface method under a weaker contract with no interface behind it. Implementing the whole of
+`SubscriptionModelLifeCycle` would have been worse than untidy: `DcbSubscriptionModelAdapter` uses
+`instanceof SubscriptionModelLifeCycle` as a runtime capability gate, and a push model failing that gate is the
+behaviour this ADR already decided on, so a push model must keep failing it. Beyond that, `stop` and `pauseSubscription`
+have no sound meaning here. Every other implementation has an upstream buffer, so a pause defers events, while these
+models take their events from the caller and have no replay, so a pause would drop them. On
+`SynchronousSubscriptionModel` a pause would silently stop updating a read model whose whole purpose is read-after-write.
+
+Moving a method onto a new superinterface is compatible in both directions: every current implementor still satisfies
+`SubscriptionModelLifeCycle`, and a call against it still resolves.
+
+**A `DomainEventFeed` fails terminally instead, and does not drop the projection.** `catchUpAll()` runs each
+`CatchupProjectionFeed.catchUp()`, and each feed owns its own handover, so a failure poisons that feed the same way.
+Dropping it would be the wrong recovery: the application declared that projection, so running without it is worse than
+not running at all. The two differ because of who owns the decision. A subscription model hands the failure straight
+back from `subscribe`, so the caller already knows and the released id is a courtesy. A feed is assembled by the
+application and fanned out to in registration order, so a silently missing projection would surface much later as a
+read model that is simply wrong. The contract is stated on `catchUpAll` on both stacks: fix the cause and build a new
+feed.

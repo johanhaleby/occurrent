@@ -122,22 +122,33 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // lost in the gap between the replay head and going live.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
 
-        handover.catchUp(new BlockingHandover.Source<>() {
-            @Override
-            public boolean isAlreadyCaughtUp() {
-                return CatchupThenPushSubscriptionModel.this.isAlreadyCaughtUp(subscriptionId);
-            }
+        try {
+            handover.catchUp(new BlockingHandover.Source<>() {
+                @Override
+                public boolean isAlreadyCaughtUp() {
+                    return CatchupThenPushSubscriptionModel.this.isAlreadyCaughtUp(subscriptionId);
+                }
 
-            @Override
-            public Stream<CloudEvent> replay() {
-                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
-            }
+                @Override
+                public Stream<CloudEvent> replay() {
+                    return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
+                }
 
-            @Override
-            public void markCaughtUp() {
-                CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
-            }
-        });
+                @Override
+                public void markCaughtUp() {
+                    CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
+                }
+            });
+        } catch (RuntimeException | Error e) {
+            // The handover was registered before the replay, so a failure here would otherwise leave a handler that
+            // rethrows the failure for every later event, taking the id with it and starving the handlers behind it.
+            // Error is caught alongside RuntimeException and rethrown unchanged, because the handover only records a
+            // RuntimeException as its stored failure. So something like a NoClassDefFoundError from a lazily loaded
+            // class inside the fold would otherwise leave the registration in place AND leave the handover buffering
+            // every live event until it overflows, surfacing far from the cause.
+            liveFeed.cancelSubscription(subscriptionId);
+            throw e;
+        }
         return new AlreadyStartedSubscription(subscriptionId);
     }
 

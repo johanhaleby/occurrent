@@ -119,6 +119,47 @@ class DomainEventFeedTest {
                 .hasMessageContaining("(cap 2)");
     }
 
+    @Test
+    void a_failed_catch_up_all_is_terminal_and_blocks_the_projections_behind_it() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(failingReader(store), converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Integer> first = new ConcurrentHashMap<>();
+        ConcurrentHashMap<String, Integer> second = new ConcurrentHashMap<>();
+        feed.register("first", projection(), ViewStateRepository.create(first::get, first::put));
+        feed.register("second", projection(), ViewStateRepository.create(second::get, second::put));
+
+        Throwable catchUpFailure = catchThrowable(feed::catchUpAll);
+        assertThat(catchUpFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        // The feed does not drop the poisoned projection, so it stays first in the fan-out and its stored failure
+        // blocks delivery to the one behind it. That is the terminal contract catchUpAll documents.
+        Throwable liveFailure = catchThrowable(() -> feed.accept(new Counted("1")));
+
+        assertThat(liveFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(second).isEmpty();
+    }
+
+    private static PositionOrderedReader failingReader(PositionOrderedReader delegate) {
+        return new PositionOrderedReader() {
+            @Override
+            public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                throw new IllegalStateException("replay boom");
+            }
+
+            @Override
+            public long currentPosition() {
+                return delegate.currentPosition();
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+    }
+
     private static PositionOrderedReader readerThatDoesNotWritePosition(PositionOrderedReader delegate) {
         return new PositionOrderedReader() {
             @Override

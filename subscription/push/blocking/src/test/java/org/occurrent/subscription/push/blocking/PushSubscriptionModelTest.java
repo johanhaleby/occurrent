@@ -106,6 +106,62 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void a_cancelled_subscription_receives_no_further_events() {
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        List<String> cancelledHandler = new ArrayList<>();
+        List<String> remainingHandler = new ArrayList<>();
+        model.subscribe("cancel-me", cloudEvent -> cancelledHandler.add(cloudEvent.getId()));
+        model.subscribe("keep-me", cloudEvent -> remainingHandler.add(cloudEvent.getId()));
+
+        model.cancelSubscription("cancel-me");
+        model.accept(cloudEvent("1", "NameDefined"));
+
+        assertThat(cancelledHandler).isEmpty();
+        assertThat(remainingHandler).containsExactly("1");
+    }
+
+    @Test
+    void a_cancelled_subscription_id_can_be_registered_again() {
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        model.subscribe("a", cloudEvent -> {
+        });
+
+        model.cancelSubscription("a");
+
+        List<String> received = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.subscribe("a", cloudEvent -> received.add(cloudEvent.getId())));
+
+        assertThat(thrown).isNull();
+        model.accept(cloudEvent("1", "NameDefined"));
+        assertThat(received).containsExactly("1");
+    }
+
+    @Test
+    void cancelling_an_unknown_id_is_a_no_op() {
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        List<String> received = new ArrayList<>();
+        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.cancelSubscription("unknown"));
+
+        assertThat(thrown).isNull();
+        model.accept(cloudEvent("1", "NameDefined"));
+        assertThat(received).containsExactly("1");
+    }
+
+    @Test
+    void cancelling_an_already_cancelled_id_is_a_no_op() {
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        model.subscribe("sub", cloudEvent -> {
+        });
+        model.cancelSubscription("sub");
+
+        Throwable thrown = catchThrowable(() -> model.cancelSubscription("sub"));
+
+        assertThat(thrown).isNull();
+    }
+
+    @Test
     void has_subscriptions_reflects_whether_anything_is_registered() {
         PushSubscriptionModel model = new PushSubscriptionModel();
         assertThat(model.hasSubscriptions()).isFalse();

@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Verifies the {@link SagaInstance} view {@link SagaEnvelope} implements directly: {@link SagaEnvelope#nextTimerAt()}
@@ -96,6 +97,42 @@ class SagaEnvelopeTest {
             SagaEnvelope<String> envelope = new SagaEnvelope<>("s1", null, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, NOW, NOW, null, null);
 
             assertThat(envelope.currentStep()).isNull();
+        }
+    }
+
+    @Nested
+    class Construction {
+
+        @Test
+        void throws_NullPointerException_when_sagaId_is_null() {
+            assertThatThrownBy(() -> new SagaEnvelope<>(null, "state", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, NOW, NOW, null, null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void throws_NullPointerException_when_status_is_null() {
+            assertThatThrownBy(() -> new SagaEnvelope<>("s1", "state", null, 1, List.of(), Map.of(), null, NOW, NOW, null, null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void accepts_a_null_state() {
+            // A null state is legal and deliberate (parametric nullness): a store may need a null-state envelope for a
+            // projected read that never loads the state at all. This must keep passing so a later change cannot quietly
+            // tighten that.
+            SagaEnvelope<String> envelope = new SagaEnvelope<>("s1", null, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, NOW, NOW, null, null);
+
+            assertThat(envelope.state()).isNull();
+        }
+    }
+
+    @Nested
+    class TimerEntryConstruction {
+
+        @Test
+        void throws_NullPointerException_when_name_is_null() {
+            assertThatThrownBy(() -> new TimerEntry(null, 1_000))
+                    .isInstanceOf(NullPointerException.class);
         }
     }
 }

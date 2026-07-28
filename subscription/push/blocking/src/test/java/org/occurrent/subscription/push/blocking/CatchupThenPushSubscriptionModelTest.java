@@ -178,7 +178,7 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
-    void a_catch_up_failure_makes_the_live_feed_fail_fast() {
+    void a_catch_up_failure_releases_the_registration() {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
         PositionOrderedReader failingReader = failingReader();
 
@@ -189,9 +189,54 @@ class CatchupThenPushSubscriptionModelTest {
                 }));
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
+        // The dead handler is released on the catch-up failure path, so a later live event is simply a no-op delivery
+        // rather than resurrecting the stored failure.
         Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
 
-        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(thrown).isNull();
+    }
+
+    @Test
+    void the_same_subscription_id_can_be_used_again_after_a_catch_up_failure() {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+
+        CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
+        Throwable replayFailure = catchThrowable(() ->
+                failingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+                }));
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        List<String> delivered = new ArrayList<>();
+        PositionOrderedReader workingReader = reader(Stream::empty, 0);
+        CatchupThenPushSubscriptionModel workingModel = new CatchupThenPushSubscriptionModel(workingReader, liveFeed, null);
+        Throwable secondSubscribeFailure = catchThrowable(() ->
+                workingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())));
+
+        assertThat(secondSubscribeFailure).isNull();
+
+        liveFeed.accept(cloudEvent("1", "Created"));
+        assertThat(delivered).containsExactly("1");
+    }
+
+    @Test
+    void a_subscription_registered_after_a_failed_one_still_receives_events() {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+
+        CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
+        Throwable replayFailure = catchThrowable(() ->
+                failingModel.subscribe("failed", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+                }));
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        List<String> delivered = new ArrayList<>();
+        PositionOrderedReader workingReader = reader(Stream::empty, 0);
+        CatchupThenPushSubscriptionModel healthyModel = new CatchupThenPushSubscriptionModel(workingReader, liveFeed, null);
+        healthyModel.subscribe("healthy", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isNull();
+        assertThat(delivered).containsExactly("1");
     }
 
     @Test
