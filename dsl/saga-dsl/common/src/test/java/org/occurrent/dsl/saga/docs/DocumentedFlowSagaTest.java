@@ -110,7 +110,7 @@ class DocumentedFlowSagaTest {
             Saga.Step<FlowState<GameEvent>, CloseGame> step = lobby().step(started.state(), SagaInput.event(new PlayerJoined(GAME_ID)));
 
             // Then
-            assertThat(issuedCommands(step)).isEmpty();
+            assertThat(step.issuedCommands()).isEmpty();
         }
 
         @Test
@@ -275,18 +275,6 @@ class DocumentedFlowSagaTest {
                         .timeout(received -> received.initiating(AuctionStarted.class).endsAt(), Continuation.end(),
                                 received -> List.of(new CloseAuction(received.initiating(AuctionStarted.class).auctionId()))))
                 .build();
-    }
-
-    /**
-     * The commands out of a step's effects. Effects are not only commands, so leaving a step with an armed timeout
-     * contributes a {@link SagaEffect.CancelTimeout} that has nothing to do with what the reaction issued.
-     */
-    @SuppressWarnings("unchecked")
-    private static <C> List<C> issuedCommands(Saga.Step<?, C> step) {
-        return step.effects().stream()
-                .filter(SagaEffect.IssueCommand.class::isInstance)
-                .map(effect -> ((SagaEffect.IssueCommand<C>) effect).command())
-                .toList();
     }
 
     /**

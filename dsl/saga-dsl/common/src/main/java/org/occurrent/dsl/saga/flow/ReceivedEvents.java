@@ -41,7 +41,14 @@ public interface ReceivedEvents<E> {
     /** The event that started this saga instance. */
     E initiating();
 
-    /** The initiating event cast to {@code type}. Throws {@link ClassCastException} if it is not of that type. */
+    /**
+     * The initiating event cast to {@code type}. Throws {@link ClassCastException} if it is not of that type.
+     * <p>
+     * Kotlin has a reified {@code received.initiating<OrderPlaced>()} for this. It is a top-level extension in this
+     * package, so a caller in another package imports it by name, {@code import org.occurrent.dsl.saga.flow.initiating}.
+     * Without that import the compiler reports "No type arguments expected" against the no-arg {@link #initiating()}
+     * below rather than an unresolved reference, which makes a missing import look like the wrong method.
+     */
     <T extends E> T initiating(Class<T> type);
 
     /** The first received event of {@code type}, if any. */

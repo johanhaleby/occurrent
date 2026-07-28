@@ -17,9 +17,15 @@
 package org.occurrent.dsl.saga.flow
 
 // Reified Kotlin equivalents of the Class-taking ReceivedEvents members, so a flow reaction can write
-// received.initiating<OrderPlaced>() instead of received.initiating(OrderPlaced::class.java). The single type
-// parameter and the ReceivedEvents<in T> receiver are what let the explicit type argument bind to the extension
-// rather than shadowing to the member (the same shape the query DSL uses for its reified queryOne).
+// received.initiating<OrderPlaced>() instead of received.initiating(OrderPlaced::class.java). The single type parameter
+// and the ReceivedEvents<in T> receiver are what make the no-argument call shape work (the same shape the query DSL
+// uses for its reified queryOne).
+//
+// These are top-level extensions, so a caller in another package imports them by name, as any extension requires. That
+// is not shadowing, it is ordinary scope. Shadowing only matters for initiating: ReceivedEvents has a no-arg
+// initiating() member, a member wins over an extension when both apply, so the reified form needs its type argument
+// spelled out. It also means a missing import reports "No type arguments expected for fun initiating()" rather than an
+// unresolved reference, which is the confusing part (issue #449). The other four names have no no-arg member to lose to.
 
 /** The initiating event cast to [T]. Throws [ClassCastException] if it is not of that type. */
 inline fun <reified T : Any> ReceivedEvents<in T>.initiating(): T = initiating(T::class.java)

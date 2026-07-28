@@ -1,3 +1,9 @@
+### Changelog next version
+
+#### Changes
+
+* `Saga.Step` can now read the commands a transition issued, through `issuedCommands()`. `effects()` is a mixed list, so a reaction that issued nothing does not produce an empty one: leaving a step whose timeout was armed contributes a `CancelTimeout` that says nothing about what the reaction decided. Asserting on what a reaction issued therefore meant filtering the sealed `SagaEffect` hierarchy by hand, which the accessor removes. It performs the same reading an executor does, so an assertion on it is an assertion about what would actually be dispatched. The timer effects get no matching accessor, because they need none: a timer effect is already a value you can assert on `effects()` directly, as `SagaEffect.cancelTimeout("step:awaiting-players")`, whereas a command arrives wrapped in an `IssueCommand` and has to be unwrapped first. Kotlin callers write `step.issuedCommands()`, with the parentheses, since this is a derived accessor rather than a record component. `effects()` is unchanged and stays the full ordered record of the transition. Resolves [#448](https://github.com/johanhaleby/occurrent/issues/448).
+
 ### 0.31.0 (2026-07-28)
 
 #### Changes
