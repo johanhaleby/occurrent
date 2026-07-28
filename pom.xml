@@ -26,6 +26,7 @@
     <version>${revision}</version>
     <modules>
         <module>test-support</module>
+        <module>tck</module>
         <module>eventstore</module>
         <module>subscription</module>
         <module>cloudevents-extension</module>
@@ -542,6 +543,8 @@
                                 <excludeArtifact>test-support</excludeArtifact>
 
                                 <!-- empty aggregate parent POMs not needed with enabled flattening -->
+                                <!-- The tck aggregator only. Its leaves (occurrent-tck-*) are published, see ADR 77. -->
+                                <excludeArtifact>tck</excludeArtifact>
                                 <excludeArtifact>application-service</excludeArtifact>
                                 <excludeArtifact>application</excludeArtifact>
                                 <excludeArtifact>cloudevent-converter</excludeArtifact>
