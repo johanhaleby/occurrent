@@ -1,0 +1,281 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.dsl.saga.docs
+
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.DisplayNameGeneration
+import org.junit.jupiter.api.DisplayNameGenerator
+import org.junit.jupiter.api.Nested
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertAll
+import org.occurrent.dsl.saga.Saga
+import org.occurrent.dsl.saga.SagaEffect
+import org.occurrent.dsl.saga.SagaInput
+import org.occurrent.dsl.saga.SagaTimeout
+import org.occurrent.dsl.saga.flow.FlowState
+// ReceivedEvents has a no-arg initiating() member, and a member always wins over an extension, so the reified
+// initiating<T>() has to be imported explicitly.
+import org.occurrent.dsl.saga.flow.initiating
+import org.occurrent.dsl.saga.flow.saga
+import java.time.Duration
+import java.time.Instant
+
+/**
+ * The flow sagas the documentation's Testing chapter shows, kept compiling and passing here so a published snippet
+ * cannot drift from the API. Every assertion goes through [Saga.step], which folds evolve and react without any clock,
+ * store or subscription, so a timeout is fired by naming its timer rather than by letting time pass.
+ */
+@DisplayName("DocumentedFlowSaga (Kotlin)")
+@DisplayNameGeneration(DisplayNameGenerator.Simple::class)
+class DocumentedFlowSagaKotlinTest {
+
+    @Nested
+    @DisplayName("when a lobby waits for a player to join")
+    inner class WhenALobbyWaitsForAPlayerToJoin {
+
+        @Test
+        fun `a player joining advances to the next step and cancels the step's timeout`() {
+            // Given
+            val started = start(lobby(), GameCreated(GAME_ID))
+
+            // When
+            val step = lobby().step(started.state, SagaInput.event(PlayerJoined(GAME_ID)))
+
+            // Then
+            assertAll(
+                { assertThat(step.state.currentStep()).isEqualTo("waiting-for-both-players") },
+                { assertThat(step.effects).containsExactly(SagaEffect.cancelTimeout("step:awaiting-players")) }
+            )
+        }
+
+        @Test
+        fun `a player joining issues no command even though it produces an effect`() {
+            // Given
+            val started = start(lobby(), GameCreated(GAME_ID))
+
+            // When
+            val step = lobby().step(started.state, SagaInput.event(PlayerJoined(GAME_ID)))
+
+            // Then
+            assertThat(issuedCommands(step)).isEmpty()
+        }
+
+        @Test
+        fun `the timeout firing closes the game and completes the saga`() {
+            // Given
+            val started = start(lobby(), GameCreated(GAME_ID))
+
+            // When
+            val step = lobby().step(started.state, SagaInput.timeout(SagaTimeout(GAME_ID, "step:awaiting-players")))
+
+            // Then
+            assertAll(
+                { assertThat(step.effects).containsExactly(SagaEffect.issue(CloseGame(GAME_ID))) },
+                { assertThat(step.state.completed()).isTrue() }
+            )
+        }
+
+        @Test
+        fun `a timer name the saga does not know leaves the state and the effects untouched`() {
+            // Given
+            val started = start(lobby(), GameCreated(GAME_ID))
+
+            // When
+            val step = lobby().step(started.state, SagaInput.timeout(SagaTimeout(GAME_ID, "step:no-such-step")))
+
+            // Then
+            assertAll(
+                { assertThat(step.state.currentStep()).isEqualTo("awaiting-players") },
+                { assertThat(step.effects).isEmpty() }
+            )
+        }
+    }
+
+    @Nested
+    @DisplayName("when a step joins on two players readying up")
+    inner class WhenAStepJoinsOnTwoPlayersReadyingUp {
+
+        @Test
+        fun `one player readying up does not leave the join step`() {
+            // Given
+            val joining = joinStepEntered()
+
+            // When
+            val step = lobby().step(joining, SagaInput.event(PlayerReady(GAME_ID)))
+
+            // Then
+            assertAll(
+                { assertThat(step.state.currentStep()).isEqualTo("waiting-for-both-players") },
+                { assertThat(step.state.completed()).isFalse() }
+            )
+        }
+
+        @Test
+        fun `the second player readying up fulfils the join and completes the saga`() {
+            // Given
+            val afterFirst = lobby().step(joinStepEntered(), SagaInput.event(PlayerReady(GAME_ID)))
+
+            // When
+            val afterSecond = lobby().step(afterFirst.state, SagaInput.event(PlayerReady(GAME_ID)))
+
+            // Then
+            assertThat(afterSecond.state.completed()).isTrue()
+        }
+
+        private fun joinStepEntered(): FlowState<GameEvent> {
+            val started = start(lobby(), GameCreated(GAME_ID))
+            return lobby().step(started.state, SagaInput.event(PlayerJoined(GAME_ID))).state
+        }
+    }
+
+    @Nested
+    @DisplayName("when an auction re-enters its bidding step on every bid")
+    inner class WhenAnAuctionReEntersItsBiddingStepOnEveryBid {
+
+        @Test
+        fun `a bid keeps the saga in the bidding step`() {
+            // Given
+            val started = start(auction(), AuctionStarted(AUCTION_ID, ENDS_AT))
+
+            // When
+            val step = auction().step(started.state, SagaInput.event(BidPlaced(AUCTION_ID, 100)))
+
+            // Then
+            assertAll(
+                { assertThat(step.state.currentStep()).isEqualTo("bidding") },
+                { assertThat(step.state.completed()).isFalse() }
+            )
+        }
+
+        @Test
+        fun `a second bid still keeps the saga in the bidding step`() {
+            // Given
+            val afterFirstBid = auction().step(
+                start(auction(), AuctionStarted(AUCTION_ID, ENDS_AT)).state,
+                SagaInput.event(BidPlaced(AUCTION_ID, 100))
+            )
+
+            // When
+            val afterSecondBid = auction().step(afterFirstBid.state, SagaInput.event(BidPlaced(AUCTION_ID, 150)))
+
+            // Then
+            assertThat(afterSecondBid.state.currentStep()).isEqualTo("bidding")
+        }
+
+        @Test
+        fun `the deadline firing closes the auction and completes the saga`() {
+            // Given
+            val started = start(auction(), AuctionStarted(AUCTION_ID, ENDS_AT))
+
+            // When
+            val step = auction().step(started.state, SagaInput.timeout(SagaTimeout(AUCTION_ID, "step:bidding")))
+
+            // Then
+            assertAll(
+                { assertThat(step.effects).containsExactly(SagaEffect.issue(CloseAuction(AUCTION_ID))) },
+                { assertThat(step.state.completed()).isTrue() }
+            )
+        }
+
+        @Test
+        fun `the deadline still closes the auction after bids have looped the step`() {
+            // Given
+            val afterBid = auction().step(
+                start(auction(), AuctionStarted(AUCTION_ID, ENDS_AT)).state,
+                SagaInput.event(BidPlaced(AUCTION_ID, 100))
+            )
+
+            // When
+            val step = auction().step(afterBid.state, SagaInput.timeout(SagaTimeout(AUCTION_ID, "step:bidding")))
+
+            // Then
+            assertThat(step.effects).containsExactly(SagaEffect.issue(CloseAuction(AUCTION_ID)))
+        }
+    }
+
+    companion object {
+
+        private const val GAME_ID = "game-1"
+        private const val AUCTION_ID = "auction-1"
+
+        /** Fixed so the absolute timeout never depends on the machine's clock or zone. */
+        private val ENDS_AT: Instant = Instant.parse("2026-07-28T18:00:00Z")
+
+        sealed interface GameEvent {
+            val gameId: String
+        }
+
+        data class GameCreated(override val gameId: String) : GameEvent
+        data class PlayerJoined(override val gameId: String) : GameEvent
+        data class PlayerReady(override val gameId: String) : GameEvent
+
+        data class CloseGame(val gameId: String)
+
+        sealed interface AuctionEvent {
+            val auctionId: String
+        }
+
+        data class AuctionStarted(override val auctionId: String, val endsAt: Instant) : AuctionEvent
+        data class BidPlaced(override val auctionId: String, val amount: Int) : AuctionEvent
+
+        data class CloseAuction(val auctionId: String)
+
+        private fun lobby(): Saga<GameEvent, FlowState<GameEvent>, CloseGame> = saga {
+            startsOn<GameCreated>()
+            correlateAll { it.gameId }
+            step("awaiting-players") {
+                on<PlayerJoined>(then = next)
+                timeout(after = Duration.ofMinutes(10), then = end) { received ->
+                    issue(CloseGame(received.initiating<GameCreated>().gameId))
+                }
+            }
+            step("waiting-for-both-players") {
+                join(expect<PlayerReady>(2), then = end)
+            }
+        }
+
+        private fun auction(): Saga<AuctionEvent, FlowState<AuctionEvent>, CloseAuction> = saga {
+            startsOn<AuctionStarted>()
+            correlate<AuctionStarted> { it.auctionId }
+            correlate<BidPlaced> { it.auctionId }
+            step("bidding") {
+                on<BidPlaced>(then = transitionTo("bidding"))
+                timeout(at = { received -> received.initiating<AuctionStarted>().endsAt }, then = end) { received ->
+                    issue(CloseAuction(received.initiating<AuctionStarted>().auctionId))
+                }
+            }
+        }
+
+        /**
+         * The commands out of a step's effects. Effects are not only commands, so leaving a step with an armed timeout
+         * contributes a [SagaEffect.CancelTimeout] that has nothing to do with what the reaction issued.
+         */
+        private fun <C : Any> issuedCommands(step: Saga.Step<*, C>): List<C> =
+            step.effects.filterIsInstance<SagaEffect.IssueCommand<C>>().map { it.command() }
+
+        /**
+         * Applies a start event the way an executor would. [Saga.step] deliberately leaves out [Saga.onStart], so a
+         * start event's effects are onStart's followed by react's.
+         */
+        private fun <E : Any, C : Any> start(saga: Saga<E, FlowState<E>, C>, event: E): Saga.Step<FlowState<E>, C> {
+            val state = saga.evolve(saga.initialState(), SagaInput.event(event))
+            val effects = saga.onStart(state, event) + saga.react(state, SagaInput.event(event))
+            return Saga.Step(state, effects)
+        }
+    }
+}
