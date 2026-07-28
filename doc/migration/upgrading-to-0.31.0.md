@@ -1,7 +1,7 @@
 # Upgrading to Occurrent 0.31.0
 
 0.31.0 has four breaking changes. First, the `ResumeBehavior` and `StartupMode` enums move out of `@Subscription`,
-`@StreamSubscription`, `@DcbSubscription`, and `@Projection` and become shared top-level types. `Subscription.StartPosition`
+`@StreamSubscription`, and `@DcbSubscription` and become shared top-level types. `Subscription.StartPosition`
 and `DcbSubscription.DcbStartPosition` move the same way, to a shared top-level `org.occurrent.annotation.StartPosition`
 (the constants are unchanged). Second, the four subscription checkpoint-storage modules are renamed from
 `-position-storage` to `-checkpoint-storage`. Third, `EventMetadata` moves from `org.occurrent.dsl.subscription.EventMetadata`
@@ -52,6 +52,10 @@ renames the four checkpoint-storage dependency coordinates (see section 3) and t
 module coordinate, from `occurrent-mongodb-spring-boot-autoconfigure` to `occurrent-spring-boot-autoconfigure`
 (see section 5), in your Maven and Gradle build files. Safe to run and commit without review.
 
+One entry in that list will never match your code. `Projection.StartupMode` and `Projection.ResumeBehavior` are a
+nested shape that only ever existed in pre-release snapshots, since `@Projection` itself is new in 0.31.0. They are
+covered for anyone who tracked a snapshot build, and are harmless if you are coming from the released 0.30.0.
+
 ## 2. What changed
 
 `ResumeBehavior` (`SAME_AS_START_AT`, `DEFAULT`) and `StartupMode` (`DEFAULT`, `WAIT_UNTIL_STARTED`, `BACKGROUND`)
@@ -65,7 +69,7 @@ declared return type changed, from a nested enum to the shared one.
 
 `Subscription.StartPosition` and `DcbSubscription.DcbStartPosition` also move, to a single shared
 `org.occurrent.annotation.StartPosition` (`BEGINNING`, `NOW`, `DEFAULT`, unchanged). `@Projection` and `@Snapshot`
-already used this same shared `StartPosition`. `StreamSubscription.StartPosition` is untouched: its constant is
+are new in 0.31.0 and use this shared `StartPosition` from the start. `StreamSubscription.StartPosition` is untouched: its constant is
 `BEGINNING_OF_TIME`, not `BEGINNING`, a genuinely different start position over wall-clock time rather than the
 unified global or DCB position, so it stays nested and annotation-specific.
 

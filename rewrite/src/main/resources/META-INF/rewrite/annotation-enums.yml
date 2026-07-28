@@ -19,8 +19,10 @@ name: org.occurrent.MigrateOccurrentRenames_0_31
 displayName: Migrate Occurrent renamed types (0.30.0 -> 0.31.0)
 description: >-
   Applies the mechanical type renames introduced between Occurrent 0.30.0 and 0.31.0: the ResumeBehavior and
-  StartupMode enums, formerly nested inside each of the Subscription, StreamSubscription, DcbSubscription, and
-  Projection annotations, are now top-level types in org.occurrent.annotation. Subscription.StartPosition and
+  StartupMode enums, formerly nested inside each of the Subscription, StreamSubscription, and DcbSubscription
+  annotations, are now top-level types in org.occurrent.annotation. The Projection entries in this recipe are
+  defensive coverage for a nested shape that only ever existed in pre-release snapshots, not in the released
+  0.30.0. Subscription.StartPosition and
   DcbSubscription.DcbStartPosition also move to the shared top-level org.occurrent.annotation.StartPosition (the
   constants BEGINNING, NOW, and DEFAULT are unchanged). EventMetadata also moves from
   org.occurrent.dsl.subscription to org.occurrent.cloudevents. The Spring Boot annotation machinery

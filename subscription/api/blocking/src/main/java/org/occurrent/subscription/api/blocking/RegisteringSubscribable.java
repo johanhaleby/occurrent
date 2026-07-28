@@ -36,15 +36,18 @@ import java.util.function.Predicate;
  * {@link SubscriptionFilter}, and events fed in by the subclass are routed to every handler whose filter matches.
  * <p>
  * It owns id uniqueness, the filter-to-{@link Predicate} translation (via {@link SubscriptionFilterMatcher}), and
- * ordered dispatch. It has no lifecycle, start position, checkpoint, catch-up, or replay, so it implements only
- * {@link Subscribable}. {@link StartAt} is accepted for interface compatibility but ignored, since "where to start"
- * is meaningless when the subclass decides which events reach {@link #route(CloudEvent)} and when.
+ * ordered dispatch. It has no start position, checkpoint, catch-up, or replay, and no
+ * {@link SubscriptionModelLifeCycle}: there is nothing to start or stop when the events arrive from the caller, and a
+ * pause would drop them rather than defer them, since there is no feed holding them back. Cancellation is the one
+ * life-cycle operation that does apply, so it implements {@link CancellableSubscriptions}. {@link StartAt} is accepted
+ * for interface compatibility but ignored, since "where to start" is meaningless when the subclass decides which
+ * events reach {@link #route(CloudEvent)} and when.
  * <p>
  * Subclasses expose their own ingestion API (for example a synchronous at-write-time {@code dispatch(List)} or an
  * externally driven {@code accept(CloudEvent)}) and delegate to {@link #route(CloudEvent)} to deliver each event.
  */
 @NullMarked
-public abstract class RegisteringSubscribable implements Subscribable {
+public abstract class RegisteringSubscribable implements Subscribable, CancellableSubscriptions {
 
     private record Registration(String id, Predicate<CloudEvent> matcher, Consumer<CloudEvent> action) {
     }
@@ -64,6 +67,14 @@ public abstract class RegisteringSubscribable implements Subscribable {
         }
         registrations.add(new Registration(subscriptionId, matcher, action));
         return new AlreadyStartedSubscription(subscriptionId);
+    }
+
+    @Override
+    public final void cancelSubscription(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        // Drop the registration before releasing the id, so the id is never free while its handler can still be routed to.
+        registrations.removeIf(registration -> registration.id().equals(subscriptionId));
+        subscriptionIds.remove(subscriptionId);
     }
 
     /**

@@ -29,6 +29,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -175,6 +176,64 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
+    void a_catch_up_failure_releases_the_registration() {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+        PositionOrderedReader failingReader = failingReader();
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader, liveFeed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Throwable replayFailure = catchThrowable(() -> subscription.waitUntilStarted().block());
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        // The dead handler is released on the catch-up failure path, so a later live event is simply a no-op delivery
+        // rather than resurrecting the stored failure.
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")).block());
+
+        assertThat(thrown).isNull();
+    }
+
+    @Test
+    void the_same_subscription_id_can_be_used_again_after_a_catch_up_failure() {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+
+        CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
+        // Subscribe eagerly runs the release on failure, so no waitUntilStarted() call is needed here: that is exactly
+        // what this test (and the next one) proves.
+        failingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+
+        List<String> delivered = new ArrayList<>();
+        PositionOrderedReader workingReader = reader(Flux::empty, 0);
+        CatchupThenPushSubscriptionModel workingModel = new CatchupThenPushSubscriptionModel(workingReader, liveFeed, null);
+        Throwable secondSubscribeFailure = catchThrowable(() ->
+                workingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), recordInto(delivered)));
+
+        assertThat(secondSubscribeFailure).isNull();
+
+        liveFeed.accept(cloudEvent("1", "Created")).block();
+        assertThat(delivered).containsExactly("1");
+    }
+
+    @Test
+    void a_subscription_registered_after_a_failed_one_still_receives_events() {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+
+        CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
+        // No waitUntilStarted() call here either: subscribe already ran the release synchronously.
+        failingModel.subscribe("failed", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+
+        List<String> delivered = new ArrayList<>();
+        PositionOrderedReader workingReader = reader(Flux::empty, 0);
+        CatchupThenPushSubscriptionModel healthyModel = new CatchupThenPushSubscriptionModel(workingReader, liveFeed, null);
+        healthyModel.subscribe("healthy", null, StartAt.subscriptionModelDefault(), recordInto(delivered));
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")).block());
+
+        assertThat(thrown).isNull();
+        assertThat(delivered).containsExactly("1");
+    }
+
+    @Test
     void a_reader_that_does_not_write_positions_fails_fast_at_construction() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         PositionOrderedReader reader = positionlessReader();
@@ -224,6 +283,25 @@ class CatchupThenPushSubscriptionModelTest {
             @Override
             public boolean writesPosition() {
                 return false;
+            }
+        };
+    }
+
+    private static PositionOrderedReader failingReader() {
+        return new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.error(new IllegalStateException("replay boom"));
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just(0L);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
             }
         };
     }

@@ -149,10 +149,23 @@ public final class DcbExecuteOptions<E> {
         return fromPosition;
     }
 
-    // Intentionally no equals()/hashCode(): sideEffect and tagGenerator are lambda-typed fields, which are compared
-    // by identity, so a structural equals() would almost never consider two functionally-equivalent instances equal.
-    // Falling back to identity equality (the Object default) is less misleading than a partially-structural equals()
-    // (matches the stream ExecuteOptions' reasoning).
+    // sideEffect and tagGenerator are lambda-typed fields, so they are compared by identity here.
+    // Two options built with separately written but source-identical lambdas are therefore not equal.
+
+    @Override
+    public boolean equals(@Nullable Object obj) {
+        if (obj == this) return true;
+        if (obj == null || obj.getClass() != this.getClass()) return false;
+        DcbExecuteOptions<?> that = (DcbExecuteOptions<?>) obj;
+        return Objects.equals(this.sideEffect, that.sideEffect) &&
+                Objects.equals(this.tagGenerator, that.tagGenerator) &&
+                Objects.equals(this.fromPosition, that.fromPosition);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(sideEffect, tagGenerator, fromPosition);
+    }
 
     @Override
     public String toString() {

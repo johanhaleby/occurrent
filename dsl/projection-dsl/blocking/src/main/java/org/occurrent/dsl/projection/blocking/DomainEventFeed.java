@@ -151,6 +151,12 @@ public final class DomainEventFeed<E> {
     /**
      * Run the one-time catch-up of every registered projection (replay history, then go live). Call once, after all
      * projections are registered and the live feed is wired.
+     * <p>
+     * A failure here is terminal for the whole feed, so let it reach the caller and do not start the application.
+     * The projection that failed rejects every later event, and because the projections are fed in registration
+     * order, one that failed early blocks the ones behind it. Unlike a subscription model, the feed does not drop the
+     * failed projection: the application asked for it, so running on without it is worse than not running. Fix the
+     * cause and build a new feed.
      */
     public void catchUpAll() {
         for (CatchupProjectionFeed<E> feed : feeds) {

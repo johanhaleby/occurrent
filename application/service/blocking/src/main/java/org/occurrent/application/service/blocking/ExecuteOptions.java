@@ -28,7 +28,7 @@ import java.util.function.Consumer;
 /**
  * Options used when executing a command in {@link ApplicationService}.
  * <p>
- * Use this record to configure:
+ * Use this class to configure:
  * <ul>
  *     <li>a {@link StreamReadFilter} that limits which events are read before command execution</li>
  *     <li>an optional side-effect that is invoked after events have been written</li>
@@ -178,9 +178,25 @@ public final class ExecuteOptions<E> {
         return fromStreamVersion;
     }
 
-    // Intentionally no equals()/hashCode(): executeFilter and sideEffect are lambda-typed fields, which are compared
-    // by identity, so a structural equals() would almost never consider two functionally-equivalent instances equal.
-    // Falling back to identity equality (the Object default) is less misleading than a partially-structural equals().
+    // executeFilter and sideEffect are lambda-typed fields, so they are compared by identity here.
+    // Two options built with separately written but source-identical lambdas are therefore not equal.
+
+    @SuppressWarnings("rawtypes")
+    @Override
+    public boolean equals(@Nullable Object obj) {
+        if (obj == this) return true;
+        if (obj == null || obj.getClass() != this.getClass()) return false;
+        var that = (ExecuteOptions) obj;
+        return Objects.equals(this.filter, that.filter) &&
+                Objects.equals(this.executeFilter, that.executeFilter) &&
+                Objects.equals(this.sideEffect, that.sideEffect) &&
+                Objects.equals(this.fromStreamVersion, that.fromStreamVersion);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(filter, executeFilter, sideEffect, fromStreamVersion);
+    }
 
     @Override
     public String toString() {

@@ -144,6 +144,9 @@ public interface Saga<E, S extends @Nullable Object, C> {
 
     /** The outcome of one transition: the new {@code state} and the {@code effects} it produced. Mirror of {@code Decider.Decision}. */
     record Step<S extends @Nullable Object, C>(S state, List<SagaEffect<C>> effects) {
+        public Step {
+            effects = List.copyOf(effects);
+        }
     }
 
     /**

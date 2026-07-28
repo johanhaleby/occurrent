@@ -3,10 +3,12 @@ package org.occurrent.subscription.api.blocking;
 import org.jspecify.annotations.NullMarked;
 
 /**
- * Defines life-cycle methods for subscription models and subscriptions.
+ * Defines life-cycle methods for subscription models and subscriptions. Cancellation lives in
+ * {@link CancellableSubscriptions}, which this extends, because a register-only model can cancel a subscription
+ * without having anything to start, stop, or pause.
  */
 @NullMarked
-public interface SubscriptionModelLifeCycle {
+public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
 
     /**
      * Temporary stop the subscription model so that none of its subscriptions will receive any events.
@@ -73,13 +75,6 @@ public interface SubscriptionModelLifeCycle {
      * @throws IllegalArgumentException If subscription is not running
      */
     void pauseSubscription(String subscriptionId);
-
-    /**
-     * Cancel a subscription, this will remove the position from position storage (if used),
-     * and you cannot restart it from its current position again. Cancelling a subscription id that is unknown or
-     * already cancelled is a no-op.
-     */
-    void cancelSubscription(String subscriptionId);
 
     /**
      * Shutdown the subscription model and close all subscriptions (they can be resumed later if you start from a durable checkpoint).

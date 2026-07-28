@@ -115,7 +115,17 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
             }
         });
 
-        return new AlreadyStartedSubscription(subscriptionId, catchupDone);
+        // The handover was registered before the replay, so a failure would otherwise leave a handler that rethrows the
+        // failure for every later event, taking the id with it and starving the handlers behind it. Subscribe here
+        // rather than only handing the Mono back, because a caller that never calls waitUntilStarted would never run
+        // the release. catchUp returns a Sinks.One, which replays its terminal signal, so the caller still sees the
+        // error, and cache keeps the release to one run.
+        Mono<Void> releaseOnFailure = catchupDone.doOnError(error -> liveFeed.cancelSubscription(subscriptionId)).cache();
+        releaseOnFailure.subscribe(ignored -> {
+        }, error -> {
+        });
+
+        return new AlreadyStartedSubscription(subscriptionId, releaseOnFailure);
     }
 
     private Mono<Boolean> alreadyCaughtUp(String subscriptionId) {

@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * The persisted record of one saga instance: its user state {@code S}, its lifecycle status, its pending timers, and the
  * bookkeeping the executor needs to be safe under at-least-once delivery. The envelope is the single source of truth for
@@ -60,6 +62,8 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable String currentStep) implements SagaInstance {
 
     public SagaEnvelope {
+        requireNonNull(sagaId, "sagaId cannot be null");
+        requireNonNull(status, "status cannot be null");
         timers = List.copyOf(timers);
         streamWatermarks = Map.copyOf(streamWatermarks);
         if (state != null) {
@@ -72,6 +76,9 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
 
     /** A pending timer: its name and when it should fire (epoch millis). */
     public record TimerEntry(String name, long firesAtEpochMilli) {
+        public TimerEntry {
+            requireNonNull(name, "name cannot be null");
+        }
     }
 
     /** Whether the instance has completed. */

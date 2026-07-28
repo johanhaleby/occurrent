@@ -122,22 +122,29 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // lost in the gap between the replay head and going live.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
 
-        handover.catchUp(new BlockingHandover.Source<>() {
-            @Override
-            public boolean isAlreadyCaughtUp() {
-                return CatchupThenPushSubscriptionModel.this.isAlreadyCaughtUp(subscriptionId);
-            }
+        try {
+            handover.catchUp(new BlockingHandover.Source<>() {
+                @Override
+                public boolean isAlreadyCaughtUp() {
+                    return CatchupThenPushSubscriptionModel.this.isAlreadyCaughtUp(subscriptionId);
+                }
 
-            @Override
-            public Stream<CloudEvent> replay() {
-                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
-            }
+                @Override
+                public Stream<CloudEvent> replay() {
+                    return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
+                }
 
-            @Override
-            public void markCaughtUp() {
-                CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
-            }
-        });
+                @Override
+                public void markCaughtUp() {
+                    CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
+                }
+            });
+        } catch (RuntimeException e) {
+            // The handover was registered before the replay, so a failure here would otherwise leave a handler that
+            // rethrows the failure for every later event, taking the id with it and starving the handlers behind it.
+            liveFeed.cancelSubscription(subscriptionId);
+            throw e;
+        }
         return new AlreadyStartedSubscription(subscriptionId);
     }
 

@@ -26,6 +26,7 @@ import org.occurrent.cloudevents.EventMetadata;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -128,6 +129,48 @@ class SagaTest {
                             SagaEffect.issue(new ReservePayment("order-1", 100)),
                             SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)))
             );
+        }
+    }
+
+    @Nested
+    class StepConstruction {
+
+        @Test
+        void throws_NullPointerException_when_effects_is_null() {
+            assertThatThrownBy(() -> new Saga.Step<OrderState, OrderCommand>(new AwaitingPayment("order-1"), null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void throws_NullPointerException_when_effects_contains_a_null_element() {
+            List<SagaEffect<OrderCommand>> effects = new ArrayList<>();
+            effects.add(null);
+
+            assertThatThrownBy(() -> new Saga.Step<>(new AwaitingPayment("order-1"), effects))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void the_stored_effects_list_is_unmodifiable() {
+            // Hand in a mutable list, otherwise this passes whether or not the constructor copies.
+            List<SagaEffect<OrderCommand>> effects = new ArrayList<>();
+            effects.add(SagaEffect.cancelTimeout(PAYMENT_TIMER));
+
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), effects);
+
+            assertThatThrownBy(() -> step.effects().add(SagaEffect.cancelTimeout(PAYMENT_TIMER)))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void mutating_the_caller_list_afterwards_does_not_change_the_stored_effects() {
+            List<SagaEffect<OrderCommand>> effects = new ArrayList<>();
+            effects.add(SagaEffect.cancelTimeout(PAYMENT_TIMER));
+
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), effects);
+            effects.add(SagaEffect.issue(new ReservePayment("order-1", 100)));
+
+            assertThat(step.effects()).containsExactly(SagaEffect.cancelTimeout(PAYMENT_TIMER));
         }
     }
 
