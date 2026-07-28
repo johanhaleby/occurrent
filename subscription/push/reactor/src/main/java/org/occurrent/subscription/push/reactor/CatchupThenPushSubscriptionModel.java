@@ -21,6 +21,8 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -62,6 +64,8 @@ import java.util.function.Function;
  */
 @NullMarked
 public class CatchupThenPushSubscriptionModel implements Subscribable {
+
+    private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
 
     private final PositionOrderedReader reader;
     private final PushSubscriptionModel liveFeed;
@@ -120,7 +124,20 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // rather than only handing the Mono back, because a caller that never calls waitUntilStarted would never run
         // the release. catchUp returns a Sinks.One, which replays its terminal signal, so the caller still sees the
         // error, and cache keeps the release to one run.
-        Mono<Void> releaseOnFailure = catchupDone.doOnError(error -> liveFeed.cancelSubscription(subscriptionId)).cache();
+        //
+        // The log is not decoration. Unlike the blocking model, which throws the failure out of subscribe, here a
+        // caller that discards waitUntilStarted would otherwise see nothing at all: no replay, no live events, and a
+        // Subscription handle that looks healthy.
+        //
+        // The release cancels by id, so it removes whatever registration holds this id when the replay fails, not
+        // specifically the one registered above. An application that cancels and re-subscribes the same id while this
+        // replay is still running would lose the new registration. Reaching that needs the id reused mid-catch-up on
+        // this same feed, and cancelling by id is the only handle the feed offers.
+        Mono<Void> releaseOnFailure = catchupDone.doOnError(error -> {
+            log.error("Catch-up failed for subscription {}, releasing its registration on the live feed. It received no "
+                    + "replay and will receive no live events until it is subscribed again.", subscriptionId, error);
+            liveFeed.cancelSubscription(subscriptionId);
+        }).cache();
         releaseOnFailure.subscribe(ignored -> {
         }, error -> {
         });

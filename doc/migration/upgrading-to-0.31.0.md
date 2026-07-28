@@ -59,8 +59,8 @@ covered for anyone who tracked a snapshot build, and are harmless if you are com
 ## 2. What changed
 
 `ResumeBehavior` (`SAME_AS_START_AT`, `DEFAULT`) and `StartupMode` (`DEFAULT`, `WAIT_UNTIL_STARTED`, `BACKGROUND`)
-used to be declared separately, and identically, inside each of the four annotations. They are now one
-`ResumeBehavior` and one `StartupMode`, both in `org.occurrent.annotation`, shared by all four. The constants, their
+used to be declared separately, and identically, inside each of the three annotations. They are now one
+`ResumeBehavior` and one `StartupMode`, both in `org.occurrent.annotation`, shared by all three. The constants, their
 names, and what they mean are unchanged, only the enclosing type moved, so this is otherwise a drop-in upgrade with
 no behavioral change. Rationale is in [ADR 60](../architecture/decisions/0060-unify-resumebehavior-and-startupmode-enums.md).
 

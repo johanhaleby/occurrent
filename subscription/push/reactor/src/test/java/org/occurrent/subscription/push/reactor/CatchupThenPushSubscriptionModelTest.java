@@ -33,8 +33,10 @@ import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +46,7 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupThenPushSubscriptionModelTest {
@@ -234,6 +237,26 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
+    void a_catch_up_that_fails_asynchronously_after_subscribe_returned_still_releases_the_registration() {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+
+        CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(asynchronouslyFailingReader(), liveFeed, null);
+        // Deliberately never touched, so only the eager release inside subscribe can free the id.
+        failingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+
+        List<String> delivered = new ArrayList<>();
+        CatchupThenPushSubscriptionModel workingModel = new CatchupThenPushSubscriptionModel(reader(Flux::empty, 0), liveFeed, null);
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            Throwable resubscribe = catchThrowable(() ->
+                    workingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), recordInto(delivered)));
+            assertThat(resubscribe).isNull();
+        });
+
+        liveFeed.accept(cloudEvent("1", "Created")).block();
+        assertThat(delivered).containsExactly("1");
+    }
+
+    @Test
     void a_reader_that_does_not_write_positions_fails_fast_at_construction() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         PositionOrderedReader reader = positionlessReader();
@@ -283,6 +306,31 @@ class CatchupThenPushSubscriptionModelTest {
             @Override
             public boolean writesPosition() {
                 return false;
+            }
+        };
+    }
+
+    private static PositionOrderedReader asynchronouslyFailingReader() {
+        return new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                // Fails on another thread, after subscribe has already returned, which is the case the eager release
+                // exists for. The synchronous failingReader cannot distinguish an eager release from an accidental
+                // in-line one.
+                return Flux.error(new IllegalStateException("replay boom"))
+                        .delaySubscription(Duration.ofMillis(50))
+                        .subscribeOn(Schedulers.parallel())
+                        .cast(CloudEvent.class);
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just(0L);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
             }
         };
     }

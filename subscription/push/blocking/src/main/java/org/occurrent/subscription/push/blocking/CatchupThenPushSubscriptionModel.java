@@ -139,9 +139,13 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
                     CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
                 }
             });
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
             // The handover was registered before the replay, so a failure here would otherwise leave a handler that
             // rethrows the failure for every later event, taking the id with it and starving the handlers behind it.
+            // Error is caught alongside RuntimeException and rethrown unchanged, because the handover only records a
+            // RuntimeException as its stored failure. So something like a NoClassDefFoundError from a lazily loaded
+            // class inside the fold would otherwise leave the registration in place AND leave the handover buffering
+            // every live event until it overflows, surfacing far from the cause.
             liveFeed.cancelSubscription(subscriptionId);
             throw e;
         }
