@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright 2020 Johan Haleby
+  ~ Copyright 2026 Johan Haleby
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -15,71 +15,47 @@
   ~ limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>eventstore</artifactId>
+        <artifactId>tck</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>occurrent-eventstore-inmemory</artifactId>
+    <artifactId>occurrent-tck-eventstore-reactor</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
+        <!-- The behavioral suites are the blocking ones, reached through the bridge in this module -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-api-blocking</artifactId>
+            <artifactId>occurrent-tck-eventstore-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-api-dcb</artifactId>
+            <artifactId>occurrent-eventstore-api-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-common-inmemory-filter-matching</artifactId>
+            <artifactId>occurrent-eventstore-api-dcb-reactor</artifactId>
             <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.cloudevents</groupId>
-            <artifactId>cloudevents-core</artifactId>
         </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+
         <!-- Test -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <scope>test</scope>
-        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>org.assertj</groupId>
-            <artifactId>assertj-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-tck-eventstore-blocking</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>test-support</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
-
 </project>

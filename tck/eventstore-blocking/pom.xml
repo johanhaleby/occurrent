@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright 2020 Johan Haleby
+  ~ Copyright 2026 Johan Haleby
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -15,22 +15,33 @@
   ~ limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>eventstore</artifactId>
+        <artifactId>tck</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>occurrent-eventstore-inmemory</artifactId>
+    <artifactId>occurrent-tck-eventstore-blocking</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-tck-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-api-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-api-common</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -40,46 +51,35 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-common-inmemory-filter-matching</artifactId>
+            <artifactId>occurrent-eventstore-capability</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Deliberately compile scope, not test: the suites live in src/main and their public surface is JUnit
+             annotations, so a consumer cannot run them without these on its compile path. See ADR 77. -->
         <dependency>
-            <groupId>io.cloudevents</groupId>
-            <artifactId>cloudevents-core</artifactId>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
         </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
-        <!-- Test -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <scope>test</scope>
-        </dependency>
+
+        <!-- Test: the suites are run against deliberately broken stores to prove they can fail -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.assertj</groupId>
-            <artifactId>assertj-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-tck-eventstore-blocking</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>test-support</artifactId>
-            <version>${project.version}</version>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-testkit</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
-
 </project>

@@ -116,6 +116,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-tck-eventstore-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
