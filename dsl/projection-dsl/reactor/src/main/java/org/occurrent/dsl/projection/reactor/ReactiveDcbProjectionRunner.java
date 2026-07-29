@@ -113,10 +113,14 @@ public final class ReactiveDcbProjectionRunner<E> {
      * Subscribes with the given id and materializes {@code dcbProjection} into the blocking {@code repository} (scheduled
      * on {@code boundedElastic}), skipping events whose id resolves to {@code null}.
      *
-     * <p>A DCB projection whose {@code projection().id()} is {@code null} is single-instance: it has one
-     * slot, and that slot is stored under {@code subscriptionId} rather than under a key derived from the
-     * events, so read it back with the same id. One that resolves an id keys each instance by that id
-     * instead.</p>
+     * <p>A DCB projection with no id function is single-instance: it has one slot, and that slot is
+     * stored under {@code subscriptionId} rather than under a key derived from the events, so read it back
+     * with the same id. One that has an id function keys each instance by whatever that function returns
+     * for an event.</p>
+     *
+     * <p>Those are two different nulls, which is worth keeping apart. No id function at all means
+     * single-instance. An id function that returns {@code null} for one event means that event is skipped,
+     * and the projection is still keyed.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, dcbProjection, repository, null);
@@ -127,10 +131,14 @@ public final class ReactiveDcbProjectionRunner<E> {
      * and materializes {@code dcbProjection} into the blocking {@code repository} (scheduled on {@code boundedElastic}),
      * skipping events whose id resolves to {@code null}.
      *
-     * <p>A DCB projection whose {@code projection().id()} is {@code null} is single-instance: it has one
-     * slot, and that slot is stored under {@code subscriptionId} rather than under a key derived from the
-     * events, so read it back with the same id. One that resolves an id keys each instance by that id
-     * instead.</p>
+     * <p>A DCB projection with no id function is single-instance: it has one slot, and that slot is
+     * stored under {@code subscriptionId} rather than under a key derived from the events, so read it back
+     * with the same id. One that has an id function keys each instance by whatever that function returns
+     * for an event.</p>
+     *
+     * <p>Those are two different nulls, which is worth keeping apart. No id function at all means
+     * single-instance. An id function that returns {@code null} for one event means that event is skipped,
+     * and the projection is still keyed.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository, @Nullable DcbStartAt startAt) {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
