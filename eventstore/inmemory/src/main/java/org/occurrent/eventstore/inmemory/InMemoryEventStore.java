@@ -189,7 +189,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                     assignInsertionOrder(newEvents);
                     return new CopyOnWriteArrayList<>(eventList);
                 } else {
-                    throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
+                    throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition);
                 }
             });
         }
@@ -367,7 +367,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                         .noneMatch(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, condition.criteria()));
                 long currentPosition = nextPosition.get() - 1;
                 if (!fulfilled) {
-                    throw new DcbAppendConditionNotFulfilledException(condition, currentPosition, "Append condition was not fulfilled.");
+                    throw new DcbAppendConditionNotFulfilledException(condition, currentPosition);
                 }
             }
 
