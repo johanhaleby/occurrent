@@ -178,7 +178,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             long currentStreamVersion = currentStreamVersion(streamId);
 
             if (!isFulfilled(currentStreamVersion, writeCondition)) {
-                throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
+                throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition);
             }
 
             List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, events.stream(), currentStreamVersion);
@@ -513,7 +513,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             conflict = mongoTemplate.exists(toDcbMongoQuery(condition.criteria(), 0, Long.MAX_VALUE), eventStoreCollectionName);
         }
         if (conflict) {
-            throw new DcbAppendConditionNotFulfilledException(condition, currentPosition(), "Append condition was not fulfilled.");
+            throw new DcbAppendConditionNotFulfilledException(condition, currentPosition());
         }
         // Increment a marker per key for the union of the query's keys and the appended events' keys. The increment
         // forces a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs

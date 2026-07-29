@@ -34,6 +34,19 @@ public class WriteConditionNotFulfilledException extends RuntimeException {
     public final long eventStreamVersion;
     public final WriteCondition writeCondition;
 
+    /**
+     * Creates an exception with the standard message describing the write condition that was not fulfilled
+     * and the version the event stream was actually at. This is the message every Occurrent event store
+     * produces, so prefer this constructor over supplying your own message.
+     *
+     * @param eventStreamId      The id of the event stream that was written to
+     * @param eventStreamVersion The version the event stream was at when the write condition was evaluated
+     * @param writeCondition     The write condition that was not fulfilled
+     */
+    public WriteConditionNotFulfilledException(String eventStreamId, long eventStreamVersion, WriteCondition writeCondition) {
+        this(eventStreamId, eventStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, eventStreamVersion));
+    }
+
     public WriteConditionNotFulfilledException(String eventStreamId, long eventStreamVersion, WriteCondition writeCondition, String message) {
         super(message);
         this.writeCondition = writeCondition;

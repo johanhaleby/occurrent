@@ -32,6 +32,17 @@ public class DcbAppendConditionNotFulfilledException extends RuntimeException {
     private final long currentPosition;
 
     /**
+     * Creates an exception with the standard message for a failed DCB append condition. This is the message
+     * every Occurrent event store produces, so prefer this constructor over supplying your own message.
+     *
+     * @param appendCondition The DCB append condition that was not fulfilled
+     * @param currentPosition The event store position at the time the append failed
+     */
+    public DcbAppendConditionNotFulfilledException(DcbAppendCondition appendCondition, long currentPosition) {
+        this(appendCondition, currentPosition, "Append condition was not fulfilled.");
+    }
+
+    /**
      * Creates an exception for a failed DCB append condition.
      */
     public DcbAppendConditionNotFulfilledException(DcbAppendCondition appendCondition, long currentPosition, String message) {

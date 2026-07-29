@@ -52,8 +52,7 @@ public class MongoExceptionTranslator {
             // This error only happens when two or more clients write to the same stream at the same time after
             // reading the same previous version, so one of the writes won and the version increased by at least one.
             long eventStreamVersion = ctx.eventStreamVersion + 1;
-            runtimeException = new WriteConditionNotFulfilledException(ctx.eventStreamId, eventStreamVersion, ctx.writeCondition,
-                    String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), ctx.writeCondition.toString(), eventStreamVersion));
+            runtimeException = new WriteConditionNotFulfilledException(ctx.eventStreamId, eventStreamVersion, ctx.writeCondition);
         } else {
             runtimeException = e;
         }
