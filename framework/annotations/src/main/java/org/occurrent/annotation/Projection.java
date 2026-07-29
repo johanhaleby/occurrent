@@ -80,6 +80,10 @@ public @interface Projection {
     /**
      * The unique identifier of the projection (required, no default). It is the durable checkpoint key and the
      * namespace for the zero-config store, and must be unique across all subscriptions, projections, and snapshots.
+     * <p>
+     * For a single-instance projection it is also the key the one view state is stored under, since such a projection
+     * has no id function to derive a key from. So a read model declared {@code @Projection(id = "is-username-claimed")}
+     * is found under {@code "is-username-claimed"}, not under anything taken from the events.
      */
     String id();
 
