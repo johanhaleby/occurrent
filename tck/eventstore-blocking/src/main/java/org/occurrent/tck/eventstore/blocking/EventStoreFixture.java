@@ -97,7 +97,8 @@ public interface EventStoreFixture {
      * are unaffected, which is why only exact matching is declared here.
      * <p>
      * It is a declaration rather than a loosened assertion so that both answers stay pinned and the stores that get it
-     * right cannot regress. Delete this method, and its overrides, once the divergence is resolved.
+     * right cannot regress. Reported in <a href="https://github.com/johanhaleby/occurrent/issues/396">#396</a>.
+     * Delete this method, and its overrides, once the divergence is resolved.
      */
     default boolean matchesExactTimeFilters() {
         return true;
@@ -112,8 +113,9 @@ public interface EventStoreFixture {
      * {@code false}: it removes the events, so {@code count()} drops to zero, but the stream keeps reporting that it
      * exists.
      * <p>
-     * It is a declaration rather than a loosened assertion so that both answers stay pinned. Delete this method, and
-     * its overrides, once the divergence is resolved.
+     * It is a declaration rather than a loosened assertion so that both answers stay pinned. Reported in
+     * <a href="https://github.com/johanhaleby/occurrent/issues/396">#396</a>. Delete this method, and its overrides,
+     * once the divergence is resolved.
      */
     default boolean deleteByFilterClearsStreamExistence() {
         return true;
