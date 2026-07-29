@@ -562,6 +562,23 @@
                 <artifactId>occurrent-hederlig</artifactId>
                 <version>${project.version}</version>
             </dependency>
+
+            <!-- TCK: abstract conformance suites an implementation plugs into with a fixture, see ADR 77 -->
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-tck-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-tck-eventstore-blocking</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-tck-eventstore-reactor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 </project>
