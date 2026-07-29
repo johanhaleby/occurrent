@@ -155,9 +155,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
          * nothing is not an empty one: leaving a step whose timeout was armed contributes a
          * {@link SagaEffect.CancelTimeout} that says nothing about what the reaction decided.
          * <p>
-         * There is no matching accessor for the timer effects, because they need none. A timer effect is already a value
-         * you can assert on {@link #effects()} directly, as {@code SagaEffect.cancelTimeout("step:awaiting-players")},
-         * whereas a command arrives wrapped in a {@link SagaEffect.IssueCommand} and has to be unwrapped first.
+         * See {@link #timerEffects()} for the other half of the split.
          * <p>
          * This is the same reading an executor performs, so an assertion here is an assertion about what would actually
          * be dispatched. Computed on each call, and unmodifiable. Kotlin callers write {@code step.issuedCommands()},
@@ -174,6 +172,33 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 }
             }
             return List.copyOf(commands);
+        }
+
+        /**
+         * The timer effects this transition produced, in the order {@link #effects()} holds them, and empty when it
+         * produced none. The complement of {@link #issuedCommands()}: together the two partition {@link #effects()}.
+         * <p>
+         * Unlike a command, a timer effect needs no unwrapping, so you can already compare one against
+         * {@link #effects()}. What this adds is isolation. A reaction that both issues a command and arms a timer forces
+         * {@code contains(...)} on the mixed list, which cannot show that no <em>other</em> timer was touched, whereas
+         * {@code assertThat(step.timerEffects()).containsExactly(SagaEffect.startTimeout("payment", ofMinutes(30)))}
+         * says exactly one timer effect and says nothing about commands.
+         * <p>
+         * The three variants stay as they are rather than becoming three accessors, because they carry different
+         * payloads (a {@link java.time.Duration}, an {@link java.time.Instant}, or neither) and pattern matching reads
+         * better than a method per variant. Computed on each call, and unmodifiable.
+         */
+        public List<SagaEffect<C>> timerEffects() {
+            List<SagaEffect<C>> timers = new ArrayList<>(effects.size());
+            for (SagaEffect<C> effect : effects) {
+                // Anything that is not a command is a timer effect. Stated as the negation on purpose: a new timer
+                // variant is then included here without an edit, and a new non-timer variant would make
+                // SagaExecutionSupport.applyEffects stop compiling, which is where it gets caught.
+                if (!(effect instanceof SagaEffect.IssueCommand<C>)) {
+                    timers.add(effect);
+                }
+            }
+            return List.copyOf(timers);
         }
     }
 
