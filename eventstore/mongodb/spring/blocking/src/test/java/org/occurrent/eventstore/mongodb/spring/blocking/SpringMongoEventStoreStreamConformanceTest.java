@@ -17,31 +17,16 @@
 package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.ConnectionString;
-import com.mongodb.client.MongoClient;
-import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.eventstore.api.blocking.EventStoreOperations;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
-import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.blocking.StreamEventStoreConformance;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
-import org.springframework.data.mongodb.MongoTransactionManager;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
-
-import static java.util.Objects.requireNonNull;
 
 @Testcontainers
 class SpringMongoEventStoreStreamConformanceTest extends StreamEventStoreConformance {
@@ -66,64 +51,9 @@ class SpringMongoEventStoreStreamConformanceTest extends StreamEventStoreConform
 
     @Override
     protected EventStoreFixture createFixture() {
-        return new SpringMongoEventStoreFixture();
-    }
-
-    private static class SpringMongoEventStoreFixture implements EventStoreFixture {
-
-        private final MongoClient mongoClient;
-        private final SpringMongoEventStore eventStore;
-
-        SpringMongoEventStoreFixture() {
-            // The database here is "test" and the collection "events". Appending ".events" to the replica-set URL does
-            // not change the database, because MongoDB forbids a dot in a database name, so only getCollection() sees it.
-            ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-            this.mongoClient = MongoClients.create(connectionString);
-            String database = requireNonNull(connectionString.getDatabase());
-            MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, database);
-            MongoTransactionManager transactionManager =
-                    new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, database));
-            EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
-                    .eventStoreCollectionName(connectionString.getCollection())
-                    .transactionConfig(transactionManager)
-                    .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
-                    .build();
-            this.eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-        }
-
-        @Override
-        public Set<EventStoreCapability> capabilities() {
-            return Set.of(EventStoreCapability.STREAM);
-        }
-
-        @Override
-        public EventStore eventStore() {
-            return eventStore;
-        }
-
-        @Override
-        public EventStoreQueries queries() {
-            return eventStore;
-        }
-
-        @Override
-        public EventStoreOperations operations() {
-            return eventStore;
-        }
-
-        @Override
-        public ReadEventStreamWithFilter filteredReader() {
-            return eventStore;
-        }
-
-        @Override
-        public PositionOrderedReader positionOrderedReader() {
-            return eventStore;
-        }
-
-        @Override
-        public void close() {
-            mongoClient.close();
-        }
+        // The database here is "test" and the collection "events". Appending ".events" to the replica-set URL does
+        // not change the database, because MongoDB forbids a dot in a database name, so only getCollection() sees it.
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        return new SpringMongoEventStoreConformanceFixture(connectionString);
     }
 }

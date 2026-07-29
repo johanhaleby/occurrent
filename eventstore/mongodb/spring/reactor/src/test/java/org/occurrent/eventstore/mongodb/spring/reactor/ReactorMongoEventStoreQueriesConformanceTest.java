@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-package org.occurrent.eventstore.mongodb.nativedriver;
+package org.occurrent.eventstore.mongodb.spring.reactor;
 
 import com.mongodb.ConnectionString;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.eventstore.blocking.StreamEventStoreConformance;
+import org.occurrent.tck.eventstore.blocking.EventStoreQueriesConformance;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -29,7 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Testcontainers
-class MongoEventStoreStreamConformanceTest extends StreamEventStoreConformance {
+class ReactorMongoEventStoreQueriesConformanceTest extends EventStoreQueriesConformance {
 
     @Container
     private static final MongoDBContainer mongoDBContainer;
@@ -39,7 +39,8 @@ class MongoEventStoreStreamConformanceTest extends StreamEventStoreConformance {
                 .withReplicaSet();
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
-        mongoDBContainer.withReuse(true).setPortBindings(ports);
+        mongoDBContainer.withReuse(true);
+        mongoDBContainer.setPortBindings(ports);
     }
 
     /**
@@ -47,10 +48,10 @@ class MongoEventStoreStreamConformanceTest extends StreamEventStoreConformance {
      * it. An extension callback runs before the {@code @BeforeEach} that creates the fixture, so the order is right.
      */
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
 
     @Override
     protected EventStoreFixture createFixture() {
-        return new MongoEventStoreConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+        return new ReactorMongoEventStoreConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
     }
 }

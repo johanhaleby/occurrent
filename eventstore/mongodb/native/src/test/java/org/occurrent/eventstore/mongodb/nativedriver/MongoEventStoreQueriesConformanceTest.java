@@ -19,7 +19,7 @@ package org.occurrent.eventstore.mongodb.nativedriver;
 import com.mongodb.ConnectionString;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.eventstore.blocking.StreamEventStoreConformance;
+import org.occurrent.tck.eventstore.blocking.EventStoreQueriesConformance;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -29,7 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Testcontainers
-class MongoEventStoreStreamConformanceTest extends StreamEventStoreConformance {
+class MongoEventStoreQueriesConformanceTest extends EventStoreQueriesConformance {
 
     @Container
     private static final MongoDBContainer mongoDBContainer;

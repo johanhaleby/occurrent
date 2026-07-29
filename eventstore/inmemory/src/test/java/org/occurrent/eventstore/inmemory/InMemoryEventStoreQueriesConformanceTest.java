@@ -17,9 +17,9 @@
 package org.occurrent.eventstore.inmemory;
 
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.eventstore.blocking.StreamEventStoreConformance;
+import org.occurrent.tck.eventstore.blocking.EventStoreQueriesConformance;
 
-class InMemoryEventStoreStreamConformanceTest extends StreamEventStoreConformance {
+class InMemoryEventStoreQueriesConformanceTest extends EventStoreQueriesConformance {
 
     @Override
     protected EventStoreFixture createFixture() {

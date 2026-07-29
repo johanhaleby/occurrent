@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-package org.occurrent.eventstore.mongodb.nativedriver;
+package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.ConnectionString;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.eventstore.blocking.StreamEventStoreConformance;
+import org.occurrent.tck.eventstore.blocking.EventStoreQueriesConformance;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -29,7 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Testcontainers
-class MongoEventStoreStreamConformanceTest extends StreamEventStoreConformance {
+class SpringMongoEventStoreQueriesConformanceTest extends EventStoreQueriesConformance {
 
     @Container
     private static final MongoDBContainer mongoDBContainer;
@@ -47,10 +47,13 @@ class MongoEventStoreStreamConformanceTest extends StreamEventStoreConformance {
      * it. An extension callback runs before the {@code @BeforeEach} that creates the fixture, so the order is right.
      */
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
 
     @Override
     protected EventStoreFixture createFixture() {
-        return new MongoEventStoreConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+        // The database here is "test" and the collection "events". Appending ".events" to the replica-set URL does
+        // not change the database, because MongoDB forbids a dot in a database name, so only getCollection() sees it.
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        return new SpringMongoEventStoreConformanceFixture(connectionString);
     }
 }

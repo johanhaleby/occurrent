@@ -69,6 +69,59 @@ public interface EventStoreFixture {
     }
 
     /**
+     * Whether this store accepts a natural sort step composed with a field sort, as in
+     * {@code SortBy.time(DESCENDING).thenNatural(ASCENDING)}. Defaults to {@code false}, which is what three of the
+     * four stores shipping with Occurrent do.
+     * <p>
+     * This is a variation the contract already documents on {@link org.occurrent.eventstore.api.SortBy#natural}, not
+     * something the TCK discovered: the in-memory store treats natural order as an insertion-order tiebreaker for the
+     * preceding fields, while the MongoDB stores reject the compound sort with an {@link IllegalArgumentException}
+     * because MongoDB cannot express a natural sort combined with other keys.
+     * <p>
+     * The query suite does not skip either way. It asserts the tiebreaker ordering when this is {@code true} and the
+     * rejection when it is {@code false}, so a store that quietly drops the natural step instead of doing one of those
+     * two things fails.
+     */
+    default boolean composesNaturalSortWithFieldSorts() {
+        return false;
+    }
+
+    /**
+     * Whether {@code Filter.time(anInstant)} matches an event written at exactly that instant. Defaults to
+     * {@code true}, because that is what the filter plainly means.
+     * <p>
+     * <strong>This is an unresolved divergence, not a blessed variation.</strong> The MongoDB stores answer
+     * {@code false}: with {@code RFC_3339_STRING} the filter's instant is rendered by Occurrent's RFC 3339 formatter,
+     * which always writes seconds, while the stored CloudEvent time omits them when they are zero, so
+     * {@code 2026-07-28T12:00:00Z} is compared against a stored {@code 2026-07-28T12:00Z} and misses. Range conditions
+     * are unaffected, which is why only exact matching is declared here.
+     * <p>
+     * It is a declaration rather than a loosened assertion so that both answers stay pinned and the stores that get it
+     * right cannot regress. Reported in <a href="https://github.com/johanhaleby/occurrent/issues/396">#396</a>.
+     * Delete this method, and its overrides, once the divergence is resolved.
+     */
+    default boolean matchesExactTimeFilters() {
+        return true;
+    }
+
+    /**
+     * Whether deleting every event in a stream through {@code delete(Filter)} also makes {@code exists(streamId)}
+     * report {@code false}. Defaults to {@code true}, which is what the three MongoDB stores do and what
+     * {@code deleteEventStream} does everywhere.
+     * <p>
+     * <strong>This is an unresolved divergence, not a blessed variation.</strong> The in-memory store answers
+     * {@code false}: it removes the events, so {@code count()} drops to zero, but the stream keeps reporting that it
+     * exists.
+     * <p>
+     * It is a declaration rather than a loosened assertion so that both answers stay pinned. Reported in
+     * <a href="https://github.com/johanhaleby/occurrent/issues/396">#396</a>. Delete this method, and its overrides,
+     * once the divergence is resolved.
+     */
+    default boolean deleteByFilterClearsStreamExistence() {
+        return true;
+    }
+
+    /**
      * The stream-capability store under test. Required when {@link EventStoreCapability#STREAM} is declared.
      */
     default EventStore eventStore() {
