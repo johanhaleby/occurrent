@@ -175,18 +175,16 @@ public interface Saga<E, S extends @Nullable Object, C> {
         }
 
         /**
-         * The timer effects this transition produced, in the order {@link #effects()} holds them, and empty when it
-         * produced none. The complement of {@link #issuedCommands()}: together the two partition {@link #effects()}.
+         * The timers this transition started or cancelled, in the order {@link #effects()} holds them, and empty when it
+         * touched none. The timer half of {@link #effects()}, as {@link #issuedCommands()} is the command half.
          * <p>
-         * Unlike a command, a timer effect needs no unwrapping, so you can already compare one against
-         * {@link #effects()}. What this adds is isolation. A reaction that both issues a command and arms a timer forces
-         * {@code contains(...)} on the mixed list, which cannot show that no <em>other</em> timer was touched, whereas
+         * Use it when a reaction both issues a command and touches a timer, so you can check the timers on their own:
          * {@code assertThat(step.timerEffects()).containsExactly(SagaEffect.startTimeout("payment", ofMinutes(30)))}
-         * says exactly one timer effect and says nothing about commands.
+         * checks the timers and ignores the commands.
          * <p>
-         * The three variants stay as they are rather than becoming three accessors, because they carry different
-         * payloads (a {@link java.time.Duration}, an {@link java.time.Instant}, or neither) and pattern matching reads
-         * better than a method per variant. Computed on each call, and unmodifiable.
+         * Starting a timer, starting one at a given time, and cancelling one all arrive here together, because they
+         * carry different values and it reads better to match on them than to have three methods. Computed on each
+         * call, and unmodifiable.
          */
         public List<SagaEffect<C>> timerEffects() {
             List<SagaEffect<C>> timers = new ArrayList<>(effects.size());
