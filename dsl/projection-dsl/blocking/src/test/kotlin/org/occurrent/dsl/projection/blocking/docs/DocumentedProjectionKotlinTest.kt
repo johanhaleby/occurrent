@@ -18,8 +18,6 @@ package org.occurrent.dsl.projection.blocking.docs
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.assertj.core.api.Assertions.assertThat
-import org.awaitility.kotlin.await
-import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -127,7 +125,8 @@ class DocumentedProjectionKotlinTest {
             )
 
             // Then
-            await untilAsserted { assertThat(store["johan"]).isEqualTo("Johan Haleby") }
+            assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+            assertThat(store["johan"]).isEqualTo("Johan Haleby")
         }
 
         private fun write(streamId: String, vararg events: DomainEvent) {
@@ -203,7 +202,8 @@ class DocumentedProjectionKotlinTest {
             // A second instance, so the pull side has to scope to one of them. With a single instance the scoping is a
             // no-op and this test cannot tell a correctly scoped fold from one that folds everything.
             write("eve", NameDefined(UUID.randomUUID().toString(), Date(), "eve", "Eve"))
-            await untilAsserted { assertThat(store["johan"]).isEqualTo("Johan Haleby") }
+            assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+            assertThat(store["johan"]).isEqualTo("Johan Haleby")
 
             val queries = DomainEventQueries(eventStore, converter)
             val pulled = queries.project(currentNameProjection(), "johan")

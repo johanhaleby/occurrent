@@ -29,6 +29,7 @@ import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -49,6 +50,9 @@ public class InMemorySubscription implements Subscription, Runnable {
     private volatile boolean shutdown;
 
     private final CountDownLatch started = new CountDownLatch(1);
+
+    /** Events queued but not yet handled, including the one currently in the handler. */
+    private final AtomicInteger outstanding = new AtomicInteger();
 
     InMemorySubscription(String id, BlockingQueue<CloudEvent> queue, Consumer<CloudEvent> consumer, Predicate<CloudEvent> matcher, RetryStrategy retryStrategy) {
         this.id = id;
@@ -99,7 +103,21 @@ public class InMemorySubscription implements Subscription, Runnable {
     }
 
     void eventAvailable(CloudEvent cloudEvent) {
-        queue.offer(cloudEvent);
+        // Counted before the event is visible to the consumer thread, otherwise it could be polled and handled before
+        // the count went up, and the count would drop below zero.
+        outstanding.incrementAndGet();
+        if (!queue.offer(cloudEvent)) {
+            outstanding.decrementAndGet();
+        }
+    }
+
+    /**
+     * Whether this subscription has nothing left to do. Counting outstanding events rather than reading the queue is
+     * what makes this exact: {@link #run()} takes an event off the queue and only then calls the handler, so an event
+     * being handled right now is in neither the queue nor any flag set afterwards.
+     */
+    boolean isIdle() {
+        return outstanding.get() == 0;
     }
 
     void shutdown() {
@@ -122,7 +140,13 @@ public class InMemorySubscription implements Subscription, Runnable {
             }
 
             if (cloudEvent != null) {
-                executeWithRetry(consumer, __ -> !shutdown, retryStrategy).accept(cloudEvent);
+                try {
+                    executeWithRetry(consumer, __ -> !shutdown, retryStrategy).accept(cloudEvent);
+                } finally {
+                    // In a finally so a handler that exhausts its retries and throws cannot leave the count stuck,
+                    // which would hang waitUntilAllEventsProcessed forever.
+                    outstanding.decrementAndGet();
+                }
             }
         }
     }

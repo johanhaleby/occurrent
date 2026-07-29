@@ -21,6 +21,8 @@ import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.DurationToTimeoutConverter;
+import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -29,9 +31,12 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.StringJoiner;
 import java.util.concurrent.*;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -149,6 +154,59 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Li
                         .forEach(subscription::eventAvailable);
             }
         });
+    }
+
+    /**
+     * Block until every subscription has handled the events fed to it so far, so a test can write events and then
+     * assert on the read model without polling the assertion.
+     * <p>
+     * A subscription is done when its queue is empty and it is not inside a handler. Pausing does not exclude a
+     * subscription from the wait: pausing only stops {@code accept(...)} from queueing anything new, and the
+     * subscription's own thread keeps draining whatever was already queued, so a backlog from before the pause still
+     * finishes and is still worth waiting for. A handler that keeps throwing is retried by the subscription's
+     * {@code RetryStrategy}, and this waits for those retries, which is why it takes a timeout.
+     * <p>
+     * This exists because delivery here is asynchronous: {@code accept(...)} queues on the caller's thread and a pool
+     * thread runs the handler. It has no equivalent on a change-stream model, where the cursor is unbounded and there
+     * is no point at which everything written has arrived.
+     *
+     * @param timeout How long to wait.
+     * @return {@code true} if every subscription finished, {@code false} if the timeout expired first.
+     */
+    public boolean waitUntilAllEventsProcessed(Duration timeout) {
+        Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
+        long timeoutNanos = safeTimeout.timeUnit().toNanos(safeTimeout.timeout());
+        // Compare elapsed against the budget rather than now against a precomputed deadline. A large timeout would
+        // overflow that deadline to a negative value and report an immediate timeout.
+        long start = System.nanoTime();
+        while (true) {
+            if (allSubscriptionsIdle()) {
+                return true;
+            }
+            if (System.nanoTime() - start >= timeoutNanos) {
+                return allSubscriptionsIdle();
+            }
+            try {
+                MILLISECONDS.sleep(1);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Block until every subscription has handled the events fed to it so far, waiting up to 10 seconds.
+     *
+     * @return {@code true} if every subscription finished, {@code false} if the wait expired first.
+     * @see #waitUntilAllEventsProcessed(Duration)
+     */
+    public boolean waitUntilAllEventsProcessed() {
+        return waitUntilAllEventsProcessed(Duration.ofSeconds(10));
+    }
+
+    private boolean allSubscriptionsIdle() {
+        return subscriptions.values().stream().allMatch(InMemorySubscription::isIdle);
     }
 
     @PreDestroy

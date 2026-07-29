@@ -41,7 +41,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 import static org.occurrent.example.projection.dsl.streamjava.OrderStatusProjection.orderStatusProjection;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -81,8 +80,7 @@ class OrderStatusProjectionTest {
         applicationService.execute("order-1", events -> List.of(new OrderPlaced("order-1", "The Pragmatic Programmer")));
         applicationService.execute("order-1", events -> List.of(new OrderShipped("order-1")));
 
-        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() ->
-                assertThat(store.get("order-1"))
-                        .isEqualTo(new OrderStatusView("order-1", "The Pragmatic Programmer", "SHIPPED")));
+        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue();
+        assertThat(store.get("order-1")).isEqualTo(new OrderStatusView("order-1", "The Pragmatic Programmer", "SHIPPED"));
     }
 }
