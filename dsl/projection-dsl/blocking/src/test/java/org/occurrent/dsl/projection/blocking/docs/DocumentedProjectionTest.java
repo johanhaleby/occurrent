@@ -50,7 +50,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 
 /**
  * The projections the documentation's Testing chapter shows, kept compiling and passing here so a published snippet
@@ -129,8 +128,9 @@ class DocumentedProjectionTest {
                     new NameDefined(UUID.randomUUID().toString(), new Date(), "johan", "Johan"),
                     new NameWasChanged(UUID.randomUUID().toString(), new Date(), "johan", "Johan Haleby"));
 
-            // Then
-            await().untilAsserted(() -> assertThat(store.get("johan")).isEqualTo("Johan Haleby"));
+            // Then a deterministic drain, so the assertion is plain rather than polled
+            assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue();
+            assertThat(store.get("johan")).isEqualTo("Johan Haleby");
         }
 
         private void write(String streamId, DomainEvent... events) {
@@ -207,7 +207,8 @@ class DocumentedProjectionTest {
             // A second instance, so the pull side has to scope to one of them. With a single instance the scoping is a
             // no-op and this test cannot tell a correctly scoped fold from one that folds everything.
             write("eve", new NameDefined(UUID.randomUUID().toString(), new Date(), "eve", "Eve"));
-            await().untilAsserted(() -> assertThat(store.get("johan")).isEqualTo("Johan Haleby"));
+            assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue();
+            assertThat(store.get("johan")).isEqualTo("Johan Haleby");
 
             DomainEventQueries<DomainEvent> queries = new DomainEventQueries<>(eventStore, converter);
             String pulled = ProjectionExtensionsKt.project(queries, currentNameProjection(), "johan");
