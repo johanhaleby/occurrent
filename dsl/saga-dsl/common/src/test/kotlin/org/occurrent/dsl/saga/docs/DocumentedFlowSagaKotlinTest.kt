@@ -28,8 +28,10 @@ import org.occurrent.dsl.saga.SagaEffect
 import org.occurrent.dsl.saga.SagaInput
 import org.occurrent.dsl.saga.SagaTimeout
 import org.occurrent.dsl.saga.flow.FlowState
-// ReceivedEvents has a no-arg initiating() member, and a member always wins over an extension, so the reified
-// initiating<T>() has to be imported explicitly.
+// The reified initiating<T>() is a top-level extension in org.occurrent.dsl.saga.flow, so a file in another package
+// imports it by name like any extension. ReceivedEvents also has a no-arg initiating() member, and a member wins over
+// an extension, so the type argument has to be explicit: without it the member is chosen instead. That member is also
+// why omitting the import reports "No type arguments expected" rather than an unresolved reference.
 import org.occurrent.dsl.saga.flow.initiating
 import org.occurrent.dsl.saga.flow.saga
 import java.time.Duration
@@ -72,7 +74,7 @@ class DocumentedFlowSagaKotlinTest {
             val step = lobby().step(started.state, SagaInput.event(PlayerJoined(GAME_ID)))
 
             // Then
-            assertThat(issuedCommands(step)).isEmpty()
+            assertThat(step.issuedCommands()).isEmpty()
         }
 
         @Test
@@ -260,13 +262,6 @@ class DocumentedFlowSagaKotlinTest {
                 }
             }
         }
-
-        /**
-         * The commands out of a step's effects. Effects are not only commands, so leaving a step with an armed timeout
-         * contributes a [SagaEffect.CancelTimeout] that has nothing to do with what the reaction issued.
-         */
-        private fun <C : Any> issuedCommands(step: Saga.Step<*, C>): List<C> =
-            step.effects.filterIsInstance<SagaEffect.IssueCommand<C>>().map { it.command() }
 
         /**
          * Applies a start event the way an executor would. [Saga.step] deliberately leaves out [Saga.onStart], so a

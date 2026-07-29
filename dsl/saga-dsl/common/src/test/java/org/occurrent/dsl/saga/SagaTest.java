@@ -175,6 +175,112 @@ class SagaTest {
     }
 
     @Nested
+    class IssuedCommands {
+
+        @Test
+        void is_empty_when_the_step_produced_no_effects() {
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), List.of());
+
+            assertThat(step.issuedCommands()).isEmpty();
+        }
+
+        @Test
+        void is_empty_when_the_only_effect_is_a_timer_cancellation() {
+            // The case the accessor exists for. Reacting to PaymentReserved issues nothing, but leaving the armed
+            // timeout behind still contributes a CancelTimeout, so effects() is not empty and cannot answer
+            // "did this reaction issue anything".
+            Saga<OrderEvent, OrderState, OrderCommand> saga = orderFulfillment();
+
+            Saga.Step<OrderState, OrderCommand> step = saga.step(new AwaitingPayment("order-1"), SagaInput.event(new PaymentReserved("order-1")));
+
+            assertAll(
+                    () -> assertThat(step.effects()).containsExactly(SagaEffect.cancelTimeout(PAYMENT_TIMER)),
+                    () -> assertThat(step.issuedCommands()).isEmpty()
+            );
+        }
+
+        @Test
+        void ignores_all_three_kinds_of_timer_effect() {
+            // StartTimeoutAt is the one no saga in this file produces, so build the step by hand to cover it.
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), List.of(
+                    SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)),
+                    SagaEffect.startTimeoutAt(PAYMENT_TIMER, Instant.parse("2026-07-28T12:00:00Z")),
+                    SagaEffect.cancelTimeout(PAYMENT_TIMER)));
+
+            assertThat(step.issuedCommands()).isEmpty();
+        }
+
+        @Test
+        void returns_the_commands_in_effect_order_and_drops_the_timers() {
+            // Interleaved rather than commands-then-timers, otherwise this passes even on an implementation that sorts
+            // or partitions the list.
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), List.of(
+                    SagaEffect.issue(new ReservePayment("order-1", 100)),
+                    SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)),
+                    SagaEffect.issue(new CancelOrder("order-1")),
+                    SagaEffect.cancelTimeout(PAYMENT_TIMER)));
+
+            assertThat(step.issuedCommands()).containsExactly(new ReservePayment("order-1", 100), new CancelOrder("order-1"));
+        }
+
+        @Test
+        void keeps_a_command_that_was_issued_twice() {
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), List.of(
+                    SagaEffect.issue(new CancelOrder("order-1")),
+                    SagaEffect.issue(new CancelOrder("order-1"))));
+
+            assertThat(step.issuedCommands()).hasSize(2);
+        }
+
+        @Test
+        void the_returned_list_is_unmodifiable() {
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"),
+                    List.of(SagaEffect.issue(new CancelOrder("order-1"))));
+
+            assertThatThrownBy(() -> step.issuedCommands().add(new CancelOrder("order-2")))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void is_recomputed_on_each_call_rather_than_shared() {
+            // Pins the documented per-call contract, so a later "cache it" change cannot start handing out one aliased
+            // list. Needs a non-empty step, because List.copyOf of an empty list returns the shared List.of().
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"),
+                    List.of(SagaEffect.issue(new CancelOrder("order-1"))));
+
+            assertAll(
+                    () -> assertThat(step.issuedCommands()).isEqualTo(step.issuedCommands()),
+                    () -> assertThat(step.issuedCommands()).isNotSameAs(step.issuedCommands())
+            );
+        }
+
+        @Test
+        void does_not_take_part_in_equality_or_toString() {
+            // The reason this is a derived accessor and not a third record component.
+            List<SagaEffect<OrderCommand>> effects = List.of(SagaEffect.issue(new CancelOrder("order-1")));
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), effects);
+
+            assertAll(
+                    () -> assertThat(step).isEqualTo(new Saga.Step<>(new AwaitingPayment("order-1"), effects)),
+                    () -> assertThat(step.toString()).doesNotContain("issuedCommands")
+            );
+        }
+
+        @Test
+        void reads_the_command_out_of_a_step_the_saga_itself_produced() {
+            Saga<OrderEvent, OrderState, OrderCommand> saga = orderFulfillment();
+
+            Saga.Step<OrderState, OrderCommand> step = saga.step(null, SagaInput.event(new OrderPlaced("order-1", 100)));
+
+            // effects() carries the armed timeout too, which is exactly what makes it the wrong thing to assert on here.
+            assertAll(
+                    () -> assertThat(step.effects()).hasSize(2),
+                    () -> assertThat(step.issuedCommands()).containsExactly(new ReservePayment("order-1", 100))
+            );
+        }
+    }
+
+    @Nested
     class OnStart {
 
         @Test
@@ -648,6 +754,24 @@ class SagaTest {
             assertAll(
                     () -> assertThat(step.state()).isEqualTo(new Cancelled("order-1")),
                     () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new CancelOrder("order-1")))
+            );
+        }
+
+        @Test
+        void issuedCommands_reads_through_the_widened_command_type() {
+            // widen casts the effect list, so at runtime these are IssueCommand<OrderCommand> behind a static
+            // IssueCommand<Object>. The accessor's type pattern is erased, so it matches either way, and this is the
+            // test that proves that cast stays benign under the new accessor. Both paths through widen are covered:
+            // the event path here and the timeout path below.
+            Saga<Object, OrderState, Object> saga = widened();
+
+            Saga.Step<OrderState, Object> fromEvent = saga.step(null, SagaInput.event(new OrderPlaced("order-1", 100)));
+            Saga.Step<OrderState, Object> fromTimeout = saga.step(new AwaitingPayment("order-1"),
+                    SagaInput.timeout(new SagaTimeout("order-1", PAYMENT_TIMER)));
+
+            assertAll(
+                    () -> assertThat(fromEvent.issuedCommands()).containsExactly(new ReservePayment("order-1", 100)),
+                    () -> assertThat(fromTimeout.issuedCommands()).containsExactly(new CancelOrder("order-1"))
             );
         }
 

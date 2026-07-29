@@ -20,6 +20,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
 import org.occurrent.cloudevents.EventMetadata;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -146,6 +147,33 @@ public interface Saga<E, S extends @Nullable Object, C> {
     record Step<S extends @Nullable Object, C>(S state, List<SagaEffect<C>> effects) {
         public Step {
             effects = List.copyOf(effects);
+        }
+
+        /**
+         * The commands this transition issued, in the order {@link #effects()} holds them, and empty when it issued none.
+         * This is usually what a test wants, because {@link #effects()} is a mixed list and a transition that issues
+         * nothing is not an empty one: leaving a step whose timeout was armed contributes a
+         * {@link SagaEffect.CancelTimeout} that says nothing about what the reaction decided.
+         * <p>
+         * There is no matching accessor for the timer effects, because they need none. A timer effect is already a value
+         * you can assert on {@link #effects()} directly, as {@code SagaEffect.cancelTimeout("step:awaiting-players")},
+         * whereas a command arrives wrapped in a {@link SagaEffect.IssueCommand} and has to be unwrapped first.
+         * <p>
+         * This is the same reading an executor performs, so an assertion here is an assertion about what would actually
+         * be dispatched. Computed on each call, and unmodifiable. Kotlin callers write {@code step.issuedCommands()},
+         * with the parentheses, because this is a derived accessor rather than a record component.
+         */
+        public List<C> issuedCommands() {
+            List<C> commands = new ArrayList<>(effects.size());
+            for (SagaEffect<C> effect : effects) {
+                // Only IssueCommand carries a C, so this is a checked narrowing rather than an unchecked cast. The
+                // exhaustive interpreter is SagaExecutionSupport.applyEffects, which stops compiling when a new
+                // SagaEffect variant lands, so this accessor gets revisited at the same time.
+                if (effect instanceof SagaEffect.IssueCommand<C> issue) {
+                    commands.add(issue.command());
+                }
+            }
+            return List.copyOf(commands);
         }
     }
 
