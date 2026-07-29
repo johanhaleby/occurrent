@@ -110,6 +110,11 @@ public final class ReactiveProjectionRunner<E> {
     /**
      * Subscribes with the given id and materializes {@code projection} into the blocking {@code repository} (scheduled on
      * {@code boundedElastic}), skipping events whose id resolves to {@code null}.
+     *
+     * <p>A projection whose {@code id()} is {@code null} is single-instance: it has one slot, and that
+     * slot is stored under {@code subscriptionId} rather than under a key derived from the events, so
+     * read it back with the same id. A projection that resolves an id keys each instance by that id
+     * instead.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, projection, repository, null);
@@ -119,6 +124,11 @@ public final class ReactiveProjectionRunner<E> {
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and materializes {@code projection} into the blocking {@code repository} (scheduled on {@code boundedElastic}),
      * skipping events whose id resolves to {@code null}.
+     *
+     * <p>A projection whose {@code id()} is {@code null} is single-instance: it has one slot, and that
+     * slot is stored under {@code subscriptionId} rather than under a key derived from the events, so
+     * read it back with the same id. A projection that resolves an id keys each instance by that id
+     * instead.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
         return projectWithMetadata(subscriptionId, projection, Projections.reactiveUpdateWithMetadata(projection, repository, subscriptionId), startAt);

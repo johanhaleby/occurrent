@@ -86,6 +86,11 @@ public final class ProjectionRunner<E> {
      * the event. This overload adds no fine-grained optimistic-locking retry of its own, so for concurrent writers to the
      * same instance use {@link #project(String, Projection, MaterializedView)} with a store that re-reads and reapplies
      * on conflict, such as the view DSL's {@code materialized(...)}.
+     *
+     * <p>A projection whose {@code id()} is {@code null} is single-instance: it has one slot, and that
+     * slot is stored under {@code subscriptionId} rather than under a key derived from the events, so
+     * read it back with the same id. A projection that resolves an id keys each instance by that id
+     * instead.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, projection, repository, null);
@@ -95,6 +100,11 @@ public final class ProjectionRunner<E> {
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and materializes {@code projection} into {@code repository}, skipping events whose id resolves to {@code null}. Pass
      * {@code StartAt.subscriptionModelDefault()} or a specific position to control catch-up.
+     *
+     * <p>A projection whose {@code id()} is {@code null} is single-instance: it has one slot, and that
+     * slot is stored under {@code subscriptionId} rather than under a key derived from the events, so
+     * read it back with the same id. A projection that resolves an id keys each instance by that id
+     * instead.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
         return project(subscriptionId, projection, Projections.materializedView(projection, repository, subscriptionId), startAt);

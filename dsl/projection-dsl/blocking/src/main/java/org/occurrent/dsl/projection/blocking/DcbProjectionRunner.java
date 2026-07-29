@@ -68,6 +68,11 @@ public final class DcbProjectionRunner<E> {
     /**
      * Subscribes with the given id and materializes {@code dcbProjection} into {@code repository}, skipping events whose
      * id resolves to {@code null}.
+     *
+     * <p>A DCB projection whose {@code projection().id()} is {@code null} is single-instance: it has one
+     * slot, and that slot is stored under {@code subscriptionId} rather than under a key derived from the
+     * events, so read it back with the same id. One that resolves an id keys each instance by that id
+     * instead.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, dcbProjection, repository, null);
@@ -76,6 +81,11 @@ public final class DcbProjectionRunner<E> {
     /**
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and materializes {@code dcbProjection} into {@code repository}, skipping events whose id resolves to {@code null}.
+     *
+     * <p>A DCB projection whose {@code projection().id()} is {@code null} is single-instance: it has one
+     * slot, and that slot is stored under {@code subscriptionId} rather than under a key derived from the
+     * events, so read it back with the same id. One that resolves an id keys each instance by that id
+     * instead.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository, @Nullable DcbStartAt startAt) {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
