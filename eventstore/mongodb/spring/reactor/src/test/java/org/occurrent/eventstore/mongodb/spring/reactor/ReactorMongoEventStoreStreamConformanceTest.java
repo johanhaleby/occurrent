@@ -17,32 +17,16 @@
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
 import com.mongodb.ConnectionString;
-import com.mongodb.reactivestreams.client.MongoClient;
-import com.mongodb.reactivestreams.client.MongoClients;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.eventstore.api.blocking.EventStoreOperations;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
-import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.blocking.StreamEventStoreConformance;
-import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
-import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
-import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
-import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
-
-import static java.util.Objects.requireNonNull;
-import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 
 /**
  * Runs the blocking stream suite against the reactive store through {@link BlockingEventStoreOverReactive}, so the
@@ -72,62 +56,6 @@ class ReactorMongoEventStoreStreamConformanceTest extends StreamEventStoreConfor
 
     @Override
     protected EventStoreFixture createFixture() {
-        return new ReactorMongoEventStoreFixture();
-    }
-
-    private static class ReactorMongoEventStoreFixture implements EventStoreFixture {
-
-        private final MongoClient mongoClient;
-        private final BlockingEventStoreOverReactive bridge;
-
-        ReactorMongoEventStoreFixture() {
-            ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-            this.mongoClient = MongoClients.create(connectionString);
-            String database = requireNonNull(connectionString.getDatabase());
-            ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, database);
-            ReactiveMongoTransactionManager transactionManager =
-                    new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, database));
-            EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
-                    .eventStoreCollectionName(connectionString.getCollection())
-                    .transactionConfig(transactionManager)
-                    .timeRepresentation(RFC_3339_STRING)
-                    .build();
-            this.bridge = BlockingEventStoreOverReactive.of(new ReactorMongoEventStore(mongoTemplate, eventStoreConfig));
-        }
-
-        @Override
-        public Set<EventStoreCapability> capabilities() {
-            return Set.of(EventStoreCapability.STREAM);
-        }
-
-        @Override
-        public EventStore eventStore() {
-            return bridge;
-        }
-
-        @Override
-        public EventStoreQueries queries() {
-            return bridge;
-        }
-
-        @Override
-        public EventStoreOperations operations() {
-            return bridge;
-        }
-
-        @Override
-        public ReadEventStreamWithFilter filteredReader() {
-            return bridge;
-        }
-
-        @Override
-        public PositionOrderedReader positionOrderedReader() {
-            return bridge;
-        }
-
-        @Override
-        public void close() {
-            mongoClient.close();
-        }
+        return new ReactorMongoEventStoreConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
     }
 }
