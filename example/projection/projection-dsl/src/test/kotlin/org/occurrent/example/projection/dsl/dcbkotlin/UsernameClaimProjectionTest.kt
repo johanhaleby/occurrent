@@ -17,8 +17,6 @@
 package org.occurrent.example.projection.dsl.dcbkotlin
 
 import org.assertj.core.api.Assertions.assertThat
-import org.awaitility.kotlin.await
-import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayNameGeneration
@@ -80,7 +78,8 @@ class UsernameClaimProjectionTest {
         append("username:johan", AccountRegistered("johan"))
 
         // A single-instance projection keys its one slot by the subscription id, not the tagged username.
-        await untilAsserted { assertThat(store["is-username-claimed"]).isTrue() }
+        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+        assertThat(store["is-username-claimed"]).isTrue()
     }
 
     @Test

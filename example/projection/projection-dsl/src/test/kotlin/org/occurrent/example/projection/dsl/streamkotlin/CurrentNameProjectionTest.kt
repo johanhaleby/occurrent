@@ -17,8 +17,6 @@
 package org.occurrent.example.projection.dsl.streamkotlin
 
 import org.assertj.core.api.Assertions.assertThat
-import org.awaitility.kotlin.await
-import org.awaitility.kotlin.untilAsserted
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayNameGeneration
@@ -75,7 +73,8 @@ class CurrentNameProjectionTest {
         applicationService.execute("u1") { listOf(NameDefined("u1", "Johan")) }
         applicationService.execute("u1") { listOf(NameChanged("u1", "Johan Haleby")) }
 
-        await untilAsserted { assertThat(store["u1"]).isEqualTo(CurrentName("u1", "Johan Haleby")) }
+        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+        assertThat(store["u1"]).isEqualTo(CurrentName("u1", "Johan Haleby"))
     }
 
     @Test
@@ -90,7 +89,8 @@ class CurrentNameProjectionTest {
         applicationService.execute("u1") { listOf(NameDefined("u1", "Johan")) }
         applicationService.execute("u2") { listOf(NameDefined("u2", "Eve")) }
 
-        await untilAsserted { assertThat(store["u1"]).isEqualTo(CurrentName("u1", "Johan")) }
+        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+        assertThat(store["u1"]).isEqualTo(CurrentName("u1", "Johan"))
         // u2's event carries a different subject, so the filtered subscription never delivered it.
         assertThat(store["u2"]).isNull()
     }

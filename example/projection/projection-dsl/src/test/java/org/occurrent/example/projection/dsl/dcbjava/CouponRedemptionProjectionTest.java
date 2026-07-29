@@ -42,7 +42,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 import static org.occurrent.example.projection.dsl.dcbjava.CouponRedemption.isCouponRedeemedProjection;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -79,7 +78,8 @@ class CouponRedemptionProjectionTest {
         append("coupon:SAVE10", new CouponRedeemed("SAVE10", "order-1"));
 
         // A single-instance projection keys its one slot by the subscription id, not the tagged coupon code.
-        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> assertThat(store.get("coupon-redeemed")).isTrue());
+        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue();
+        assertThat(store.get("coupon-redeemed")).isTrue();
     }
 
     @Test
