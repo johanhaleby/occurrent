@@ -1,3 +1,9 @@
+### Changelog next version
+
+#### Changes
+
+* `WriteConditionNotFulfilledException` and `DcbAppendConditionNotFulfilledException` each got a constructor that composes the standard message, so a caller passes only the data (the write condition, the stream id and the version the stream was at) and gets the message every Occurrent event store produces. The exact wording is part of the contract rather than a cosmetic detail, because `WriteConditionNotFulfilledException.equals` compares `getMessage()` and the event store conformance suite asserts it, but it was written out by hand at nine throw sites across the four stores and `MongoExceptionTranslator`. Anyone implementing an event store outside this repository therefore had to copy a format string out of a store's source to pass the suite. The message-taking constructors stay for a store that genuinely needs different wording, the produced strings are unchanged, and no existing caller needs migrating. Resolves [#456](https://github.com/johanhaleby/occurrent/issues/456).
+
 ### 0.31.0 (2026-07-28)
 
 #### Changes
