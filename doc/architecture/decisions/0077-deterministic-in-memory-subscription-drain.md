@@ -32,7 +32,9 @@ Reading `queue.isEmpty()` instead is wrong, and this was proven rather than reas
 
 The `finally` is load-bearing. A handler that exhausts its retries and throws would otherwise leave the count stuck above zero and hang every later wait.
 
-**A paused subscription is skipped.** Nothing new is queued for it while it is paused, and anything queued before the pause can never drain, so waiting on it could not succeed. This is surprising in exactly one direction, that pausing and then waiting reports success while events sit queued, so it is stated in the javadoc.
+**Pausing does not exclude a subscription from the wait.** The first version skipped paused subscriptions, on the stated ground that anything queued before a pause could never drain. That ground is false, and Copilot caught it on review. `pauseSubscription` only records a flag that stops `accept(...)` from queueing anything new, and `InMemorySubscription`'s run loop checks only `shutdown`, so a paused subscription's own thread keeps draining whatever was already queued.
+
+Once the reason was gone the filter had nothing left to justify it, so it was removed rather than reworded. A backlog from before a pause does finish and is worth waiting for, and the only case the filter actually covered was a paused subscription stuck in its handler, where reporting success would have been a lie. That case now reports the timeout instead, which is the honest answer and needs no caveat in the javadoc.
 
 **A throwing handler is waited out.** The count stays raised across the retry strategy's attempts, so the wait blocks until it gives up. That is the wanted behaviour and it is the reason the wait is bounded by a timeout rather than blocking forever.
 
@@ -53,6 +55,7 @@ Sound, because an event id carries no ordering assumption, and it would work aga
 - An in-memory projection test drains once and then makes a plain assertion, so it needs no Awaitility and reports a real failure immediately.
 - The synchronous versus asynchronous distinction becomes visible. The synchronous idiom is no wait at all, so a projection whose mode is misconfigured to `ASYNC` now fails the test instead of passing slowly.
 - This is in-memory only by design, and that is not a gap in the change-stream models. A change stream tails an unbounded cursor with no end-of-stream signal, so "everything written has arrived" has no definition there, and a test against a real MongoDB keeps polling.
+- The timeout is measured as elapsed against a budget rather than as now against a precomputed deadline, because a large `Duration` overflows such a deadline to a negative value and would report an immediate timeout. Also found on review.
 - The wait polls its own condition internally on a short interval. The determinism comes from the condition being exact, not from avoiding a sleep, and the alternative (a lock and condition signalled per completed handler) is more machinery than the guarantee needs.
 - Only the projection tests that use the in-memory model were converted. The roughly 90 other Awaitility test files are change-stream or Spring integration tests where polling is still the correct thing, so sweeping them would be a large diff that mostly made things worse.
 - Awaitility was never a user-facing problem, contrary to the issue. Every module declares it in test scope and Maven never propagates test scope, so a user depending on the Projection DSL never received it. The gain here is determinism and a better failure, not dependency hygiene.

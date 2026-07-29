@@ -189,10 +189,9 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
     class When_a_subscription_is_paused {
 
         @Test
-        void the_wait_ignores_it_rather_than_hanging_on_its_undrainable_queue() throws InterruptedException {
-            // Given a subscription with one event stuck in its handler and a second still queued behind it, so it has
-            // outstanding work that pausing can never drain. Without this the count would be zero and the test would
-            // pass whether or not the wait skips paused subscriptions.
+        void a_backlog_queued_before_the_pause_still_drains_and_the_wait_covers_it() throws InterruptedException {
+            // Given two events queued and the handler released, then paused. Pausing only stops accept(...) from
+            // queueing anything new, so the subscription's own thread keeps draining what is already there.
             CountDownLatch entered = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
             List<String> handled = new CopyOnWriteArrayList<>();
@@ -204,17 +203,39 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
 
             subscriptionModel.accept(List.of(cloudEvent("1"), cloudEvent("2")));
             assertThat(entered.await(5, SECONDS)).isTrue();
+            subscriptionModel.pauseSubscription("paused");
+            release.countDown();
 
             // When
-            subscriptionModel.pauseSubscription("paused");
-            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(2));
+            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
 
             // Then
             assertAll(
                     () -> assertThat(drained).isTrue(),
                     () -> assertThat(subscriptionModel.isPaused("paused")).isTrue(),
-                    () -> assertThat(handled).isEmpty()
+                    () -> assertThat(handled).containsExactly("1", "2")
             );
+        }
+
+        @Test
+        void the_wait_reports_a_timeout_when_a_paused_subscription_is_stuck_in_its_handler() throws InterruptedException {
+            // Given a paused subscription whose handler never returns, so its backlog cannot drain
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            subscriptionModel.subscribe("paused", cloudEvent -> {
+                entered.countDown();
+                await(release);
+            }).waitUntilStarted();
+
+            subscriptionModel.accept(List.of(cloudEvent("1"), cloudEvent("2")));
+            assertThat(entered.await(5, SECONDS)).isTrue();
+            subscriptionModel.pauseSubscription("paused");
+
+            // When
+            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofMillis(300));
+
+            // Then it reports the timeout rather than claiming success, which is what a skipped subscription would do
+            assertThat(drained).isFalse();
 
             release.countDown();
         }

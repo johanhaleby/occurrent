@@ -157,12 +157,13 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Li
     }
 
     /**
-     * Block until every running subscription has handled the events fed to it so far, so a test can write events and
-     * then assert on the read model without polling the assertion.
+     * Block until every subscription has handled the events fed to it so far, so a test can write events and then
+     * assert on the read model without polling the assertion.
      * <p>
-     * A subscription is done when its queue is empty and it is not inside a handler. A paused subscription is ignored,
-     * because nothing new is queued for it while it is paused and anything queued before the pause would never drain,
-     * so waiting on it could not succeed. A handler that keeps throwing is retried by the subscription's
+     * A subscription is done when its queue is empty and it is not inside a handler. Pausing does not exclude a
+     * subscription from the wait: pausing only stops {@code accept(...)} from queueing anything new, and the
+     * subscription's own thread keeps draining whatever was already queued, so a backlog from before the pause still
+     * finishes and is still worth waiting for. A handler that keeps throwing is retried by the subscription's
      * {@code RetryStrategy}, and this waits for those retries, which is why it takes a timeout.
      * <p>
      * This exists because delivery here is asynchronous: {@code accept(...)} queues on the caller's thread and a pool
@@ -170,17 +171,20 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Li
      * is no point at which everything written has arrived.
      *
      * @param timeout How long to wait.
-     * @return {@code true} if every running subscription finished, {@code false} if the timeout expired first.
+     * @return {@code true} if every subscription finished, {@code false} if the timeout expired first.
      */
     public boolean waitUntilAllEventsProcessed(Duration timeout) {
         Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
-        long deadline = System.nanoTime() + safeTimeout.timeUnit().toNanos(safeTimeout.timeout());
+        long timeoutNanos = safeTimeout.timeUnit().toNanos(safeTimeout.timeout());
+        // Compare elapsed against the budget rather than now against a precomputed deadline. A large timeout would
+        // overflow that deadline to a negative value and report an immediate timeout.
+        long start = System.nanoTime();
         while (true) {
-            if (allRunningSubscriptionsIdle()) {
+            if (allSubscriptionsIdle()) {
                 return true;
             }
-            if (System.nanoTime() >= deadline) {
-                return allRunningSubscriptionsIdle();
+            if (System.nanoTime() - start >= timeoutNanos) {
+                return allSubscriptionsIdle();
             }
             try {
                 MILLISECONDS.sleep(1);
@@ -192,19 +196,17 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Li
     }
 
     /**
-     * Block until every running subscription has handled the events fed to it so far, waiting up to 10 seconds.
+     * Block until every subscription has handled the events fed to it so far, waiting up to 10 seconds.
      *
-     * @return {@code true} if every running subscription finished, {@code false} if the wait expired first.
+     * @return {@code true} if every subscription finished, {@code false} if the wait expired first.
      * @see #waitUntilAllEventsProcessed(Duration)
      */
     public boolean waitUntilAllEventsProcessed() {
         return waitUntilAllEventsProcessed(Duration.ofSeconds(10));
     }
 
-    private boolean allRunningSubscriptionsIdle() {
-        return subscriptions.values().stream()
-                .filter(subscription -> isRunning(subscription.id()))
-                .allMatch(InMemorySubscription::isIdle);
+    private boolean allSubscriptionsIdle() {
+        return subscriptions.values().stream().allMatch(InMemorySubscription::isIdle);
     }
 
     @PreDestroy
