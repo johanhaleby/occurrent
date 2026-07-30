@@ -46,6 +46,11 @@ import java.lang.annotation.Target;
  * }
  * }</pre>
  *
+ * The extension bean is all this adds. Your event store, subscription model and everything else in the context are
+ * left exactly as the application wires them, so a test still runs against the real store rather than an in-memory
+ * substitute. That is the point, since a subscription is only worth testing against the change streams, checkpoints
+ * and catch-up it actually uses.
+ * <p>
  * Everything this adds is available without Spring by constructing the extension directly, see
  * {@link org.occurrent.testing.junit.OccurrentSubscriptionsExtension#stoppedByDefault}.
  */
