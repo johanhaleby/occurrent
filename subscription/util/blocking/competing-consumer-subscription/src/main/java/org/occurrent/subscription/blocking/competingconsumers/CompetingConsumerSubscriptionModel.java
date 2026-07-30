@@ -127,9 +127,15 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
         stoppedByUser.set(true);
         delegate.stop();
+        // Unregister every competing consumer, not only the running ones. A waiting consumer left registered
+        // keeps competing for the lock through the strategy's refresh thread, so a stopped model can take a
+        // lock it then refuses to act on, and start() sees no status change and never starts it.
+        // Only a running consumer becomes paused. A waiting one stays waiting, so start() registers it again.
         unregisterAllCompetingConsumers(cc -> {
             logDebug("Stopped CompetingConsumer subscription (subscriberId={}, subscriptionId={})", cc.getSubscriberId(), cc.getSubscriptionId());
-            competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused());
+            if (cc.isRunning()) {
+                competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused());
+            }
         });
     }
 
@@ -158,8 +164,15 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                                 logDebug("Starting CompetingConsumer subscription (subscriberId={}, subscriptionId={}, state={})", cc.getSubscriberId(), cc.getSubscriptionId(), cc.state.getClass().getSimpleName());
                                 // Only change state when permitted to consume
                                 if (cc.isWaiting()) {
-                                    // Registering a competing consumer will start the subscription automatically if lock was acquired
-                                    competingConsumerStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
+                                    // Registering a competing consumer starts the subscription through onConsumeGranted if the
+                                    // lock was acquired. That callback only fires on a change of status, so a consumer already
+                                    // holding the lock gets none. Read the answer from the return value, and re-read the state
+                                    // to see whether the callback already started it.
+                                    boolean acquiredLock = competingConsumerStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
+                                    CompetingConsumer current = competingConsumers.get(cc.subscriptionIdAndSubscriberId);
+                                    if (acquiredLock && current != null && current.isWaiting()) {
+                                        startWaitingConsumer(current);
+                                    }
                                 } else if (cc.isPaused()) {
                                     resumeSubscription(cc.getSubscriptionId());
                                 }
@@ -494,7 +507,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     private void unregisterAllCompetingConsumers(Consumer<CompetingConsumer> andDo) {
         logDebug("Unregistering all CompetingConsumer's");
-        unregisterCompetingConsumersMatching(CompetingConsumer::isRunning, andDo);
+        unregisterCompetingConsumersMatching(cc -> true, andDo);
     }
 
     private void unregisterCompetingConsumersMatching(Predicate<CompetingConsumer> predicate, Consumer<CompetingConsumer> and) {
