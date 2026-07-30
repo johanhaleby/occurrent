@@ -34,15 +34,6 @@ class InMemoryEventStoreConformanceFixture implements EventStoreFixture {
 
     private final InMemoryEventStore eventStore = new InMemoryEventStore();
 
-    /**
-     * The in-memory store removes the events but keeps reporting that the stream exists. Unresolved divergence, see
-     * the SPI method.
-     */
-    @Override
-    public boolean deleteByFilterClearsStreamExistence() {
-        return false;
-    }
-
     @Override
     public Set<EventStoreCapability> capabilities() {
         return Set.of(EventStoreCapability.STREAM, EventStoreCapability.DCB);

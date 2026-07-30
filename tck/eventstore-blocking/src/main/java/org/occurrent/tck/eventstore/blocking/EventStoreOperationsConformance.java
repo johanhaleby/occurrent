@@ -193,11 +193,10 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
 
             operations().delete(Filter.all());
 
-            boolean existenceIsCleared = fixture().deleteByFilterClearsStreamExistence();
             assertAll(
                     () -> assertThat(queries().count()).isZero(),
-                    () -> assertThat(eventStore().exists(STREAM_ID)).isEqualTo(!existenceIsCleared),
-                    () -> assertThat(eventStore().exists(OTHER_STREAM_ID)).isEqualTo(!existenceIsCleared)
+                    () -> assertThat(eventStore().exists(STREAM_ID)).isFalse(),
+                    () -> assertThat(eventStore().exists(OTHER_STREAM_ID)).isFalse()
             );
         }
 
@@ -208,10 +207,9 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
 
             operations().delete(Filter.streamId(STREAM_ID));
 
-            boolean existenceIsCleared = fixture().deleteByFilterClearsStreamExistence();
             assertAll(
                     () -> assertThat(eventStore().read(STREAM_ID).eventList()).isEmpty(),
-                    () -> assertThat(eventStore().exists(STREAM_ID)).isEqualTo(!existenceIsCleared),
+                    () -> assertThat(eventStore().exists(STREAM_ID)).isFalse(),
                     () -> assertThat(idsOf(queries().all())).containsExactly("b")
             );
         }

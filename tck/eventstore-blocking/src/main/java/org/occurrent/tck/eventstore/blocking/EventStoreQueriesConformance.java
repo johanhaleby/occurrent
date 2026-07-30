@@ -194,19 +194,12 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
         }
 
         @Test
-        void matching_an_exact_time_follows_what_the_fixture_declares() {
+        void matches_an_exact_time() {
+            // TIME has zero seconds and zero nanos on purpose. A store that renders the stored value and the filter
+            // value differently misses exactly this case and nothing else, which is how it went unnoticed for so long.
             eventStore().write(STREAM_ID, List.of(eventAt("a", DEFINED, TIME), eventAt("b", CHANGED, TIME.plusHours(1))));
 
-            List<String> matched = idsOf(queries().query(Filter.time(TIME)));
-
-            if (fixture().matchesExactTimeFilters()) {
-                assertThat(matched).containsExactly("a");
-            } else {
-                assertThat(matched)
-                        .describedAs("a store that declares it cannot match an exact time must miss the event rather "
-                                + "than matching something else")
-                        .isEmpty();
-            }
+            assertThat(idsOf(queries().query(Filter.time(TIME)))).containsExactly("a");
         }
 
         @Test

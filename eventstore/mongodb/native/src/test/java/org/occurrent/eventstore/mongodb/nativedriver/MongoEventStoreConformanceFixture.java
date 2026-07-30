@@ -43,15 +43,6 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
                 new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
     }
 
-    /**
-     * An exact-time filter misses an event whose time has zero seconds, because the filter renders seconds and the
-     * stored CloudEvent time does not. Unresolved divergence, see the SPI method.
-     */
-    @Override
-    public boolean matchesExactTimeFilters() {
-        return false;
-    }
-
     @Override
     public Set<EventStoreCapability> capabilities() {
         return Set.of(EventStoreCapability.STREAM);
