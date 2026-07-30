@@ -29,6 +29,7 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.projection.projection
+import org.occurrent.dsl.projection.singletonProjection
 import org.occurrent.dsl.query.reactor.DomainEventQueries
 import org.occurrent.dsl.subscription.reactor.streamSubscriptions
 import org.occurrent.dsl.subscription.reactor.subscriptions
@@ -39,10 +40,12 @@ import org.occurrent.filter.Filter
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import reactor.test.StepVerifier
 import java.net.URI
 import java.util.Date
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Docker-free reactor tests for the projection runners. The push tests register a projection on the in-memory reactor
@@ -169,6 +172,92 @@ class ReactorProjectionTest {
             .isInstanceOf(IllegalArgumentException::class.java)
     }
 
+    @Test
+    fun unqualified_pull_defers_the_keyed_rejection_until_the_mono_is_subscribed_to() {
+        val queries = DomainEventQueries(InMemoryEventStoreQueries(cloudEvents(NameDefined(id(), Date(), "johan", "Johan"))), converter)
+
+        // Assembling the Mono for a keyed projection must not throw on the spot, only when subscribed to.
+        val state = queries.project(currentNameProjection())
+
+        StepVerifier.create(state).expectError(IllegalArgumentException::class.java).verify()
+    }
+
+    @Test
+    fun unqualified_pull_completes_empty_when_a_nullable_state_projection_folds_to_null() {
+        // Given a single-instance projection whose state models absence as null, and whose last fold lands back on null
+        val projection = singletonProjection<String?, DomainEvent>(initialState = null) {
+            on<NameDefined> { _, e -> e.name() }
+            on<NameWasChanged> { _, _ -> null }
+        }
+        val queries = DomainEventQueries(
+            InMemoryEventStoreQueries(
+                cloudEvents(
+                    NameDefined(id(), Date(), "johan", "Johan"),
+                    NameWasChanged(id(), Date(), "johan", "Johan Haleby")
+                )
+            ),
+            converter
+        )
+
+        // When the projection is folded on demand
+        val state = queries.project(projection)
+
+        // Then the Mono completes empty, since a Mono cannot carry the null the fold produced
+        StepVerifier.create(state).verifyComplete()
+    }
+
+    @Test
+    fun id_scoped_pull_completes_empty_when_a_nullable_state_projection_folds_to_null() {
+        // Given a keyed nullable-state projection where one instance folds to null and another does not
+        val projection = projection<String?, DomainEvent, String>(initialState = null) {
+            id { it.userId() }
+            on<NameDefined> { _, e -> e.name() }
+            on<NameWasChanged> { _, _ -> null }
+        }
+        val queries = DomainEventQueries(
+            InMemoryEventStoreQueries(
+                cloudEvents(
+                    NameDefined(id(), Date(), "johan", "Johan"),
+                    NameWasChanged(id(), Date(), "johan", "Johan Haleby"),
+                    NameDefined(id(), Date(), "eve", "Eve")
+                )
+            ),
+            converter
+        )
+
+        // When each instance is folded on its own
+        // Then johan completes empty and eve still emits, so the null is per instance rather than swallowing the read
+        StepVerifier.create(queries.project(projection, "johan")).verifyComplete()
+        StepVerifier.create(queries.project(projection, "eve")).expectNext("Eve").verifyComplete()
+    }
+
+    @Test
+    fun unqualified_pull_folds_each_event_as_the_query_emits_it_rather_than_reading_them_all_first() {
+        // Given a query that counts how much it has emitted, and a fold that records that count every time it runs
+        val emitted = AtomicInteger()
+        val countsSeenByTheFold = mutableListOf<Int>()
+        val projection = singletonProjection<Int, DomainEvent>(initialState = 0) {
+            on<NameDefined> { state, _ ->
+                countsSeenByTheFold += emitted.get()
+                state + 1
+            }
+        }
+        val events = cloudEvents(
+            NameDefined(id(), Date(), "a", "A"),
+            NameDefined(id(), Date(), "b", "B"),
+            NameDefined(id(), Date(), "c", "C")
+        )
+        val queries = DomainEventQueries(CountingEventStoreQueries(events, emitted), converter)
+
+        // When the projection is folded on demand
+        val folded = queries.project(projection).block()
+
+        // Then every fold ran while the query was still emitting. Reading the whole history into a list first would
+        // fold only after all three had arrived, and each fold would see 3.
+        assertThat(folded).isEqualTo(3)
+        assertThat(countsSeenByTheFold).containsExactly(1, 2, 3)
+    }
+
     private fun cloudEvents(vararg events: DomainEvent): List<CloudEvent> = events.map { converter.toCloudEvent(it) }
 
     private fun id(): String = UUID.randomUUID().toString()
@@ -176,6 +265,15 @@ class ReactorProjectionTest {
     /** Minimal in-memory [EventStoreQueries]: returns all supplied events in order (the fold no-ops on unhandled types). */
     private class InMemoryEventStoreQueries(private val events: List<CloudEvent>) : EventStoreQueries {
         override fun query(filter: Filter, skip: Int, limit: Int, sortBy: SortBy): Flux<CloudEvent> = Flux.fromIterable(events)
+        override fun count(filter: Filter): Mono<Long> = Mono.just(events.size.toLong())
+        override fun exists(filter: Filter): Mono<Boolean> = Mono.just(events.isNotEmpty())
+    }
+
+    /** As [InMemoryEventStoreQueries], but counts emissions so a test can tell an incremental fold from a buffered one. */
+    private class CountingEventStoreQueries(private val events: List<CloudEvent>, private val emitted: AtomicInteger) : EventStoreQueries {
+        override fun query(filter: Filter, skip: Int, limit: Int, sortBy: SortBy): Flux<CloudEvent> =
+            Flux.fromIterable(events).doOnNext { emitted.incrementAndGet() }
+
         override fun count(filter: Filter): Mono<Long> = Mono.just(events.size.toLong())
         override fun exists(filter: Filter): Mono<Boolean> = Mono.just(events.isNotEmpty())
     }

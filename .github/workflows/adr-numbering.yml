@@ -1,0 +1,40 @@
+name: ADR numbering
+
+# Deliberately a separate workflow rather than a job in maven.yml. That build triggers on push
+# with paths-ignore '**/*.md', so an ADR-only change reaches it as nothing at all, and a guard
+# living there would stay silent on exactly the changes it exists to check. This one is the
+# mirror image: markdown paths only, and cheap enough that it costs a few seconds.
+#
+# pull_request is the trigger that matters. Its checkout is the branch merged with the base, so a
+# number that is free on the branch but taken on main shows up as the duplicate it will become.
+# That is the case a local check cannot see and the one that has bitten three times.
+
+on:
+  pull_request:
+    paths:
+      - 'doc/architecture/decisions/**'
+      - '.adr-dir'
+      - '.github/scripts/check-adr-numbering.sh'
+      - '.github/workflows/adr-numbering.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'doc/architecture/decisions/**'
+      - '.adr-dir'
+      - '.github/scripts/check-adr-numbering.sh'
+      - '.github/workflows/adr-numbering.yml'
+
+concurrency:
+  group: adr-numbering-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  adr-numbering:
+    name: adr numbering
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No duplicate ADR numbers, and every heading matches its filename
+        run: bash .github/scripts/check-adr-numbering.sh

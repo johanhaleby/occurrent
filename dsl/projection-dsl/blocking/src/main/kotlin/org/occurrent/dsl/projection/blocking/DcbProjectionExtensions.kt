@@ -49,6 +49,8 @@ fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, d
  * Folds the events matching [dcbProjection]'s DCB criteria, read on demand, into its view state and returns it: the
  * strongly-consistent, query-driven counterpart to the subscription-fed [DcbSubscriptions.project]. This is the shape
  * of a single-instance DCB projection such as "is this username claimed?".
+ *
+ * The receiver form of [Projections.project], which does the work.
  */
 fun <S, E : Any, ID : Any> DcbDomainEventQueries<E>.project(dcbProjection: DcbProjection<S, E, ID>): S =
-    dcbProjection.projection().view().evolve(query(dcbProjection.criteria()))
+    Projections.project(dcbProjection, this)

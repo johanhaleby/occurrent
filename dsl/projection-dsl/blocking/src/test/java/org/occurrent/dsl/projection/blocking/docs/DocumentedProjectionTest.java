@@ -33,8 +33,8 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.projection.Projection;
-import org.occurrent.dsl.projection.blocking.ProjectionExtensionsKt;
 import org.occurrent.dsl.projection.blocking.ProjectionRunner;
+import org.occurrent.dsl.projection.blocking.Projections;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
@@ -211,7 +211,7 @@ class DocumentedProjectionTest {
             assertThat(store.get("johan")).isEqualTo("Johan Haleby");
 
             DomainEventQueries<DomainEvent> queries = new DomainEventQueries<>(eventStore, converter);
-            String pulled = ProjectionExtensionsKt.project(queries, currentNameProjection(), "johan");
+            String pulled = Projections.project(currentNameProjection(), queries, "johan");
 
             // Then
             // The pull folds the same events on demand; it must agree with what the push side already materialized,

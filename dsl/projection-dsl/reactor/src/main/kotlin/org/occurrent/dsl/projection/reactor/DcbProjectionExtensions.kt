@@ -69,8 +69,15 @@ fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection:
 /**
  * Folds the events matching [dcbProjection]'s DCB criteria, read on demand, into its view state: the strongly-consistent,
  * query-driven counterpart to the subscription-fed [DcbSubscriptions.project], and the shape of a single-instance DCB
- * projection such as "is this username claimed?". The returned [Mono] emits the folded state, or completes empty when
- * that state is `null` (Reactor cannot carry a `null` value, so the state type is constrained to be non-null).
+ * projection such as "is this username claimed?". The returned [Mono] emits the folded state, and completes empty when
+ * the fold produced `null`, since a [Mono] cannot carry `null`. An empty completion therefore means the state is
+ * `null`, not that the criteria matched nothing.
+ *
+ * The receiver form of [Projections.project], which does the work. It folds each event as the query emits it rather
+ * than reading the whole boundary into a list first.
  */
-fun <S : Any, E : Any, ID : Any> DcbDomainEventQueries<E>.project(dcbProjection: DcbProjection<S, E, ID>): Mono<S> =
-    query(dcbProjection.criteria()).collectList().flatMap { list -> Mono.justOrEmpty(dcbProjection.projection().view().evolve(list)) }
+// See the non-DCB pull: a null state becomes an empty completion, so the Mono never emits null, and Kotlin will not let
+// a Mono be declared over a nullable type.
+@Suppress("UNCHECKED_CAST")
+fun <S, E : Any, ID : Any> DcbDomainEventQueries<E>.project(dcbProjection: DcbProjection<S, E, ID>): Mono<S & Any> =
+    Projections.project(dcbProjection, this) as Mono<S & Any>
