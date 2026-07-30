@@ -1,4 +1,4 @@
-# 77. A deterministic drain for the in-memory subscription model, and no position watermark
+# 78. A deterministic drain for the in-memory subscription model, and no position watermark
 
 Date: 2026-07-29
 
