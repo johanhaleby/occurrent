@@ -52,6 +52,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.atomic.AtomicReference;
@@ -424,7 +425,7 @@ class MongoEventStoreTest {
                 @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
                 void query_filter_by_time_but_is_using_slow_string_comparision() {
                     // Given
-                    LocalDateTime now = LocalDateTime.now();
+                    LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
                     NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
                     NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
@@ -459,7 +460,7 @@ class MongoEventStoreTest {
                 @Test
                 void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_8() {
                     // Given
-                    LocalDateTime now = LocalDateTime.now();
+                    LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
                     NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
                     NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
@@ -477,7 +478,7 @@ class MongoEventStoreTest {
                 @Test
                 void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_11_and_above() {
                     // Given
-                    LocalDateTime now = LocalDateTime.now();
+                    LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
                     NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
                     NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
                     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
@@ -488,7 +489,7 @@ class MongoEventStoreTest {
 
                     // Then
                     Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
-                    assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
+                    assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
                 }
 
                 @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)

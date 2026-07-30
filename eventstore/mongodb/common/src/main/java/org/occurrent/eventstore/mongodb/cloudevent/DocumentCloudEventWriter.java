@@ -27,6 +27,7 @@ import io.cloudevents.rw.CloudEventWriter;
 import io.cloudevents.rw.CloudEventWriterFactory;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.time.internal.RFC3339;
 
 import java.time.OffsetDateTime;
 import java.util.Map;
@@ -59,7 +60,7 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
     @Override
     public CloudEventContextWriter withContextAttribute(String name, OffsetDateTime value) throws CloudEventRWException {
         if (value != null) {
-            document.append(name, value.toString());
+            document.append(name, RFC3339.RFC_3339_FIXED_WIDTH_DATE_TIME_FORMATTER.format(value));
         }
         return this;
     }
