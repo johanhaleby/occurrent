@@ -38,6 +38,10 @@ import java.util.stream.Stream;
 /**
  * A wrapper around a reactive {@link EventStoreQueries} that maps the result of a query into your domain event type
  * using a {@link CloudEventConverter}. This is the reactive counterpart of the blocking {@code DomainEventQueries}.
+ * <p>
+ * A {@code Projection} from the projection DSL can be folded over these queries for a strongly consistent read on
+ * demand, with {@code Projections.project(projection, queries)} from Java or the {@code queries.project(projection)}
+ * extension from Kotlin.
  *
  * @param <T> The type of your event
  */
