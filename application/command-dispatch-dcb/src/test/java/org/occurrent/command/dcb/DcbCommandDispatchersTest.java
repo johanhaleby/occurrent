@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
@@ -46,13 +47,14 @@ class DcbCommandDispatchersTest {
 
     private InMemoryEventStore eventStore;
     private CloudEventConverter<OrderEvent> cloudEventConverter;
+    private DcbApplicationService<OrderEvent> applicationService;
     private DcbDeciderApplicationService<OrderEvent> deciderApplicationService;
 
     @BeforeEach
     void create_instances() {
         eventStore = new InMemoryEventStore();
         cloudEventConverter = new JacksonCloudEventConverter.Builder<OrderEvent>(new ObjectMapper(), URI.create("urn:test")).build();
-        DcbApplicationService<OrderEvent> applicationService = new GenericDcbApplicationService<>(
+        applicationService = new GenericDcbApplicationService<>(
                 eventStore,
                 cloudEventConverter,
                 event -> Set.of(tagFor(event)),
@@ -97,6 +99,65 @@ class DcbCommandDispatchersTest {
 
         // Then
         assertThat(readEvents("order-2")).containsExactly(new OrderShipped("order-2"));
+    }
+
+    @Nested
+    @DisplayName("invocation")
+    class Invocations {
+
+        @Test
+        void dispatch_runs_the_decision_inside_the_boundary_it_names() {
+            // Given
+            CommandDispatcher<DcbInvocation<OrderEvent>> dispatcher = DcbCommandDispatchers.invocation(applicationService);
+
+            // When
+            dispatcher.dispatch(DcbInvocation.to(orderQuery("order-3"), events -> ship(events, "order-3")));
+
+            // Then
+            assertThat(readEvents("order-3")).containsExactly(new OrderShipped("order-3"));
+        }
+
+        @Test
+        void dispatching_the_same_invocation_twice_is_idempotent_because_the_decision_re_reads_the_boundary() {
+            // Given
+            CommandDispatcher<DcbInvocation<OrderEvent>> dispatcher = DcbCommandDispatchers.invocation(applicationService);
+            DcbInvocation<OrderEvent> shipOnce = DcbInvocation.to(orderQuery("order-4"), events -> ship(events, "order-4"));
+
+            // When
+            dispatcher.dispatch(shipOnce);
+            dispatcher.dispatch(shipOnce);
+
+            // Then
+            assertThat(readEvents("order-4")).containsExactly(new OrderShipped("order-4"));
+        }
+
+        @Test
+        void an_invocation_can_carry_its_own_tag_generator_when_the_application_service_has_no_global_one() {
+            // Given an application service with no global tag generator, so nothing else can tag the decided events
+            DcbApplicationService<OrderEvent> untagged = new GenericDcbApplicationService<>(eventStore, cloudEventConverter);
+            CommandDispatcher<DcbInvocation<OrderEvent>> dispatcher = DcbCommandDispatchers.invocation(untagged);
+
+            // When
+            dispatcher.dispatch(DcbInvocation.to(
+                    orderQuery("order-5"),
+                    event -> Set.of(tagFor(event)),
+                    events -> ship(events, "order-5")));
+
+            // Then the events are findable by the tag, so the invocation's own generator was applied
+            assertThat(readEvents("order-5")).containsExactly(new OrderShipped("order-5"));
+        }
+
+        @Test
+        void an_invocation_describes_itself_by_its_boundary_because_a_lambda_has_no_readable_name() {
+            DcbCriteria criteria = orderQuery("order-6");
+
+            assertThat(DcbInvocation.to(criteria, events -> events)).hasToString("DcbInvocation[criteria=" + criteria + "]");
+        }
+    }
+
+    private static List<OrderEvent> ship(List<OrderEvent> events, String orderId) {
+        boolean alreadyShipped = events.stream().anyMatch(OrderShipped.class::isInstance);
+        return alreadyShipped ? List.of() : List.of(new OrderShipped(orderId));
     }
 
     private List<OrderEvent> readEvents(String orderId) {

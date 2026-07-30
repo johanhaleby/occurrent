@@ -316,7 +316,8 @@ class SagaAnnotationRegistrar {
             String[] names = applicationContext.getBeanNamesForType(CommandDispatcher.class);
             if (names.length == 0) {
                 throw new IllegalStateException(("@Saga '%s' needs a CommandDispatcher bean to run the commands it issues. Declare one, for example a lambda over your ApplicationService: " +
-                        "`CommandDispatcher<MyCommand> d = cmd -> applicationService.execute(cmd.streamId(), events -> handle(cmd));`, or wrap a decider with CommandDispatchers.decider(applicationService, decider, MyCommand::streamId).").formatted(id));
+                        "`CommandDispatcher<MyCommand> d = cmd -> applicationService.execute(cmd.streamId(), events -> handle(cmd));`, or wrap a decider with CommandDispatchers.decider(applicationService, decider, MyCommand::streamId). " +
+                        "If the saga has no command types and issues Invocations instead, that bean is CommandDispatchers.invocation(applicationService).").formatted(id));
             }
             if (names.length > 1) {
                 throw new IllegalStateException("@Saga '%s' found %d CommandDispatcher beans (%s) and cannot pick one. Select one with commandDispatcher/commandDispatcherName.".formatted(id, names.length, String.join(", ", names)));
