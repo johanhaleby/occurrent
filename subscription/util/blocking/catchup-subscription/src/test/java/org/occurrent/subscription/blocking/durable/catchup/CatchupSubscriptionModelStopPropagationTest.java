@@ -81,7 +81,7 @@ class CatchupSubscriptionModelStopPropagationTest {
     }
 
     @Test
-    void isRunning_with_subscriptionId_reports_true_while_a_catchup_replay_is_in_flight_even_though_the_shared_delegate_has_not_started_the_subscription_yet() throws InterruptedException {
+    void isRunning_reports_true_while_a_catchup_replay_is_in_flight() throws InterruptedException {
         InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"));
         CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(new PermissiveCheckpointAwareSubscriptionModel(), events);
 
