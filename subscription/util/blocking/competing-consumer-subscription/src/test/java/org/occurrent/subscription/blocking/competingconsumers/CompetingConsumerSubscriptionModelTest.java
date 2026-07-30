@@ -608,9 +608,9 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.stop();
         competingConsumerSubscriptionModel2.stop();
 
-        // The lock refresh runs every half lease, so sleeping past a whole one guarantees a tick while both
-        // models are stopped. A model that keeps competing while stopped takes a lock it will not consume on,
-        // and then start() has nothing to do because the status never changed.
+        // The lock refresh runs every half lease, so sleeping past a whole one gives it two chances to tick
+        // while both models are stopped. A model that keeps competing while stopped takes a lock it will not
+        // consume on, and then start() has nothing to do because the status never changed.
         Thread.sleep(leaseTime.toMillis() + 200);
 
         competingConsumerSubscriptionModel1.start();
