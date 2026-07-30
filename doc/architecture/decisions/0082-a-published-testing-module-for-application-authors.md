@@ -131,7 +131,8 @@ registers the subscription straight into `pausedSubscriptions`. What is missing 
 be stopped before the annotation bean post-processors register anything, which no JUnit extension can do
 because it runs after context refresh. That needs its own decision, because a model that starts stopped
 interacts with `StartupMode.WAIT_UNTIL_STARTED` and with the `waitUntilStarted()` calls the bean
-post-processors make, so it is a feature rather than a flag. Left as its own decision, not built here.
+post-processors make, so it is a feature rather than a flag. Filed as #481, which carries the interactions to work
+through and needs its own ADR.
 
 Nothing on `SubscriptionModelLifeCycle` enumerates subscription ids. Only `isRunning(String)` and
 `isPaused(String)` answer per-id questions, so an extension cannot discover what a model knows and can only
@@ -141,7 +142,7 @@ follow-up.
 A wrong subscription id in a test fails with a message listing the ids the extension was told about rather
 than the ids that exist, which helps less than it sounds when the id was mistyped in the only place it
 appears. Exposing the ids the annotation bean post-processors already collect in their private
-`registeredIds` set would fix it properly, and is the next step rather than something this change does.
+`registeredIds` set would fix it properly, and is filed as #482.
 
 And there is deliberately no `startAll()`. It was written, then removed before this shipped. It could only
 ever resume the ids already named through `alwaysStart` or `start`, so on a fresh extension it would do
@@ -151,4 +152,4 @@ removing a published method breaks callers while adding one does not. A test tha
 names each of them. Once the registered ids are exposed, a real `startAll()` can be added without breaking
 anybody.
 
-Separately, whether `FlushMongoDBExtension` graduates into a store-specific testing leaf is left open above.
+Separately, whether `FlushMongoDBExtension` graduates into a store-specific testing leaf is left open above, and filed as #483.
