@@ -36,8 +36,9 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
 
 /**
  * A TCK that can be satisfied by doing nothing is worse than no TCK, so this runs
- * {@link StreamEventStoreConformance} against a store that honours none of the contract and asserts that the suite
- * notices. Every test must fail, none may pass, and none may be skipped or aborted.
+ * {@link StreamEventStoreConformance} and {@link StreamConcurrencyConformance} against a store that honours none of
+ * the contract and asserts that the suite notices. Every test must fail, none may pass, and none may be skipped or
+ * aborted.
  * <p>
  * The last part is the one worth having. The suites are written without {@code Assumptions} on purpose, so that an
  * unsupported behaviour fails loudly instead of vanishing from the report, and this is the only check that the rule is
@@ -50,8 +51,17 @@ class SuiteNeverSkipsTest {
 
     @Test
     void fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingConformance.class);
+    }
+
+    @Test
+    void the_concurrency_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingConcurrencyConformance.class);
+    }
+
+    private static void assertSuiteFailsEveryTestAndSkipsNone(Class<?> suite) {
         Events tests = EngineTestKit.engine("junit-jupiter")
-                .selectors(selectClass(HonoursNothingConformance.class))
+                .selectors(selectClass(suite))
                 .execute()
                 .testEvents();
 
@@ -78,6 +88,49 @@ class SuiteNeverSkipsTest {
      * to select, and it is expected to fail every assertion it makes.
      */
     static class HonoursNothingConformance extends StreamEventStoreConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.STREAM);
+                }
+
+                @Override
+                public EventStore eventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreQueries queries() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreOperations operations() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public ReadEventStreamWithFilter filteredReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public PositionOrderedReader positionOrderedReader() {
+                    return NoopStore.INSTANCE;
+                }
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingConformance}, but for {@link StreamConcurrencyConformance}. Every write against
+     * {@link NoopStore} throws {@link UnsupportedOperationException}, so both concurrency tests must fail rather than
+     * pass or skip.
+     */
+    static class HonoursNothingConcurrencyConformance extends StreamConcurrencyConformance {
 
         @Override
         protected EventStoreFixture createFixture() {
