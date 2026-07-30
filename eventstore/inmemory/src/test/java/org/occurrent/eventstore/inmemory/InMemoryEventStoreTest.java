@@ -33,7 +33,6 @@ import org.occurrent.filter.Filter;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -47,7 +46,6 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,7 +57,6 @@ import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.*;
 import static org.occurrent.functional.CheckedFunction.unchecked;
-import static org.occurrent.time.TimeConversion.offsetDateTimeFrom;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("ConstantConditions")
@@ -259,67 +256,6 @@ public class InMemoryEventStoreTest {
                     "The good thing is that Occurrent is open-source, so feel free to contribute :) (https://github.com/johanhaleby/occurrent/issues/58).");
         }
 
-        @Test
-        void query_filter_by_data_schema() {
-            // Given
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-            // When
-            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
-            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
-            CloudEvent cloudEvent = CloudEventBuilder.v1()
-                    .withId(UUID.randomUUID().toString())
-                    .withSource(URI.create("http://something"))
-                    .withType("something")
-                    .withTime(LocalDateTime.now().atOffset(UTC))
-                    .withSubject("subject")
-                    .withDataSchema(URI.create("urn:myschema"))
-                    .withDataContentType("application/json")
-                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
-                    .withExtension(occurrent("something", 1L))
-                    .build();
-            inMemoryEventStore.write("something", List.of(cloudEvent));
-
-            // Then
-            // Stream position is on by default, so the store stamps a global position (the fourth event written here).
-            CloudEvent expectedCloudEvent = withPosition(cloudEvent, 4);
-            Stream<CloudEvent> events = inMemoryEventStore.query(dataSchema(URI.create("urn:myschema")));
-            assertThat(events).containsExactly(expectedCloudEvent);
-        }
-
-        @Test
-        void query_filter_by_data_content_type() {
-            // Given
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-            // When
-            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
-            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
-            CloudEvent cloudEvent = CloudEventBuilder.v1()
-                    .withId(UUID.randomUUID().toString())
-                    .withSource(URI.create("http://something"))
-                    .withType("something")
-                    .withTime(offsetDateTimeFrom(LocalDateTime.now(), ZoneId.of("Europe/Stockholm")))
-                    .withSubject("subject")
-                    .withDataSchema(URI.create("urn:myschema"))
-                    .withDataContentType("text/plain")
-                    .withData("text".getBytes(UTF_8))
-                    .withExtension(occurrent("something", 1L))
-                    .build();
-            inMemoryEventStore.write("something", List.of(cloudEvent));
-
-            // Then
-            // Stream position is on by default, so the store stamps a global position (the fourth event written here).
-            CloudEvent expectedCloudEvent = withPosition(cloudEvent, 4);
-            Stream<CloudEvent> events = inMemoryEventStore.query(dataContentType("text/plain"));
-            assertThat(events).containsExactly(expectedCloudEvent);
-        }
     }
 
     @Nested

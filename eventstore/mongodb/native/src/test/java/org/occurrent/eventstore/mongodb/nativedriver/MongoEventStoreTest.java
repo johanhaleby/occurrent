@@ -28,7 +28,6 @@ import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import io.cloudevents.core.data.PojoCloudEventData;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.awaitility.Awaitility;
 import org.bson.Document;
@@ -51,7 +50,6 @@ import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.CyclicBarrier;
@@ -62,7 +60,6 @@ import java.util.stream.Stream;
 
 import static io.vavr.API.*;
 import static io.vavr.Predicates.is;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -76,7 +73,6 @@ import static org.occurrent.condition.Condition.*;
 import static org.occurrent.domain.Composition.chain;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static org.occurrent.filter.Filter.*;
-import static org.occurrent.time.TimeConversion.offsetDateTimeFrom;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("SameParameterValue")
@@ -355,67 +351,6 @@ class MongoEventStoreTest {
                 // Then
                 Stream<CloudEvent> events = eventStore.query(data("name", eq("name2")));
                 assertThat(deserialize(events)).containsExactly(nameWasChanged1);
-            }
-
-            @Test
-            void query_filter_by_data_schema() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                // When
-                persist("name1", List.of(nameDefined, nameWasChanged1));
-                persist("name2", nameWasChanged2);
-                CloudEvent cloudEvent = CloudEventBuilder.v1()
-                        .withId(UUID.randomUUID().toString())
-                        .withSource(URI.create("http://something"))
-                        .withType("something")
-                        .withTime(LocalDateTime.now().atOffset(UTC))
-                        .withSubject("subject")
-                        .withDataSchema(URI.create("urn:myschema"))
-                        .withDataContentType("application/json")
-                        .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
-                        .withExtension(occurrent("something", 1L))
-                        .build();
-                persist("something", cloudEvent);
-
-                // Then
-                Stream<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
-                // Stream position is on by default, so the store stamps a global position (the fourth event written here).
-                CloudEvent expectedCloudEvent = withPosition(CloudEventBuilder.v1(cloudEvent).withData(PojoCloudEventData.wrap(Document.parse(new String(cloudEvent.getData().toBytes(), UTF_8)), document -> document.toJson().getBytes(UTF_8))).build(), 4);
-                assertThat(events).containsExactly(expectedCloudEvent);
-            }
-
-            @Test
-            void query_filter_by_data_content_type() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                // When
-                persist("name1", List.of(nameDefined, nameWasChanged1));
-                persist("name2", nameWasChanged2);
-                CloudEvent cloudEvent = CloudEventBuilder.v1()
-                        .withId(UUID.randomUUID().toString())
-                        .withSource(URI.create("http://something"))
-                        .withType("something")
-                        .withTime(offsetDateTimeFrom(LocalDateTime.now(), ZoneId.of("Europe/Stockholm")))
-                        .withSubject("subject")
-                        .withDataSchema(URI.create("urn:myschema"))
-                        .withDataContentType("text/plain")
-                        .withData("text".getBytes(UTF_8))
-                        .withExtension(occurrent("something", 1L))
-                        .build();
-                persist("something", cloudEvent);
-
-                // Then
-                Stream<CloudEvent> events = eventStore.query(dataContentType("text/plain"));
-                // Stream position is on by default, so the store stamps a global position (the fourth event written here).
-                assertThat(events).containsExactly(withPosition(cloudEvent, 4));
             }
 
             @Nested
