@@ -122,6 +122,16 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private static final Retry COLD_START_COUNTER_RETRY = Retry.fixedDelay(5, Duration.ofMillis(20))
             .filter(ReactorMongoEventStore::isDuplicateKeyError);
 
+    // An "any stream version" write cannot legitimately fail on a version race, so a conflict from a concurrent writer
+    // is retried rather than surfaced. Applied only when the condition really is any-version, since a caller who asked
+    // for a specific version wants to hear about the conflict. Bounded with backoff rather than the blocking stores'
+    // unbounded RetryStrategy.retry() default, because retrying a reactive pipeline with neither a delay nor a limit
+    // spins a scheduler thread. Fifteen attempts over a rising delay settle any contention a single stream can produce.
+    private static final Retry ANY_STREAM_VERSION_CONFLICT_RETRY = Retry.backoff(15, Duration.ofMillis(10))
+            .maxBackoff(Duration.ofMillis(500))
+            .filter(throwable -> throwable instanceof WriteConditionNotFulfilledException)
+            .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+
     private final ReactiveMongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
     private final String dcbPositionCollectionName;
@@ -206,7 +216,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                             return streamVersionDiffFlux.switchIfEmpty(Mono.just(StreamVersionDiff.of(currentStreamVersion, currentStreamVersion)));
                         });
 
-                return transactionalOperator.transactional(operation)
+                Mono<StreamVersionDiff> transaction = transactionalOperator.transactional(operation);
+                if (writeCondition.isAnyStreamVersion()) {
+                    transaction = retryOnlyWhenThisStoreOwnsTheTransaction(transaction, ANY_STREAM_VERSION_CONFLICT_RETRY);
+                }
+                return transaction
                         .map(streamVersionDiff -> new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion));
             });
         });
