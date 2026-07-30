@@ -1,0 +1,40 @@
+name: CI-runnable tests
+
+# Deliberately a separate workflow rather than a job in maven.yml. That build triggers on push
+# with paths-ignore '**/*.md', so a change to only the test sources, the script, or this workflow
+# would otherwise not reliably get the guard to run in the same place it runs the tests; keeping it
+# here, with its own paths, means it always runs on the changes it exists to check.
+#
+# This is the same shape as adr-numbering.yml: a small, standalone check reading maven.yml for the
+# truth about what CI can run, rather than a second list of allowed platforms that maven.yml and
+# this file would have to be kept in sync by hand.
+
+on:
+  pull_request:
+    paths:
+      - '**/src/test/**'
+      - '.github/scripts/check-ci-runnable-tests.sh'
+      - '.github/workflows/ci-runnable-tests.yml'
+      - '.github/workflows/maven.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '**/src/test/**'
+      - '.github/scripts/check-ci-runnable-tests.sh'
+      - '.github/workflows/ci-runnable-tests.yml'
+      - '.github/workflows/maven.yml'
+
+concurrency:
+  group: ci-runnable-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci-runnable-tests:
+    name: ci-runnable tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No test is gated on an OS or JDK that no CI job satisfies
+        run: bash .github/scripts/check-ci-runnable-tests.sh

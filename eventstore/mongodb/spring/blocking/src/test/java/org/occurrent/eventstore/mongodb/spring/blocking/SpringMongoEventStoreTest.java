@@ -26,12 +26,9 @@ import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
-import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
-import org.junit.jupiter.api.condition.EnabledOnJre;
-import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.*;
 import org.occurrent.eventstore.api.*;
@@ -53,8 +50,6 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.concurrent.CyclicBarrier;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -62,13 +57,10 @@ import static io.vavr.API.*;
 import static io.vavr.Predicates.is;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.condition.JRE.JAVA_11;
-import static org.junit.jupiter.api.condition.JRE.JAVA_8;
-import static org.junit.jupiter.api.condition.OS.MAC;
 import static org.occurrent.condition.Condition.*;
 import static org.occurrent.filter.Filter.*;
 
@@ -210,94 +202,6 @@ public class SpringMongoEventStoreTest {
     }
 
     @Nested
-    @DisplayName("Conditionally Write to Blocking Spring Mongo EventStore")
-    class ConditionallyWriteToSpringMongoEventStore {
-
-        LocalDateTime now = LocalDateTime.now();
-
-        @Nested
-        @DisplayName("parallel writes")
-        class ParallelWritesToEventStoreReturns {
-
-            @EnabledOnOs(MAC)
-            @RepeatedIfExceptionsTest(repeats = 5, suspend = 500)
-            void parallel_writes_to_event_store_throws_WriteConditionNotFulfilledException_when_write_condition_is_not_any() {
-                // Given
-                CyclicBarrier cyclicBarrier = new CyclicBarrier(2);
-                WriteCondition writeCondition = WriteCondition.streamVersionEq(0);
-                AtomicReference<Throwable> exception = new AtomicReference<>();
-
-                // When
-                new Thread(() -> {
-                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                    await(cyclicBarrier);
-                    exception.set(catchThrowable(() -> persist("name", writeCondition, event)));
-                }).start();
-
-                new Thread(() -> {
-                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                    await(cyclicBarrier);
-                    exception.set(catchThrowable(() -> persist("name", writeCondition, event)));
-                }).start();
-
-                // Then
-                Awaitility.await().atMost(4, SECONDS).untilAsserted(() -> assertThat(exception).hasValue(new WriteConditionNotFulfilledException("name", 1, writeCondition, "WriteCondition was not fulfilled. Expected version to be equal to 0 but was 1.")));
-            }
-
-            @EnabledOnOs(MAC)
-            @RepeatedIfExceptionsTest(repeats = 5, suspend = 200, minSuccess = 5)
-            void parallel_writes_to_event_store_does_not_throw_WriteConditionNotFulfilledException_when_write_condition_is_any() {
-                // Given
-                CyclicBarrier cyclicBarrier = new CyclicBarrier(3);
-                WriteCondition writeCondition = WriteCondition.anyStreamVersion();
-                AtomicReference<Throwable> exception = new AtomicReference<>();
-
-                // When
-                new Thread(() -> {
-                    NameWasChanged event = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Ikk Doe");
-                    try {
-                        await(cyclicBarrier);
-                        persist("name", writeCondition, event);
-                    } catch (Exception e) {
-                        exception.set(e);
-                    }
-                }).start();
-
-                new Thread(() -> {
-                    NameWasChanged event = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Ikkster Doe");
-                    try {
-                        await(cyclicBarrier);
-                        persist("name", writeCondition, event);
-                    } catch (Exception e) {
-                        exception.set(e);
-                    }
-                }).start();
-
-                new Thread(() -> {
-                    NameWasChanged event = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Ikkster Doe2");
-                    try {
-                        await(cyclicBarrier);
-                        persist("name", writeCondition, event);
-                    } catch (Exception e) {
-                        exception.set(e);
-                    }
-                }).start();
-
-                // Then
-                Awaitility.await().atMost(4, SECONDS).untilAsserted(() -> {
-                    EventStream<CloudEvent> eventStream = eventStore.read("name");
-                    assertThat(deserialize(eventStream.events()))
-                            .extracting(it -> (NameWasChanged) it)
-                            .extracting(NameWasChanged::name)
-                            .contains("Ikk Doe", "Ikkster Doe", "Ikkster Doe2");
-                });
-                assertThat(exception.get()).isNull();
-            }
-        }
-
-    }
-
-    @Nested
     @DisplayName("queries")
     class QueriesTest {
 
@@ -354,24 +258,6 @@ public class SpringMongoEventStoreTest {
                 // Then
                 Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now.plusMinutes(35), UTC)), lte(OffsetDateTime.of(now.plusHours(4), UTC)))));
                 assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
-            }
-
-            @EnabledOnJre(JAVA_8)
-            @Test
-            void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_8() {
-                // Given
-                LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                // When
-                persist("name1", Stream.of(nameDefined, nameWasChanged1));
-                persist("name2", nameWasChanged2);
-
-                // Then
-                Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
-                assertThat(deserialize(events)).isNotEmpty(); // Java 8 seem to return undeterministic results
             }
 
             @EnabledForJreRange(min = JAVA_11)
@@ -566,14 +452,6 @@ public class SpringMongoEventStoreTest {
             }});
         } catch (JsonProcessingException jsonProcessingException) {
             throw new RuntimeException(jsonProcessingException);
-        }
-    }
-
-    private static void await(CyclicBarrier cyclicBarrier) {
-        try {
-            cyclicBarrier.await();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
         }
     }
 }

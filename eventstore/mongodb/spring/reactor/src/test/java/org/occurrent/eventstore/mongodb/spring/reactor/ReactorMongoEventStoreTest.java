@@ -28,8 +28,6 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
-import org.junit.jupiter.api.condition.EnabledOnJre;
-import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.condition.Condition;
 import org.occurrent.domain.*;
@@ -58,22 +56,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.condition.JRE.JAVA_11;
-import static org.junit.jupiter.api.condition.JRE.JAVA_8;
-import static org.junit.jupiter.api.condition.OS.MAC;
 import static org.occurrent.condition.Condition.*;
 import static org.occurrent.filter.Filter.*;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
@@ -251,46 +245,6 @@ public class ReactorMongoEventStoreTest {
     }
 
     @Nested
-    @DisplayName("Conditionally Write to Mongo Event Store")
-    class ConditionallyWriteToSpringMongoEventStore {
-
-        LocalDateTime now = LocalDateTime.now();
-
-        @Nested
-        @DisplayName("parallel writes")
-        class ParallelWritesToEventStoreReturns {
-
-            @EnabledOnOs(MAC)
-            @RepeatedIfExceptionsTest(repeats = 5, suspend = 500)
-            void parallel_writes_to_event_store_throws_WriteConditionNotFulfilledException() {
-                // Given
-                CyclicBarrier cyclicBarrier = new CyclicBarrier(2);
-                WriteCondition writeCondition = WriteCondition.streamVersionEq(0);
-                AtomicReference<Throwable> exception = new AtomicReference<>();
-
-                // When
-                new Thread(() -> {
-                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                    await(cyclicBarrier);
-                    exception.set(catchThrowable(() -> persist("name", writeCondition, event).block()));
-                }).start();
-
-                new Thread(() -> {
-                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-                    await(cyclicBarrier);
-                    exception.set(catchThrowable(() -> persist("name", writeCondition, event).block()));
-                }).start();
-
-                // Then
-                Awaitility.await().atMost(4, SECONDS).untilAsserted(() -> assertThat(exception).hasValue(new WriteConditionNotFulfilledException("name", 1, writeCondition, "WriteCondition was not fulfilled. Expected version to be equal to 0 but was 1.")));
-            }
-        }
-
-        
-
-    }
-
-    @Nested
     @DisplayName("queries")
     class QueriesTest {
 
@@ -347,24 +301,6 @@ public class ReactorMongoEventStoreTest {
                 // Then
                 Flux<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now.plusMinutes(35), UTC)), lte(OffsetDateTime.of(now.plusHours(4), UTC)))));
                 assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
-            }
-
-            @EnabledOnJre(JAVA_8)
-            @Test
-            void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_8() {
-                // Given
-                LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                // When
-                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
-                persist("name2", nameWasChanged2).block();
-
-                // Then
-                Flux<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
-                assertThat(deserialize(events)).isNotEmpty(); // Java 8 seem to return nondeterministic results
             }
 
             @EnabledForJreRange(min = JAVA_11)
@@ -580,14 +516,6 @@ public class ReactorMongoEventStoreTest {
         try {
             countDownLatch.await();
         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private static void await(CyclicBarrier cyclicBarrier) {
-        try {
-            cyclicBarrier.await();
-        } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
