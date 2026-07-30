@@ -92,4 +92,4 @@ offset, which is the case if you store UTC. If your events span several offsets 
 use `TimeRepresentation.DATE`, which compares numerically, or keep a separate attribute holding the instant as a
 `Date`.
 
-Rationale in [ADR 78](../architecture/decisions/0078-canonical-fixed-width-time-for-rfc3339-storage.md).
+Rationale in [ADR 79](../architecture/decisions/0079-canonical-fixed-width-time-for-rfc3339-storage.md).
