@@ -33,6 +33,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.tck.ConformanceEvents.SOURCE;
 import static org.occurrent.tck.ConformanceEvents.event;
@@ -252,6 +253,37 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
                     original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
 
             assertThat(updated).isEmpty();
+        }
+
+        @Test
+        void rejects_an_update_function_that_returns_null() {
+            eventStore().write(STREAM_ID, List.of(event("a", DEFINED), event("b", CHANGED)));
+
+            Throwable thrown = catchThrowable(() -> operations().updateEvent("b", SOURCE, original -> null));
+
+            assertAll(
+                    // The wording is part of the contract, not a cosmetic detail, so every store owes the same one.
+                    () -> assertThat(thrown)
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessage("Cloud event update function is not allowed to return null"),
+                    // Removing the event instead of refusing would be the dangerous reading of a null return.
+                    () -> assertThat(idsOf(eventStore().read(STREAM_ID))).containsExactly("a", "b")
+            );
+        }
+
+        @Test
+        void gives_back_the_event_when_the_update_changes_nothing() {
+            eventStore().write(STREAM_ID, List.of(event("a", DEFINED), event("b", CHANGED)));
+
+            Optional<CloudEvent> updated = operations().updateEvent("b", SOURCE, original -> original);
+
+            // An empty result means "no such event" everywhere else on this interface, so an unchanged event must not
+            // report itself as missing.
+            assertAll(
+                    () -> assertThat(updated).isPresent(),
+                    () -> assertThat(updated.orElseThrow().getId()).isEqualTo("b"),
+                    () -> assertThat(idsOf(eventStore().read(STREAM_ID))).containsExactly("a", "b")
+            );
         }
 
         @Test
