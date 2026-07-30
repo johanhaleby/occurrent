@@ -25,6 +25,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 
+import java.time.temporal.ChronoUnit;
 import java.util.Set;
 
 /**
@@ -87,37 +88,31 @@ public interface EventStoreFixture {
     }
 
     /**
-     * Whether {@code Filter.time(anInstant)} matches an event written at exactly that instant. Defaults to
-     * {@code true}, because that is what the filter plainly means.
+     * The finest precision this store keeps for a CloudEvent's {@code time} attribute. Defaults to
+     * {@link ChronoUnit#NANOS}, which is what the in-memory store and MongoDB's {@code RFC_3339_STRING} both manage.
      * <p>
-     * <strong>This is an unresolved divergence, not a blessed variation.</strong> The MongoDB stores answer
-     * {@code false}: with {@code RFC_3339_STRING} the filter's instant is rendered by Occurrent's RFC 3339 formatter,
-     * which always writes seconds, while the stored CloudEvent time omits them when they are zero, so
-     * {@code 2026-07-28T12:00:00Z} is compared against a stored {@code 2026-07-28T12:00Z} and misses. Range conditions
-     * are unaffected, which is why only exact matching is declared here.
+     * <strong>A store must refuse a time it cannot represent, not round it off.</strong> That is the contract, not an
+     * implementation detail: an event is the record of something that happened, and a silently truncated timestamp
+     * cannot be detected afterwards by anything. MongoDB's {@code DATE} representation stores a millisecond epoch value
+     * and throws rather than lose the rest, which is the behaviour to copy.
      * <p>
-     * It is a declaration rather than a loosened assertion so that both answers stay pinned and the stores that get it
-     * right cannot regress. Reported in <a href="https://github.com/johanhaleby/occurrent/issues/396">#396</a>.
-     * Delete this method, and its overrides, once the divergence is resolved.
+     * This is a {@link ChronoUnit} rather than a flag because precision is not binary. A relational store on a
+     * {@code timestamp(6)} column keeps microseconds, which no boolean can express.
      */
-    default boolean matchesExactTimeFilters() {
-        return true;
+    default ChronoUnit timePrecision() {
+        return ChronoUnit.NANOS;
     }
 
     /**
-     * Whether deleting every event in a stream through {@code delete(Filter)} also makes {@code exists(streamId)}
-     * report {@code false}. Defaults to {@code true}, which is what the three MongoDB stores do and what
-     * {@code deleteEventStream} does everywhere.
+     * Whether this store gives back a CloudEvent's {@code time} carrying the same UTC offset it was written with.
+     * Defaults to {@code true}.
      * <p>
-     * <strong>This is an unresolved divergence, not a blessed variation.</strong> The in-memory store answers
-     * {@code false}: it removes the events, so {@code count()} drops to zero, but the stream keeps reporting that it
-     * exists.
-     * <p>
-     * It is a declaration rather than a loosened assertion so that both answers stay pinned. Reported in
-     * <a href="https://github.com/johanhaleby/occurrent/issues/396">#396</a>. Delete this method, and its overrides,
-     * once the divergence is resolved.
+     * A store answering {@code false} must refuse a time that is not already in UTC, for the same reason as
+     * {@link #timePrecision()}: quietly rewriting {@code +02:00} to {@code Z} preserves the instant and loses the
+     * offset, and nothing downstream can tell that it happened. MongoDB's {@code DATE} representation cannot hold an
+     * offset, so it rejects one.
      */
-    default boolean deleteByFilterClearsStreamExistence() {
+    default boolean preservesTimeOffset() {
         return true;
     }
 

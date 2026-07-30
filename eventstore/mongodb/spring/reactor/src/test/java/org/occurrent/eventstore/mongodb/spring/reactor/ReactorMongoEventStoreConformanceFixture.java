@@ -25,15 +25,18 @@ import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 
+import java.time.temporal.ChronoUnit;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.DATE;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 
 /**
@@ -44,8 +47,14 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
 
     private final MongoClient mongoClient;
     private final BlockingEventStoreOverReactive bridge;
+    private final TimeRepresentation timeRepresentation;
 
     ReactorMongoEventStoreConformanceFixture(ConnectionString connectionString) {
+        this(connectionString, RFC_3339_STRING);
+    }
+
+    ReactorMongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation) {
+        this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         String database = requireNonNull(connectionString.getDatabase());
         ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, database);
@@ -54,23 +63,26 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(connectionString.getCollection())
                 .transactionConfig(transactionManager)
-                .timeRepresentation(RFC_3339_STRING)
+                .timeRepresentation(timeRepresentation)
                 .build();
         this.bridge = BlockingEventStoreOverReactive.of(new ReactorMongoEventStore(mongoTemplate, eventStoreConfig));
-    }
-
-    /**
-     * An exact-time filter misses an event whose time has zero seconds, because the filter renders seconds and the
-     * stored CloudEvent time does not. Unresolved divergence, see the SPI method.
-     */
-    @Override
-    public boolean matchesExactTimeFilters() {
-        return false;
     }
 
     @Override
     public Set<EventStoreCapability> capabilities() {
         return Set.of(EventStoreCapability.STREAM);
+    }
+
+    @Override
+    public ChronoUnit timePrecision() {
+        // DATE stores a millisecond epoch value, so anything finer is lost rather than kept.
+        return timeRepresentation == DATE ? ChronoUnit.MILLIS : ChronoUnit.NANOS;
+    }
+
+    @Override
+    public boolean preservesTimeOffset() {
+        // DATE has no offset field alongside the epoch value, so it cannot hold anything but UTC.
+        return timeRepresentation != DATE;
     }
 
     @Override

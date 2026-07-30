@@ -62,7 +62,10 @@ public final class ConformanceEvents {
      */
     public static final OffsetDateTime TIME = OffsetDateTime.of(2026, 7, 28, 12, 0, 0, 0, ZoneOffset.UTC);
 
-    private static final String CONTENT_TYPE = "application/json";
+    /**
+     * The {@code datacontenttype} every event built here carries unless one is supplied.
+     */
+    public static final String CONTENT_TYPE = "application/json";
 
     private ConformanceEvents() {
     }
@@ -115,6 +118,25 @@ public final class ConformanceEvents {
                 .withDataContentType(CONTENT_TYPE)
                 .withData(dataFor(subject))
                 .build();
+    }
+
+    /**
+     * An event carrying a {@code dataschema}, which the events built by the other factories deliberately leave unset so
+     * a filter on it can tell them apart.
+     */
+    public static CloudEvent eventWithDataSchema(String id, String type, URI dataSchema) {
+        requireNonNull(dataSchema, "dataSchema cannot be null");
+        return CloudEventBuilder.v1(event(id, type)).withDataSchema(dataSchema).build();
+    }
+
+    /**
+     * An event carrying an explicit {@code datacontenttype} and matching body. The other factories always say
+     * {@value #CONTENT_TYPE}, so a suite filtering on the content type needs one event that says something else.
+     */
+    public static CloudEvent eventWithDataContentType(String id, String type, String dataContentType, byte[] data) {
+        requireNonNull(dataContentType, "dataContentType cannot be null");
+        requireNonNull(data, "data cannot be null");
+        return CloudEventBuilder.v1(event(id, type)).withDataContentType(dataContentType).withData(data).build();
     }
 
     /**

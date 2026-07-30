@@ -31,9 +31,11 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 
+import java.time.temporal.ChronoUnit;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.DATE;
 
 /**
  * Extracted from the stream conformance test so the queries and operations suites can share it without duplicating
@@ -44,8 +46,14 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
 
     private final MongoClient mongoClient;
     private final SpringMongoEventStore eventStore;
+    private final TimeRepresentation timeRepresentation;
 
     SpringMongoEventStoreConformanceFixture(ConnectionString connectionString) {
+        this(connectionString, TimeRepresentation.RFC_3339_STRING);
+    }
+
+    SpringMongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation) {
+        this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         String database = requireNonNull(connectionString.getDatabase());
         MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, database);
@@ -54,23 +62,26 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(connectionString.getCollection())
                 .transactionConfig(transactionManager)
-                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .timeRepresentation(timeRepresentation)
                 .build();
         this.eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-    }
-
-    /**
-     * An exact-time filter misses an event whose time has zero seconds, because the filter renders seconds and the
-     * stored CloudEvent time does not. Unresolved divergence, see the SPI method.
-     */
-    @Override
-    public boolean matchesExactTimeFilters() {
-        return false;
     }
 
     @Override
     public Set<EventStoreCapability> capabilities() {
         return Set.of(EventStoreCapability.STREAM);
+    }
+
+    @Override
+    public ChronoUnit timePrecision() {
+        // DATE stores a millisecond epoch value, so anything finer is lost rather than kept.
+        return timeRepresentation == DATE ? ChronoUnit.MILLIS : ChronoUnit.NANOS;
+    }
+
+    @Override
+    public boolean preservesTimeOffset() {
+        // DATE has no offset field alongside the epoch value, so it cannot hold anything but UTC.
+        return timeRepresentation != DATE;
     }
 
     @Override

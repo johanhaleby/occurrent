@@ -23,17 +23,14 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import io.cloudevents.core.data.PojoCloudEventData;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.awaitility.Awaitility;
-import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.condition.Condition;
 import org.occurrent.domain.*;
 import org.occurrent.eventstore.api.*;
@@ -56,7 +53,7 @@ import reactor.core.scheduler.Schedulers;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -66,7 +63,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -81,7 +77,6 @@ import static org.junit.jupiter.api.condition.OS.MAC;
 import static org.occurrent.condition.Condition.*;
 import static org.occurrent.filter.Filter.*;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
-import static org.occurrent.time.TimeConversion.offsetDateTimeFrom;
 
 @SuppressWarnings("SameParameterValue")
 @Testcontainers
@@ -256,45 +251,6 @@ public class ReactorMongoEventStoreTest {
     }
 
     @Nested
-    @DisplayName("update when stream consistency guarantee is transactional")
-    class Update {
-
-        @Test
-        void throw_iae_when_update_function_returns_null() {
-            // Given
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            String eventId2 = UUID.randomUUID().toString();
-            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name", "name2");
-            persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
-
-            // When
-            Throwable throwable = catchThrowable(() -> eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> null).block());
-
-            // Then
-            assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Cloud event update function is not allowed to return null");
-        }
-
-        @Test
-        void when_update_function_returns_the_same_argument_then_cloud_event_is_unchanged_in_the_database() {
-            // Given
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            String eventId2 = UUID.randomUUID().toString();
-            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name", "name2");
-            persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
-
-            // When
-            eventStore.updateEvent(eventId2, NAME_SOURCE, Function.identity()).block();
-
-            // Then
-            Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
-            VersionAndEvents versionAndEvents = deserialize(eventStream);
-            assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1);
-        }
-    }
-
-    @Nested
     @DisplayName("Conditionally Write to Mongo Event Store")
     class ConditionallyWriteToSpringMongoEventStore {
 
@@ -355,67 +311,6 @@ public class ReactorMongoEventStoreTest {
             assertThat(deserialize(events)).containsOnly(nameWasChanged1, nameDefined);
         }
 
-        @Test
-        void query_filter_by_data_schema() {
-            // Given
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-            // When
-            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
-            persist("name2", nameWasChanged2).block();
-            CloudEvent cloudEvent = CloudEventBuilder.v1()
-                    .withId(UUID.randomUUID().toString())
-                    .withSource(URI.create("http://something"))
-                    .withType("something")
-                    .withTime(LocalDateTime.now().atOffset(UTC))
-                    .withSubject("subject")
-                    .withDataSchema(URI.create("urn:myschema"))
-                    .withDataContentType("application/json")
-                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
-                    .withExtension(OccurrentCloudEventExtension.occurrent("something", 1))
-                    .build();
-            persist("something", cloudEvent).block();
-
-            // Then
-            Flux<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
-            // Stream position is on by default, so the store stamps a global position (the fourth event written here).
-            CloudEvent expectedCloudEvent = OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1(cloudEvent).withData(PojoCloudEventData.wrap(Document.parse(new String(requireNonNull(cloudEvent.getData()).toBytes(), UTF_8)), document -> document.toJson().getBytes(UTF_8))).build(), 4);
-            assertThat(events.toStream()).containsExactly(expectedCloudEvent);
-        }
-
-        @Test
-        void query_filter_by_data_content_type() {
-            // Given
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-            // When
-            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
-            persist("name2", nameWasChanged2).block();
-            CloudEvent cloudEvent = CloudEventBuilder.v1()
-                    .withId(UUID.randomUUID().toString())
-                    .withSource(URI.create("http://something"))
-                    .withType("something")
-                    .withTime(offsetDateTimeFrom(LocalDateTime.now(), ZoneId.of("Europe/Stockholm")))
-                    .withSubject("subject")
-                    .withDataSchema(URI.create("urn:myschema"))
-                    .withDataContentType("text/plain")
-                    .withData("text".getBytes(UTF_8))
-                    .withExtension(OccurrentCloudEventExtension.occurrent("something", 1))
-                    .build();
-            persist("something", cloudEvent).block();
-
-            // Then
-            Flux<CloudEvent> events = eventStore.query(dataContentType("text/plain"));
-            // Stream position is on by default, so the store stamps a global position (the fourth event written here).
-            assertThat(events.toStream()).containsExactly(OccurrentCloudEventExtension.withPosition(cloudEvent, 4));
-        }
-
         @Nested
         @DisplayName("when time is represented as rfc 3339 string")
         class TimeRepresentedAsRfc3339String {
@@ -423,7 +318,7 @@ public class ReactorMongoEventStoreTest {
             @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
             void query_filter_by_time_but_is_using_slow_string_comparison() {
                 // Given
-                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
                 NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
@@ -458,7 +353,7 @@ public class ReactorMongoEventStoreTest {
             @Test
             void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_8() {
                 // Given
-                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
                 NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
@@ -476,7 +371,7 @@ public class ReactorMongoEventStoreTest {
             @Test
             void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_11_and_above() {
                 // Given
-                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
                 NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
@@ -487,7 +382,7 @@ public class ReactorMongoEventStoreTest {
 
                 // Then
                 Flux<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
-                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
             }
 
             @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)

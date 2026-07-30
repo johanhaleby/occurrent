@@ -44,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.DATE;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
+import static org.occurrent.time.internal.RFC3339.RFC_3339_FIXED_WIDTH_DATE_TIME_FORMATTER;
 
 class OccurrentCloudEventMongoDocumentMapperTest {
 
@@ -532,7 +533,7 @@ class OccurrentCloudEventMongoDocumentMapperTest {
             assertAll(
                     () -> assertThat(document.getString("subject")).isEqualTo("subject"),
                     () -> assertThat(document.getString("type")).isEqualTo("type"),
-                    () -> assertThat(document.getString("time")).isEqualTo(RFC_3339_DATE_TIME_FORMATTER.format(offsetDateTime)),
+                    () -> assertThat(document.getString("time")).isEqualTo(RFC_3339_FIXED_WIDTH_DATE_TIME_FORMATTER.format(offsetDateTime)),
                     () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                     () -> assertThat(document.getString("id")).isEqualTo("id"),
                     () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
@@ -563,13 +564,76 @@ class OccurrentCloudEventMongoDocumentMapperTest {
             assertAll(
                     () -> assertThat(document.getString("subject")).isEqualTo("subject"),
                     () -> assertThat(document.getString("type")).isEqualTo("type"),
-                    () -> assertThat(document.getString("time")).isEqualTo(RFC_3339_DATE_TIME_FORMATTER.format(offsetDateTime)),
+                    () -> assertThat(document.getString("time")).isEqualTo(RFC_3339_FIXED_WIDTH_DATE_TIME_FORMATTER.format(offsetDateTime)),
                     () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                     () -> assertThat(document.getString("id")).isEqualTo("id"),
                     () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
                     () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
                     () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
             );
+        }
+
+        @Test
+        void converts_cloud_event_with_whole_minute_precision_to_fixed_width_rfc_3339() {
+            // Given
+            OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 0, 0), UTC);
+
+            CloudEvent cloudEvent = new CloudEventBuilder()
+                    .withSubject("subject")
+                    .withType("type")
+                    .withTime(offsetDateTime)
+                    .withSource(URI.create("urn:name"))
+                    .withId("id")
+                    .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
+                    .build();
+
+            // When
+            Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(RFC_3339_STRING, "streamid", 2L, cloudEvent);
+
+            // Then
+            assertThat(document.getString("time")).isEqualTo("2020-07-26T09:13:00.000000000Z");
+        }
+
+        @Test
+        void converts_cloud_event_with_zero_nanos_but_nonzero_seconds_to_fixed_width_rfc_3339() {
+            // Given
+            OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 0), UTC);
+
+            CloudEvent cloudEvent = new CloudEventBuilder()
+                    .withSubject("subject")
+                    .withType("type")
+                    .withTime(offsetDateTime)
+                    .withSource(URI.create("urn:name"))
+                    .withId("id")
+                    .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
+                    .build();
+
+            // When
+            Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(RFC_3339_STRING, "streamid", 2L, cloudEvent);
+
+            // Then
+            assertThat(document.getString("time")).isEqualTo("2020-07-26T09:13:03.000000000Z");
+        }
+
+        @Test
+        void converts_cloud_event_with_nanosecond_precision_and_survives_the_fixed_width_rfc_3339_round_trip() {
+            // Given
+            OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 123_456_789), UTC);
+
+            CloudEvent cloudEvent = new CloudEventBuilder()
+                    .withSubject("subject")
+                    .withType("type")
+                    .withTime(offsetDateTime)
+                    .withSource(URI.create("urn:name"))
+                    .withId("id")
+                    .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
+                    .build();
+
+            // When
+            Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(RFC_3339_STRING, "streamid", 2L, cloudEvent);
+
+            // Then
+            assertThat(document.getString("time")).isEqualTo("2020-07-26T09:13:03.123456789Z");
         }
 
 

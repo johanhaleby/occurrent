@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
+import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
@@ -342,7 +343,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             CloudEvent currentCloudEvent = DcbDocumentMapper.toCloudEvent(timeRepresentation, document);
             CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
             if (updatedCloudEvent == null) {
-                throw new IllegalArgumentException("Cloud event update function is not allowed to return null");
+                throw UpdateEventFunctionValidator.updateFunctionReturnedNull();
             } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);

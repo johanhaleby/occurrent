@@ -27,7 +27,9 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.filter.Filter;
+import org.occurrent.tck.ConformanceEvents;
 
+import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
@@ -46,6 +48,7 @@ import static org.occurrent.condition.Condition.ne;
 import static org.occurrent.condition.Condition.not;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.occurrent.tck.ConformanceEvents.SOURCE;
 import static org.occurrent.tck.ConformanceEvents.TIME;
 import static org.occurrent.tck.ConformanceEvents.event;
@@ -80,6 +83,8 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
     private static final String DEFINED = "NameDefined";
     private static final String CHANGED = "NameWasChanged";
     private static final String ARCHIVED = "NameArchived";
+
+    private static final URI DATA_SCHEMA = URI.create("urn:occurrent:tck:schema");
 
     @Override
     protected final Set<EventStoreCapability> requiredCapabilities() {
@@ -178,7 +183,7 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
 
             assertAll(
                     () -> assertThat(idsOf(queries().query(Filter.source(SOURCE)))).containsExactly("a"),
-                    () -> assertThat(idsOf(queries().query(Filter.source(java.net.URI.create("urn:nope"))))).isEmpty()
+                    () -> assertThat(idsOf(queries().query(Filter.source(URI.create("urn:nope"))))).isEmpty()
             );
         }
 
@@ -194,19 +199,37 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
         }
 
         @Test
-        void matching_an_exact_time_follows_what_the_fixture_declares() {
+        void matches_an_exact_time() {
+            // TIME has zero seconds and zero nanos on purpose. A store that renders the stored value and the filter
+            // value differently misses exactly this case and nothing else, which is how it went unnoticed for so long.
             eventStore().write(STREAM_ID, List.of(eventAt("a", DEFINED, TIME), eventAt("b", CHANGED, TIME.plusHours(1))));
 
-            List<String> matched = idsOf(queries().query(Filter.time(TIME)));
+            assertThat(idsOf(queries().query(Filter.time(TIME)))).containsExactly("a");
+        }
 
-            if (fixture().matchesExactTimeFilters()) {
-                assertThat(matched).containsExactly("a");
-            } else {
-                assertThat(matched)
-                        .describedAs("a store that declares it cannot match an exact time must miss the event rather "
-                                + "than matching something else")
-                        .isEmpty();
-            }
+        @Test
+        void filters_on_data_schema() {
+            eventStore().write(STREAM_ID, List.of(
+                    ConformanceEvents.eventWithDataSchema("a", DEFINED, DATA_SCHEMA),
+                    event("b", CHANGED)));
+
+            assertAll(
+                    () -> assertThat(idsOf(queries().query(Filter.dataSchema(DATA_SCHEMA)))).containsExactly("a"),
+                    () -> assertThat(idsOf(queries().query(Filter.dataSchema(URI.create("urn:other"))))).isEmpty()
+            );
+        }
+
+        @Test
+        void filters_on_data_content_type() {
+            eventStore().write(STREAM_ID, List.of(
+                    event("a", DEFINED),
+                    ConformanceEvents.eventWithDataContentType("b", CHANGED, "text/plain", "text".getBytes(UTF_8))));
+
+            assertAll(
+                    () -> assertThat(idsOf(queries().query(Filter.dataContentType("text/plain")))).containsExactly("b"),
+                    () -> assertThat(idsOf(queries().query(Filter.dataContentType(ConformanceEvents.CONTENT_TYPE))))
+                            .containsExactly("a")
+            );
         }
 
         @Test
