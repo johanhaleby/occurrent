@@ -27,7 +27,6 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter
 import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.StreamSubscriptionFilter
 import org.occurrent.subscription.api.reactor.Subscription
-import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
 /**
@@ -119,45 +118,32 @@ private fun <E : Any> StreamSubscriptions<E>.projectWithMetadata(subscriptionId:
 
 /**
  * Folds the events [projection] selects, read on demand, into its view state: the strongly-consistent, query-driven
- * counterpart to the subscription-fed [Subscriptions.project]. The returned [Mono] emits the folded state, or completes
- * empty when that state is `null` (Reactor cannot carry a `null` value, so the state type is constrained to be non-null,
- * a nullable-state read model should use the blocking pull or model absence explicitly). Only valid for a
- * single-instance (singleton) projection. A keyed projection errors, since folding every instance into one blended
- * state on demand would produce a nonsense result. Use [project] with an `instanceId` for a keyed projection.
+ * counterpart to the subscription-fed [Subscriptions.project]. The returned [Mono] emits the folded state, and completes
+ * empty when the fold produced `null`, since a [Mono] cannot carry `null`. An empty completion therefore means the state
+ * is `null`, not that no events matched. Only valid for a single-instance (singleton) projection. A keyed projection
+ * errors when subscribed to, since folding every instance into one blended state on demand would produce a nonsense
+ * result. Use [project] with an `instanceId` for a keyed projection.
+ *
+ * The Kotlin receiver form of [Projections.project], which is the same fold and does the work, so which events get
+ * selected and when a keyed projection is rejected are decided in one place for both languages. It folds each event as
+ * the query emits it rather than reading the whole history into a list first.
  */
-fun <S : Any, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<S, E, ID>): Mono<S> {
-    if (projection.id() != null) {
-        return Mono.error(
-            IllegalArgumentException(
-                "projection is keyed; folding every instance into one blended state on demand is not supported, use project(projection, instanceId) to read a single instance, or a singleton projection for one shared state"
-            )
-        )
-    }
-    val explicitFilter = projection.filter()
-    val events: Flux<E> = when {
-        explicitFilter != null -> query(explicitFilter)
-        projection.eventTypes().isEmpty() -> all()
-        else -> query(projection.eventTypes().toList())
-    }
-    return events.collectList().flatMap { list -> Mono.justOrEmpty(projection.view().evolve(list)) }
-}
+// The cast expresses what the Mono already guarantees: a null state becomes an empty completion, so nothing null is
+// ever emitted. Kotlin will not let a Mono be declared over a nullable type, hence stating the non-null element here.
+@Suppress("UNCHECKED_CAST")
+fun <S, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<S, E, ID>): Mono<S & Any> =
+    Projections.project(projection, this) as Mono<S & Any>
 
 /**
  * Folds the events [projection] selects for [instanceId], read on demand, into that instance's view state: the
- * strongly-consistent, query-driven, single-instance counterpart to the unqualified [project]. Uses the same filter
- * or handled event types as the unqualified [project] to read candidate events, then keeps only the ones whose
- * [Projection.id] resolves to [instanceId] before folding. A singleton projection (no id function) has a single
- * instance regardless of [instanceId], so this folds all selected events, same as the unqualified [project]. The
- * returned [Mono] emits the folded state, or completes empty when that state is `null`.
+ * strongly-consistent, query-driven, single-instance counterpart to the unqualified [project]. Reads the same candidate
+ * events as the unqualified [project], then keeps only the ones whose [Projection.id] resolves to
+ * [instanceId] before folding. A singleton projection (no id function) has a single instance regardless of
+ * [instanceId], so this folds all selected events, same as the unqualified [project]. The returned [Mono] emits the
+ * folded state, and completes empty when the fold produced `null`.
+ *
+ * The receiver form of [Projections.project], which does the work.
  */
-fun <S : Any, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<S, E, ID>, instanceId: ID): Mono<S> {
-    val explicitFilter = projection.filter()
-    val events: Flux<E> = when {
-        explicitFilter != null -> query(explicitFilter)
-        projection.eventTypes().isEmpty() -> all()
-        else -> query(projection.eventTypes().toList())
-    }
-    val id = projection.id()
-    val scopedEvents = if (id == null) events else events.filter { id.apply(it) == instanceId }
-    return scopedEvents.collectList().flatMap { list -> Mono.justOrEmpty(projection.view().evolve(list)) }
-}
+@Suppress("UNCHECKED_CAST")
+fun <S, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<S, E, ID>, instanceId: ID): Mono<S & Any> =
+    Projections.project(projection, this, instanceId) as Mono<S & Any>

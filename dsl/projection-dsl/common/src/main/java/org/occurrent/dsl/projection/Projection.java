@@ -43,6 +43,12 @@ import static java.util.Objects.requireNonNull;
  * Build one with the type-safe {@link #builder(Object) handler builder}, registering a fold per event type with
  * {@link Builder#on(Class, BiFunction)}. The handled types become the subscription filter, and the fold leaves the state
  * unchanged for any event type it does not handle, so feeding it a broader stream is safe.
+ * <p>
+ * One descriptor runs two ways. Feed it a subscription to keep a stored read model up to date, with a
+ * {@code ProjectionRunner} or the Kotlin {@code project} extensions, or fold it over a query for a strongly consistent
+ * read on demand, with {@code Projections.project(projection, queries)} in the blocking and reactor projection DSL
+ * modules. Running one descriptor both ways and checking the two answers agree is the strongest test available for a
+ * projection.
  *
  * @param <S> the state type
  * @param <E> the event type
