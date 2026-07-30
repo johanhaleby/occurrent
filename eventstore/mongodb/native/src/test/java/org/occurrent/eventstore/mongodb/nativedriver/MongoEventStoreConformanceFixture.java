@@ -28,24 +28,44 @@ import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 
+import java.time.temporal.ChronoUnit;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.DATE;
 
 class MongoEventStoreConformanceFixture implements EventStoreFixture {
 
     private final MongoClient mongoClient;
     private final MongoEventStore eventStore;
+    private final TimeRepresentation timeRepresentation;
 
     MongoEventStoreConformanceFixture(ConnectionString connectionString) {
+        this(connectionString, TimeRepresentation.RFC_3339_STRING);
+    }
+
+    MongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation) {
+        this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         this.eventStore = new MongoEventStore(mongoClient, requireNonNull(connectionString.getDatabase()), "events",
-                new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
+                new EventStoreConfig(timeRepresentation));
     }
 
     @Override
     public Set<EventStoreCapability> capabilities() {
         return Set.of(EventStoreCapability.STREAM);
+    }
+
+    @Override
+    public ChronoUnit timePrecision() {
+        // DATE stores a millisecond epoch value, so anything finer is lost rather than kept.
+        return timeRepresentation == DATE ? ChronoUnit.MILLIS : ChronoUnit.NANOS;
+    }
+
+    @Override
+    public boolean preservesTimeOffset() {
+        // DATE has no offset field alongside the epoch value, so it cannot hold anything but UTC.
+        return timeRepresentation != DATE;
     }
 
     @Override

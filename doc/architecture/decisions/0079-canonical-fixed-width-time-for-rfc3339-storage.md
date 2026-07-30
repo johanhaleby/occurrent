@@ -97,9 +97,17 @@ That is the price of a sortable fixed-width key.
 A collection written across the upgrade holds both shapes. Ordering within each shape is fine and ordering between them
 is not, which is the caveat above, and the reason the backfill exists for anyone who needs it.
 
-Precision behaviour is now something the TCK asserts rather than something nobody checked: nanoseconds survive under
-`RFC_3339_STRING`, and `DATE` keeps milliseconds because it stores a 64-bit epoch value. Neither was covered before, so
-a store silently dropping nanos would not have failed a test.
+Precision behaviour is now something the TCK asserts rather than something nobody checked. When this ADR was written
+that sentence was a claim about intent, so `EventStoreTimePrecisionConformance` was added to make it true: nanoseconds
+survive under `RFC_3339_STRING`, and `DATE` keeps milliseconds because it stores a 64-bit epoch value. Neither was
+covered before, so a store silently dropping nanos would not have failed a test.
+
+That suite also fixes the contract for what a store does with a value it cannot represent: **it must refuse the write,
+not round the value off.** An event is the record of something that happened, and a truncated timestamp cannot be told
+apart afterwards from an accurate one, so losing precision quietly is the worse failure. The `DATE` representation
+already threw for both a sub-millisecond value and a non-UTC offset, and that behaviour is now the rule rather than one
+store's choice. The cost lands on implementations that do not exist yet: a relational store on a `timestamp(3)` or
+`timestamp(6)` column gets truncation for free from the column type and has to add an explicit check to pass.
 
 `TimeRepresentation.DATE` is unaffected throughout. It stores a BSON Date and compares numerically, so it already
 ordered correctly and remains the recommendation for anyone who wants range queries without thinking about string

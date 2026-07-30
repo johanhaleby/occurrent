@@ -25,6 +25,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 
+import java.time.temporal.ChronoUnit;
 import java.util.Set;
 
 /**
@@ -84,6 +85,35 @@ public interface EventStoreFixture {
      */
     default boolean composesNaturalSortWithFieldSorts() {
         return false;
+    }
+
+    /**
+     * The finest precision this store keeps for a CloudEvent's {@code time} attribute. Defaults to
+     * {@link ChronoUnit#NANOS}, which is what the in-memory store and MongoDB's {@code RFC_3339_STRING} both manage.
+     * <p>
+     * <strong>A store must refuse a time it cannot represent, not round it off.</strong> That is the contract, not an
+     * implementation detail: an event is the record of something that happened, and a silently truncated timestamp
+     * cannot be detected afterwards by anything. MongoDB's {@code DATE} representation stores a millisecond epoch value
+     * and throws rather than lose the rest, which is the behaviour to copy.
+     * <p>
+     * This is a {@link ChronoUnit} rather than a flag because precision is not binary. A relational store on a
+     * {@code timestamp(6)} column keeps microseconds, which no boolean can express.
+     */
+    default ChronoUnit timePrecision() {
+        return ChronoUnit.NANOS;
+    }
+
+    /**
+     * Whether this store gives back a CloudEvent's {@code time} carrying the same UTC offset it was written with.
+     * Defaults to {@code true}.
+     * <p>
+     * A store answering {@code false} must refuse a time that is not already in UTC, for the same reason as
+     * {@link #timePrecision()}: quietly rewriting {@code +02:00} to {@code Z} preserves the instant and loses the
+     * offset, and nothing downstream can tell that it happened. MongoDB's {@code DATE} representation cannot hold an
+     * offset, so it rejects one.
+     */
+    default boolean preservesTimeOffset() {
+        return true;
     }
 
     /**
