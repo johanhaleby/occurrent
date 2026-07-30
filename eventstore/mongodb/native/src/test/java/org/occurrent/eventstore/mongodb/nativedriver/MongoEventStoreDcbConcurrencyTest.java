@@ -56,9 +56,11 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -86,6 +88,10 @@ class MongoEventStoreDcbConcurrencyTest {
 
     private static final URI SOURCE = URI.create("urn:test:concurrency");
     private static final int ITERATIONS = 50;
+    // Generous relative to a single (possibly internally-retried) append against real MongoDB, but far below the
+    // class-level @Timeout(180), so a wedged worker is reported by the specific bounded wait, not the class timeout.
+    private static final long BARRIER_TIMEOUT_SECONDS = 10;
+    private static final long FUTURE_TIMEOUT_SECONDS = 20;
 
     @Container
     private static final MongoDBContainer mongoDBContainer;
@@ -151,7 +157,7 @@ class MongoEventStoreDcbConcurrencyTest {
             ExecutorService pool = Executors.newFixedThreadPool(2);
 
             Future<Boolean> futA = pool.submit(() -> {
-                barrier.await();
+                barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 try {
                     isolatedStore.append(List.of(eventA), condA);
                     return true;
@@ -161,7 +167,7 @@ class MongoEventStoreDcbConcurrencyTest {
             });
 
             Future<Boolean> futB = pool.submit(() -> {
-                barrier.await();
+                barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 try {
                     isolatedStore.append(List.of(eventB), condB);
                     return true;
@@ -170,9 +176,9 @@ class MongoEventStoreDcbConcurrencyTest {
                 }
             });
 
-            pool.shutdown();
-            boolean aSucceeded = futA.get();
-            boolean bSucceeded = futB.get();
+            boolean[] results = awaitBothThenShutdownNow(pool, futA, futB);
+            boolean aSucceeded = results[0];
+            boolean bSucceeded = results[1];
 
             int iterSuccesses = (aSucceeded ? 1 : 0) + (bSucceeded ? 1 : 0);
 
@@ -209,7 +215,7 @@ class MongoEventStoreDcbConcurrencyTest {
             ExecutorService pool = Executors.newFixedThreadPool(2);
 
             Future<Boolean> futA = pool.submit(() -> {
-                barrier.await();
+                barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 try {
                     isolatedStore.append(List.of(taggedEvent("SomeType", sharedTag, extraTagA)), condA);
                     return true;
@@ -219,7 +225,7 @@ class MongoEventStoreDcbConcurrencyTest {
             });
 
             Future<Boolean> futB = pool.submit(() -> {
-                barrier.await();
+                barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 try {
                     isolatedStore.append(List.of(taggedEvent("SomeType", sharedTag, extraTagA)), condB);
                     return true;
@@ -228,9 +234,9 @@ class MongoEventStoreDcbConcurrencyTest {
                 }
             });
 
-            pool.shutdown();
-            boolean aSucceeded = futA.get();
-            boolean bSucceeded = futB.get();
+            boolean[] results = awaitBothThenShutdownNow(pool, futA, futB);
+            boolean aSucceeded = results[0];
+            boolean bSucceeded = results[1];
 
             int iterSuccesses = (aSucceeded ? 1 : 0) + (bSucceeded ? 1 : 0);
 
@@ -263,7 +269,7 @@ class MongoEventStoreDcbConcurrencyTest {
             ExecutorService pool = Executors.newFixedThreadPool(2);
 
             Future<Boolean> futA = pool.submit(() -> {
-                barrier.await();
+                barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 try {
                     isolatedStore.append(List.of(taggedEvent(sharedType, tag)), condA);
                     return true;
@@ -273,7 +279,7 @@ class MongoEventStoreDcbConcurrencyTest {
             });
 
             Future<Boolean> futB = pool.submit(() -> {
-                barrier.await();
+                barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 try {
                     isolatedStore.append(List.of(taggedEvent(sharedType, tag)), condB);
                     return true;
@@ -282,9 +288,9 @@ class MongoEventStoreDcbConcurrencyTest {
                 }
             });
 
-            pool.shutdown();
-            boolean aSucceeded = futA.get();
-            boolean bSucceeded = futB.get();
+            boolean[] results = awaitBothThenShutdownNow(pool, futA, futB);
+            boolean aSucceeded = results[0];
+            boolean bSucceeded = results[1];
 
             int iterSuccesses = (aSucceeded ? 1 : 0) + (bSucceeded ? 1 : 0);
 
@@ -319,7 +325,7 @@ class MongoEventStoreDcbConcurrencyTest {
             for (int t = 0; t < threadCount; t++) {
                 final int threadIdx = t;
                 futures.add(pool.submit(() -> {
-                    barrier.await();
+                    barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                     try {
                         eventStore.append(List.of(taggedEvent("SomeEvent", tag)), condition);
                         successCount.incrementAndGet();
@@ -333,10 +339,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 }));
             }
 
-            pool.shutdown();
-            for (Future<Void> f : futures) {
-                f.get();
-            }
+            awaitAllThenShutdownNow(pool, futures);
 
             assertThat(successCount.get())
                     .as("Iteration %d: expected exactly one success under contention (tag=%s)", i, tag)
@@ -371,7 +374,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 futures.add(pool.submit(() -> {
                     DcbConsistencyToken token = disjointStore.read(tags(Tag.parse(distinctTag))).consistencyToken();
                     DcbAppendCondition cond = failIfEventsMatch(tags(Tag.parse(distinctTag)), token);
-                    barrier.await();
+                    barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                     try {
                         disjointStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);
                         successCount.incrementAndGet();
@@ -383,10 +386,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 }));
             }
 
-            pool.shutdown();
-            for (Future<Void> f : futures) {
-                f.get();
-            }
+            awaitAllThenShutdownNow(pool, futures);
 
             assertThat(successCount.get())
                     .as("Iteration %d: all %d disjoint-boundary appends should succeed (no false conflicts)", i, threadCount)
@@ -416,7 +416,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 futures.add(pool.submit(() -> {
                     DcbConsistencyToken token = sharedStreamStore.read(tags(Tag.parse(distinctTag))).consistencyToken();
                     DcbAppendCondition cond = failIfEventsMatch(tags(Tag.parse(distinctTag)), token);
-                    barrier.await();
+                    barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                     try {
                         sharedStreamStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);
                         successCount.incrementAndGet();
@@ -427,10 +427,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 }));
             }
 
-            pool.shutdown();
-            for (Future<Void> f : futures) {
-                f.get();
-            }
+            awaitAllThenShutdownNow(pool, futures);
 
             assertThat(failures)
                     .as("Iteration %d: disjoint boundaries on a shared stream must all be retried to success, not fail", i)
@@ -463,7 +460,7 @@ class MongoEventStoreDcbConcurrencyTest {
 
             for (int t = 0; t < threadCount; t++) {
                 futures.add(pool.submit(() -> {
-                    barrier.await();
+                    barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                     try {
                         eventStore.read(multiMarkerQuery).consistencyToken();
                         eventStore.append(List.of(taggedEvent("MultiMarkerEvent", tag1, tag2)), condition);
@@ -477,10 +474,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 }));
             }
 
-            pool.shutdown();
-            for (Future<Void> f : futures) {
-                f.get();
-            }
+            awaitAllThenShutdownNow(pool, futures);
 
             Throwable unexpected = firstUnexpected.get();
             if (unexpected != null) {
@@ -517,7 +511,7 @@ class MongoEventStoreDcbConcurrencyTest {
             ExecutorService pool = Executors.newFixedThreadPool(2);
 
             Future<Boolean> futA = pool.submit(() -> {
-                barrier.await();
+                barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 try {
                     isolatedStore.append(List.of(eventA), condA);
                     return true;
@@ -527,7 +521,7 @@ class MongoEventStoreDcbConcurrencyTest {
             });
 
             Future<Boolean> futB = pool.submit(() -> {
-                barrier.await();
+                barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 try {
                     isolatedStore.append(List.of(eventB), condB);
                     return true;
@@ -536,9 +530,9 @@ class MongoEventStoreDcbConcurrencyTest {
                 }
             });
 
-            pool.shutdown();
-            boolean aSucceeded = futA.get();
-            boolean bSucceeded = futB.get();
+            boolean[] results = awaitBothThenShutdownNow(pool, futA, futB);
+            boolean aSucceeded = results[0];
+            boolean bSucceeded = results[1];
 
             int iterSuccesses = (aSucceeded ? 1 : 0) + (bSucceeded ? 1 : 0);
 
@@ -690,7 +684,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 futures.add(pool.submit(() -> {
                     DcbConsistencyToken token = singlePartitionStore.read(tags(Tag.parse(distinctTag))).consistencyToken();
                     DcbAppendCondition cond = failIfEventsMatch(tags(Tag.parse(distinctTag)), token);
-                    barrier.await();
+                    barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                     try {
                         singlePartitionStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);
                         successCount.incrementAndGet();
@@ -701,10 +695,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 }));
             }
 
-            pool.shutdown();
-            for (Future<Void> f : futures) {
-                f.get();
-            }
+            awaitAllThenShutdownNow(pool, futures);
 
             assertThat(failures)
                     .as("Iteration %d: disjoint boundaries in a single partition must all be retried to success, not fail with a duplicate CloudEvent error", i)
@@ -755,7 +746,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 futures.add(pool.submit(() -> {
                     DcbConsistencyToken token = singlePartitionStore.read(tags(Tag.parse(distinctTag))).consistencyToken();
                     DcbAppendCondition cond = failIfEventsMatch(tags(Tag.parse(distinctTag)), token);
-                    barrier.await();
+                    barrier.await(BARRIER_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                     try {
                         singlePartitionStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);
                         successCount.incrementAndGet();
@@ -768,10 +759,7 @@ class MongoEventStoreDcbConcurrencyTest {
                 }));
             }
 
-            pool.shutdown();
-            for (Future<Void> f : futures) {
-                f.get();
-            }
+            awaitAllThenShutdownNow(pool, futures);
         }
 
         int expectedAppends = threadCount * iterations;
@@ -820,6 +808,69 @@ class MongoEventStoreDcbConcurrencyTest {
         assertThat(store.exists(types("InjectedEvent")))
                 .as("The append must be retried past the injected stream-version duplicate and commit its event")
                 .isTrue();
+    }
+
+    /**
+     * Joins both futures before returning or throwing, so a throw from one cannot leave the other still writing to
+     * MongoDB in the background. The pool is interrupted via {@code shutdownNow()} only after both joins have been
+     * attempted, so a wedged worker is stopped rather than left running.
+     */
+    private static boolean[] awaitBothThenShutdownNow(ExecutorService pool, Future<Boolean> futA, Future<Boolean> futB) throws Exception {
+        Boolean resultA = null;
+        Boolean resultB = null;
+        Exception failureA = null;
+        Exception failureB = null;
+        try {
+            resultA = getUnwrapped(futA);
+        } catch (Exception e) {
+            failureA = e;
+        }
+        try {
+            resultB = getUnwrapped(futB);
+        } catch (Exception e) {
+            failureB = e;
+        }
+        pool.shutdownNow();
+
+        if (failureA != null) {
+            throw failureA;
+        }
+        if (failureB != null) {
+            throw failureB;
+        }
+        return new boolean[]{resultA, resultB};
+    }
+
+    /**
+     * Joins every future before returning or throwing, so one thread's failure cannot leave the others still writing
+     * to MongoDB in the background. The pool is interrupted via {@code shutdownNow()} only after every join has been
+     * attempted.
+     */
+    private static void awaitAllThenShutdownNow(ExecutorService pool, List<Future<Void>> futures) throws Exception {
+        Exception firstFailure = null;
+        for (Future<Void> future : futures) {
+            try {
+                getUnwrapped(future);
+            } catch (Exception e) {
+                if (firstFailure == null) {
+                    firstFailure = e;
+                }
+            }
+        }
+        pool.shutdownNow();
+
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
+    }
+
+    private static <T> T getUnwrapped(Future<T> future) throws Exception {
+        try {
+            return future.get(FUTURE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            throw cause instanceof Exception ? (Exception) cause : e;
+        }
     }
 
     private MongoEventStore buildEventStoreWithStreamIdGenerator(DcbStreamIdGenerator streamIdGenerator) {
