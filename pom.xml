@@ -82,7 +82,7 @@
         <jackson3.version>3.1.4</jackson3.version>
         <cloudevents.version>4.0.1</cloudevents.version>
         <spring-boot.version>4.1.0</spring-boot.version>
-        <spring-retry.version>2.0.12</spring-retry.version>
+        <spring-retry.version>2.0.13</spring-retry.version>
         <dokka.version>2.0.0</dokka.version>
         <awaitility.version>4.2.2</awaitility.version>
         <jobrunr.version>8.1.0</jobrunr.version>
