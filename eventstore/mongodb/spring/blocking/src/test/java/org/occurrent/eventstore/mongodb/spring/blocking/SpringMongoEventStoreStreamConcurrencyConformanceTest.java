@@ -52,8 +52,8 @@ class SpringMongoEventStoreStreamConcurrencyConformanceTest extends StreamConcur
 
     @Override
     protected EventStoreFixture createFixture() {
-        // The database here is "test" and the collection "events". Appending ".events" to the replica-set URL does
-        // not change the database, because MongoDB forbids a dot in a database name, so only getCollection() sees it.
+        // The replica-set URL ends with the database name, so appending ".events" gives the driver a "db.collection"
+        // path. It reads the database as "test" and the collection as "events".
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         return new SpringMongoEventStoreConformanceFixture(connectionString, TimeRepresentation.RFC_3339_STRING);
     }

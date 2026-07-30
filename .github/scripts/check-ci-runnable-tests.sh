@@ -59,6 +59,9 @@ checked=0
 
 # One row per @EnabledOnOs/@EnabledOnJre annotation, followed by the declaration (method or class)
 # it precedes: <file>\t<line>\t<annotation text>\t<declaration text>
+#
+# Kotlin counts too. No Kotlin test carries either annotation today, but this repository has 332 Kotlin
+# test files, so a Java-only scan would let the next one hide.
 rows=$(
   while IFS= read -r -d '' file; do
     awk -v file="$file" '
@@ -84,14 +87,17 @@ rows=$(
         }
       }
     ' "$file"
-  done < <(find . -path '*/src/test/*' -name '*.java' -print0)
+  done < <(find . -path '*/src/test/*' \( -name '*.java' -o -name '*.kt' \) -print0)
 )
 
 if [ -n "$rows" ]; then
   while IFS=$'\t' read -r file lineno annotation declaration; do
     checked=$((checked + 1))
 
-    if [[ "$declaration" == *class* ]]; then
+    if [[ "$declaration" == *'`'* ]]; then
+      # A Kotlin test name in backticks, e.g. fun `writes to the store`().
+      name=$(sed -E 's/^[^`]*`([^`]*)`.*/\1/' <<<"$declaration")
+    elif [[ "$declaration" == *class* ]]; then
       name=$(sed -E 's/^.*\bclass[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' <<<"$declaration")
     else
       name=$(sed -E 's/^.*[^A-Za-z0-9_]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(.*/\1/' <<<"$declaration")
