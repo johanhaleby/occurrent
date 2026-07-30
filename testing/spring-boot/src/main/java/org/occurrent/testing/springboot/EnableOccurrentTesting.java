@@ -47,7 +47,7 @@ import java.lang.annotation.Target;
  * }</pre>
  *
  * Everything this adds is available without Spring by constructing the extension directly, see
- * {@link org.occurrent.testing.junit.OccurrentSubscriptionsExtension#stopAllBeforeAndAfterEach}.
+ * {@link org.occurrent.testing.junit.OccurrentSubscriptionsExtension#stoppedByDefault}.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)

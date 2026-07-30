@@ -47,13 +47,10 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Fast, no-Mongo regression guard for the dual-mode {@link CatchupSubscriptionModel} dispatcher's
- * {@code cancelSubscription} and {@code shutdown} fan-out. Both inner models ({@link StreamCatchupSubscriptionModel}
- * and {@link DcbCatchupSubscriptionModel}) wrap the same shared {@link CheckpointAwareSubscriptionModel} delegate, so a
- * naive fan-out could call the delegate's {@code cancelSubscription}/{@code shutdown} once per inner model (double
- * firing) instead of once for the dispatcher as a whole. Neither inner model's own {@code cancelSubscription}/
- * {@code shutdown} touches the shared delegate (see their Javadoc), so this test never needs to drive an actual
- * catch-up: the counting delegate alone is enough to observe how many times the dispatcher reaches it.
+ * No-Mongo regression guard for the dual-mode {@link CatchupSubscriptionModel} dispatcher: {@code stop},
+ * {@code start}, {@code cancelSubscription} and {@code shutdown} must reach the shared
+ * {@link CheckpointAwareSubscriptionModel} delegate exactly once, not once per inner model. A counting fake delegate
+ * is enough here, no actual catch-up needs to run.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupSubscriptionModelDualModeLifecycleTest {

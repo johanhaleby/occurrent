@@ -546,7 +546,7 @@
                                 <!-- empty aggregate parent POMs not needed with enabled flattening -->
                                 <!-- The tck aggregator only. Its leaves (occurrent-tck-*) are published, see ADR 77. -->
                                 <excludeArtifact>tck</excludeArtifact>
-                                <!-- The testing aggregator only. Its leaves (occurrent-testing-*) are published, see ADR 80. -->
+                                <!-- The testing aggregator only. Its leaves (occurrent-testing-*) are published, see ADR 81. -->
                                 <excludeArtifact>testing</excludeArtifact>
                                 <excludeArtifact>application-service</excludeArtifact>
                                 <excludeArtifact>application</excludeArtifact>

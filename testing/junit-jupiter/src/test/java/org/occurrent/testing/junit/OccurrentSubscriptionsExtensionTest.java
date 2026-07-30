@@ -21,9 +21,11 @@ import io.cloudevents.core.v1.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
+import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -55,7 +57,7 @@ class OccurrentSubscriptionsExtensionTest {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
         subscriptionModel.subscribe("orders", received::add);
 
-        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stopAllBeforeAndAfterEach(subscriptionModel);
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
         runBeforeEach(extension);
 
         eventStore.write("stream1", List.of(event()));
@@ -69,7 +71,7 @@ class OccurrentSubscriptionsExtensionTest {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
         subscriptionModel.subscribe("orders", received::add);
 
-        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stopAllBeforeAndAfterEach(subscriptionModel);
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
         runBeforeEach(extension);
 
         extension.start("orders");
@@ -86,8 +88,8 @@ class OccurrentSubscriptionsExtensionTest {
         });
 
         OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension
-                .stopAllBeforeAndAfterEach(subscriptionModel)
-                .keepRunning("orders");
+                .stoppedByDefault(subscriptionModel)
+                .alwaysStart("orders");
         runBeforeEach(extension);
 
         assertThatThrownBy(() -> extension.start("shipments"))
@@ -97,13 +99,13 @@ class OccurrentSubscriptionsExtensionTest {
     }
 
     @Test
-    void keep_running_resumes_automatically_in_before_each() {
+    void always_start_resumes_automatically_in_before_each() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
         subscriptionModel.subscribe("orders", received::add);
 
         OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension
-                .stopAllBeforeAndAfterEach(subscriptionModel)
-                .keepRunning("orders");
+                .stoppedByDefault(subscriptionModel)
+                .alwaysStart("orders");
         runBeforeEach(extension);
 
         eventStore.write("stream1", List.of(event()));
@@ -119,7 +121,7 @@ class OccurrentSubscriptionsExtensionTest {
         subscriptionModel.subscribe("orders", ordersReceived::add);
         subscriptionModel.subscribe("shipments", shipmentsReceived::add);
 
-        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stopAllBeforeAndAfterEach(subscriptionModel);
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
         runBeforeEach(extension);
 
         extension.start("orders");
@@ -139,7 +141,7 @@ class OccurrentSubscriptionsExtensionTest {
         subscriptionModel.subscribe("orders", ordersReceived::add);
         subscriptionModel.subscribe("shipments", shipmentsReceived::add);
 
-        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stopAllBeforeAndAfterEach(subscriptionModel);
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
         runBeforeEach(extension);
 
         extension.start("orders");
@@ -156,11 +158,11 @@ class OccurrentSubscriptionsExtensionTest {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
         subscriptionModel.subscribe("orders", received::add);
 
-        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stopAllBeforeAndAfterEach(subscriptionModel);
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
         runBeforeEach(extension);
         extension.start("orders");
 
-        extension.afterEach(null);
+        extension.afterEach(unusedExtensionContext());
 
         eventStore.write("stream1", List.of(event()));
         subscriptionModel.waitUntilAllEventsProcessed();
@@ -169,7 +171,18 @@ class OccurrentSubscriptionsExtensionTest {
     }
 
     private static void runBeforeEach(OccurrentSubscriptionsExtension extension) {
-        extension.beforeEach(null);
+        extension.beforeEach(unusedExtensionContext());
+    }
+
+    // beforeEach/afterEach do not read the ExtensionContext today, but a null argument would silently hide it if
+    // they started to. A proxy that throws on any access fails the test loudly instead.
+    private static ExtensionContext unusedExtensionContext() {
+        return (ExtensionContext) Proxy.newProxyInstance(
+                OccurrentSubscriptionsExtensionTest.class.getClassLoader(),
+                new Class<?>[]{ExtensionContext.class},
+                (proxy, method, args) -> {
+                    throw new UnsupportedOperationException("Did not expect ExtensionContext#" + method.getName() + " to be called in this test");
+                });
     }
 
     private static CloudEvent event() {

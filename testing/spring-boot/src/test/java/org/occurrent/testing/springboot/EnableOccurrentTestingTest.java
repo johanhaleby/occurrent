@@ -21,6 +21,7 @@ import io.cloudevents.core.v1.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.testing.junit.OccurrentSubscriptionsExtension;
@@ -28,6 +29,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -56,7 +58,7 @@ class EnableOccurrentTestingTest {
             subscriptionModel.subscribe("orders", orders::add);
             subscriptionModel.subscribe("shipments", shipments::add);
 
-            subscriptions.beforeEach(null);
+            subscriptions.beforeEach(unusedExtensionContext());
             subscriptions.start("orders");
 
             eventStore.write("stream1", List.of(event()));
@@ -84,10 +86,21 @@ class EnableOccurrentTestingTest {
             subscriptionModel.subscribe("orders", event -> {
             });
 
-            context.getBean(OccurrentSubscriptionsExtension.class).beforeEach(null);
+            context.getBean(OccurrentSubscriptionsExtension.class).beforeEach(unusedExtensionContext());
 
             assertThat(subscriptionModel.isPaused("orders")).isTrue();
         }
+    }
+
+    // beforeEach does not read the ExtensionContext today, but a null argument would silently hide it if it started
+    // to. A proxy that throws on any access fails the test loudly instead.
+    private static ExtensionContext unusedExtensionContext() {
+        return (ExtensionContext) Proxy.newProxyInstance(
+                EnableOccurrentTestingTest.class.getClassLoader(),
+                new Class<?>[]{ExtensionContext.class},
+                (proxy, method, args) -> {
+                    throw new UnsupportedOperationException("Did not expect ExtensionContext#" + method.getName() + " to be called in this test");
+                });
     }
 
     private static CloudEvent event() {

@@ -18,8 +18,10 @@ package org.occurrent.testing.springboot;
 
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.testing.junit.OccurrentSubscriptionsExtension;
+import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Scope;
 
 /**
  * Exposes an {@link OccurrentSubscriptionsExtension} over the application context's own
@@ -41,8 +43,8 @@ public class OccurrentTestingConfiguration {
      * @return an extension to register with {@code @RegisterExtension}
      */
     @Bean
-    @org.springframework.context.annotation.Scope("prototype")
+    @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
     public OccurrentSubscriptionsExtension occurrentSubscriptionsExtension(SubscriptionModelLifeCycle subscriptionModel) {
-        return OccurrentSubscriptionsExtension.stopAllBeforeAndAfterEach(subscriptionModel);
+        return OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
     }
 }

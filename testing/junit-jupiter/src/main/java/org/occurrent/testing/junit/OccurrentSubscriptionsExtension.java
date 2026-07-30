@@ -25,28 +25,18 @@ import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
- * A JUnit 5 extension that keeps a {@link SubscriptionModelLifeCycle} paused by default in tests, so a test that
- * writes events never races a subscription it never asked to run. Every subscription is stopped before each test,
- * and a test opts a subscription back in with {@link #start(String)}, or a whole test class opts a fixed set in
- * with {@link #keepRunning(String...)}.
+ * Stops every subscription before and after each test, so a test only runs the subscriptions it names with
+ * {@link #start(String)}. A test that writes events then cannot race a subscription it never asked for.
  * <p>
- * Every subscription is also stopped again after each test. This matters for a Spring test whose application
- * context is cached across test classes, since a subscription one class resumed would otherwise keep running while
- * the next class's tests execute against the same context.
- * <p>
- * {@link SubscriptionModelLifeCycle} has no operation that lists the subscription ids it knows about, so this
- * extension cannot enumerate the subscriptions registered on the model. It only ever acts on ids it has itself been
- * told about, through {@link #keepRunning(String...)} or {@link #start(String)}. That is also why there is no
- * {@code startAll}: it could only resume the ids named here, which is not what the name would promise. A test that
- * needs several subscriptions running names each of them.
+ * Stopping after each test matters because a Spring test context is cached across test classes, so a subscription one
+ * class started would otherwise still be running for the next.
  */
 public final class OccurrentSubscriptionsExtension implements BeforeEachCallback, AfterEachCallback {
 
     private final SubscriptionModelLifeCycle subscriptionModel;
-    private final Set<String> keepRunningIds = new LinkedHashSet<>();
+    private final Set<String> alwaysStartIds = new LinkedHashSet<>();
     private final Set<String> knownIds = new LinkedHashSet<>();
 
     private OccurrentSubscriptionsExtension(SubscriptionModelLifeCycle subscriptionModel) {
@@ -54,29 +44,27 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     }
 
     /**
-     * Create an extension that stops every subscription on {@code subscriptionModel} before each test and again
-     * after each test. Register the result with {@code @RegisterExtension}.
+     * An extension over {@code subscriptionModel} where no subscription runs until a test asks for one. Register it
+     * with {@code @RegisterExtension}.
      *
-     * @param subscriptionModel the subscription model to pause and resume, must not be {@code null}
+     * @param subscriptionModel the subscription model to stop and start, must not be {@code null}
      * @return a new extension
      */
-    public static OccurrentSubscriptionsExtension stopAllBeforeAndAfterEach(SubscriptionModelLifeCycle subscriptionModel) {
+    public static OccurrentSubscriptionsExtension stoppedByDefault(SubscriptionModelLifeCycle subscriptionModel) {
         return new OccurrentSubscriptionsExtension(subscriptionModel);
     }
 
     /**
-     * Name subscriptions that should be resumed automatically in {@code beforeEach}, right after every subscription
-     * has been stopped. Use this for a test class where every test needs the same subscriptions running, so
-     * individual tests don't each have to call {@link #start(String)}.
+     * Start these subscriptions before every test, for a test class where each test needs the same ones.
      *
-     * @param subscriptionIds the ids to resume automatically before each test, must not be {@code null} and must not contain {@code null}
-     * @return this extension, so calls can be chained onto {@link #stopAllBeforeAndAfterEach(SubscriptionModelLifeCycle)}
+     * @param subscriptionIds the ids to start before every test, must not be {@code null} and must not contain {@code null}
+     * @return this extension, so the call can be chained onto {@link #stoppedByDefault(SubscriptionModelLifeCycle)}
      */
-    public OccurrentSubscriptionsExtension keepRunning(String... subscriptionIds) {
+    public OccurrentSubscriptionsExtension alwaysStart(String... subscriptionIds) {
         Objects.requireNonNull(subscriptionIds, "subscriptionIds must not be null");
         for (String subscriptionId : subscriptionIds) {
             Objects.requireNonNull(subscriptionId, "subscriptionIds must not contain null");
-            keepRunningIds.add(subscriptionId);
+            alwaysStartIds.add(subscriptionId);
             knownIds.add(subscriptionId);
         }
         return this;
@@ -85,7 +73,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     @Override
     public void beforeEach(ExtensionContext context) {
         subscriptionModel.stop();
-        for (String subscriptionId : keepRunningIds) {
+        for (String subscriptionId : alwaysStartIds) {
             resumeAndWait(subscriptionId);
         }
     }
@@ -96,12 +84,11 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     }
 
     /**
-     * Resume the subscription named {@code subscriptionId} and block until it has actually started, so the caller
-     * cannot forget to wait and write an event before the subscription is listening for it.
+     * Start one subscription and block until it is actually listening, so a write that follows cannot outrun it.
      *
-     * @param subscriptionId the id of a subscription that is currently paused, must not be {@code null}
-     * @return the now-running {@link Subscription}
-     * @throws IllegalArgumentException if {@code subscriptionId} is not a paused subscription on the model, the message names every id this extension knows about
+     * @param subscriptionId the id of a currently stopped subscription, must not be {@code null}
+     * @return the running {@link Subscription}
+     * @throws IllegalArgumentException if the model has no stopped subscription with that id
      */
     public Subscription start(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId must not be null");
@@ -115,7 +102,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(
                     "Could not start subscription '" + subscriptionId + "', " + e.getMessage() +
-                            ". Ids known to this extension (named via keepRunning or start): " + describeKnownIds(), e);
+                            ". Ids known to this extension (named via alwaysStart or start): " + describeKnownIds(), e);
         }
         knownIds.add(subscriptionId);
         subscription.waitUntilStarted();
@@ -123,6 +110,6 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     }
 
     private String describeKnownIds() {
-        return knownIds.isEmpty() ? "none" : knownIds.stream().collect(Collectors.joining(", ", "[", "]"));
+        return knownIds.isEmpty() ? "none" : knownIds.toString();
     }
 }

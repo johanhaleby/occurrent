@@ -37,6 +37,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 /**
  * A {@link SubscriptionModel} that can read historic cloud events from the all event streams (see {@link EventStoreQueries#all()}) until caught up with the
@@ -256,34 +257,24 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         return StreamCatchupSubscriptionModel.startsAtExplicitGlobalPosition(startAt, CatchupSubscriptionModel.class);
     }
 
-    // markStopped rather than a child's own stop(), which would reach the shared live delegate once per child. The
+    // Whichever catch-up children this configuration wired. Only the live delegate is always present.
+    private Stream<AbstractCatchupSubscriptionModel> presentCatchupModels() {
+        return Stream.of(streamCatchupSubscriptionModel, dcbCatchupSubscriptionModel, agnosticCatchupSubscriptionModel)
+                .filter(Objects::nonNull);
+    }
+
+    // stopReplay() rather than a child's own stop(), which would reach the shared live delegate once per child. The
     // children have to be told so a replay already in flight stops delivering.
     @Override
     public void stop() {
-        if (streamCatchupSubscriptionModel != null) {
-            streamCatchupSubscriptionModel.markStopped();
-        }
-        if (dcbCatchupSubscriptionModel != null) {
-            dcbCatchupSubscriptionModel.markStopped();
-        }
-        if (agnosticCatchupSubscriptionModel != null) {
-            agnosticCatchupSubscriptionModel.markStopped();
-        }
+        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::stopReplay);
         getDelegatedSubscriptionModel().stop();
     }
 
-    // markStarted for the same reason stop() uses markStopped.
+    // resumeReplay() for the same reason stop() uses stopReplay().
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        if (streamCatchupSubscriptionModel != null) {
-            streamCatchupSubscriptionModel.markStarted();
-        }
-        if (dcbCatchupSubscriptionModel != null) {
-            dcbCatchupSubscriptionModel.markStarted();
-        }
-        if (agnosticCatchupSubscriptionModel != null) {
-            agnosticCatchupSubscriptionModel.markStarted();
-        }
+        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::resumeReplay);
         getDelegatedSubscriptionModel().start(resumeSubscriptionsAutomatically);
     }
 
@@ -291,25 +282,19 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     // subscription. Repeating the delegate's answer per child is harmless here, unlike in stop() and start().
     @Override
     public boolean isRunning() {
-        return (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isRunning())
-                || (dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.isRunning())
-                || (agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.isRunning())
+        return presentCatchupModels().anyMatch(AbstractCatchupSubscriptionModel::isRunning)
                 || getDelegatedSubscriptionModel().isRunning();
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isRunning(subscriptionId))
-                || (dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.isRunning(subscriptionId))
-                || (agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.isRunning(subscriptionId))
+        return presentCatchupModels().anyMatch(model -> model.isRunning(subscriptionId))
                 || getDelegatedSubscriptionModel().isRunning(subscriptionId);
     }
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isPaused(subscriptionId))
-                || (dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.isPaused(subscriptionId))
-                || (agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.isPaused(subscriptionId))
+        return presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))
                 || getDelegatedSubscriptionModel().isPaused(subscriptionId);
     }
 

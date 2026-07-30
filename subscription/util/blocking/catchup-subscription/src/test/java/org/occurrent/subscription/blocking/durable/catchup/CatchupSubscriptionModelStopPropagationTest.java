@@ -44,14 +44,9 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Fast, no-Mongo regression guard for {@link CatchupSubscriptionModel#stop()}/{@code start(boolean)} and
- * {@code isRunning}/{@code isRunning(String)} actually reaching the catch-up child that owns the in-flight replay,
- * not just the shared live delegate. {@link AbstractCatchupSubscriptionModel#stopped} is checked by the replay loops
- * themselves (see its Javadoc), so a dispatcher that only stops the live delegate leaves a running replay unaffected,
- * and a dispatcher that only asks the live delegate whether it's running under-reports a replay that is still going.
- * A real (in-memory, non-Mongo) event store and a permissive fake live delegate are used here, unlike
- * {@link CatchupSubscriptionModelDualModeLifecycleTest}'s throwing counting fake, because these tests need an actual
- * replay to run and be observed mid-flight.
+ * No-Mongo regression guard: {@link CatchupSubscriptionModel#stop()}/{@code start(boolean)} and {@code isRunning}
+ * must reach the catch-up child running the in-flight replay, not just the shared live delegate. Uses a real
+ * in-memory event store and a permissive fake delegate, since these tests need an actual replay to observe mid-flight.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupSubscriptionModelStopPropagationTest {
@@ -113,6 +108,7 @@ class CatchupSubscriptionModelStopPropagationTest {
         try {
             latch.await();
         } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             throw new RuntimeException(e);
         }
     }

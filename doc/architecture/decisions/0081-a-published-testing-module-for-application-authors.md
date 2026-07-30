@@ -144,7 +144,7 @@ appears. Exposing the ids the annotation bean post-processors already collect in
 `registeredIds` set would fix it properly, and is the next step rather than something this change does.
 
 And there is deliberately no `startAll()`. It was written, then removed before this shipped. It could only
-ever resume the ids already named through `keepRunning` or `start`, so on a fresh extension it would do
+ever resume the ids already named through `alwaysStart` or `start`, so on a fresh extension it would do
 nothing at all and say nothing about it, which is the worst behavior a test helper can have. A method whose
 name promises more than the API underneath can deliver is not worth shipping now and removing later, because
 removing a published method breaks callers while adding one does not. A test that needs several subscriptions
