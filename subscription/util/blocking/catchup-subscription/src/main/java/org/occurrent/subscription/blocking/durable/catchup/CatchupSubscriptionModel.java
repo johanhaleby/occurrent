@@ -256,29 +256,61 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         return StreamCatchupSubscriptionModel.startsAtExplicitGlobalPosition(startAt, CatchupSubscriptionModel.class);
     }
 
+    // markStopped rather than a child's own stop(), which would reach the shared live delegate once per child. The
+    // children have to be told so a replay already in flight stops delivering.
     @Override
     public void stop() {
+        if (streamCatchupSubscriptionModel != null) {
+            streamCatchupSubscriptionModel.markStopped();
+        }
+        if (dcbCatchupSubscriptionModel != null) {
+            dcbCatchupSubscriptionModel.markStopped();
+        }
+        if (agnosticCatchupSubscriptionModel != null) {
+            agnosticCatchupSubscriptionModel.markStopped();
+        }
         getDelegatedSubscriptionModel().stop();
     }
 
+    // markStarted for the same reason stop() uses markStopped.
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
+        if (streamCatchupSubscriptionModel != null) {
+            streamCatchupSubscriptionModel.markStarted();
+        }
+        if (dcbCatchupSubscriptionModel != null) {
+            dcbCatchupSubscriptionModel.markStarted();
+        }
+        if (agnosticCatchupSubscriptionModel != null) {
+            agnosticCatchupSubscriptionModel.markStarted();
+        }
         getDelegatedSubscriptionModel().start(resumeSubscriptionsAutomatically);
     }
 
+    // Asks the catch-up children too, because a replay is running before the live delegate has registered the
+    // subscription. Repeating the delegate's answer per child is harmless here, unlike in stop() and start().
     @Override
     public boolean isRunning() {
-        return getDelegatedSubscriptionModel().isRunning();
+        return (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isRunning())
+                || (dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.isRunning())
+                || (agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.isRunning())
+                || getDelegatedSubscriptionModel().isRunning();
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isRunning(subscriptionId);
+        return (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isRunning(subscriptionId))
+                || (dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.isRunning(subscriptionId))
+                || (agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.isRunning(subscriptionId))
+                || getDelegatedSubscriptionModel().isRunning(subscriptionId);
     }
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isPaused(subscriptionId);
+        return (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isPaused(subscriptionId))
+                || (dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.isPaused(subscriptionId))
+                || (agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.isPaused(subscriptionId))
+                || getDelegatedSubscriptionModel().isPaused(subscriptionId);
     }
 
     @Override

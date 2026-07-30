@@ -78,6 +78,26 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
         assertThat(delegate.shutdownCount()).isEqualTo(1);
     }
 
+    @Test
+    void stop_invokes_the_shared_delegates_stop_exactly_once_in_dual_mode() {
+        CountingCheckpointAwareSubscriptionModel delegate = new CountingCheckpointAwareSubscriptionModel();
+        CatchupSubscriptionModel dualMode = dualMode(delegate);
+
+        dualMode.stop();
+
+        assertThat(delegate.stopCount()).isEqualTo(1);
+    }
+
+    @Test
+    void start_invokes_the_shared_delegates_start_exactly_once_in_dual_mode() {
+        CountingCheckpointAwareSubscriptionModel delegate = new CountingCheckpointAwareSubscriptionModel();
+        CatchupSubscriptionModel dualMode = dualMode(delegate);
+
+        dualMode.start(true);
+
+        assertThat(delegate.startCount()).isEqualTo(1);
+    }
+
     private static CatchupSubscriptionModel dualMode(CheckpointAwareSubscriptionModel delegate) {
         return new CatchupSubscriptionModel(delegate, new UnusedEventStoreQueries(), new UnusedDcbEventStore(), DcbCriteria.tags(Tag.parse("name:1")), new CatchupSubscriptionModelConfig(1));
     }
@@ -86,9 +106,13 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
      * Counts calls reaching the shared delegate. {@code cancelSubscriptionCount} is keyed by subscription id so a
      * double-fire from the dual-mode fan-out (once via the stream inner model's path, once via the DCB path) would
      * surface as a count greater than one for that id, rather than being hidden by aggregating across ids.
+     * {@code stop}/{@code start} have no id to key by (they are subscription-agnostic lifecycle calls), so a
+     * double-fire there would show up directly as their aggregate count exceeding one.
      */
     private static final class CountingCheckpointAwareSubscriptionModel implements CheckpointAwareSubscriptionModel {
         private final AtomicInteger shutdownCount = new AtomicInteger();
+        private final AtomicInteger stopCount = new AtomicInteger();
+        private final AtomicInteger startCount = new AtomicInteger();
         private final ConcurrentMap<String, AtomicInteger> cancelSubscriptionCounts = new ConcurrentHashMap<>();
 
         int cancelSubscriptionCount(String subscriptionId) {
@@ -98,6 +122,14 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
 
         int shutdownCount() {
             return shutdownCount.get();
+        }
+
+        int stopCount() {
+            return stopCount.get();
+        }
+
+        int startCount() {
+            return startCount.get();
         }
 
         @Override
@@ -112,12 +144,12 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
 
         @Override
         public void stop() {
-            throw new AssertionError("stop must not be called by this test");
+            stopCount.incrementAndGet();
         }
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
-            throw new AssertionError("start must not be called by this test");
+            startCount.incrementAndGet();
         }
 
         @Override
