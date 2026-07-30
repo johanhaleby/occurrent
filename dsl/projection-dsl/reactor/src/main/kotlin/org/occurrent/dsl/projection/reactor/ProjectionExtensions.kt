@@ -124,9 +124,9 @@ private fun <E : Any> StreamSubscriptions<E>.projectWithMetadata(subscriptionId:
  * errors when subscribed to, since folding every instance into one blended state on demand would produce a nonsense
  * result. Use [project] with an `instanceId` for a keyed projection.
  *
- * The receiver form Kotlin reads better with. [Projections.project] is the same fold and does the work, so which events
- * get selected and when a keyed projection is rejected are decided in one place for both languages. It folds each event
- * as the query emits it rather than reading the whole history into a list first.
+ * The Kotlin receiver form of [Projections.project], which is the same fold and does the work, so which events get
+ * selected and when a keyed projection is rejected are decided in one place for both languages. It folds each event as
+ * the query emits it rather than reading the whole history into a list first.
  */
 // The cast expresses what the Mono already guarantees: a null state becomes an empty completion, so nothing null is
 // ever emitted. Kotlin will not let a Mono be declared over a nullable type, hence stating the non-null element here.
@@ -136,8 +136,8 @@ fun <S, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<
 
 /**
  * Folds the events [projection] selects for [instanceId], read on demand, into that instance's view state: the
- * strongly-consistent, query-driven, single-instance counterpart to the unqualified [project]. Uses the same filter
- * candidate events as the unqualified [project], then keeps only the ones whose [Projection.id] resolves to
+ * strongly-consistent, query-driven, single-instance counterpart to the unqualified [project]. Reads the same candidate
+ * events as the unqualified [project], then keeps only the ones whose [Projection.id] resolves to
  * [instanceId] before folding. A singleton projection (no id function) has a single instance regardless of
  * [instanceId], so this folds all selected events, same as the unqualified [project]. The returned [Mono] emits the
  * folded state, and completes empty when the fold produced `null`.

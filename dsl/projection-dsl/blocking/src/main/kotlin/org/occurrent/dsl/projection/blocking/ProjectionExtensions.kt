@@ -76,8 +76,8 @@ fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String
  * (singleton) projection. A keyed projection throws, since folding every instance into one blended state on demand
  * would produce a nonsense result. Use [project] with an `instanceId` for a keyed projection.
  *
- * The receiver form Kotlin reads better with. [Projections.project] is the same fold and does the work, so which
- * events get selected and when a keyed projection is rejected are decided in one place for both languages.
+ * The Kotlin receiver form of [Projections.project], which is the same fold and does the work, so which events get
+ * selected and when a keyed projection is rejected are decided in one place for both languages.
  */
 fun <S, E : Any, ID : Any> DomainEventQueries<E>.project(projection: Projection<S, E, ID>): S =
     Projections.project(projection, this)
