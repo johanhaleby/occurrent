@@ -32,6 +32,7 @@ import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
+import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 
@@ -446,7 +447,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     @Override
     public boolean exists(String streamId) {
-        return state.containsKey(streamId);
+        CopyOnWriteArrayList<CloudEvent> events = state.get(streamId);
+        return events != null && !events.isEmpty();
     }
 
     private static boolean isConditionFulfilledBy(WriteCondition writeCondition, long version) {
@@ -501,10 +503,11 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     @Override
     public void delete(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
-        state.replaceAll((streamId, cloudEvents) -> {
+        new ArrayList<>(state.keySet()).forEach(streamId -> state.computeIfPresent(streamId, (__, cloudEvents) -> {
             cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
-            return cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
-        });
+            CopyOnWriteArrayList<CloudEvent> remaining = cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
+            return remaining.isEmpty() ? null : remaining;
+        }));
     }
 
     @Override
@@ -512,21 +515,29 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         requireNonNull(updateFunction, "Update function cannot be null");
 
         Predicate<CloudEvent> cloudEventPredicate = uniqueCloudEvent(cloudEventId, cloudEventSource);
-        return findStreamIdByCloudEvent(cloudEventPredicate)
-                .map(streamId -> state.computeIfPresent(streamId, (__, events) ->
-                        events.stream().map(cloudEvent -> {
-                            if (cloudEventPredicate.test(cloudEvent)) {
-                                CloudEvent updatedCloudEvent = updateFunction.apply(cloudEvent);
-                                //noinspection ConstantValue
-                                if (updatedCloudEvent == null) {
-                                    throw new IllegalArgumentException("It's not allowed to return a null CloudEvent from the update function.");
-                                }
-                                return updatedCloudEvent;
-                            } else {
-                                return cloudEvent;
-                            }
-                        }).collect(Collectors.toCollection(CopyOnWriteArrayList::new))))
-                .flatMap(events -> events.stream().filter(cloudEventPredicate).findFirst());
+        AtomicReference<CloudEvent> result = new AtomicReference<>();
+        findStreamIdByCloudEvent(cloudEventPredicate)
+                .ifPresent(streamId -> state.computeIfPresent(streamId, (__, events) -> {
+                    Optional<CloudEvent> currentCloudEvent = events.stream().filter(cloudEventPredicate).findFirst();
+                    if (currentCloudEvent.isEmpty()) {
+                        return events;
+                    }
+
+                    CloudEvent updatedCloudEvent = updateFunction.apply(currentCloudEvent.get());
+                    //noinspection ConstantValue
+                    if (updatedCloudEvent == null) {
+                        throw UpdateEventFunctionValidator.updateFunctionReturnedNull();
+                    } else if (Objects.equals(updatedCloudEvent, currentCloudEvent.get())) {
+                        result.set(currentCloudEvent.get());
+                        return events;
+                    }
+
+                    result.set(updatedCloudEvent);
+                    return events.stream()
+                            .map(cloudEvent -> cloudEventPredicate.test(cloudEvent) ? updatedCloudEvent : cloudEvent)
+                            .collect(Collectors.toCollection(CopyOnWriteArrayList::new));
+                }));
+        return Optional.ofNullable(result.get());
     }
 
     @Override

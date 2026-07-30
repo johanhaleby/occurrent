@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
+import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreOperations;
@@ -880,7 +881,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
                         final Mono<CloudEvent> result;
                         if (updatedCloudEvent == null) {
-                            result = Mono.error(new IllegalArgumentException("Cloud event update function is not allowed to return null"));
+                            result = Mono.error(UpdateEventFunctionValidator.updateFunctionReturnedNull());
                         } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                             String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                             long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
@@ -888,7 +889,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                             updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                             result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(updatedCloudEvent);
                         } else {
-                            result = Mono.empty();
+                            result = Mono.just(updatedCloudEvent);
                         }
                         return result;
                     });

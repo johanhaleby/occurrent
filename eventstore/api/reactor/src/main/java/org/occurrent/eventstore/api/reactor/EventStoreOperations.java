@@ -65,8 +65,8 @@ public interface EventStoreOperations {
      * @param updateFunction   A function that takes the existing cloud event and you're expected to return an
      *                         updated cloud event (cannot be <code>null</code>). If the a cloud event is not found
      *                         for the given <code>cloudEventId</code> and <code>cloudEventSource</code> then the <code>fn</code>
-     *                         function will not be called and an empty <code>Optional</code> will be returned.
-     * @return The updated cloud event or an empty <code>Optional</code> if no cloud event was found matching the <code>cloudEventId</code> and <code>cloudEventSource</code>.
+     *                         function will not be called and an empty <code>Mono</code> will be returned.
+     * @return The updated cloud event or an empty <code>Mono</code> if no cloud event was found matching the <code>cloudEventId</code> and <code>cloudEventSource</code>.
      */
     Mono<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction);
 
