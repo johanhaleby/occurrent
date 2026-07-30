@@ -583,6 +583,49 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
+    void it_is_possible_to_stop_and_start_a_CompetingConsumerSubscriptionModel_when_some_subscriptions_are_blocked_and_the_lease_expires_while_stopped() throws InterruptedException {
+        // Given
+        Duration leaseTime = Duration.ofMillis(500);
+        CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription2 = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate, leaseTime));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate, leaseTime));
+
+        String subscriberId1 = "SubscriberId1";
+        String subscriberId2 = "SubscriberId2";
+        String subscriptionId1 = "SubscriptionId1";
+        String subscriptionId2 = "SubscriptionId2";
+        competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
+
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId2, cloudEventsSubscription2::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId2, cloudEventsSubscription2::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+
+        // When
+        competingConsumerSubscriptionModel1.stop();
+        competingConsumerSubscriptionModel2.stop();
+
+        // The lock refresh runs every half lease, so sleeping past a whole one guarantees a tick while both
+        // models are stopped. A model that keeps competing while stopped takes a lock it will not consume on,
+        // and then start() has nothing to do because the status never changed.
+        Thread.sleep(leaseTime.toMillis() + 200);
+
+        competingConsumerSubscriptionModel1.start();
+        competingConsumerSubscriptionModel2.start();
+
+        eventStore.write("streamId", serialize(nameDefined));
+
+        // Then
+        await().failFast("cloudEventsSubscription1 should never have more than 1 event", () -> cloudEventsSubscription1.size() > 1)
+               .untilAsserted(() -> assertThat(cloudEventsSubscription1).hasSize(1));
+        await().failFast("cloudEventsSubscription2 should never have more than 1 event", () -> cloudEventsSubscription2.size() > 1)
+               .untilAsserted(() -> assertThat(cloudEventsSubscription2).hasSize(1));
+    }
+
+    @Test
     void consumption_is_resumed_after_prohibited_when_lease_time_is_low() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
