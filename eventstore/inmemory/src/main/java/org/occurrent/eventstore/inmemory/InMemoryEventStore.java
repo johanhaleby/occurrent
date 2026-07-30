@@ -503,11 +503,16 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     @Override
     public void delete(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
-        new ArrayList<>(state.keySet()).forEach(streamId -> state.computeIfPresent(streamId, (__, cloudEvents) -> {
-            cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
-            CopyOnWriteArrayList<CloudEvent> remaining = cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
-            return remaining.isEmpty() ? null : remaining;
-        }));
+        // Held for the whole delete, not just the key snapshot: "state" is a synchronized map, so iterating any of its
+        // views needs the monitor, and holding it also keeps the delete atomic against a concurrent write the way the
+        // single replaceAll call this replaced was.
+        synchronized (state) {
+            new ArrayList<>(state.keySet()).forEach(streamId -> state.computeIfPresent(streamId, (__, cloudEvents) -> {
+                cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
+                CopyOnWriteArrayList<CloudEvent> remaining = cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
+                return remaining.isEmpty() ? null : remaining;
+            }));
+        }
     }
 
     @Override

@@ -281,6 +281,80 @@ class SagaTest {
     }
 
     @Nested
+    class TimerEffects {
+
+        @Test
+        void is_empty_when_the_step_produced_no_effects() {
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), List.of());
+
+            assertThat(step.timerEffects()).isEmpty();
+        }
+
+        @Test
+        void is_empty_when_the_only_effect_is_a_command() {
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"),
+                    List.of(SagaEffect.issue(new CancelOrder("order-1"))));
+
+            assertThat(step.timerEffects()).isEmpty();
+        }
+
+        @Test
+        void isolates_the_timer_from_a_step_that_also_issued_a_command() {
+            // The case the accessor exists for. On the mixed effects() list this assertion could only be contains(...),
+            // which cannot show that no other timer was touched.
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), List.of(
+                    SagaEffect.issue(new ReservePayment("order-1", 100)),
+                    SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30))));
+
+            assertThat(step.timerEffects()).containsExactly(SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)));
+        }
+
+        @Test
+        void keeps_all_three_kinds_of_timer_effect() {
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), List.of(
+                    SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)),
+                    SagaEffect.startTimeoutAt(PAYMENT_TIMER, Instant.parse("2026-07-28T12:00:00Z")),
+                    SagaEffect.cancelTimeout(PAYMENT_TIMER)));
+
+            assertThat(step.timerEffects()).hasSize(3);
+        }
+
+        @Test
+        void returns_the_timers_in_effect_order_and_drops_the_commands() {
+            // Interleaved on purpose, so an implementation that partitions or sorts the list would fail here.
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), List.of(
+                    SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)),
+                    SagaEffect.issue(new ReservePayment("order-1", 100)),
+                    SagaEffect.cancelTimeout(PAYMENT_TIMER)));
+
+            assertThat(step.timerEffects()).containsExactly(
+                    SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)),
+                    SagaEffect.cancelTimeout(PAYMENT_TIMER));
+        }
+
+        @Test
+        void partitions_effects_together_with_issuedCommands() {
+            // The documented relationship between the two accessors, so neither can start dropping or duplicating.
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"), List.of(
+                    SagaEffect.issue(new ReservePayment("order-1", 100)),
+                    SagaEffect.startTimeout(PAYMENT_TIMER, Duration.ofMinutes(30)),
+                    SagaEffect.issue(new CancelOrder("order-1")),
+                    SagaEffect.cancelTimeout(PAYMENT_TIMER)));
+
+            assertThat(step.issuedCommands().size() + step.timerEffects().size()).isEqualTo(step.effects().size());
+        }
+
+        @Test
+        void the_returned_list_is_unmodifiable() {
+            Saga.Step<OrderState, OrderCommand> step = new Saga.Step<>(new AwaitingPayment("order-1"),
+                    List.of(SagaEffect.cancelTimeout(PAYMENT_TIMER)));
+
+            assertThatThrownBy(() -> step.timerEffects().add(SagaEffect.cancelTimeout("other")))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    @Nested
     class OnStart {
 
         @Test

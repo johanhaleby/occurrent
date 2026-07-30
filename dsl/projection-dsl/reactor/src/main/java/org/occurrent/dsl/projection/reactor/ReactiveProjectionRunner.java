@@ -110,6 +110,15 @@ public final class ReactiveProjectionRunner<E> {
     /**
      * Subscribes with the given id and materializes {@code projection} into the blocking {@code repository} (scheduled on
      * {@code boundedElastic}), skipping events whose id resolves to {@code null}.
+     *
+     * <p>A projection with no id function is single-instance: it has one slot, and that slot is
+     * stored under {@code subscriptionId} rather than under a key derived from the events, so read it back
+     * with the same id. A projection that has an id function keys each instance by whatever that function
+     * returns for an event.</p>
+     *
+     * <p>Those are two different nulls, which is worth keeping apart. No id function at all means
+     * single-instance. An id function that returns {@code null} for one event means that event is skipped,
+     * and the projection is still keyed.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, projection, repository, null);
@@ -119,6 +128,15 @@ public final class ReactiveProjectionRunner<E> {
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and materializes {@code projection} into the blocking {@code repository} (scheduled on {@code boundedElastic}),
      * skipping events whose id resolves to {@code null}.
+     *
+     * <p>A projection with no id function is single-instance: it has one slot, and that slot is
+     * stored under {@code subscriptionId} rather than under a key derived from the events, so read it back
+     * with the same id. A projection that has an id function keys each instance by whatever that function
+     * returns for an event.</p>
+     *
+     * <p>Those are two different nulls, which is worth keeping apart. No id function at all means
+     * single-instance. An id function that returns {@code null} for one event means that event is skipped,
+     * and the projection is still keyed.</p>
      */
     public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
         return projectWithMetadata(subscriptionId, projection, Projections.reactiveUpdateWithMetadata(projection, repository, subscriptionId), startAt);

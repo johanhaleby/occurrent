@@ -155,9 +155,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
          * nothing is not an empty one: leaving a step whose timeout was armed contributes a
          * {@link SagaEffect.CancelTimeout} that says nothing about what the reaction decided.
          * <p>
-         * There is no matching accessor for the timer effects, because they need none. A timer effect is already a value
-         * you can assert on {@link #effects()} directly, as {@code SagaEffect.cancelTimeout("step:awaiting-players")},
-         * whereas a command arrives wrapped in a {@link SagaEffect.IssueCommand} and has to be unwrapped first.
+         * See {@link #timerEffects()} for the other half of the split.
          * <p>
          * This is the same reading an executor performs, so an assertion here is an assertion about what would actually
          * be dispatched. Computed on each call, and unmodifiable. Kotlin callers write {@code step.issuedCommands()},
@@ -174,6 +172,31 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 }
             }
             return List.copyOf(commands);
+        }
+
+        /**
+         * The timers this transition started or cancelled, in the order {@link #effects()} holds them, and empty when it
+         * touched none. The timer half of {@link #effects()}, as {@link #issuedCommands()} is the command half.
+         * <p>
+         * Use it when a reaction both issues a command and touches a timer, so you can check the timers on their own:
+         * {@code assertThat(step.timerEffects()).containsExactly(SagaEffect.startTimeout("payment", ofMinutes(30)))}
+         * checks the timers and ignores the commands.
+         * <p>
+         * Starting a timer, starting one at a given time, and cancelling one all arrive here together, because they
+         * carry different values and it reads better to match on them than to have three methods. Computed on each
+         * call, and unmodifiable.
+         */
+        public List<SagaEffect<C>> timerEffects() {
+            List<SagaEffect<C>> timers = new ArrayList<>(effects.size());
+            for (SagaEffect<C> effect : effects) {
+                // Anything that is not a command is a timer effect. Stated as the negation on purpose: a new timer
+                // variant is then included here without an edit, and a new non-timer variant would make
+                // SagaExecutionSupport.applyEffects stop compiling, which is where it gets caught.
+                if (!(effect instanceof SagaEffect.IssueCommand<C>)) {
+                    timers.add(effect);
+                }
+            }
+            return List.copyOf(timers);
         }
     }
 
