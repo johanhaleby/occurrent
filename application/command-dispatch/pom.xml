@@ -45,6 +45,22 @@
             <version>${project.version}</version>
             <optional>true</optional>
         </dependency>
+        <!-- Optional: the CommandDispatchers.invocation(...) adapter executes an Invocation's decision function through
+             ApplicationService; interface-only consumers are unaffected -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-application-service-blocking</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <!-- Not optional: dispatchAll folds a run of same-stream invocations with ListCommandComposition, so a caller
+             that has the application service but not this would fail at runtime, only on the branch that issues two
+             invocations to one stream. The module is a dependency-free leaf, so requiring it costs nothing. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-command-composition</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
@@ -55,12 +71,6 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-inmemory</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-application-service-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

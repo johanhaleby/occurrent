@@ -189,10 +189,16 @@ public interface Saga<E, S extends @Nullable Object, C> {
         public List<SagaEffect<C>> timerEffects() {
             List<SagaEffect<C>> timers = new ArrayList<>(effects.size());
             for (SagaEffect<C> effect : effects) {
-                // Anything that is not a command is a timer effect. Stated as the negation on purpose: a new timer
-                // variant is then included here without an edit, and a new non-timer variant would make
-                // SagaExecutionSupport.applyEffects stop compiling, which is where it gets caught.
-                if (!(effect instanceof SagaEffect.IssueCommand<C>)) {
+                // Matched exhaustively rather than as "not a command", so a new SagaEffect variant stops compiling here
+                // and has to be classified deliberately. A negation would silently report a new non-timer variant as a
+                // timer, and only SagaExecutionSupport.applyEffects would object.
+                boolean isTimerEffect = switch (effect) {
+                    case SagaEffect.IssueCommand<C> ignored -> false;
+                    case SagaEffect.StartTimeout<C> ignored -> true;
+                    case SagaEffect.StartTimeoutAt<C> ignored -> true;
+                    case SagaEffect.CancelTimeout<C> ignored -> true;
+                };
+                if (isTimerEffect) {
                     timers.add(effect);
                 }
             }

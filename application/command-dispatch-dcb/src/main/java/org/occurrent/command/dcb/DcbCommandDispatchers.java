@@ -16,9 +16,13 @@
 
 package org.occurrent.command.dcb;
 
+import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
+import org.occurrent.application.service.blocking.dcb.DcbExecuteOptions;
+import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.dcb.DcbDecider;
 import org.occurrent.dsl.dcb.blocking.DcbDeciderApplicationService;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 
 import static java.util.Objects.requireNonNull;
 
@@ -48,5 +52,29 @@ public final class DcbCommandDispatchers {
         requireNonNull(applicationService, "applicationService cannot be null");
         requireNonNull(dcbDecider, "dcbDecider cannot be null");
         return command -> applicationService.execute(command, dcbDecider);
+    }
+
+    /**
+     * A dispatcher for commands that carry their own handling logic, the DCB twin of
+     * {@code CommandDispatchers.invocation(...)}. Each {@link DcbInvocation} names a read boundary and a domain
+     * function, and this runs that function through {@code applicationService} inside that boundary.
+     * <p>
+     * Unlike the stream twin, {@link CommandDispatcher#dispatchAll(java.util.List)} is not overridden here. Invocations
+     * sharing a {@link DcbCriteria} may carry different {@link TagGenerator}s and one append can only be tagged one
+     * way, so each invocation is dispatched as its own atomic append.
+     *
+     * @param applicationService the DCB application service to execute each invocation's decision against
+     * @param <E>                the event type of the write model
+     */
+    public static <E> CommandDispatcher<DcbInvocation<E>> invocation(DcbApplicationService<E> applicationService) {
+        requireNonNull(applicationService, "applicationService cannot be null");
+        return invocation -> {
+            requireNonNull(invocation, "invocation cannot be null");
+            TagGenerator<E> tagGenerator = invocation.tagGenerator();
+            DcbExecuteOptions<E> options = tagGenerator == null
+                    ? DcbExecuteOptions.empty()
+                    : DcbExecuteOptions.<E>options().tagGenerator(tagGenerator);
+            applicationService.execute(invocation.criteria(), options, invocation.decision());
+        };
     }
 }
