@@ -22,16 +22,8 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A command whose handling logic <i>is</i> the command: a stream to write to, and the domain function to run against
- * that stream's events. Use it when your domain model is plain functions rather than command objects and deciders, so a
- * saga or a policy can invoke the domain directly instead of routing an invented command record through a
- * {@code switch}.
- * <p>
- * Dispatch it with {@link CommandDispatchers#invocation(org.occurrent.application.service.blocking.ApplicationService)},
- * which runs {@link #decision()} through {@code ApplicationService.execute(streamId, decision)}. Because that re-reads
- * the stream before deciding, a duplicated or stale invocation is rejected by the domain's own rules, which is what
- * makes at-least-once dispatch safe. It is also the reason this type carries a decision function rather than an
- * arbitrary {@code Runnable}: the only thing it can express is "fold this stream and return events to append".
+ * A command that carries its own handling logic: a stream id, and the function to run against that stream's events.
+ * Dispatch it with {@link CommandDispatchers#invocation(org.occurrent.application.service.blocking.ApplicationService)}.
  * <p>
  * In a saga, the command type becomes {@code Invocation<E>} and no command records are needed at all:
  * <pre>{@code
@@ -40,15 +32,10 @@ import static java.util.Objects.requireNonNull;
  * }</pre>
  * Kotlin callers get a two-argument {@code issue(streamId) { events -> ... }} from {@code occurrent-saga-dsl-blocking}.
  * <p>
- * Two things to know before choosing this over command records:
- * <ul>
- *   <li><b>{@code E} is the event type of the stream being written to</b>, not the event type a saga subscribes to. A
- *       process commanding several write models needs a common event supertype and one {@code ApplicationService} over
- *       it.</li>
- *   <li><b>{@code Saga.adapt} cannot widen it.</b> {@code adapt} requires the narrower command type to be a subtype of
- *       the wider one, and Java generics are invariant, so {@code Invocation<PaymentEvent>} is not an
- *       {@code Invocation<DomainEvent>}. Type a feature saga on the module-wide event type from the start.</li>
- * </ul>
+ * {@code E} is the event type of the stream being written to, not the event type a saga subscribes to.
+ * {@code Saga.adapt} cannot widen it, because Java generics are invariant, so type a feature saga on the module-wide
+ * event type from the start.
+ * <p>
  * Two invocations are equal only when they hold the same stream id and the very same function instance, since a lambda
  * has no value equality. Assert on what an invocation <i>does</i> instead, by applying {@link #decision()} to the events
  * the test cares about.
@@ -72,10 +59,7 @@ public record Invocation<E>(String streamId, Function<List<E>, List<E>> decision
         return new Invocation<>(streamId, decision);
     }
 
-    /**
-     * Only the stream id, because the decision is a lambda whose generated {@code toString} is a synthetic class name
-     * that would otherwise fill every assertion failure and dispatch log line.
-     */
+    /** Renders only the stream id, since the decision lambda has no useful {@code toString}. */
     @Override
     public String toString() {
         return "Invocation[streamId=" + streamId + "]";

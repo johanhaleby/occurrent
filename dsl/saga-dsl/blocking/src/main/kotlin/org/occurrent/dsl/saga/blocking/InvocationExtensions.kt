@@ -23,11 +23,7 @@ import java.util.function.Function
 
 /**
  * Issues the domain function itself instead of a command object, for a saga whose command type is [Invocation].
- *
- * These live here rather than in `occurrent-saga-dsl-common` on purpose. That module is the pure saga descriptor and
- * deliberately knows nothing about command dispatch, so putting a dispatch type into its public Kotlin surface would
- * undo that. This module already depends on both the descriptor and `occurrent-command-dispatch`, so the sugar costs
- * nothing here.
+ * These live here rather than in `occurrent-saga-dsl-common`, which knows nothing about command dispatch (ADR 81).
  *
  * Both mirror the one-argument `issue(command)` they delegate to, including returning the receiver, which is what makes
  * a produced-but-discarded reaction a compile error.

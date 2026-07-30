@@ -57,14 +57,11 @@ public final class DcbCommandDispatchers {
     /**
      * A dispatcher for commands that carry their own handling logic, the DCB twin of
      * {@code CommandDispatchers.invocation(...)}. Each {@link DcbInvocation} names a read boundary and a domain
-     * function, and this runs that function through {@code applicationService} inside that boundary. Use it when the
-     * domain model is plain functions rather than command objects and deciders.
+     * function, and this runs that function through {@code applicationService} inside that boundary.
      * <p>
-     * Unlike the stream twin this does not override {@link CommandDispatcher#dispatchAll(java.util.List)} to fold a run
-     * of invocations sharing a boundary into one append. Two invocations with equal {@link DcbCriteria} may still carry
-     * different {@link org.occurrent.application.service.dcb.TagGenerator}s, and one append can only be tagged one way,
-     * so folding would either drop a generator or need a rule for combining them. Each invocation is therefore its own
-     * atomic append, which is the same guarantee {@link #decider} gives.
+     * Unlike the stream twin, {@link CommandDispatcher#dispatchAll(java.util.List)} is not overridden here. Invocations
+     * sharing a {@link DcbCriteria} may carry different {@link TagGenerator}s and one append can only be tagged one
+     * way, so each invocation is dispatched as its own atomic append.
      *
      * @param applicationService the DCB application service to execute each invocation's decision against
      * @param <E>                the event type of the write model
