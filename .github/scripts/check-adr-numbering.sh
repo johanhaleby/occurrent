@@ -45,7 +45,7 @@ done < <(for f in "$dir"/[0-9][0-9][0-9][0-9]-*.md; do
 for f in "$dir"/[0-9][0-9][0-9][0-9]-*.md; do
   [ -e "$f" ] || continue
   file_num=$(basename "$f" | cut -c1-4)
-  head_num=$(head -1 "$f" | sed -nE 's/^# ([0-9]+)\..*/\1/p')
+  head_num=$(head -n 1 "$f" | sed -nE 's/^# ([0-9]+)\..*/\1/p')
   if [ -z "$head_num" ]; then
     echo "::error::$f does not start with a '# <number>. <title>' heading"
     status=1
