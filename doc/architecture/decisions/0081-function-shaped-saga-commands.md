@@ -1,4 +1,4 @@
-# 80. Function-shaped commands, not a lambda-carrying saga effect
+# 81. Function-shaped commands, not a lambda-carrying saga effect
 
 Date: 2026-07-30
 
