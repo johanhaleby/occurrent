@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
@@ -49,7 +50,7 @@ import static java.util.function.Predicate.not;
  * If the above code is executed on multiple nodes/processes, then only <i>one</i> subscriber will receive events.
  */
 @NullMarked
-public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, CompetingConsumerListener {
+public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel, CompetingConsumerListener {
     private static final Logger log = LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class);
 
     private final SubscriptionModel delegate;
@@ -195,6 +196,19 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @Override
     public boolean isRunning(String subscriptionId) {
         return getDelegatedSubscriptionModel().isRunning(subscriptionId);
+    }
+
+    // Reports its own consumers as well as the delegate's, because a consumer that has not won the lock yet is only
+    // known here. The delegate is not told about it until startWaitingConsumer subscribes on its behalf.
+    @Override
+    public Set<String> subscriptionIds() {
+        Set<String> ids = competingConsumers.keySet().stream()
+                .map(SubscriptionIdAndSubscriberId::subscriptionId)
+                .collect(Collectors.toCollection(HashSet::new));
+        IntrospectableSubscriptionModel.of(getDelegatedSubscriptionModel())
+                .map(IntrospectableSubscriptionModel::subscriptionIds)
+                .ifPresent(ids::addAll);
+        return Set.copyOf(ids);
     }
 
     /**

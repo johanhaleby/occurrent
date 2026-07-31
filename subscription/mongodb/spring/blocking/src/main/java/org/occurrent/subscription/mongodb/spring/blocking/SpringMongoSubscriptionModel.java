@@ -33,6 +33,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
@@ -55,7 +56,9 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -81,7 +84,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptionModel, SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
     private final String eventCollection;
@@ -290,6 +293,13 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         runningSubscriptions.put(subscriptionId, newInternalSubscription);
         logDebug("Subscription {} resumed", subscriptionId);
         return new SpringMongoSubscription(subscriptionId, newSubscription);
+    }
+
+    @Override
+    public Set<String> subscriptionIds() {
+        Set<String> ids = new HashSet<>(runningSubscriptions.keySet());
+        ids.addAll(pausedSubscriptions.keySet());
+        return Set.copyOf(ids);
     }
 
     @Override
