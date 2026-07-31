@@ -28,8 +28,8 @@ import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle
  * val subscriptions = subscriptionModel.stoppedByDefault()
  * ```
  *
- * `@JvmField` is required. A plain Kotlin `val` compiles to a private field with a getter, and JUnit only picks up
- * a non-private one.
+ * Keep the `@JvmField`. Without it JUnit never picks the field up, so nothing is stopped and every subscription stays
+ * live for the whole test.
  */
 fun SubscriptionModelLifeCycle.stoppedByDefault(): OccurrentSubscriptionsExtension =
     OccurrentSubscriptionsExtension.stoppedByDefault(this)
