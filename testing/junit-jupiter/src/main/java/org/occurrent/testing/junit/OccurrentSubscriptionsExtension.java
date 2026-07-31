@@ -99,9 +99,10 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     }
 
     /**
-     * Start every subscription the model has, for the one test that needs to see them all working together.
+     * Start every subscription the model has, for the one test that needs to see them all working together. A
+     * subscription that is already running is left alone.
      *
-     * @return the ids that were started, in the order the model reported them
+     * @return the ids that were started, in no particular order
      * @throws IllegalStateException if the subscription model cannot list its subscriptions
      */
     public Set<String> startAll() {
