@@ -173,6 +173,22 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     }
 
     /**
+     * Interrupts an in-flight or future replay on this model, without touching the shared live delegate. Lets the
+     * dispatcher stop every inner model's replay while calling the delegate's {@code stop()} exactly once.
+     */
+    public void stopReplay() {
+        stopped = true;
+    }
+
+    /**
+     * Allows the next replay on this model to run, without touching the shared live delegate. Does not restart a
+     * replay already interrupted by {@link #stopReplay()}, it only permits the next one.
+     */
+    public void resumeReplay() {
+        stopped = false;
+    }
+
+    /**
      * Delete {@code subscriptionId}'s position from the configured position storage, if any. Exposed so the
      * dispatcher can delete it exactly once when cancelling a subscription that could belong to either mode, since
      * the position storage config (and the storage instance it wraps) is shared, not owned per mode.

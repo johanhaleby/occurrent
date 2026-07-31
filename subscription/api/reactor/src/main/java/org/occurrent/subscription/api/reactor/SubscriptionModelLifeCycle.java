@@ -32,6 +32,9 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
     /**
      * Temporarily stop the subscription model so that none of its subscriptions will receive any events.
      * It can be started again using {@link #start}.
+     * <p>
+     * Every subscription that was running is left <i>paused</i>, so {@link #isPaused(String)} returns {@code true} for it,
+     * and {@link #resumeSubscription(String)} can bring it back on its own without starting the rest.
      */
     void stop();
 

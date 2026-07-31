@@ -37,6 +37,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 /**
  * A {@link SubscriptionModel} that can read historic cloud events from the all event streams (see {@link EventStoreQueries#all()}) until caught up with the
@@ -256,29 +257,45 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         return StreamCatchupSubscriptionModel.startsAtExplicitGlobalPosition(startAt, CatchupSubscriptionModel.class);
     }
 
+    // Whichever catch-up children this configuration wired. Only the live delegate is always present.
+    private Stream<AbstractCatchupSubscriptionModel> presentCatchupModels() {
+        return Stream.of(streamCatchupSubscriptionModel, dcbCatchupSubscriptionModel, agnosticCatchupSubscriptionModel)
+                .filter(Objects::nonNull);
+    }
+
+    // stopReplay() rather than a child's own stop(), which would reach the shared live delegate once per child. The
+    // children have to be told so a replay already in flight stops delivering.
     @Override
     public void stop() {
+        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::stopReplay);
         getDelegatedSubscriptionModel().stop();
     }
 
+    // resumeReplay() for the same reason stop() uses stopReplay().
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
+        presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::resumeReplay);
         getDelegatedSubscriptionModel().start(resumeSubscriptionsAutomatically);
     }
 
+    // Asks the catch-up children too, because a replay is running before the live delegate has registered the
+    // subscription. Repeating the delegate's answer per child is harmless here, unlike in stop() and start().
     @Override
     public boolean isRunning() {
-        return getDelegatedSubscriptionModel().isRunning();
+        return presentCatchupModels().anyMatch(AbstractCatchupSubscriptionModel::isRunning)
+                || getDelegatedSubscriptionModel().isRunning();
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isRunning(subscriptionId);
+        return presentCatchupModels().anyMatch(model -> model.isRunning(subscriptionId))
+                || getDelegatedSubscriptionModel().isRunning(subscriptionId);
     }
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isPaused(subscriptionId);
+        return presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))
+                || getDelegatedSubscriptionModel().isPaused(subscriptionId);
     }
 
     @Override

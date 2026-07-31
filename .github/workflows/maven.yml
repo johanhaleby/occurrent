@@ -241,9 +241,9 @@ jobs:
           # misc is the deliberate junk drawer: whatever is too small to shard on its own. The
           # reactive Spring Boot starter is here because the blocking one nearly fills a shard by
           # itself, so the two cannot share.
-          # `tck` lodges here: its own tests run the conformance suites against deliberately broken stores to prove
-          # the suites can fail, so they need no container and cost almost nothing.
-          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck" }
+          # `tck` and `testing` lodge here: their own tests run against the in-memory event store and subscription
+          # model, so they need no container and cost almost nothing.
+          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing" }
           # example modules run real MongoDB replica-set containers with timing-sensitive
           # Awaitility subscription-catchup tests. A single example shard started 12 containers
           # sequentially on one runner, which tipped those waits over. Split by container load

@@ -6,7 +6,9 @@ Last updated: 2026-07-30. **0.31.0 IS released**, tag `occurrent-0.31.0` on `b97
 
 Occurrent is a Maven multi-module JVM event-sourcing library centered on CloudEvents, built as small composable libraries rather than a framework: domain models stay independent of Occurrent.
 
-Root modules (`pom.xml`): `test-support`, `eventstore`, `subscription`, `cloudevents-extension`, `common`, `application`, `dsl`, `framework`, `deadline`, `library` (currently `hederlig`), `bom`, `example` (active-by-default `examples-module` profile), `rewrite`.
+Root modules (`pom.xml`): `test-support`, `tck`, `testing`, `eventstore`, `subscription`, `cloudevents-extension`, `common`, `application`, `dsl`, `framework`, `deadline`, `library` (currently `hederlig`), `bom`, `example` (active-by-default `examples-module` profile), `rewrite`.
+
+Three homes for test code, and they are not interchangeable (ADR 0077, ADR 0082): `test-support` is unpublished fixtures for this repo's own tests, `occurrent-tck-*` is published for someone implementing an Occurrent SPI outside this repo, and `occurrent-testing-*` is published for someone testing an application built on Occurrent. `testing/junit-jupiter` holds the mechanism and depends only on JUnit plus `occurrent-subscription-api-blocking`, `testing/spring-boot` is a thin wrapper (`@EnableOccurrentTesting`) over it. Anything the Spring leaf can do must be expressible against the neutral one.
 
 Layering:
 
@@ -191,6 +193,20 @@ Release: `mvn_local_snapshot.sh` runs a release-profile local install with `-Dre
 A new section needs an `addedTags` entry in `js/_partials/main.js` keyed by the heading's kramdown id (or its explicit `{#anchor}`), per the docs repo's own `AGENTS.md`. Two feature branches both adding an entry conflict on the same line every time, and the resolution is always to keep both.
 
 Still owed on docs `main` from the 0.31.0 release: a `dcb-patterns` row in the Examples table, deliberately omitted while a tag-pinned link would have 404ed against 0.30.0. It resolves now.
+
+### The testing modules (ADR 0082, shipped 2026-07-30)
+
+`occurrent-testing-junit-jupiter` plus `occurrent-testing-spring-boot` ship the deny-by-default subscription pattern: `stop()` in `beforeEach` and `afterEach`, each test opting in with `resumeSubscription(id).waitUntilStarted()`. The pattern came from the Parkster push-notification service, not from this repo, and nothing here used it before.
+
+Decisions a later session must not silently reopen:
+
+- **`SubscriptionModelLifeCycle.stop()` now promises that every running subscription is left paused**, so a per-id `resumeSubscription` works after a model-wide stop. Every implementation already did this, nothing said so. **Pin it in the #395 subscription conformance suite**, because the whole extension rests on it.
+- **No `startAll()`, on purpose.** Nothing on `SubscriptionModelLifeCycle` enumerates subscription ids, so it could only resume ids already named and would silently no-op on a fresh extension. Adding it later is not breaking, removing it would have been. The proper fix is exposing the bean post-processors' private `registeredIds`, filed as #482.
+- **Await conventions stay with `occurrent-tck-subscription-blocking` (ADR 0077), not duplicated here.** If the testing module ever needs one, relocate it here and have the TCK depend on it. Decide before #395 lands, cheaper than moving a published type afterwards.
+- **The neutral leaf must stay usable with no Spring and no container.** Its tests run against the in-memory store and subscription model, which is why `testing` lodges in the `misc` CI shard next to `tck`.
+- **Not fixed:** subscriptions still all start once during context boot before the first `beforeEach` stops them. `SpringMongoSubscriptionModel.subscribe` already registers into `pausedSubscriptions` when the model is not running, so the missing piece is stopping the model before the bean post-processors register anything. A JUnit extension cannot, it runs after context refresh. Filed as #481. Needs its own ADR because a model that starts stopped interacts with `StartupMode.WAIT_UNTIL_STARTED` and the post-processors' `waitUntilStarted()` calls.
+
+`CatchupSubscriptionModel.stop()` was fixed in the same change: it only stopped the live delegate, so a catch-up replay kept delivering events after `stop()` returned. The children are told via `stopReplay()`/`resumeReplay()` rather than their own `stop()`, because a child's `stop()` reaches the shared live delegate and would fire it once per child. `CatchupSubscriptionModelStopPropagationTest` is the no-Mongo guard, and it fails on 2 of 3 tests without the fix.
 
 ### Planned work: TCK, SQL event store, broker integration (issues filed 2026-07-25, NO code yet)
 
