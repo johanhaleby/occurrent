@@ -96,6 +96,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final MongoOperations mongoOperations;
     private final RetryStrategy retryStrategy;
     private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
+    private final boolean autoStartup;
     private final @Nullable Duration maxAwaitTime;
     // Shared executor for restart loops so a failing subscription backs off (via retryStrategy) instead of
     // spawning a thread per restart attempt. One virtual thread per currently-restarting subscription,
@@ -152,8 +153,13 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         this.maxAwaitTime = config.maxAwaitTime;
         this.restartExecutor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("spring-mongo-subscription-restart-", 0).factory());
         this.activeRestartSignal = new ConcurrentHashMap<>();
+        this.autoStartup = config.autoStartup;
         this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate, config.executor);
-        this.messageListenerContainer.start();
+        // Left stopped when autoStartup is false, so subscribe(..) registers into pausedSubscriptions and no change
+        // stream is opened until the caller starts one. Starting here and stopping again would open and close them.
+        if (autoStartup) {
+            this.messageListenerContainer.start();
+        }
     }
 
     @Override
@@ -346,7 +352,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     @Override
     public boolean isAutoStartup() {
-        return messageListenerContainer.isAutoStartup();
+        return autoStartup;
     }
 
     private void stopMessageListenerContainer() {
