@@ -23,6 +23,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.lang.reflect.Proxy;
@@ -83,19 +85,67 @@ class OccurrentSubscriptionsExtensionTest {
     }
 
     @Test
-    void start_on_an_unknown_id_fails_with_a_message_naming_the_known_ids() {
+    void start_on_an_unknown_id_names_the_subscriptions_the_model_actually_has() {
         subscriptionModel.subscribe("orders", event -> {
         });
+        subscriptionModel.subscribe("shipments", event -> {
+        });
 
-        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension
-                .stoppedByDefault(subscriptionModel)
-                .alwaysStart("orders");
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
         runBeforeEach(extension);
 
-        assertThatThrownBy(() -> extension.start("shipments"))
+        // Nothing was named on the extension, so only the model can say what exists
+        assertThatThrownBy(() -> extension.start("odrers"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("shipments")
-                .hasMessageContaining("orders");
+                .hasMessageContaining("odrers")
+                .hasMessageContaining("orders")
+                .hasMessageContaining("shipments");
+    }
+
+    @Test
+    void start_all_starts_every_subscription_on_the_model() {
+        CopyOnWriteArrayList<CloudEvent> orders = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> shipments = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe("orders", orders::add);
+        subscriptionModel.subscribe("shipments", shipments::add);
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
+        runBeforeEach(extension);
+
+        assertThat(extension.startAll()).containsExactlyInAnyOrder("orders", "shipments");
+
+        eventStore.write("stream1", List.of(event()));
+        subscriptionModel.waitUntilAllEventsProcessed();
+
+        assertThat(orders).hasSize(1);
+        assertThat(shipments).hasSize(1);
+    }
+
+    @Test
+    void start_all_is_fine_when_a_subscription_is_already_running() {
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe("orders", received::add);
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
+        runBeforeEach(extension);
+        extension.start("orders");
+
+        assertThat(extension.startAll()).isEmpty();
+
+        eventStore.write("stream1", List.of(event()));
+        subscriptionModel.waitUntilAllEventsProcessed();
+
+        assertThat(received).hasSize(1);
+    }
+
+    @Test
+    void start_all_fails_loudly_when_the_model_cannot_list_its_subscriptions() {
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(new NotIntrospectableSubscriptionModel());
+
+        assertThatThrownBy(extension::startAll)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cannot list them")
+                .hasMessageContaining("start(String)");
     }
 
     @Test
@@ -168,6 +218,45 @@ class OccurrentSubscriptionsExtensionTest {
         subscriptionModel.waitUntilAllEventsProcessed();
 
         assertThat(received).isEmpty();
+    }
+
+    // A lifecycle with no IntrospectableSubscriptionModel anywhere in it, so startAll has nothing to enumerate.
+    private static final class NotIntrospectableSubscriptionModel implements SubscriptionModelLifeCycle {
+        @Override
+        public void stop() {
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+        }
+
+        @Override
+        public boolean isRunning() {
+            return false;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            throw new AssertionError("resumeSubscription must not be reached when the model cannot be enumerated");
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+        }
     }
 
     private static void runBeforeEach(OccurrentSubscriptionsExtension extension) {

@@ -19,12 +19,15 @@ package org.occurrent.testing.junit;
 import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 
 import java.util.LinkedHashSet;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Stops every subscription before and after each test, so a test only runs the subscriptions it names with
@@ -95,21 +98,47 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
         return resumeAndWait(subscriptionId);
     }
 
+    /**
+     * Start every subscription the model has, for the one test that needs to see them all working together. A
+     * subscription that is already running is left alone.
+     *
+     * @return the ids that were started, in no particular order
+     * @throws IllegalStateException if the subscription model cannot list its subscriptions
+     */
+    public Set<String> startAll() {
+        Set<String> ids = new LinkedHashSet<>(modelSubscriptionIds().orElseThrow(() -> new IllegalStateException(
+                "Cannot start all subscriptions because " + subscriptionModel.getClass().getName() + " cannot list them. "
+                        + "Name each subscription with start(String) instead, or use a model implementing "
+                        + IntrospectableSubscriptionModel.class.getSimpleName() + ".")));
+        ids.removeIf(subscriptionId -> !subscriptionModel.isPaused(subscriptionId));
+        ids.forEach(this::resumeAndWait);
+        return Set.copyOf(ids);
+    }
+
     private Subscription resumeAndWait(String subscriptionId) {
         Subscription subscription;
         try {
             subscription = subscriptionModel.resumeSubscription(subscriptionId);
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(
-                    "Could not start subscription '" + subscriptionId + "', " + e.getMessage() +
-                            ". Ids known to this extension (named via alwaysStart or start): " + describeKnownIds(), e);
+                    "Could not start subscription '" + subscriptionId + "', " + e.getMessage() + ". " + describeAvailableIds(), e);
         }
         knownIds.add(subscriptionId);
         subscription.waitUntilStarted();
         return subscription;
     }
 
-    private String describeKnownIds() {
-        return knownIds.isEmpty() ? "none" : knownIds.toString();
+    // Prefers what the model actually knows, since the ids this extension was told about are useless on a typo, they
+    // contain the same wrong id and nothing else.
+    private String describeAvailableIds() {
+        return modelSubscriptionIds()
+                .map(ids -> ids.isEmpty() ? "The subscription model has no subscriptions." : "Subscriptions on the model: " + new TreeSet<>(ids) + ".")
+                .orElseGet(() -> knownIds.isEmpty()
+                        ? "This subscription model cannot list its subscriptions, and this extension has not been told about any."
+                        : "This subscription model cannot list its subscriptions. Ids named via alwaysStart or start: " + knownIds + ".");
+    }
+
+    private Optional<Set<String>> modelSubscriptionIds() {
+        return IntrospectableSubscriptionModel.of(subscriptionModel).map(IntrospectableSubscriptionModel::subscriptionIds);
     }
 }

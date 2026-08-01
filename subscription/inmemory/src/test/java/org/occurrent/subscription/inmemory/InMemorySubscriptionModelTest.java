@@ -70,6 +70,29 @@ public class InMemorySubscriptionModelTest {
     }
 
     @Test
+    void subscription_ids_reports_both_running_and_paused_subscriptions() {
+        inMemorySubscriptionModel.subscribe("orders", __ -> {
+        });
+        inMemorySubscriptionModel.subscribe("shipments", __ -> {
+        });
+        inMemorySubscriptionModel.pauseSubscription("shipments");
+
+        assertAll(
+                () -> assertThat(inMemorySubscriptionModel.subscriptionIds()).containsExactlyInAnyOrder("orders", "shipments"),
+                () -> assertThat(inMemorySubscriptionModel.isPaused("shipments")).isTrue()
+        );
+    }
+
+    @Test
+    void subscription_ids_forgets_a_cancelled_subscription() {
+        inMemorySubscriptionModel.subscribe("orders", __ -> {
+        });
+        inMemorySubscriptionModel.cancelSubscription("orders");
+
+        assertThat(inMemorySubscriptionModel.subscriptionIds()).isEmpty();
+    }
+
+    @Test
     void events_written_to_event_store_are_propagated_to_all_subscribers() {
         // Given
         CloudEvent cloudEvent = new CloudEventBuilder()
