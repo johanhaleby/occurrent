@@ -27,12 +27,14 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.*;
 
@@ -46,7 +48,7 @@ import java.util.stream.Stream;
  * An in-memory subscription model
  */
 @NullMarked
-public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<List<CloudEvent>> {
+public class InMemorySubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, Consumer<List<CloudEvent>> {
 
     private final ConcurrentMap<String, InMemorySubscription> subscriptions;
     private final ConcurrentMap<String, Boolean> pausedSubscriptions;
@@ -220,6 +222,11 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Li
 
         pausedSubscriptions.clear();
         ExecutorShutdown.shutdownSafely(cloudEventDispatcher, 5, TimeUnit.SECONDS);
+    }
+
+    @Override
+    public Set<String> subscriptionIds() {
+        return Set.copyOf(subscriptions.keySet());
     }
 
     @Override

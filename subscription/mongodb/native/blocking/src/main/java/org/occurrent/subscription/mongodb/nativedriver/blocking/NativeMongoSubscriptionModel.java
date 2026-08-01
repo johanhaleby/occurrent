@@ -38,6 +38,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
@@ -55,6 +56,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -79,7 +81,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
 
     private final MongoCollection<Document> eventCollection;
@@ -377,6 +379,12 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public boolean isRunning() {
         return running;
+    }
+
+    @Override
+    public Set<String> subscriptionIds() {
+        return Stream.concat(runningSubscriptions.keySet().stream(), pausedSubscriptions.keySet().stream())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     @Override

@@ -18,6 +18,7 @@ package org.occurrent.command;
 
 import org.occurrent.application.composition.command.ListCommandComposition;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.command.internal.CommandGrouping;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.decider.DeciderApplicationService;
 
@@ -43,10 +44,15 @@ public final class CommandDispatchers {
     }
 
     /**
-     * A dispatcher that runs each command through {@code decider} on the stream {@code streamIdOf} derives from the
+     * A dispatcher that runs a command through {@code decider} on the stream {@code streamIdOf} derives from the
      * command, via {@code applicationService}. Because the decider re-folds the authoritative stream, a duplicated or
      * stale command is rejected by the decider's own rules, which is what makes the executor's at-least-once dispatch
      * safe.
+     * <p>
+     * {@link CommandDispatcher#dispatchAll(List)} folds a run of <i>consecutive</i> commands targeting the same stream
+     * into a single {@code execute}, so a reaction issuing three commands against one stream is one append rather than
+     * three. The decider sees them in order and each one decides against what the ones before it decided. Order is
+     * preserved, so two commands to one stream separated by one to a different stream stay three separate appends.
      *
      * @param applicationService the decider-backed application service to execute against
      * @param decider            the decider handling the saga's commands
@@ -60,7 +66,19 @@ public final class CommandDispatchers {
         requireNonNull(applicationService, "applicationService cannot be null");
         requireNonNull(decider, "decider cannot be null");
         requireNonNull(streamIdOf, "streamIdOf cannot be null");
-        return command -> applicationService.execute(streamIdOf.streamId(command), command, decider);
+        return new CommandDispatcher<>() {
+            @Override
+            public void dispatch(C command) {
+                requireNonNull(command, "command cannot be null");
+                applicationService.execute(streamIdOf.streamId(command), command, decider);
+            }
+
+            @Override
+            public void dispatchAll(List<C> commands) {
+                CommandGrouping.forEachRun(commands, streamIdOf::streamId,
+                        (streamId, group) -> applicationService.execute(streamId, group, decider));
+            }
+        };
     }
 
     /**
@@ -89,22 +107,8 @@ public final class CommandDispatchers {
 
             @Override
             public void dispatchAll(List<Invocation<E>> invocations) {
-                requireNonNull(invocations, "invocations cannot be null");
-                int groupStart = 0;
-                while (groupStart < invocations.size()) {
-                    String streamId = requireInvocation(invocations.get(groupStart)).streamId();
-                    int groupEnd = groupStart + 1;
-                    while (groupEnd < invocations.size() && requireInvocation(invocations.get(groupEnd)).streamId().equals(streamId)) {
-                        groupEnd++;
-                    }
-                    List<Invocation<E>> group = invocations.subList(groupStart, groupEnd);
-                    applicationService.execute(streamId, ListCommandComposition.composeCommands(group.stream().map(Invocation::decision).toList()));
-                    groupStart = groupEnd;
-                }
-            }
-
-            private Invocation<E> requireInvocation(Invocation<E> invocation) {
-                return requireNonNull(invocation, "invocations cannot contain null");
+                CommandGrouping.forEachRun(invocations, Invocation::streamId, (streamId, group) ->
+                        applicationService.execute(streamId, ListCommandComposition.composeCommands(group.stream().map(Invocation::decision).toList())));
             }
         };
     }
