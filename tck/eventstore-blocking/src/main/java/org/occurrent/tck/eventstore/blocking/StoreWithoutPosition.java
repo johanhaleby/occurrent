@@ -16,8 +16,11 @@
 
 package org.occurrent.tck.eventstore.blocking;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * An event store built with its global position turned off, presented as both of the interfaces the position-disabled
@@ -30,5 +33,11 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
  * @param eventStore           writes events to the store with position turned off
  * @param positionOrderedReader answers {@link PositionOrderedReader#writesPosition()} for that same store
  */
+@NullMarked
 public record StoreWithoutPosition(EventStore eventStore, PositionOrderedReader positionOrderedReader) {
+
+    public StoreWithoutPosition {
+        requireNonNull(eventStore, "eventStore cannot be null");
+        requireNonNull(positionOrderedReader, "positionOrderedReader cannot be null");
+    }
 }

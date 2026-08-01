@@ -36,12 +36,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.tck.ConformanceEvents.event;
 
 /**
- * The global sequence position contract, stated in {@code DcbAppendResult}: positions start at 1, are strictly
- * increasing, and are comparable across separate appends without being contiguous. A rejected write reserves and
- * abandons a position block, so gaps between two writes are expected, not a defect.
+ * The global sequence position contract, stated in ADR 84: a position is positive, unique, and strictly increasing,
+ * and is comparable across separate appends without being contiguous. A rejected write reserves and abandons a
+ * position block, so gaps between two writes are expected, not a defect.
  * <p>
- * Nothing here asserts a literal position value or contiguity. Every bound this suite reads a range with is derived
- * from a position it read back off a written event, never from a literal such as 1 or 2.
+ * {@code DcbAppendResult} additionally documents that the very first position a store ever hands out is 1, but this
+ * suite does not assert that: a fixture cannot guarantee its store's underlying position counter has never been used
+ * before this test, only that the store contains no events. Nothing here asserts a literal position value or
+ * contiguity. Every bound this suite reads a range with is derived from a position it read back off a written event,
+ * never from a literal such as 1 or 2.
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -135,7 +138,10 @@ public abstract class StreamPositionConformance extends EventStoreConformance {
         eventStore().write("stream:2", WriteCondition.anyStreamVersion(), List.of(event("B", DEFINED)));
         eventStore().write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("C", DEFINED)));
 
-        List<CloudEvent> events = positionOrderedReader().readInPositionOrder(Filter.all(), PositionRange.fromBeginning()).toList();
+        List<CloudEvent> events;
+        try (var stream = positionOrderedReader().readInPositionOrder(Filter.all(), PositionRange.fromBeginning())) {
+            events = stream.toList();
+        }
 
         List<Long> positions = events.stream().map(OccurrentCloudEventExtension::getPosition).toList();
         assertThat(positions)
@@ -200,7 +206,9 @@ public abstract class StreamPositionConformance extends EventStoreConformance {
     }
 
     private List<String> idsInPositionOrder(Filter filter, PositionRange range) {
-        return positionOrderedReader().readInPositionOrder(filter, range).map(CloudEvent::getId).toList();
+        try (var stream = positionOrderedReader().readInPositionOrder(filter, range)) {
+            return stream.map(CloudEvent::getId).toList();
+        }
     }
 
     private CloudEvent singleEventOf(String streamId) {

@@ -94,7 +94,11 @@ public abstract class StreamPositionDisabledConformance extends EventStoreConfor
     void read_in_position_order_refuses_to_answer_and_says_why() {
         PositionOrderedReader reader = storeWithoutPosition().positionOrderedReader();
 
-        assertThatThrownBy(() -> reader.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()).toList())
+        assertThatThrownBy(() -> {
+            try (var stream = reader.readInPositionOrder(Filter.all(), PositionRange.fromBeginning())) {
+                stream.toList();
+            }
+        })
                 .isExactlyInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("does not write a position");
     }
