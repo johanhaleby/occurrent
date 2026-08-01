@@ -49,7 +49,8 @@ public final class CommandGrouping {
      *
      * @param items  the batch to split, must not contain null
      * @param keyOf  derives the target an item is written to
-     * @param action receives each run's key and the run itself, an unmodifiable view over {@code items}
+     * @param action receives each run's key and the run itself, an unmodifiable copy of that stretch of {@code items},
+     *               so a later change to {@code items} is not visible through it
      * @param <T>    the item type
      * @param <K>    the target key type, which must have value equality
      */
