@@ -27,12 +27,14 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
 import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -46,6 +48,8 @@ import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_33
 class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
 
     private final MongoClient mongoClient;
+    private final ReactiveMongoTemplate mongoTemplate;
+    private final ReactiveMongoTransactionManager transactionManager;
     private final BlockingEventStoreOverReactive bridge;
     private final TimeRepresentation timeRepresentation;
 
@@ -57,9 +61,8 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
         this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         String database = requireNonNull(connectionString.getDatabase());
-        ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, database);
-        ReactiveMongoTransactionManager transactionManager =
-                new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, database));
+        this.mongoTemplate = new ReactiveMongoTemplate(mongoClient, database);
+        this.transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, database));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(connectionString.getCollection())
                 .transactionConfig(transactionManager)
@@ -108,6 +111,18 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public PositionOrderedReader positionOrderedReader() {
         return bridge;
+    }
+
+    @Override
+    public Optional<StoreWithoutPosition> storeWithoutPosition() {
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events-without-position")
+                .transactionConfig(transactionManager)
+                .timeRepresentation(timeRepresentation)
+                .withoutStreamPosition()
+                .build();
+        BlockingEventStoreOverReactive withoutPosition = BlockingEventStoreOverReactive.of(new ReactorMongoEventStore(mongoTemplate, eventStoreConfig));
+        return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
     }
 
     @Override

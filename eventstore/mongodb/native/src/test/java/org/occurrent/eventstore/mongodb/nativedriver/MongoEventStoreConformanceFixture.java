@@ -27,8 +27,10 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
 
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -37,6 +39,7 @@ import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.DATE;
 class MongoEventStoreConformanceFixture implements EventStoreFixture {
 
     private final MongoClient mongoClient;
+    private final String database;
     private final MongoEventStore eventStore;
     private final TimeRepresentation timeRepresentation;
 
@@ -47,7 +50,8 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
     MongoEventStoreConformanceFixture(ConnectionString connectionString, TimeRepresentation timeRepresentation) {
         this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
-        this.eventStore = new MongoEventStore(mongoClient, requireNonNull(connectionString.getDatabase()), "events",
+        this.database = requireNonNull(connectionString.getDatabase());
+        this.eventStore = new MongoEventStore(mongoClient, database, "events",
                 new EventStoreConfig(timeRepresentation));
     }
 
@@ -91,6 +95,17 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public PositionOrderedReader positionOrderedReader() {
         return eventStore;
+    }
+
+    @Override
+    public Optional<StoreWithoutPosition> storeWithoutPosition() {
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .timeRepresentation(timeRepresentation)
+                .eventStoreCapabilities(EventStoreCapability.STREAM)
+                .withoutStreamPosition()
+                .build();
+        MongoEventStore withoutPosition = new MongoEventStore(mongoClient, database, "events-without-position", config);
+        return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
     }
 
     @Override

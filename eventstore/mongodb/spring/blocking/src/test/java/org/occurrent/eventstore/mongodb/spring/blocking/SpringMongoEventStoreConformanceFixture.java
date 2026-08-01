@@ -27,11 +27,13 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -45,6 +47,8 @@ import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.DATE;
 class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
 
     private final MongoClient mongoClient;
+    private final MongoTemplate mongoTemplate;
+    private final MongoTransactionManager transactionManager;
     private final SpringMongoEventStore eventStore;
     private final TimeRepresentation timeRepresentation;
 
@@ -56,9 +60,8 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
         this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         String database = requireNonNull(connectionString.getDatabase());
-        MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, database);
-        MongoTransactionManager transactionManager =
-                new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, database));
+        this.mongoTemplate = new MongoTemplate(mongoClient, database);
+        this.transactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, database));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(connectionString.getCollection())
                 .transactionConfig(transactionManager)
@@ -107,6 +110,18 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public PositionOrderedReader positionOrderedReader() {
         return eventStore;
+    }
+
+    @Override
+    public Optional<StoreWithoutPosition> storeWithoutPosition() {
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events-without-position")
+                .transactionConfig(transactionManager)
+                .timeRepresentation(timeRepresentation)
+                .withoutStreamPosition()
+                .build();
+        SpringMongoEventStore withoutPosition = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
+        return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
     }
 
     @Override

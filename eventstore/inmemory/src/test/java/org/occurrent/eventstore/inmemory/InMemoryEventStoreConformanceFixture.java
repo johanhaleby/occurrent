@@ -24,7 +24,9 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
 
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -67,6 +69,12 @@ class InMemoryEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public PositionOrderedReader positionOrderedReader() {
         return eventStore;
+    }
+
+    @Override
+    public Optional<StoreWithoutPosition> storeWithoutPosition() {
+        InMemoryEventStore withoutPosition = new InMemoryEventStore().withoutStreamPosition();
+        return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
     }
 
     /**
