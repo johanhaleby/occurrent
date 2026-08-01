@@ -86,4 +86,24 @@ class InMemoryEventStoreConformanceFixture implements EventStoreFixture {
     public boolean composesNaturalSortWithFieldSorts() {
         return true;
     }
+
+    /**
+     * The in-memory store's natural order is a list it appends to on every write, across every stream, so it can
+     * promise more than the documented "could be undefined" variation on
+     * {@link org.occurrent.eventstore.api.SortBy#natural}: its natural order is insertion order, always.
+     */
+    @Override
+    public boolean naturalOrderIsInsertionOrder() {
+        return true;
+    }
+
+    /**
+     * The in-memory store keeps a payload as opaque bytes, so it has nothing to reach into and rejects
+     * {@link org.occurrent.filter.Filter#data}. See
+     * <a href="https://github.com/johanhaleby/occurrent/issues/58">issue 58</a>.
+     */
+    @Override
+    public boolean supportsDataFilter() {
+        return false;
+    }
 }

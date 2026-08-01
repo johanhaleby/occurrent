@@ -77,6 +77,38 @@ public interface EventStoreFixture {
     }
 
     /**
+     * Whether {@link org.occurrent.eventstore.api.SortBy#natural} is this store's insertion order. Defaults to
+     * {@code false}.
+     * <p>
+     * This describes what the datastore actually promises, not an aspiration. {@link org.occurrent.eventstore.api.SortBy#natural}
+     * documents natural order as "typically the insertion order, but it could also be undefined for certain
+     * datastores", so a fixture answering {@code false} is not failing anything: it is saying its store falls on the
+     * "could be undefined" side, which is true of every MongoDB store shipping with Occurrent, since {@code $natural}
+     * on a non-capped collection is not a documented insertion-order guarantee.
+     * <p>
+     * Declaring {@code true} is a stronger promise than the default and is asserted accordingly: the query suite
+     * checks insertion order itself, in both ascending and descending direction, rather than only checking that every
+     * event comes back once.
+     */
+    default boolean naturalOrderIsInsertionOrder() {
+        return false;
+    }
+
+    /**
+     * Whether this store can filter on a field inside a CloudEvent's {@code data} payload with {@link
+     * org.occurrent.filter.Filter#data}. Defaults to {@code true}, which is what every MongoDB store shipping with
+     * Occurrent does: it parses the payload into BSON on write specifically so a later {@code Filter.data(..)} can
+     * reach inside it.
+     * <p>
+     * A fixture answering {@code false} is documenting a real limitation, not a bug: the in-memory store keeps a
+     * payload as opaque bytes and has nothing to reach into, so it must reject {@code Filter.data(..)} rather than
+     * silently ignore it or scan every payload without an index.
+     */
+    default boolean supportsDataFilter() {
+        return true;
+    }
+
+    /**
      * The finest precision this store keeps for a CloudEvent's {@code time} attribute. Defaults to
      * {@link ChronoUnit#NANOS}, which is what the in-memory store and MongoDB's {@code RFC_3339_STRING} both manage.
      * <p>

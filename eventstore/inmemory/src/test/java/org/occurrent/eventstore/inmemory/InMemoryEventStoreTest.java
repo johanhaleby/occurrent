@@ -21,7 +21,6 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
-import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
@@ -47,10 +46,8 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
-import static java.time.temporal.ChronoUnit.MILLIS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
-import static org.junit.jupiter.api.condition.JRE.JAVA_11;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 import static org.occurrent.condition.Condition.*;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
@@ -69,6 +66,26 @@ public class InMemoryEventStoreTest {
     @BeforeEach
     void create_object_mapper() {
         objectMapper = new ObjectMapper();
+    }
+
+    /**
+     * The conformance suite asserts that a store declaring it cannot filter on the data payload rejects
+     * {@code Filter.data(..)}, but only the type, since no other store can be held to this wording. The message names
+     * the issue tracking the missing feature, so it is worth keeping where it belongs.
+     */
+    @Test
+    void rejecting_a_data_filter_points_at_the_issue_tracking_the_missing_feature() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        // An event has to be there for the filter to be evaluated at all, since a query over nothing never reaches it.
+        unconditionallyPersist(eventStore, "name1", new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name"));
+
+        Throwable thrown = catchThrowable(() -> eventStore.query(data("name", eq("name2"))).forEach(__ -> {
+        }));
+
+        assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage(
+                "Currently, it's not possible to query the data field from in-memory event stores/subscriptions. "
+                        + "The good thing is that Occurrent is open-source, so feel free to contribute :) "
+                        + "(https://github.com/johanhaleby/occurrent/issues/58).");
     }
 
     @Nested
@@ -226,141 +243,6 @@ public class InMemoryEventStoreTest {
             assertThat(finalResult).hasSize(numberOfWrites);
         }
     }
-
-    @Nested
-    @DisplayName("filtering by data-related attributes")
-    class DataAttributeFilterTest {
-        private InMemoryEventStore inMemoryEventStore;
-
-        @BeforeEach
-        void create_event_store() {
-            inMemoryEventStore = new InMemoryEventStore();
-        }
-
-        @Test
-        void query_filter_by_data() {
-            // Given
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-            // When
-            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
-            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
-
-            // Then
-            Throwable throwable = catchThrowable(() -> inMemoryEventStore.query(data("name", eq("name2"))).forEach(__ -> {
-            }));
-            assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Currently, it's not possible to query the data field from in-memory event stores/subscriptions. " +
-                    "The good thing is that Occurrent is open-source, so feel free to contribute :) (https://github.com/johanhaleby/occurrent/issues/58).");
-        }
-
-    }
-
-    @Nested
-    @DisplayName("natural sort order")
-    class NaturalSortOrderTest {
-        private InMemoryEventStore inMemoryEventStore;
-
-        @BeforeEach
-        void create_event_store() {
-            inMemoryEventStore = new InMemoryEventStore();
-        }
-
-        @Test
-        void sort_by_natural_asc_sorts_by_insertion_order() {
-            // Given
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name", "name2");
-
-            // When
-            unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
-            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
-            unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
-
-            // Then
-            Stream<CloudEvent> events = inMemoryEventStore.all(SortBy.natural(ASCENDING));
-            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1, nameWasChanged2, nameDefined);
-        }
-
-        @Test
-        void sort_by_natural_desc_sorts_by_reversed_insertion_order() {
-            // Given
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name", "name2");
-
-            // When
-            unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
-            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
-            unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
-
-            // Then
-            Stream<CloudEvent> events = inMemoryEventStore.all(SortBy.natural(DESCENDING));
-            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
-        }
-
-        @Test
-        void sort_by_natural_asc_uses_global_insertion_order_across_streams() {
-            // Timestamps are intentionally out of insertion order to distinguish natural
-            // (insertion) ordering from time ordering. Insertion order is eventA, eventB, eventC.
-            // eventC's timestamp is earlier than eventB's, so a time-based sort would give a
-            // different result. The per-stream grouping that existed before the fix would yield
-            // A, C, B (grouping A and C as stream "s1" together). Global insertion order is A, B, C.
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined eventA = new NameDefined(UUID.randomUUID().toString(), now, "s1", "A");
-            NameDefined eventB = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(5), "s2", "B");
-            // eventC goes back in time (skewed clock) yet it is inserted last into s1
-            NameWasChanged eventC = new NameWasChanged(UUID.randomUUID().toString(), now.minusSeconds(3), "s1", "C");
-
-            // Write A to s1, B to a new s2, then C appended to the existing s1
-            unconditionallyPersist(inMemoryEventStore, "s1", eventA);
-            unconditionallyPersist(inMemoryEventStore, "s2", eventB);
-            unconditionallyPersist(inMemoryEventStore, "s1", Stream.of(eventC));
-
-            // Ascending natural order must reflect global insertion order: A, B, C
-            Stream<CloudEvent> ascEvents = inMemoryEventStore.all(SortBy.natural(ASCENDING));
-            assertThat(ascEvents.map(deserialize(objectMapper))).containsExactly(eventA, eventB, eventC);
-
-            // And descending must be the exact reverse: C, B, A
-            Stream<CloudEvent> descEvents = inMemoryEventStore.all(SortBy.natural(DESCENDING));
-            assertThat(descEvents.map(deserialize(objectMapper))).containsExactly(eventC, eventB, eventA);
-        }
-    }
-
-    @Nested
-    @DisplayName("time filter precision")
-    class TimeFilterPrecisionTest {
-        private InMemoryEventStore inMemoryEventStore;
-
-        @BeforeEach
-        void create_event_store() {
-            inMemoryEventStore = new InMemoryEventStore();
-        }
-
-        @EnabledForJreRange(min = JAVA_11)
-        @Test
-        void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_11_and_above() {
-            // Given
-            LocalDateTime now = LocalDateTime.now(UTC);
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-            // When
-            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
-            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
-
-            // Then
-            Stream<CloudEvent> events = inMemoryEventStore.query(time(and(gte(OffsetDateTime.of(now, UTC).truncatedTo(MILLIS)), lte(OffsetDateTime.of(now.plusHours(2), UTC).truncatedTo(MILLIS)))));
-            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
-        }
-    }
-
 
     private void unconditionallyPersist(EventStore inMemoryEventStore, String eventStreamId, DomainEvent event) {
         unconditionallyPersist(inMemoryEventStore, eventStreamId, Stream.of(event));
