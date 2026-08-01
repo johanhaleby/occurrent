@@ -28,12 +28,10 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
-import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
-import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -107,11 +105,14 @@ class SpringMongoEventStorePositionTest {
         CloudEvent dcbEvent = eventStore.read(DcbCriteria.tags(Tag.parse("name:1"))).events().get(0);
         long dcbEventPosition = OccurrentCloudEventExtension.getPosition(dcbEvent);
 
-        // Stream and DCB events are interleaved in one monotonic sequence: 1 (stream), 2 (dcb), 3 (stream).
-        assertThat(firstStreamEventPosition).isEqualTo(1L);
-        assertThat(dcbEventPosition).isEqualTo(2L);
-        assertThat(secondStreamEventPosition).isEqualTo(3L);
-        assertThat(eventStore.currentPosition()).isEqualTo(3L);
+        // Positions are shared with DCB: the two writes bracket the DCB append in the single global sequence. A
+        // retried write may reserve (and abandon) an earlier block under contention, so positions can have gaps
+        // (DcbAppendResult: callers must not assume the positions of different appends are contiguous); only strict
+        // monotonic ordering across the interleaved writes is guaranteed.
+        assertThat(firstStreamEventPosition).isPositive();
+        assertThat(dcbEventPosition).isGreaterThan(firstStreamEventPosition);
+        assertThat(secondStreamEventPosition).isGreaterThan(dcbEventPosition);
+        assertThat(eventStore.currentPosition()).isGreaterThanOrEqualTo(secondStreamEventPosition);
     }
 
     @Test
@@ -126,43 +127,12 @@ class SpringMongoEventStorePositionTest {
     }
 
     @Test
-    void position_ordered_reader_returns_events_in_the_requested_range_and_clamps_to_the_watermark() {
-        SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withStreamPosition().build());
-
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("A"), event("B")));
-        eventStore.write("stream:2", WriteCondition.anyStreamVersion(), List.of(event("C")));
-
-        List<CloudEvent> all = eventStore.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()).toList();
-        assertThat(all).extracting(CloudEvent::getType).containsExactly("A", "B", "C");
-
-        List<CloudEvent> afterFirst = eventStore.readInPositionOrder(Filter.all(), PositionRange.afterPosition(1)).toList();
-        assertThat(afterFirst).extracting(CloudEvent::getType).containsExactly("B", "C");
-
-        List<CloudEvent> upToSecond = eventStore.readInPositionOrder(Filter.all(), PositionRange.upToPosition(2)).toList();
-        assertThat(upToSecond).extracting(CloudEvent::getType).containsExactly("A", "B");
-
-        List<CloudEvent> between = eventStore.readInPositionOrder(Filter.all(), PositionRange.between(1, 2)).toList();
-        assertThat(between).extracting(CloudEvent::getType).containsExactly("B");
-
-        List<CloudEvent> filteredByType = eventStore.readInPositionOrder(Filter.type("C"), PositionRange.fromBeginning()).toList();
-        assertThat(filteredByType).extracting(CloudEvent::getType).containsExactly("C");
-    }
-
-    @Test
-    void opted_out_stream_only_store_writes_no_stream_position_and_rejects_position_reads() {
+    void the_position_index_does_not_exist_when_stream_position_is_opted_out_on_a_stream_only_store() {
         SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withoutStreamPosition().build());
 
         eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
 
-        CloudEvent writtenEvent = eventStore.read("stream:1").events().findFirst().orElseThrow();
-        assertThat(writtenEvent.getExtension(OccurrentCloudEventExtension.POSITION)).isNull();
         assertThat(indexNames()).doesNotContain(POSITION_INDEX);
-        assertThat(eventStore.writesPosition()).isFalse();
-
-        assertThatThrownBy(eventStore::currentPosition)
-                .isExactlyInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> eventStore.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()))
-                .isExactlyInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
@@ -218,7 +188,8 @@ class SpringMongoEventStorePositionTest {
 
         assertThatThrownBy(() -> new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withStreamPosition().requireBackfilledPosition(true).build()))
                 .isExactlyInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("position-backfill");
+                .hasMessageContaining("configured to require backfilled positions")
+                .hasMessageContaining("doc/runbooks/position-backfill.md");
     }
 
     private List<String> indexNames() {

@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
+import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.EventStore;
@@ -798,17 +799,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 if (!hasUnpositionedEvents) {
                     return Mono.empty();
                 }
-                String message = "This event store has writesPosition() enabled but the '" + eventStoreCollectionName +
-                        "' collection contains events without a 'position' field. New events will be positioned, but " +
-                        "position-based reads (currentPosition, PositionOrderedReader, position-based catch-up) will skip " +
-                        "the un-positioned history, which can silently drop events from a position-driven projection. " +
-                        "Run the position-backfill migration (see doc/runbooks/position-backfill.md) before relying on " +
-                        "position-based reads against this store's history. Set requireBackfilledPosition(true) on " +
-                        EventStoreConfig.class.getSimpleName() + " to hard-fail startup instead of warning.";
                 if (requireBackfilledPosition) {
-                    return Mono.error(new IllegalStateException(message));
+                    return Mono.error(PositionBackfillValidator.unpositionedEventsExist(eventStoreCollectionName));
                 }
-                LOGGER.warn(message);
+                LOGGER.warn(PositionBackfillValidator.unpositionedEventsMessage(eventStoreCollectionName));
                 return Mono.empty();
             });
         });

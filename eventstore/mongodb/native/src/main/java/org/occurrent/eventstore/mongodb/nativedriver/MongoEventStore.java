@@ -52,6 +52,7 @@ import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
+import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
@@ -901,14 +902,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (firstUnpositionedEvent == null) {
             return;
         }
-        String message = "This MongoEventStore writes a global position, but its event collection already contains " +
-                "events without one. Position-based catch-up will silently skip this pre-existing history unless it " +
-                "is backfilled. Run the position backfill migration tool (see the migration runbook at " +
-                "doc/runbooks/position-backfill.md) before relying on position-based reads or catch-up.";
+        String collectionName = eventCollection.getNamespace().getCollectionName();
         if (requireBackfilledPosition) {
-            throw new IllegalStateException(message);
+            throw PositionBackfillValidator.unpositionedEventsExist(collectionName);
         }
-        log.warn(message);
+        log.warn(PositionBackfillValidator.unpositionedEventsMessage(collectionName));
     }
 
     private static boolean collectionExists(MongoDatabase mongoDatabase, String collectionName) {

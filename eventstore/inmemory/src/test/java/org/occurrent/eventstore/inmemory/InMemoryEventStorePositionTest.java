@@ -21,26 +21,25 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.getPosition;
-import static org.occurrent.filter.Filter.all;
 
 /**
- * Tests for the global {@code position} carried on stream-written events (in addition to DCB-appended events), and
- * for {@link InMemoryEventStore}'s {@link org.occurrent.eventstore.api.blocking.PositionOrderedReader} implementation.
+ * Test for the global {@code position} shared between stream-written and DCB-appended events on
+ * {@link InMemoryEventStore}. Ordering, disabled-position, and position-ordered-reader behaviour are covered
+ * centrally by {@code StreamPositionConformance} and {@code StreamPositionDisabledConformance} in the TCK; this
+ * class keeps only the one assertion those suites cannot make without DCB fixtures (issue #485).
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class InMemoryEventStorePositionTest {
@@ -51,49 +50,28 @@ class InMemoryEventStorePositionTest {
     void stream_written_events_get_a_monotonic_position_shared_with_dcb_events() {
         InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
 
-        eventStore.append(List.of(taggedEvent("DcbEvent1", "t:1")));                                     // position 1
-        eventStore.write("stream1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1"), event("StreamEvent2"))); // positions 2,3
-        eventStore.append(List.of(taggedEvent("DcbEvent2", "t:1")));                                     // position 4
+        eventStore.append(List.of(taggedEvent("DcbEvent1", "t:1")));
+        eventStore.write("stream1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1"), event("StreamEvent2")));
+        eventStore.append(List.of(taggedEvent("DcbEvent2", "t:1")));
 
+        List<CloudEvent> dcbEvents = eventStore.read(DcbCriteria.tags(Tag.parse("t:1"))).events();
         List<CloudEvent> streamEvents = eventStore.read("stream1").events().toList();
-        assertThat(streamEvents).extracting(InMemoryEventStorePositionTest::position).containsExactly(2L, 3L);
+        assertThat(streamEvents).hasSize(2);
 
-        assertThat(eventStore.currentPosition()).isEqualTo(4L);
-    }
+        long dcbEvent1Position = position(dcbEvents.get(0));
+        long streamEvent1Position = position(streamEvents.get(0));
+        long streamEvent2Position = position(streamEvents.get(1));
+        long dcbEvent2Position = position(dcbEvents.get(1));
 
-    @Test
-    void position_ordered_reader_returns_events_in_position_order_within_the_requested_range() {
-        InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
-
-        eventStore.write("stream1", WriteCondition.anyStreamVersion(), List.of(event("A")));  // position 1
-        eventStore.append(List.of(taggedEvent("B", "t:1")));                                      // position 2
-        eventStore.write("stream1", WriteCondition.anyStreamVersion(), List.of(event("C")));  // position 3
-        eventStore.write("stream2", WriteCondition.anyStreamVersion(), List.of(event("D")));  // position 4
-
-        List<CloudEvent> all = eventStore.readInPositionOrder(all(), PositionRange.fromBeginning()).toList();
-        assertThat(all).extracting(CloudEvent::getType).containsExactly("A", "B", "C", "D");
-
-        List<CloudEvent> afterFirst = eventStore.readInPositionOrder(all(), PositionRange.afterPosition(1)).toList();
-        assertThat(afterFirst).extracting(CloudEvent::getType).containsExactly("B", "C", "D");
-
-        List<CloudEvent> between = eventStore.readInPositionOrder(all(), PositionRange.between(1, 3)).toList();
-        assertThat(between).extracting(CloudEvent::getType).containsExactly("B", "C");
-    }
-
-    @Test
-    void opt_out_store_writes_no_position_on_stream_events_and_rejects_position_apis() {
-        InMemoryEventStore eventStore = new InMemoryEventStore().withoutStreamPosition();
-
-        assertThat(eventStore.writesPosition()).isFalse();
-
-        eventStore.write("stream1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1")));
-        CloudEvent writtenEvent = eventStore.read("stream1").events().findFirst().orElseThrow();
-        assertThat(position(writtenEvent)).isZero();
-
-        assertThatThrownBy(() -> eventStore.currentPosition())
-                .isInstanceOf(UnsupportedOperationException.class);
-        assertThatThrownBy(() -> eventStore.readInPositionOrder(all(), PositionRange.fromBeginning()))
-                .isInstanceOf(UnsupportedOperationException.class);
+        // Positions are shared with DCB: the two DCB appends bracket the stream write in the single global sequence.
+        // A retried write may reserve (and abandon) an earlier block under contention, so positions can have gaps
+        // (same as DCB, ADR 0021, DcbAppendResult); only strict monotonic ordering across the interleaved writes is
+        // guaranteed, never a literal or contiguous value.
+        assertThat(dcbEvent1Position).isPositive();
+        assertThat(streamEvent1Position).isGreaterThan(dcbEvent1Position);
+        assertThat(streamEvent2Position).isGreaterThan(streamEvent1Position);
+        assertThat(dcbEvent2Position).isGreaterThan(streamEvent2Position);
+        assertThat(eventStore.currentPosition()).isGreaterThanOrEqualTo(dcbEvent2Position);
     }
 
     private static long position(CloudEvent event) {

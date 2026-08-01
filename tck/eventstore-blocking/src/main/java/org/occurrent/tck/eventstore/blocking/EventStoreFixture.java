@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -56,18 +57,6 @@ public interface EventStoreFixture {
      * implementation cannot accidentally pass a suite by declaring less than it supports.
      */
     Set<EventStoreCapability> capabilities();
-
-    /**
-     * Whether this store assigns global positions, which is Occurrent's {@code writesPosition()} on
-     * {@link PositionOrderedReader}. Defaults to {@code true}, since that is the default for every store that ships
-     * with Occurrent and a store that has opted out should have to say so.
-     * <p>
-     * When this is {@code false} the position suite does not skip. It asserts the documented behaviour of a store
-     * with positions turned off instead.
-     */
-    default boolean writesPosition() {
-        return true;
-    }
 
     /**
      * Whether this store accepts a natural sort step composed with a field sort, as in
@@ -153,11 +142,24 @@ public interface EventStoreFixture {
     }
 
     /**
-     * Position-ordered reads. Required by every store, since a store that does not write positions still has to
-     * answer for that, which is what {@link #writesPosition()} declares.
+     * Position-ordered reads. Required by every store. A store that does not write positions still has to answer for
+     * that, and the suite asks the store itself through {@link PositionOrderedReader#writesPosition()} rather than
+     * being told in advance by the fixture.
      */
     default PositionOrderedReader positionOrderedReader() {
         throw notOverridden("positionOrderedReader", EventStoreCapability.STREAM);
+    }
+
+    /**
+     * A store built with its global position turned off, for the suite that asserts the position-disabled contract.
+     * Defaults to empty, meaning this implementation cannot build a store with position off.
+     * <p>
+     * Supplying one opts the implementation into the position-disabled conformance assertions. The returned store
+     * must be STREAM-only: {@link EventStoreCapability#DCB} always writes a position, and the stores reject building
+     * one with DCB and position disabled together.
+     */
+    default Optional<StoreWithoutPosition> storeWithoutPosition() {
+        return Optional.empty();
     }
 
     /**
