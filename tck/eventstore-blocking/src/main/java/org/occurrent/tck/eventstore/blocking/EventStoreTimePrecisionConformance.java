@@ -29,10 +29,17 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.occurrent.condition.Condition.and;
+import static org.occurrent.condition.Condition.gt;
+import static org.occurrent.condition.Condition.gte;
+import static org.occurrent.condition.Condition.lt;
+import static org.occurrent.condition.Condition.lte;
+import static org.occurrent.filter.Filter.time;
 import static org.occurrent.tck.ConformanceEvents.eventAt;
 
 /**
@@ -149,5 +156,86 @@ public abstract class EventStoreTimePrecisionConformance extends EventStoreConfo
                             .isFalse()
             );
         }
+    }
+
+    /**
+     * Three events spaced ten units of {@link EventStoreFixture#timePrecision()} apart, always representable
+     * because the spacing is whole units of the store's own declared precision rather than an assumed one.
+     */
+    private OffsetDateTime timeAt(long unitsFromBase) {
+        return BOUNDARY_BASE_TIME.plus(unitsFromBase, fixture().timePrecision());
+    }
+
+    private static final OffsetDateTime BOUNDARY_BASE_TIME =
+            OffsetDateTime.of(2026, 7, 28, 12, 0, 0, 0, ZoneOffset.UTC);
+
+    @Test
+    void query_filter_by_time_range_gte_and_lte_include_the_boundary() {
+        OffsetDateTime first = timeAt(0);
+        OffsetDateTime middle = timeAt(10);
+        OffsetDateTime last = timeAt(20);
+        eventStore().write(STREAM_ID, List.of(
+                eventAt("a", DEFINED, first),
+                eventAt("b", DEFINED, middle),
+                eventAt("c", DEFINED, last)));
+
+        Stream<CloudEvent> events = queries().query(time(and(gte(first), lte(middle))));
+
+        assertThat(events.map(CloudEvent::getTime))
+                .describedAs("gte and lte must include events exactly at the boundary, and exclude what falls outside it")
+                .containsExactlyInAnyOrder(first, middle);
+    }
+
+    @Test
+    void query_filter_by_time_range_gt_and_lt_exclude_the_boundary() {
+        OffsetDateTime first = timeAt(0);
+        OffsetDateTime middle = timeAt(10);
+        OffsetDateTime last = timeAt(20);
+        eventStore().write(STREAM_ID, List.of(
+                eventAt("a", DEFINED, first),
+                eventAt("b", DEFINED, middle),
+                eventAt("c", DEFINED, last)));
+
+        Stream<CloudEvent> events = queries().query(time(and(gt(first), lt(last))));
+
+        assertThat(events.map(CloudEvent::getTime))
+                .describedAs("gt and lt must exclude events exactly at the boundary, not just what falls outside it")
+                .containsExactly(middle);
+    }
+
+    @Test
+    void query_filter_by_time_range_wider_than_persisted_range_returns_everything() {
+        OffsetDateTime first = timeAt(0);
+        OffsetDateTime middle = timeAt(10);
+        OffsetDateTime last = timeAt(20);
+        eventStore().write(STREAM_ID, List.of(
+                eventAt("a", DEFINED, first),
+                eventAt("b", DEFINED, middle),
+                eventAt("c", DEFINED, last)));
+
+        Stream<CloudEvent> events = queries().query(time(and(gte(timeAt(-5)), lte(timeAt(25)))));
+
+        assertThat(events.map(CloudEvent::getTime))
+                .describedAs("a range wider than the persisted times must return everything")
+                .containsExactlyInAnyOrder(first, middle, last);
+    }
+
+    @Test
+    void query_filter_by_time_range_narrower_than_persisted_range_returns_only_whats_inside() {
+        OffsetDateTime first = timeAt(0);
+        OffsetDateTime middle = timeAt(10);
+        OffsetDateTime last = timeAt(20);
+        eventStore().write(STREAM_ID, List.of(
+                eventAt("a", DEFINED, first),
+                eventAt("b", DEFINED, middle),
+                eventAt("c", DEFINED, last)));
+
+        // Boundaries fall strictly inside the gaps between events, not on any event's own time, so this proves the
+        // range narrows what is returned rather than merely proving gt/lt exclude an exact boundary match.
+        Stream<CloudEvent> events = queries().query(time(and(gt(timeAt(3)), lt(timeAt(17)))));
+
+        assertThat(events.map(CloudEvent::getTime))
+                .describedAs("a range narrower than the persisted times must return only what falls inside it")
+                .containsExactly(middle);
     }
 }

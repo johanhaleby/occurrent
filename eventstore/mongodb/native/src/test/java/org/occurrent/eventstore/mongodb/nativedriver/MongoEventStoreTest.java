@@ -31,7 +31,6 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.bson.Document;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.*;
 import org.occurrent.eventstore.api.*;
@@ -59,7 +58,6 @@ import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.junit.jupiter.api.condition.JRE.JAVA_11;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 import static org.occurrent.condition.Condition.*;
 import static org.occurrent.domain.Composition.chain;
@@ -246,23 +244,6 @@ class MongoEventStoreTest {
                 eventStore = newMongoEventStore(TimeRepresentation.RFC_3339_STRING);
             }
 
-            @Test
-            void query_filter_by_data() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                // When
-                persist("name1", List.of(nameDefined, nameWasChanged1));
-                persist("name2", nameWasChanged2);
-
-                // Then
-                Stream<CloudEvent> events = eventStore.query(data("name", eq("name2")));
-                assertThat(deserialize(events)).containsExactly(nameWasChanged1);
-            }
-
             @Nested
             @DisplayName("when time is represented as rfc 3339 string")
             class TimeRepresentedAsRfc3339String {
@@ -284,57 +265,6 @@ class MongoEventStoreTest {
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
                 }
 
-                @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
-                void query_filter_by_time_range_is_wider_than_persisted_time_range() {
-                    // Given
-                    LocalDateTime now = LocalDateTime.now();
-                    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                    // When
-                    persist("name1", List.of(nameDefined, nameWasChanged1));
-                    persist("name2", nameWasChanged2);
-
-                    // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now.plusMinutes(35), UTC)), lte(OffsetDateTime.of(now.plusHours(4), UTC)))));
-                    assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
-                }
-
-                @EnabledForJreRange(min = JAVA_11)
-                @Test
-                void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_11_and_above() {
-                    // Given
-                    LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
-                    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                    // When
-                    persist("name1", List.of(nameDefined, nameWasChanged1));
-                    persist("name2", nameWasChanged2);
-
-                    // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
-                    assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
-                }
-
-                @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
-                void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
-                    // Given
-                    LocalDateTime now = LocalDateTime.now();
-                    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                    // When
-                    persist("name1", List.of(nameDefined, nameWasChanged1));
-                    persist("name2", nameWasChanged2);
-
-                    // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gt(OffsetDateTime.of(now.plusMinutes(50), UTC)), lt(OffsetDateTime.of(now.plusMinutes(110), UTC)))));
-                    assertThat(deserialize(events)).containsExactly(nameWasChanged1);
-                }
             }
 
             @Nested
@@ -363,56 +293,6 @@ class MongoEventStoreTest {
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
                 }
 
-                @Test
-                void query_filter_by_time_range_is_wider_than_persisted_time_range() {
-                    // Given
-                    LocalDateTime now = LocalDateTime.now();
-                    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                    // When
-                    persist("name1", List.of(nameDefined, nameWasChanged1));
-                    persist("name2", nameWasChanged2);
-
-                    // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now.plusMinutes(35), UTC)), lte(OffsetDateTime.of(now.plusHours(4), UTC)))));
-                    assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
-                }
-
-                @Test
-                void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range() {
-                    // Given
-                    LocalDateTime now = LocalDateTime.now();
-                    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                    // When
-                    persist("name1", List.of(nameDefined, nameWasChanged1));
-                    persist("name2", nameWasChanged2);
-
-                    // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
-                    assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
-                }
-
-                @Test
-                void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
-                    // Given
-                    LocalDateTime now = LocalDateTime.now();
-                    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
-                    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
-                    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
-
-                    // When
-                    persist("name1", List.of(nameDefined, nameWasChanged1));
-                    persist("name2", nameWasChanged2);
-
-                    // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gt(OffsetDateTime.of(now.plusMinutes(50), UTC)), lt(OffsetDateTime.of(now.plusMinutes(110), UTC)))));
-                    assertThat(deserialize(events)).containsExactly(nameWasChanged1);
-                }
             }
         }
     }

@@ -17,7 +17,9 @@
 package org.occurrent.tck.eventstore.blocking;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.CloudEventData;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -49,6 +51,7 @@ import static org.occurrent.condition.Condition.not;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 import static org.occurrent.tck.ConformanceEvents.SOURCE;
 import static org.occurrent.tck.ConformanceEvents.TIME;
 import static org.occurrent.tck.ConformanceEvents.event;
@@ -67,10 +70,12 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * }
  * }</pre>
  * <p>
- * Everything here filters and sorts on CloudEvent attributes the specification defines, so a store that keeps events in
- * a shape this TCK knows nothing about still has to answer. The one place stores are documented to differ is composing
- * a natural sort step with a field sort, which {@link EventStoreFixture#composesNaturalSortWithFieldSorts()} declares
- * and which is asserted both ways rather than skipped.
+ * Most of what is here filters and sorts on CloudEvent attributes the specification defines, so a store that keeps
+ * events in a shape this TCK knows nothing about still has to answer. Three places are documented to differ, each
+ * declared by the fixture and asserted both ways rather than skipped: composing a natural sort step with a field
+ * sort ({@link EventStoreFixture#composesNaturalSortWithFieldSorts()}), whether natural order is insertion order
+ * ({@link EventStoreFixture#naturalOrderIsInsertionOrder()}), and whether the store can filter on a field inside the
+ * {@code data} payload ({@link EventStoreFixture#supportsDataFilter()}).
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -263,6 +268,57 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
     }
 
     @Nested
+    @DisplayName("filtering on the data payload")
+    class FilteringOnData {
+
+        @Test
+        void filters_on_a_field_inside_the_data_payload_according_to_what_the_fixture_declares() {
+            // ConformanceEvents builds a body of {"name":"<subject>"}, so filtering data.name for a subject picks out
+            // exactly the event written with that subject.
+            eventStore().write(STREAM_ID, List.of(event("a", DEFINED, "first"), event("b", CHANGED, "second")));
+
+            Filter secondByData = Filter.data("name", eq("second"));
+
+            if (fixture().supportsDataFilter()) {
+                CloudEvent matched = queries().query(secondByData).findFirst().orElseThrow();
+
+                assertAll(
+                        () -> assertThat(matched.getId())
+                                .as("Filter.data(..) must pick out only the event whose payload field matches")
+                                .isEqualTo("b"),
+                        () -> assertThat(withoutWhitespace(matched.getData()))
+                                .as("the payload content must survive filtering, even if a store reformats it "
+                                        + "while parsing it to reach inside")
+                                .isEqualTo(withoutWhitespace(ConformanceEvents.dataFor("second")))
+                );
+            } else {
+                Throwable thrown = catchThrowable(() -> idsOf(queries().query(secondByData)));
+
+                assertThat(thrown)
+                        .as("a store that declares it cannot filter on the data payload must reject Filter.data(..) "
+                                + "rather than silently ignoring it or scanning every payload unindexed")
+                        .isExactlyInstanceOf(IllegalArgumentException.class);
+            }
+        }
+
+        /**
+         * The payload with every space, tab and newline removed.
+         * <p>
+         * A store is not required to hand the payload back byte for byte. The MongoDB stores parse it into a BSON
+         * document so that {@code Filter.data(..)} can reach inside it, and re-serialising that document reformats
+         * the JSON, which shows up as a space after each colon. What the contract requires is that the data
+         * survives, so the comparison ignores formatting.
+         */
+        private String withoutWhitespace(@Nullable CloudEventData data) {
+            return withoutWhitespace(requireNonNull(data, "event matched by Filter.data(..) must carry data").toBytes());
+        }
+
+        private String withoutWhitespace(byte[] data) {
+            return new String(data, UTF_8).replaceAll("\\s", "");
+        }
+    }
+
+    @Nested
     @DisplayName("filtering with a condition")
     class FilteringWithACondition {
 
@@ -379,18 +435,36 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
         }
 
         @Test
-        void sorts_by_natural_order_on_its_own() {
-            writeThreeAtDistinctTimes();
+        void sorts_by_natural_order_according_to_what_the_fixture_declares() {
+            // Times are deliberately skewed and interleaved across two streams: b sorts after a by time, but c goes
+            // back in time yet is appended to stream_id last. A store that groups by stream, or that sorts by time
+            // instead of insertion order, gives a different answer than the one asserted below.
+            eventStore().write(STREAM_ID, List.of(eventAt("a", DEFINED, TIME)));
+            eventStore().write(OTHER_STREAM_ID, List.of(eventAt("b", CHANGED, TIME.plusSeconds(5))));
+            eventStore().write(STREAM_ID, List.of(eventAt("c", ARCHIVED, TIME.minusSeconds(3))));
 
-            // Natural order is documented as typically insertion order, and explicitly as possibly undefined for some
-            // datastores, so this asserts only that a store answers with every event exactly once in some total order.
-            // The suites that need a guaranteed order sort on a field or use position ordering instead.
-            assertAll(
-                    () -> assertThat(idsOf(queries().all(SortBy.natural(ASCENDING))))
-                            .containsExactlyInAnyOrder("a", "b", "c"),
-                    () -> assertThat(idsOf(queries().all(SortBy.natural(DESCENDING))))
-                            .containsExactlyInAnyOrder("a", "b", "c")
-            );
+            if (fixture().naturalOrderIsInsertionOrder()) {
+                assertAll(
+                        () -> assertThat(idsOf(queries().all(SortBy.natural(ASCENDING))))
+                                .as("a store that declares natural order as insertion order must return events in "
+                                        + "the order they were written, across every stream")
+                                .containsExactly("a", "b", "c"),
+                        () -> assertThat(idsOf(queries().all(SortBy.natural(DESCENDING))))
+                                .as("descending natural order must be the exact reverse of insertion order")
+                                .containsExactly("c", "b", "a")
+                );
+            } else {
+                // SortBy.natural documents natural order as typically insertion order, and explicitly as possibly
+                // undefined for some datastores, so a fixture that does not declare the stronger guarantee only owes
+                // every event exactly once in some total order. The suites that need a guaranteed order sort on a
+                // field or use position ordering instead.
+                assertAll(
+                        () -> assertThat(idsOf(queries().all(SortBy.natural(ASCENDING))))
+                                .containsExactlyInAnyOrder("a", "b", "c"),
+                        () -> assertThat(idsOf(queries().all(SortBy.natural(DESCENDING))))
+                                .containsExactlyInAnyOrder("a", "b", "c")
+                );
+            }
         }
 
         @Test
