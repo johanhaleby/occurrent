@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
+import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
@@ -928,14 +929,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (!hasUnpositionedEvents) {
             return;
         }
-        String message = "The event collection '" + eventStoreCollectionName + "' contains events without a 'position'. " +
-                "This store writes a global position, but existing events predate it and are invisible to position-ordered reads " +
-                "and position-based catch-up until backfilled. Run the position-backfill migration runbook " +
-                "(doc/runbooks/position-backfill.md) before relying on position for this collection.";
         if (requireBackfilledPosition) {
-            throw new IllegalStateException(message);
+            throw PositionBackfillValidator.unpositionedEventsExist(eventStoreCollectionName);
         }
-        log.warn(message);
+        log.warn(PositionBackfillValidator.unpositionedEventsMessage(eventStoreCollectionName));
     }
 
     private void requireStreamCapability() {

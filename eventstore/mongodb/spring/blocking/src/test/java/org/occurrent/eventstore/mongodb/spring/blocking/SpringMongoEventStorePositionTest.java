@@ -218,7 +218,8 @@ class SpringMongoEventStorePositionTest {
 
         assertThatThrownBy(() -> new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withStreamPosition().requireBackfilledPosition(true).build()))
                 .isExactlyInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("position-backfill");
+                .hasMessageContaining("configured to require backfilled positions")
+                .hasMessageContaining("doc/runbooks/position-backfill.md");
     }
 
     private List<String> indexNames() {

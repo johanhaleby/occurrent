@@ -270,7 +270,8 @@ class ReactorMongoEventStorePositionTest {
                 .eventStoreCapabilities(STREAM, DCB)
                 .requireBackfilledPosition(true))))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("position-backfill");
+                .hasMessageContaining("configured to require backfilled positions")
+                .hasMessageContaining("doc/runbooks/position-backfill.md");
     }
 
     @Test

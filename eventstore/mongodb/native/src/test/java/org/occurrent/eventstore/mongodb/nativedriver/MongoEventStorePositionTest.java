@@ -263,7 +263,8 @@ class MongoEventStorePositionTest {
 
         assertThatThrownBy(() -> newEventStore(eventStoreConfig(STREAM).withStreamPosition().requireBackfilledPosition(true).build()))
                 .isExactlyInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("position backfill migration");
+                .hasMessageContaining("configured to require backfilled positions")
+                .hasMessageContaining("doc/runbooks/position-backfill.md");
     }
 
     @Test
