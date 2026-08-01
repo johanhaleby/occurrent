@@ -1,4 +1,4 @@
-# 83. What a position guarantees, and what it does not
+# 84. What a position guarantees, and what it does not
 
 Date: 2026-07-31
 
