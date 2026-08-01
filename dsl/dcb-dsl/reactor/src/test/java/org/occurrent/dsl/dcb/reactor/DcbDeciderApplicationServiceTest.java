@@ -59,6 +59,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -182,6 +183,27 @@ class DcbDeciderApplicationServiceTest {
 
             // Then
             StepVerifier.create(result).expectError(IllegalArgumentException.class).verify();
+        }
+
+        @Test
+        void executes_under_the_boundary_it_is_given_without_asking_the_decider_for_one() {
+            // Given a criteria function that counts how often it is asked
+            AtomicInteger derivations = new AtomicInteger();
+            var countingDecider = DcbDecider.from(
+                    nameDecider(),
+                    (NameCommand command) -> {
+                        derivations.incrementAndGet();
+                        return nameQuery("name");
+                    },
+                    (TagGenerator<DomainEvent>) event -> Set.of(tagFor(event))
+            );
+
+            // When the boundary is passed in rather than derived
+            Mono<DcbAppendResult> result = deciderApplicationService.execute(nameQuery("name"), List.of(new DefineName("Jane Doe")), countingDecider);
+
+            // Then the events landed and the decider was never asked to resolve a boundary
+            StepVerifier.create(result).expectNextCount(1).verifyComplete();
+            assertThat(derivations).hasValue(0);
         }
     }
 

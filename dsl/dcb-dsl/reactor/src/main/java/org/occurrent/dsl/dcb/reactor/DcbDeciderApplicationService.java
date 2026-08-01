@@ -68,11 +68,28 @@ public final class DcbDeciderApplicationService<E> {
     public <C, S extends @Nullable Object> Mono<DcbAppendResult> execute(List<C> commands, DcbDecider<C, S, E> dcbDecider) {
         // Deferred so boundary resolution (and the IllegalArgumentException it may throw) happens per subscription
         // rather than eagerly when the Mono is built.
-        return Mono.defer(() -> {
-            DcbCriteria criteria = dcbDecider.criteriaFor(commands);
-            DcbExecuteOptions<E> options = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
-            return applicationService.execute(criteria, options, events -> dcbDecider.decider().decideOnEventsAndReturnEvents(events, commands));
-        });
+        return Mono.defer(() -> execute(dcbDecider.criteriaFor(commands), commands, dcbDecider));
+    }
+
+    /**
+     * Execute {@code commands} in order under the boundary {@code criteria}, using {@code dcbDecider} to decide and tag
+     * the new events. For a caller that has already resolved the boundary and would otherwise make the decider derive
+     * it a second time.
+     * <p>
+     * {@code criteria} is expected to be the boundary {@code dcbDecider} resolves for these commands. This is not
+     * enforced here, unlike {@link #execute(List, DcbDecider)}, which derives the boundary itself and rejects a batch
+     * whose commands disagree. Passing a boundary the commands do not resolve to reads the wrong events and appends
+     * under the wrong condition, which can under-scope the DCB append condition without anything raising an error.
+     * Prefer {@link #execute(List, DcbDecider)} unless the boundary came from {@code dcbDecider} for these same
+     * commands.
+     *
+     * @param criteria   the read boundary to read under and append against
+     * @param commands   the commands to execute in order
+     * @param dcbDecider the decider that decides and tags the new events
+     */
+    public <C, S extends @Nullable Object> Mono<DcbAppendResult> execute(DcbCriteria criteria, List<C> commands, DcbDecider<C, S, E> dcbDecider) {
+        DcbExecuteOptions<E> options = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
+        return applicationService.execute(criteria, options, events -> dcbDecider.decider().decideOnEventsAndReturnEvents(events, commands));
     }
 
     /**

@@ -44,6 +44,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -154,6 +155,30 @@ class DcbDeciderApplicationServiceTest {
 
             // Then
             assertThat(thrown).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void executes_under_the_boundary_it_is_given_without_asking_the_decider_for_one() {
+            // Given a criteria function that counts how often it is asked
+            AtomicInteger derivations = new AtomicInteger();
+            var countingDecider = DcbDecider.from(
+                    nameDecider(),
+                    (NameCommand command) -> {
+                        derivations.incrementAndGet();
+                        return nameQuery("name");
+                    },
+                    (TagGenerator<DomainEvent>) event -> Set.of(tagFor(event))
+            );
+
+            // When the boundary is passed in rather than derived
+            Optional<DcbAppendResult> result = deciderApplicationService.execute(nameQuery("name"), List.of(new DefineName("Jane Doe")), countingDecider);
+
+            // Then the events landed and the decider was never asked to resolve a boundary
+            assertAll(
+                    () -> assertThat(result).isPresent(),
+                    () -> assertThat(derivations).hasValue(0),
+                    () -> assertThat(readNameEvents("name")).containsExactly(new NameDefined("event-1", time, "name", "Jane Doe"))
+            );
         }
     }
 
