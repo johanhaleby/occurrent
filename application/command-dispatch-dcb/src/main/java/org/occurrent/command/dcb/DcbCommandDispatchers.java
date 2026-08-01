@@ -20,9 +20,12 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.DcbExecuteOptions;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.command.CommandDispatcher;
+import org.occurrent.command.internal.CommandGrouping;
 import org.occurrent.dsl.dcb.DcbDecider;
 import org.occurrent.dsl.dcb.blocking.DcbDeciderApplicationService;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+
+import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
@@ -37,10 +40,26 @@ public final class DcbCommandDispatchers {
     }
 
     /**
-     * A dispatcher that runs each command through {@code dcbDecider} via {@code applicationService}. The decider
+     * A dispatcher that runs a command through {@code dcbDecider} via {@code applicationService}. The decider
      * re-reads the boundary it derives from the command before deciding, so a decider whose rules are idempotent
      * turns a duplicated or stale command into no new events. At-least-once dispatch is therefore safe only to the
      * extent the decider's own rules make it so.
+     * <p>
+     * {@link CommandDispatcher#dispatchAll(List)} folds a run of <i>consecutive</i> commands resolving to the same
+     * {@link DcbCriteria} into a single {@code execute}, so a reaction issuing three commands inside one boundary is
+     * one append rather than three. The decider sees them in order and each one decides against what the ones before
+     * it decided. Order is preserved, so two commands in one boundary separated by one in a different boundary stay
+     * three separate appends.
+     * <p>
+     * Unlike the stream twin, the boundary is derived from the command by the decider rather than by a resolver, so a
+     * command this decider does not recognise fails the whole batch before anything is appended. That holds as long as
+     * the decider's criteria function answers the same for the same command, which DCB already requires of it, since
+     * the boundary is both the read query and the append condition. Grouping derives it once per command and
+     * {@code execute} derives it again for the run it is given, so a function that answered differently the second time
+     * could fail a later run after an earlier one had been written.
+     * <p>
+     * Boundaries are compared by value, and one built from the same criteria in a different order counts as a
+     * different boundary, which costs an extra append and never merges two that differ.
      *
      * @param applicationService the DCB decider-backed application service to execute against
      * @param dcbDecider         the decider handling the commands, including its read boundary and tags
@@ -51,7 +70,19 @@ public final class DcbCommandDispatchers {
                                                       DcbDecider<C, ?, E> dcbDecider) {
         requireNonNull(applicationService, "applicationService cannot be null");
         requireNonNull(dcbDecider, "dcbDecider cannot be null");
-        return command -> applicationService.execute(command, dcbDecider);
+        return new CommandDispatcher<>() {
+            @Override
+            public void dispatch(C command) {
+                requireNonNull(command, "command cannot be null");
+                applicationService.execute(command, dcbDecider);
+            }
+
+            @Override
+            public void dispatchAll(List<C> commands) {
+                CommandGrouping.forEachRun(commands, dcbDecider::criteriaFor,
+                        (criteria, group) -> applicationService.execute(group, dcbDecider));
+            }
+        };
     }
 
     /**
@@ -59,9 +90,10 @@ public final class DcbCommandDispatchers {
      * {@code CommandDispatchers.invocation(...)}. Each {@link DcbInvocation} names a read boundary and a domain
      * function, and this runs that function through {@code applicationService} inside that boundary.
      * <p>
-     * Unlike the stream twin, {@link CommandDispatcher#dispatchAll(java.util.List)} is not overridden here. Invocations
-     * sharing a {@link DcbCriteria} may carry different {@link TagGenerator}s and one append can only be tagged one
-     * way, so each invocation is dispatched as its own atomic append.
+     * This is the one dispatcher that does not fold a batch. {@link CommandDispatcher#dispatchAll(List)} is left at its
+     * default here, because invocations sharing a {@link DcbCriteria} may carry different {@link TagGenerator}s and one
+     * append can only be tagged one way. {@link #decider} has no such problem, since a {@link DcbDecider} carries one
+     * tag generator for every command it handles.
      *
      * @param applicationService the DCB application service to execute each invocation's decision against
      * @param <E>                the event type of the write model

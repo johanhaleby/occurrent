@@ -35,6 +35,7 @@ import java.net.URI;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayName("CommandDispatchers")
@@ -90,6 +91,88 @@ class CommandDispatchersTest {
 
         // Then
         assertThat(readEvents("order-2")).containsExactly(new OrderShipped("order-2"));
+    }
+
+    @Nested
+    @DisplayName("decider dispatchAll")
+    class DeciderBatching {
+
+        /** Emits nothing for an order already shipped, so a second command in the same run can be seen to have folded. */
+        private final Decider<OrderCommand, Boolean, OrderEvent> shipOnceDecider = Decider.create(
+                Boolean.FALSE,
+                (OrderCommand command, Boolean alreadyShipped) -> {
+                    if (command instanceof ExplodeOrder) {
+                        throw new IllegalStateException("boom");
+                    }
+                    return alreadyShipped ? List.of() : List.of(new OrderShipped(command.orderId()));
+                },
+                (state, event) -> Boolean.TRUE
+        );
+
+        private CommandDispatcher<OrderCommand> dispatcher() {
+            return CommandDispatchers.decider(deciderApplicationService, shipOnceDecider, OrderCommand::orderId);
+        }
+
+        @Test
+        void a_run_against_one_stream_becomes_a_single_atomic_append() {
+            // Given a run of two commands to one stream whose second one the decider rejects
+            List<OrderCommand> commands = List.of(new ShipOrder("order-10"), new ExplodeOrder("order-10"));
+
+            // When
+            assertThatThrownBy(() -> dispatcher().dispatchAll(commands)).isInstanceOf(IllegalStateException.class);
+
+            // Then nothing at all was appended, so the two ran as one execute rather than one append each
+            assertThat(readEvents("order-10")).isEmpty();
+        }
+
+        @Test
+        void a_run_is_folded_so_each_command_decides_against_what_the_previous_one_decided() {
+            // Given two ship commands for one order, where the decider ships an order at most once
+
+            // When
+            dispatcher().dispatchAll(List.of(new ShipOrder("order-11"), new ShipOrder("order-11")));
+
+            // Then the second command saw the first one's event and decided nothing
+            assertThat(readEvents("order-11")).containsExactly(new OrderShipped("order-11"));
+        }
+
+        @Test
+        void commands_are_never_reordered_to_make_a_run_longer() {
+            // Given order-12, order-13, then order-12 again, where the last one is rejected
+            List<OrderCommand> commands = List.of(
+                    new ShipOrder("order-12"), new ShipOrder("order-13"), new ExplodeOrder("order-12"));
+
+            // When
+            assertThatThrownBy(() -> dispatcher().dispatchAll(commands)).isInstanceOf(IllegalStateException.class);
+
+            // Then the first two were appended, so the trailing order-12 was not folded back into the leading one
+            assertThat(readEvents("order-12")).containsExactly(new OrderShipped("order-12"));
+            assertThat(readEvents("order-13")).containsExactly(new OrderShipped("order-13"));
+        }
+
+        @Test
+        void an_empty_batch_writes_nothing_which_is_what_a_reaction_arming_only_a_timer_produces() {
+            assertThatCode(() -> dispatcher().dispatchAll(List.of())).doesNotThrowAnyException();
+        }
+
+        @Test
+        void a_stream_id_that_cannot_be_resolved_fails_the_batch_before_anything_is_appended() {
+            // Given a resolver that rejects the second command, as an annotation-driven one does for a missing id
+            StreamIdResolver<OrderCommand> resolver = command -> {
+                if (command instanceof ExplodeOrder) {
+                    throw new IllegalArgumentException("no stream id");
+                }
+                return command.orderId();
+            };
+            CommandDispatcher<OrderCommand> dispatcher = CommandDispatchers.decider(deciderApplicationService, shipOnceDecider, resolver);
+
+            // When
+            assertThatThrownBy(() -> dispatcher.dispatchAll(List.of(new ShipOrder("order-14"), new ExplodeOrder("order-14"))))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            // Then the first command was not appended either, because ids are resolved before any run is written
+            assertThat(readEvents("order-14")).isEmpty();
+        }
     }
 
     @Nested
@@ -212,6 +295,10 @@ class CommandDispatchersTest {
     }
 
     private record ShipOrder(String orderId) implements OrderCommand {
+    }
+
+    /** Rejected by the deciders and resolvers below, so a batch can be made to fail at a chosen position. */
+    private record ExplodeOrder(String orderId) implements OrderCommand {
     }
 
     private sealed interface OrderEvent {
