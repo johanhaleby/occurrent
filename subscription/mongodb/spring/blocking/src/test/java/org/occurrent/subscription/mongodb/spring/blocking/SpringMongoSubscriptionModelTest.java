@@ -344,6 +344,69 @@ public class SpringMongoSubscriptionModelTest {
     }
 
     @Nested
+    @DisplayName("Auto startup")
+    class AutoStartupTest {
+
+        private SpringMongoSubscriptionModel notAutoStarted;
+
+        @BeforeEach
+        void create_a_model_that_does_not_start_itself() {
+            notAutoStarted = new SpringMongoSubscriptionModel(mongoTemplate,
+                    withConfig(eventCollectionName, timeRepresentation).autoStartup(false));
+        }
+
+        @AfterEach
+        void shutdown_the_model_that_does_not_start_itself() {
+            notAutoStarted.shutdown();
+        }
+
+        @Test
+        void a_model_configured_not_to_auto_start_is_not_running() {
+            assertAll(
+                    () -> assertThat(notAutoStarted.isRunning()).isFalse(),
+                    () -> assertThat(notAutoStarted.isAutoStartup()).isFalse()
+            );
+        }
+
+        @Test
+        void subscribing_on_a_model_that_did_not_auto_start_registers_the_subscription_as_paused() {
+            String subscriptionId = UUID.randomUUID().toString();
+
+            notAutoStarted.subscribe(subscriptionId, __ -> {
+            });
+
+            assertAll(
+                    () -> assertThat(notAutoStarted.isPaused(subscriptionId)).isTrue(),
+                    () -> assertThat(notAutoStarted.isRunning(subscriptionId)).isFalse()
+            );
+        }
+
+        @Test
+        void a_subscription_registered_before_start_receives_events_once_resumed() {
+            String subscriptionId = UUID.randomUUID().toString();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            notAutoStarted.subscribe(subscriptionId, state::add);
+
+            // Nothing arrives while it is still paused
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1")));
+            await().during(ONE_SECOND).atMost(FIVE_SECONDS).until(state::isEmpty);
+
+            notAutoStarted.resumeSubscription(subscriptionId).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            mongoEventStore.write("2", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2")));
+
+            await().atMost(FIVE_SECONDS).until(Not.not(state::isEmpty));
+        }
+
+        @Test
+        void the_default_still_auto_starts() {
+            assertAll(
+                    () -> assertThat(subscriptionModel.isRunning()).isTrue(),
+                    () -> assertThat(subscriptionModel.isAutoStartup()).isTrue()
+            );
+        }
+    }
+
+    @Nested
     @DisplayName("Lifecycle")
     class LifeCycleTest {
 

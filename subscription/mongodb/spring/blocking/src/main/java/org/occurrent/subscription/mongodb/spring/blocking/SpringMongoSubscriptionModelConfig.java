@@ -24,6 +24,7 @@ public class SpringMongoSubscriptionModelConfig {
     final boolean restartSubscriptionsOnChangeStreamHistoryLost;
     final Executor executor;
     final @Nullable Duration maxAwaitTime;
+    final boolean autoStartup;
 
     /**
      * Create a new instance of {@link SpringMongoSubscriptionModelConfig} with the given settings.
@@ -33,11 +34,11 @@ public class SpringMongoSubscriptionModelConfig {
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
     public SpringMongoSubscriptionModelConfig(String eventCollection, TimeRepresentation timeRepresentation) {
-        this(eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false, defaultExecutor(), null);
+        this(eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false, defaultExecutor(), null, true);
     }
 
     private SpringMongoSubscriptionModelConfig(String eventCollection, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy, boolean restartSubscriptionsOnChangeStreamHistoryLost,
-                                               Executor executor, @Nullable Duration maxAwaitTime) {
+                                               Executor executor, @Nullable Duration maxAwaitTime, boolean autoStartup) {
         requireNonNull(eventCollection, "eventCollection cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
@@ -51,6 +52,7 @@ public class SpringMongoSubscriptionModelConfig {
         this.restartSubscriptionsOnChangeStreamHistoryLost = restartSubscriptionsOnChangeStreamHistoryLost;
         this.executor = executor;
         this.maxAwaitTime = maxAwaitTime;
+        this.autoStartup = autoStartup;
     }
 
     /**
@@ -79,7 +81,7 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig restartSubscriptionsOnChangeStreamHistoryLost(boolean restartSubscriptionsOnChangeStreamHistoryLost) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime, autoStartup);
     }
 
     /**
@@ -89,7 +91,7 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig retryStrategy(RetryStrategy retryStrategy) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime, autoStartup);
     }
 
     /**
@@ -105,7 +107,7 @@ public class SpringMongoSubscriptionModelConfig {
      * @see ThreadPoolTaskExecutor
      */
     public SpringMongoSubscriptionModelConfig executor(Executor executor) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime, autoStartup);
     }
 
     /**
@@ -129,7 +131,7 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringMongoSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig maxAwaitTime(Duration maxAwaitTime) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, requireNonNull(maxAwaitTime, "maxAwaitTime cannot be null"));
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, requireNonNull(maxAwaitTime, "maxAwaitTime cannot be null"), autoStartup);
     }
 
     /**
@@ -140,6 +142,22 @@ public class SpringMongoSubscriptionModelConfig {
      */
     public SpringMongoSubscriptionModelConfig useVirtualThreads() {
         return executor(virtualThreadExecutor());
+    }
+
+    /**
+     * Whether the subscription model starts itself. When {@code false} it is created stopped, so a subscription
+     * registered on it is paused from the outset and only runs once you call {@code start()} or
+     * {@code resumeSubscription(id)}. Use this to bring subscriptions up under your own control, behind a leader
+     * election or a health check, or in a test that wants to choose which subscriptions run.
+     * <p>
+     * This also decides what {@code isAutoStartup()} reports to Spring, so a model registered as a bean is not
+     * started for you either. Defaults to {@code true}, which is the behaviour before this option existed.
+     *
+     * @param autoStartup Whether to start on creation.
+     * @return A new instance of {@code SpringMongoSubscriptionModelConfig}
+     */
+    public SpringMongoSubscriptionModelConfig autoStartup(boolean autoStartup) {
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor, maxAwaitTime, autoStartup);
     }
 
     private static Executor defaultExecutor() {

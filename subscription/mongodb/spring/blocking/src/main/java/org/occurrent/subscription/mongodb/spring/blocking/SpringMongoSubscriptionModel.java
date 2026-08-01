@@ -96,6 +96,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final MongoOperations mongoOperations;
     private final RetryStrategy retryStrategy;
     private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
+    private final boolean autoStartup;
     private final @Nullable Duration maxAwaitTime;
     // Shared executor for restart loops so a failing subscription backs off (via retryStrategy) instead of
     // spawning a thread per restart attempt. One virtual thread per currently-restarting subscription,
@@ -152,8 +153,13 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         this.maxAwaitTime = config.maxAwaitTime;
         this.restartExecutor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("spring-mongo-subscription-restart-", 0).factory());
         this.activeRestartSignal = new ConcurrentHashMap<>();
+        this.autoStartup = config.autoStartup;
         this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate, config.executor);
-        this.messageListenerContainer.start();
+        // Left stopped when autoStartup is false, so subscribe(..) registers into pausedSubscriptions and no change
+        // stream is opened until the caller starts one. Starting here and stopping again would open and close them.
+        if (autoStartup) {
+            this.messageListenerContainer.start();
+        }
     }
 
     @Override
@@ -346,7 +352,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     @Override
     public boolean isAutoStartup() {
-        return messageListenerContainer.isAutoStartup();
+        return autoStartup;
     }
 
     private void stopMessageListenerContainer() {
@@ -537,12 +543,12 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public boolean equals(@Nullable Object o) {
         if (!(o instanceof SpringMongoSubscriptionModel that)) return false;
-        return restartSubscriptionsOnChangeStreamHistoryLost == that.restartSubscriptionsOnChangeStreamHistoryLost && shutdown == that.shutdown && Objects.equals(eventCollection, that.eventCollection) && Objects.equals(messageListenerContainer, that.messageListenerContainer) && Objects.equals(runningSubscriptions, that.runningSubscriptions) && Objects.equals(pausedSubscriptions, that.pausedSubscriptions) && timeRepresentation == that.timeRepresentation && Objects.equals(mongoOperations, that.mongoOperations) && Objects.equals(retryStrategy, that.retryStrategy);
+        return restartSubscriptionsOnChangeStreamHistoryLost == that.restartSubscriptionsOnChangeStreamHistoryLost && autoStartup == that.autoStartup && shutdown == that.shutdown && Objects.equals(maxAwaitTime, that.maxAwaitTime) && Objects.equals(eventCollection, that.eventCollection) && Objects.equals(messageListenerContainer, that.messageListenerContainer) && Objects.equals(runningSubscriptions, that.runningSubscriptions) && Objects.equals(pausedSubscriptions, that.pausedSubscriptions) && timeRepresentation == that.timeRepresentation && Objects.equals(mongoOperations, that.mongoOperations) && Objects.equals(retryStrategy, that.retryStrategy);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventCollection, messageListenerContainer, runningSubscriptions, pausedSubscriptions, timeRepresentation, mongoOperations, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, shutdown);
+        return Objects.hash(eventCollection, messageListenerContainer, runningSubscriptions, pausedSubscriptions, timeRepresentation, mongoOperations, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, autoStartup, maxAwaitTime, shutdown);
     }
 
     @Override
@@ -556,6 +562,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 .add("mongoOperations=" + mongoOperations)
                 .add("retryStrategy=" + retryStrategy)
                 .add("restartSubscriptionsOnChangeStreamHistoryLost=" + restartSubscriptionsOnChangeStreamHistoryLost)
+                .add("autoStartup=" + autoStartup)
+                .add("maxAwaitTime=" + maxAwaitTime)
                 .add("shutdown=" + shutdown)
                 .toString();
     }
