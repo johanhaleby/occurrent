@@ -205,6 +205,17 @@ class DcbDeciderApplicationServiceTest {
             StepVerifier.create(result).expectNextCount(1).verifyComplete();
             assertThat(derivations).hasValue(0);
         }
+
+        @Test
+        void the_boundary_overload_is_cold_so_a_rejected_argument_surfaces_on_subscribe() {
+            // Given a null boundary, which the application service rejects before it returns a Mono, so building the
+            // Mono is where an eager overload would throw
+            @SuppressWarnings("DataFlowIssue") Mono<DcbAppendResult> result =
+                    deciderApplicationService.execute(null, List.of(new DefineName("Jane Doe")), nameDcbDecider());
+
+            // Then nothing happened until something subscribed, matching execute(List, decider) beside it
+            StepVerifier.create(result).expectError(NullPointerException.class).verify();
+        }
     }
 
     @Nested

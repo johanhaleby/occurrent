@@ -88,8 +88,12 @@ public final class DcbDeciderApplicationService<E> {
      * @param dcbDecider the decider that decides and tags the new events
      */
     public <C, S extends @Nullable Object> Mono<DcbAppendResult> execute(DcbCriteria criteria, List<C> commands, DcbDecider<C, S, E> dcbDecider) {
-        DcbExecuteOptions<E> options = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
-        return applicationService.execute(criteria, options, events -> dcbDecider.decider().decideOnEventsAndReturnEvents(events, commands));
+        // Deferred for the same reason as the overload above: the application service validates its arguments before it
+        // returns a Mono, so without this the failure would surface when the Mono is built rather than per subscription.
+        return Mono.defer(() -> {
+            DcbExecuteOptions<E> options = DcbExecuteOptions.<E>options().tagGenerator(dcbDecider.tags());
+            return applicationService.execute(criteria, options, events -> dcbDecider.decider().decideOnEventsAndReturnEvents(events, commands));
+        });
     }
 
     /**
