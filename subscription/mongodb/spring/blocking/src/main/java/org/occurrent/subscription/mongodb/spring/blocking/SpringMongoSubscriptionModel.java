@@ -543,12 +543,12 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public boolean equals(@Nullable Object o) {
         if (!(o instanceof SpringMongoSubscriptionModel that)) return false;
-        return restartSubscriptionsOnChangeStreamHistoryLost == that.restartSubscriptionsOnChangeStreamHistoryLost && shutdown == that.shutdown && Objects.equals(eventCollection, that.eventCollection) && Objects.equals(messageListenerContainer, that.messageListenerContainer) && Objects.equals(runningSubscriptions, that.runningSubscriptions) && Objects.equals(pausedSubscriptions, that.pausedSubscriptions) && timeRepresentation == that.timeRepresentation && Objects.equals(mongoOperations, that.mongoOperations) && Objects.equals(retryStrategy, that.retryStrategy);
+        return restartSubscriptionsOnChangeStreamHistoryLost == that.restartSubscriptionsOnChangeStreamHistoryLost && autoStartup == that.autoStartup && shutdown == that.shutdown && Objects.equals(maxAwaitTime, that.maxAwaitTime) && Objects.equals(eventCollection, that.eventCollection) && Objects.equals(messageListenerContainer, that.messageListenerContainer) && Objects.equals(runningSubscriptions, that.runningSubscriptions) && Objects.equals(pausedSubscriptions, that.pausedSubscriptions) && timeRepresentation == that.timeRepresentation && Objects.equals(mongoOperations, that.mongoOperations) && Objects.equals(retryStrategy, that.retryStrategy);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventCollection, messageListenerContainer, runningSubscriptions, pausedSubscriptions, timeRepresentation, mongoOperations, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, shutdown);
+        return Objects.hash(eventCollection, messageListenerContainer, runningSubscriptions, pausedSubscriptions, timeRepresentation, mongoOperations, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, autoStartup, maxAwaitTime, shutdown);
     }
 
     @Override
@@ -562,6 +562,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 .add("mongoOperations=" + mongoOperations)
                 .add("retryStrategy=" + retryStrategy)
                 .add("restartSubscriptionsOnChangeStreamHistoryLost=" + restartSubscriptionsOnChangeStreamHistoryLost)
+                .add("autoStartup=" + autoStartup)
+                .add("maxAwaitTime=" + maxAwaitTime)
                 .add("shutdown=" + shutdown)
                 .toString();
     }
