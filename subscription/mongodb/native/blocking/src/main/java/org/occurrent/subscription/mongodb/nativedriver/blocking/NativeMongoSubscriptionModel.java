@@ -54,7 +54,6 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -384,9 +383,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     @Override
     public Set<String> subscriptionIds() {
-        Set<String> ids = new HashSet<>(runningSubscriptions.keySet());
-        ids.addAll(pausedSubscriptions.keySet());
-        return Set.copyOf(ids);
+        return Stream.concat(runningSubscriptions.keySet().stream(), pausedSubscriptions.keySet().stream())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     @Override

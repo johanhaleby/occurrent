@@ -22,13 +22,10 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * A subscription model that can list the subscriptions it knows about. Useful in a test that stops every subscription
- * and then starts the ones it needs, since it can name a subscription that does not exist instead of failing with only
- * the id the caller got wrong.
+ * A subscription model that can list the subscriptions it knows about, so a caller can name one that does not exist
+ * rather than only repeating the id it was given.
  * <p>
- * This is a capability rather than part of {@link SubscriptionModelLifeCycle}, which answers {@link
- * SubscriptionModelLifeCycle#isRunning(String)} and {@link SubscriptionModelLifeCycle#isPaused(String)} per id but
- * cannot list them. Not every subscription model implements it, so reach it with {@link #of(Object)}.
+ * Not every subscription model implements this, so reach it with {@link #of(Object)}.
  */
 @NullMarked
 public interface IntrospectableSubscriptionModel {

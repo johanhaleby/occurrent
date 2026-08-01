@@ -56,7 +56,6 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import java.time.Duration;
-import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.StringJoiner;
@@ -70,6 +69,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.internal.ExecutorShutdown.shutdownSafely;
@@ -297,9 +298,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     @Override
     public Set<String> subscriptionIds() {
-        Set<String> ids = new HashSet<>(runningSubscriptions.keySet());
-        ids.addAll(pausedSubscriptions.keySet());
-        return Set.copyOf(ids);
+        return Stream.concat(runningSubscriptions.keySet().stream(), pausedSubscriptions.keySet().stream())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     @Override
