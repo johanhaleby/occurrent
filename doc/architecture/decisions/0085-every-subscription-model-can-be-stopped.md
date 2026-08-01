@@ -1,4 +1,4 @@
-# 84. Every subscription model can be stopped
+# 85. Every subscription model can be stopped
 
 Date: 2026-08-01
 
