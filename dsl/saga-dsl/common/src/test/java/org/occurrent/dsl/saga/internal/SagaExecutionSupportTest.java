@@ -241,6 +241,34 @@ class SagaExecutionSupportTest {
                     () -> assertThat(outcome.envelope().positionWatermark()).isEqualTo(6L)
             );
         }
+
+        @Test
+        void re_processes_an_event_that_carries_no_dedup_key_at_all_because_there_is_nothing_to_compare() {
+            // Given an instance that has already recorded a watermark from a properly tagged event
+            SagaEnvelope<OrderState> current = activeEnvelope("o1", new AwaitingPayment("o1"), 1, List.of(), Map.of("s1", 5L), null);
+
+            // When the same logical event arrives again with none of the three extensions, as a broker feed that drops
+            // them would deliver it
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    orderFulfillment(), "o1", current, SagaInput.event(new PaymentReserved("o1")), EventMeta.NONE, NOW);
+
+            // Then it is processed again, and nothing new is recorded to compare a third delivery against
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().streamWatermarks()).isEqualTo(Map.of("s1", 5L)),
+                    () -> assertThat(outcome.envelope().positionWatermark()).isNull()
+            );
+        }
+
+        @Test
+        void treats_a_stream_id_without_a_version_as_no_dedup_key() {
+            assertAll(
+                    () -> assertThat(new EventMeta("s1", 5L, null).carriesRedeliveryKey()).isTrue(),
+                    () -> assertThat(new EventMeta(null, null, 6L).carriesRedeliveryKey()).isTrue(),
+                    () -> assertThat(new EventMeta("s1", null, null).carriesRedeliveryKey()).isFalse(),
+                    () -> assertThat(EventMeta.NONE.carriesRedeliveryKey()).isFalse()
+            );
+        }
     }
 
     @Nested

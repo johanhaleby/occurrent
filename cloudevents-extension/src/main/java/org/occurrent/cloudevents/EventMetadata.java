@@ -58,9 +58,19 @@ public final class EventMetadata {
 
     /**
      * The version of the event in the stream.
+     * <p>
+     * Accepts a {@code Number} or a {@code String}, the same way {@link #getPosition()} does, because an event that has
+     * been through a CloudEvents JSON round trip carries this as a string.
      */
     public long getStreamVersion() {
-        return (Long) Objects.requireNonNull(data.get(OccurrentCloudEventExtension.STREAM_VERSION), "streamVersion extension is absent");
+        Object value = Objects.requireNonNull(data.get(OccurrentCloudEventExtension.STREAM_VERSION), "streamVersion extension is absent");
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String string) {
+            return Long.parseLong(string);
+        }
+        throw new IllegalArgumentException("StreamVersion extension must be a Number or String");
     }
 
     /**

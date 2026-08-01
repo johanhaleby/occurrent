@@ -39,6 +39,12 @@
         </dependency>
 
         <!-- Test -->
+        <!-- Round-trips an event through CloudEvents JSON, which is what turns a long extension into a string -->
+        <dependency>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-json-jackson</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>

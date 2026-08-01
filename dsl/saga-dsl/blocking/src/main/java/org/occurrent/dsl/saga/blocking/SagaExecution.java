@@ -41,6 +41,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Drives one saga against one subscription and its own timer poller: it loads the instance, runs the pure
@@ -59,6 +60,7 @@ import java.util.Set;
 final class SagaExecution<E, S extends @Nullable Object, C> {
     private static final Logger log = LoggerFactory.getLogger(SagaExecution.class);
 
+    private final String subscriptionId;
     private final Saga<E, S, C> saga;
     private final SagaStateStore<S> stateStore;
     private final CommandDispatcher<C> dispatcher;
@@ -71,9 +73,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // Warn once when contention has eaten past half the retry budget, before the retries exhaust and throw. Sustained
     // contention on one instance points at a hot correlation id or an under-sized maxCasAttempts.
     private final int warnThreshold;
+    private final AtomicBoolean dedupUnavailableWarningLogged = new AtomicBoolean();
 
-    SagaExecution(Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
+    SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config) {
+        this.subscriptionId = subscriptionId;
         this.saga = saga;
         this.stateStore = stateStore;
         this.dispatcher = dispatcher;
@@ -96,7 +100,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // so reactions can read it. The separate EventMeta drives redelivery dedup and is derived independently below, so
         // its null-tolerant watermark behaviour is unchanged.
         EventMetadata metadata = EventMetadata.from(cloudEvent);
-        process(sagaId, SagaInput.event(event, metadata), extractMeta(cloudEvent), null);
+        EventMeta meta = extractMeta(cloudEvent);
+        warnOnceIfRedeliveryCannotBeDetected(meta);
+        process(sagaId, SagaInput.event(event, metadata), meta, null);
     }
 
     void pollTimers() {
@@ -176,6 +182,18 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
         long nowMillis = now.toEpochMilli();
         return envelope.timers().stream().anyMatch(timer -> timer.name().equals(timerName) && timer.firesAtEpochMilli() <= nowMillis);
+    }
+
+    // An event carrying neither a stream id with a version nor a position leaves nothing to compare a redelivery
+    // against, so the reaction runs again and issues its commands again. Occurrent's own stored events always carry
+    // one, so this means a feed that dropped the extensions on the way in, which it does for every event, not just
+    // this one. Hence once per runner rather than once per event.
+    private void warnOnceIfRedeliveryCannotBeDetected(EventMeta meta) {
+        if (!meta.carriesRedeliveryKey() && dedupUnavailableWarningLogged.compareAndSet(false, true)) {
+            log.warn("Saga '{}' received an event with no streamid, streamversion or position. A redelivered event " +
+                     "cannot be recognised as one, so it will run the reaction again and issue its commands again. " +
+                     "Forward the Occurrent CloudEvent extensions from the listener feeding this saga.", subscriptionId);
+        }
     }
 
     private EventMeta extractMeta(CloudEvent cloudEvent) {

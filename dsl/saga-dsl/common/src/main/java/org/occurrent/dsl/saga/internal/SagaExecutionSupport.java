@@ -55,6 +55,15 @@ public final class SagaExecutionSupport {
     /** Delivery metadata used to deduplicate a redelivered event. All fields are {@code null} for a timer input. */
     public record EventMeta(@Nullable String streamId, @Nullable Long streamVersion, @Nullable Long position) {
         public static final EventMeta NONE = new EventMeta(null, null, null);
+
+        /**
+         * Whether this carries enough to tell a redelivery from a new event, which is a stream id together with a
+         * stream version, or a position. {@link #isRedelivery} looks at the same two things, so the rule lives here
+         * instead of being written twice.
+         */
+        public boolean carriesRedeliveryKey() {
+            return (streamId != null && streamVersion != null) || position != null;
+        }
     }
 
     /**

@@ -93,6 +93,20 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Round-trips an event through CloudEvents JSON, the shape a broker listener rebuilds -->
+        <dependency>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-json-jackson</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- A push model can redeliver the same event, which InMemorySubscriptionModel cannot, so it is what makes the
+             end-to-end redelivery dedup test possible -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-push-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-inmemory</artifactId>
