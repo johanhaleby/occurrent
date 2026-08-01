@@ -26,6 +26,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel;
 
 import java.lang.reflect.Proxy;
 import java.net.URI;
@@ -218,6 +219,23 @@ class OccurrentSubscriptionsExtensionTest {
         subscriptionModel.waitUntilAllEventsProcessed();
 
         assertThat(received).isEmpty();
+    }
+
+    @Test
+    void a_synchronous_subscription_is_stopped_and_started_like_any_other() {
+        SynchronousSubscriptionModel synchronousModel = new SynchronousSubscriptionModel();
+        List<String> received = new CopyOnWriteArrayList<>();
+        synchronousModel.subscribe("order-projection", cloudEvent -> received.add(cloudEvent.getId()));
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(synchronousModel);
+        runBeforeEach(extension);
+
+        synchronousModel.dispatch(List.of(event()));
+        assertThat(received).isEmpty();
+
+        assertThat(extension.startAll()).containsExactly("order-projection");
+        synchronousModel.dispatch(List.of(event()));
+        assertThat(received).hasSize(1);
     }
 
     // A lifecycle with no IntrospectableSubscriptionModel anywhere in it, so startAll has nothing to enumerate.

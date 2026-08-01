@@ -36,24 +36,29 @@ import java.util.function.Predicate;
  * {@link SubscriptionFilter}, and events fed in by the subclass are routed to every handler whose filter matches.
  * <p>
  * It owns id uniqueness, the filter-to-{@link Predicate} translation (via {@link SubscriptionFilterMatcher}), and
- * ordered dispatch. It has no start position, checkpoint, catch-up, or replay, and no
- * {@link SubscriptionModelLifeCycle}: there is nothing to start or stop when the events arrive from the caller, and a
- * pause would drop them rather than defer them, since there is no feed holding them back. Cancellation is the one
- * life-cycle operation that does apply, so it implements {@link CancellableSubscriptions}. {@link StartAt} is accepted
- * for interface compatibility but ignored, since "where to start" is meaningless when the subclass decides which
- * events reach {@link #route(CloudEvent)} and when.
+ * ordered dispatch. It has no start position, checkpoint, catch-up, or replay. {@link StartAt} is accepted for
+ * interface compatibility but ignored, since "where to start" is meaningless when the subclass decides which events
+ * reach {@link #route(CloudEvent)} and when.
+ * <p>
+ * It does implement {@link SubscriptionModelLifeCycle}, so a stopped model or a paused subscription is skipped by
+ * {@link #route(CloudEvent)}. Read that as <i>dropped, not deferred</i>: nothing is holding the events back, so an
+ * event fed in while a subscription is paused never reaches that handler, and resuming does not replay it. This is
+ * how {@code InMemorySubscriptionModel} already behaves for events fed to it while stopped, and it is what lets a
+ * test stop everything and opt back in per subscription.
  * <p>
  * Subclasses expose their own ingestion API (for example a synchronous at-write-time {@code dispatch(List)} or an
  * externally driven {@code accept(CloudEvent)}) and delegate to {@link #route(CloudEvent)} to deliver each event.
  */
 @NullMarked
-public abstract class RegisteringSubscribable implements Subscribable, CancellableSubscriptions {
+public abstract class RegisteringSubscribable implements Subscribable, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel {
 
     private record Registration(String id, Predicate<CloudEvent> matcher, Consumer<CloudEvent> action) {
     }
 
     private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> pausedSubscriptions = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<Registration> registrations = new CopyOnWriteArrayList<>();
+    private volatile boolean running = true;
 
     @Override
     public final Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -66,6 +71,11 @@ public abstract class RegisteringSubscribable implements Subscribable, Cancellab
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
         }
         registrations.add(new Registration(subscriptionId, matcher, action));
+        // Registering on a stopped model yields a paused subscription, so a caller that stopped the model before
+        // wiring its handlers can resume them one at a time.
+        if (!running) {
+            pausedSubscriptions.add(subscriptionId);
+        }
         return new AlreadyStartedSubscription(subscriptionId);
     }
 
@@ -75,6 +85,61 @@ public abstract class RegisteringSubscribable implements Subscribable, Cancellab
         // Drop the registration before releasing the id, so the id is never free while its handler can still be routed to.
         registrations.removeIf(registration -> registration.id().equals(subscriptionId));
         subscriptionIds.remove(subscriptionId);
+        pausedSubscriptions.remove(subscriptionId);
+    }
+
+    @Override
+    public final Set<String> subscriptionIds() {
+        return Set.copyOf(subscriptionIds);
+    }
+
+    @Override
+    public final void stop() {
+        running = false;
+        pausedSubscriptions.addAll(subscriptionIds);
+    }
+
+    @Override
+    public final void start(boolean resumeSubscriptionsAutomatically) {
+        running = true;
+        if (resumeSubscriptionsAutomatically) {
+            pausedSubscriptions.clear();
+        }
+    }
+
+    @Override
+    public final boolean isRunning() {
+        return running;
+    }
+
+    @Override
+    public final boolean isRunning(String subscriptionId) {
+        return running && subscriptionIds.contains(subscriptionId) && !pausedSubscriptions.contains(subscriptionId);
+    }
+
+    @Override
+    public final boolean isPaused(String subscriptionId) {
+        return pausedSubscriptions.contains(subscriptionId);
+    }
+
+    @Override
+    public final Subscription resumeSubscription(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        if (!isPaused(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
+        }
+        running = true;
+        pausedSubscriptions.remove(subscriptionId);
+        return new AlreadyStartedSubscription(subscriptionId);
+    }
+
+    @Override
+    public final void pauseSubscription(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        if (!isRunning(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't running.");
+        }
+        pausedSubscriptions.add(subscriptionId);
     }
 
     /**
@@ -87,13 +152,19 @@ public abstract class RegisteringSubscribable implements Subscribable, Cancellab
     /**
      * Route a single event to every registered handler whose filter matches, in registration order, on the calling
      * thread. A handler exception propagates to the caller.
+     * <p>
+     * A stopped model routes nothing, and a paused subscription is skipped. The event is dropped for that handler
+     * rather than held, so resuming later does not deliver it.
      *
      * @param cloudEvent The event to dispatch.
      */
     protected final void route(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
+        if (!running) {
+            return;
+        }
         for (Registration registration : registrations) {
-            if (registration.matcher().test(cloudEvent)) {
+            if (!pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent)) {
                 registration.action().accept(cloudEvent);
             }
         }

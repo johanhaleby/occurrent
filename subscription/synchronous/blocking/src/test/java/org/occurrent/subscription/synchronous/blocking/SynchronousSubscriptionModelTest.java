@@ -121,6 +121,86 @@ class SynchronousSubscriptionModelTest {
         assertThat(subscription.waitUntilStarted(java.time.Duration.ofMillis(1))).isTrue();
     }
 
+    @Test
+    void a_stopped_model_dispatches_to_nobody_and_the_caller_still_returns() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> received = new ArrayList<>();
+        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
+
+        model.stop();
+        model.dispatch(List.of(cloudEvent("1", "NameDefined")));
+
+        assertThat(received).isEmpty();
+        assertThat(model.isRunning()).isFalse();
+        assertThat(model.isPaused("sub")).isTrue();
+    }
+
+    @Test
+    void an_event_dispatched_while_paused_is_dropped_rather_than_delivered_on_resume() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> received = new ArrayList<>();
+        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
+
+        model.stop();
+        model.dispatch(List.of(cloudEvent("missed", "NameDefined")));
+        model.resumeSubscription("sub");
+        model.dispatch(List.of(cloudEvent("seen", "NameDefined")));
+
+        assertThat(received).containsExactly("seen");
+    }
+
+    @Test
+    void a_paused_subscription_is_skipped_while_its_siblings_still_receive() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> quiet = new ArrayList<>();
+        List<String> noisy = new ArrayList<>();
+        model.subscribe("quiet", cloudEvent -> quiet.add(cloudEvent.getId()));
+        model.subscribe("noisy", cloudEvent -> noisy.add(cloudEvent.getId()));
+
+        model.pauseSubscription("quiet");
+        model.dispatch(List.of(cloudEvent("1", "NameDefined")));
+
+        assertThat(quiet).isEmpty();
+        assertThat(noisy).containsExactly("1");
+    }
+
+    @Test
+    void registering_on_a_stopped_model_yields_a_paused_subscription() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> received = new ArrayList<>();
+
+        model.stop();
+        model.subscribe("registered-while-stopped", cloudEvent -> received.add(cloudEvent.getId()));
+
+        assertThat(model.isPaused("registered-while-stopped")).isTrue();
+        model.resumeSubscription("registered-while-stopped");
+        model.dispatch(List.of(cloudEvent("1", "NameDefined")));
+        assertThat(received).containsExactly("1");
+    }
+
+    @Test
+    void subscription_ids_lists_running_and_paused_subscriptions() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        model.subscribe("running", cloudEvent -> {
+        });
+        model.subscribe("paused", cloudEvent -> {
+        });
+        model.pauseSubscription("paused");
+
+        assertThat(model.subscriptionIds()).containsExactlyInAnyOrder("running", "paused");
+    }
+
+    @Test
+    void resuming_a_subscription_that_is_not_paused_fails() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        model.subscribe("sub", cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.resumeSubscription("sub"));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("is not paused");
+    }
+
     private static CloudEvent cloudEvent(String id, String type) {
         return CloudEventBuilder.v1()
                 .withId(id)
