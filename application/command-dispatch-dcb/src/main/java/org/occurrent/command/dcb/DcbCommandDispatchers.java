@@ -52,9 +52,14 @@ public final class DcbCommandDispatchers {
      * three separate appends.
      * <p>
      * Unlike the stream twin, the boundary is derived from the command by the decider rather than by a resolver, so a
-     * command this decider does not recognise fails the whole batch before anything is appended. Boundaries are
-     * compared by value, and one built from the same criteria in a different order counts as a different boundary,
-     * which costs an extra append and never merges two that differ.
+     * command this decider does not recognise fails the whole batch before anything is appended. That holds as long as
+     * the decider's criteria function answers the same for the same command, which DCB already requires of it, since
+     * the boundary is both the read query and the append condition. Grouping derives it once per command and
+     * {@code execute} derives it again for the run it is given, so a function that answered differently the second time
+     * could fail a later run after an earlier one had been written.
+     * <p>
+     * Boundaries are compared by value, and one built from the same criteria in a different order counts as a
+     * different boundary, which costs an extra append and never merges two that differ.
      *
      * @param applicationService the DCB decider-backed application service to execute against
      * @param dcbDecider         the decider handling the commands, including its read boundary and tags
