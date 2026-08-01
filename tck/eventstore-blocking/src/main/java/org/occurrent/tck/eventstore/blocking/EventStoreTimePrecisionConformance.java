@@ -179,11 +179,11 @@ public abstract class EventStoreTimePrecisionConformance extends EventStoreConfo
                 eventAt("b", DEFINED, middle),
                 eventAt("c", DEFINED, last)));
 
-        Stream<CloudEvent> events = queries().query(time(and(gte(first), lte(middle))));
-
-        assertThat(events.map(CloudEvent::getTime))
-                .describedAs("gte and lte must include events exactly at the boundary, and exclude what falls outside it")
-                .containsExactlyInAnyOrder(first, middle);
+        try (Stream<CloudEvent> events = queries().query(time(and(gte(first), lte(middle))))) {
+            assertThat(events.map(CloudEvent::getTime))
+                    .describedAs("gte and lte must include events exactly at the boundary, and exclude what falls outside it")
+                    .containsExactlyInAnyOrder(first, middle);
+        }
     }
 
     @Test
@@ -196,11 +196,11 @@ public abstract class EventStoreTimePrecisionConformance extends EventStoreConfo
                 eventAt("b", DEFINED, middle),
                 eventAt("c", DEFINED, last)));
 
-        Stream<CloudEvent> events = queries().query(time(and(gt(first), lt(last))));
-
-        assertThat(events.map(CloudEvent::getTime))
-                .describedAs("gt and lt must exclude events exactly at the boundary, not just what falls outside it")
-                .containsExactly(middle);
+        try (Stream<CloudEvent> events = queries().query(time(and(gt(first), lt(last))))) {
+            assertThat(events.map(CloudEvent::getTime))
+                    .describedAs("gt and lt must exclude events exactly at the boundary, not just what falls outside it")
+                    .containsExactly(middle);
+        }
     }
 
     @Test
@@ -213,11 +213,11 @@ public abstract class EventStoreTimePrecisionConformance extends EventStoreConfo
                 eventAt("b", DEFINED, middle),
                 eventAt("c", DEFINED, last)));
 
-        Stream<CloudEvent> events = queries().query(time(and(gte(timeAt(-5)), lte(timeAt(25)))));
-
-        assertThat(events.map(CloudEvent::getTime))
-                .describedAs("a range wider than the persisted times must return everything")
-                .containsExactlyInAnyOrder(first, middle, last);
+        try (Stream<CloudEvent> events = queries().query(time(and(gte(timeAt(-5)), lte(timeAt(25)))))) {
+            assertThat(events.map(CloudEvent::getTime))
+                    .describedAs("a range wider than the persisted times must return everything")
+                    .containsExactlyInAnyOrder(first, middle, last);
+        }
     }
 
     @Test
@@ -232,10 +232,10 @@ public abstract class EventStoreTimePrecisionConformance extends EventStoreConfo
 
         // Boundaries fall strictly inside the gaps between events, not on any event's own time, so this proves the
         // range narrows what is returned rather than merely proving gt/lt exclude an exact boundary match.
-        Stream<CloudEvent> events = queries().query(time(and(gt(timeAt(3)), lt(timeAt(17)))));
-
-        assertThat(events.map(CloudEvent::getTime))
-                .describedAs("a range narrower than the persisted times must return only what falls inside it")
-                .containsExactly(middle);
+        try (Stream<CloudEvent> events = queries().query(time(and(gt(timeAt(3)), lt(timeAt(17)))))) {
+            assertThat(events.map(CloudEvent::getTime))
+                    .describedAs("a range narrower than the persisted times must return only what falls inside it")
+                    .containsExactly(middle);
+        }
     }
 }

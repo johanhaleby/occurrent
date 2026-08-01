@@ -34,6 +34,7 @@ import org.occurrent.tck.ConformanceEvents;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.stream.Stream;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -280,7 +281,10 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
             Filter secondByData = Filter.data("name", eq("second"));
 
             if (fixture().supportsDataFilter()) {
-                CloudEvent matched = queries().query(secondByData).findFirst().orElseThrow();
+                CloudEvent matched;
+                try (Stream<CloudEvent> matches = queries().query(secondByData)) {
+                    matched = matches.findFirst().orElseThrow();
+                }
 
                 assertAll(
                         () -> assertThat(matched.getId())
