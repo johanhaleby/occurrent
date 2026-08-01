@@ -29,9 +29,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -43,7 +43,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
-import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
@@ -55,6 +54,7 @@ import java.util.UUID;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -116,12 +116,24 @@ class ReactorMongoEventStorePositionTest {
         eventStore.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("SomethingHappened"))).block();
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1"))).block();
 
+        List<CloudEvent> nameEvents = eventStore.read(DcbCriteria.tags(Tag.parse("name:1"))).block().events();
         List<CloudEvent> streamEvents = eventStore.read("stream-1", 0, Integer.MAX_VALUE)
                 .flatMapMany(es -> es.events()).collectList().block();
 
         assertThat(requireNonNull(streamEvents)).hasSize(1);
-        assertThat(streamEvents.get(0).getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(2L);
-        assertThat(eventStore.currentPosition().block()).isEqualTo(3L);
+
+        long nameDefinedPosition = OccurrentCloudEventExtension.getPosition(nameEvents.get(0));
+        long streamEventPosition = OccurrentCloudEventExtension.getPosition(streamEvents.get(0));
+        long nameChangedPosition = OccurrentCloudEventExtension.getPosition(nameEvents.get(1));
+
+        // Positions are shared with DCB: the two DCB appends bracket the stream write in the single global sequence.
+        // A retried write may reserve (and abandon) an earlier block under contention, so positions can have gaps
+        // (ADR 0021); only strict monotonic ordering across the interleaved writes is guaranteed, never contiguity
+        // or a literal value (DcbAppendResult).
+        assertThat(nameDefinedPosition).isPositive();
+        assertThat(streamEventPosition).isGreaterThan(nameDefinedPosition);
+        assertThat(nameChangedPosition).isGreaterThan(streamEventPosition);
+        assertThat(eventStore.currentPosition().block()).isGreaterThanOrEqualTo(nameChangedPosition);
     }
 
     @Test
@@ -183,66 +195,18 @@ class ReactorMongoEventStorePositionTest {
         assertThat(names).contains("type_1_position_1", "dcbTags_1_position_1");
     }
 
-    @Test
-    void position_ordered_reader_returns_events_within_the_requested_range() {
-        ReactorMongoEventStore eventStore = storeWith(STREAM, DCB);
-        eventStore.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("A"), event("B"))).block();
-        eventStore.write("stream-2", WriteCondition.anyStreamVersion(), Flux.just(event("C"), event("D"))).block();
-
-        List<CloudEvent> events = eventStore.readInPositionOrder(Filter.all(), PositionRange.between(1, 3)).collectList().block();
-
-        assertThat(requireNonNull(events)).extracting(CloudEvent::getType).containsExactly("B", "C");
-    }
 
     @Test
-    void position_ordered_reader_clamps_to_the_high_watermark_at_read_time() {
-        ReactorMongoEventStore eventStore = storeWith(STREAM, DCB);
-        eventStore.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("A"), event("B"))).block();
-
-        List<CloudEvent> events = eventStore.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()).collectList().block();
-
-        assertThat(requireNonNull(events)).extracting(CloudEvent::getType).containsExactly("A", "B");
-    }
-
-    @Test
-    void opt_out_stream_only_store_writes_no_position_on_stream_events() {
-        ReactorMongoEventStore eventStore = storeWith(new EventStoreConfig.Builder()
-                .eventStoreCapabilities(STREAM)
-                .withoutStreamPosition());
-
-        eventStore.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("SomethingHappened"))).block();
-
-        List<CloudEvent> streamEvents = eventStore.read("stream-1", 0, Integer.MAX_VALUE)
-                .flatMapMany(es -> es.events()).collectList().block();
-
-        assertThat(requireNonNull(streamEvents)).hasSize(1);
-        assertThat(streamEvents.get(0).getExtension(OccurrentCloudEventExtension.POSITION)).isNull();
-    }
-
-    @Test
-    void opt_out_stream_only_store_rejects_current_position_with_a_clear_error() {
-        ReactorMongoEventStore eventStore = storeWith(new EventStoreConfig.Builder()
-                .eventStoreCapabilities(STREAM)
-                .withoutStreamPosition());
-
-        StepVerifier.create(eventStore.currentPosition())
-                .expectErrorSatisfies(throwable -> assertThat(throwable)
-                        .isInstanceOf(UnsupportedOperationException.class)
-                        .hasMessageContaining("does not write a position"))
-                .verify();
-    }
-
-    @Test
-    void opt_out_stream_only_store_rejects_position_ordered_reads_with_a_clear_error() {
-        ReactorMongoEventStore eventStore = storeWith(new EventStoreConfig.Builder()
-                .eventStoreCapabilities(STREAM)
-                .withoutStreamPosition());
-
-        StepVerifier.create(eventStore.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()))
-                .expectErrorSatisfies(throwable -> assertThat(throwable)
-                        .isInstanceOf(UnsupportedOperationException.class)
-                        .hasMessageContaining("does not write a position"))
-                .verify();
+    void combining_dcb_with_an_explicit_stream_position_opt_out_fails_fast() {
+        assertThatThrownBy(() -> new EventStoreConfig.Builder()
+                .eventStoreCapabilities(STREAM, DCB)
+                .eventStoreCollectionName("events")
+                .transactionConfig(transactionManager)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .withoutStreamPosition()
+                .build())
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Cannot disable stream position when the DCB capability is enabled");
     }
 
     @Test

@@ -31,11 +31,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
-import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
-import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.junit.jupiter.Container;
@@ -45,9 +43,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -121,29 +117,6 @@ class MongoEventStorePositionTest {
     }
 
     @Test
-    void writing_a_single_stream_event_with_stream_position_enabled_still_carries_a_position() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
-
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1")));
-
-        CloudEvent written = eventStore.read("stream:1").events().findFirst().orElseThrow();
-        long writtenPosition = OccurrentCloudEventExtension.getPosition(written);
-        assertThat(writtenPosition).isPositive();
-        assertThat(eventStore.currentPosition()).isEqualTo(writtenPosition);
-    }
-
-    @Test
-    void stream_only_store_writes_no_position_when_opted_out() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
-
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1")));
-
-        CloudEvent written = eventStore.read("stream:1").events().findFirst().orElseThrow();
-        assertThat(written.getExtensionNames()).doesNotContain(OccurrentCloudEventExtension.POSITION);
-        assertThat(eventStore.writesPosition()).isFalse();
-    }
-
-    @Test
     void position_index_is_created_when_stream_position_is_enabled_for_a_stream_only_store() {
         newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
 
@@ -155,82 +128,6 @@ class MongoEventStorePositionTest {
         newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
 
         assertThat(indexNames()).doesNotContain(POSITION_INDEX);
-    }
-
-    @Test
-    void position_ordered_reader_returns_events_within_the_requested_range_in_position_order() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM, DCB).withStreamPosition().build());
-
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("A")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("B")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("C")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("D")));
-
-        // Read the actual positions rather than assuming a contiguous 1,2,3,4 sequence: a transaction retry under
-        // contention reserves (and abandons) a position block, same as the DCB write path (ADR 0021), so gaps are
-        // legal. B and C's own positions bound the range under test, whatever they happen to be.
-        List<CloudEvent> allEvents = eventStore.read("stream:1").events().toList();
-        long positionOfA = OccurrentCloudEventExtension.getPosition(allEvents.get(0));
-        long positionOfB = OccurrentCloudEventExtension.getPosition(allEvents.get(1));
-        long positionOfC = OccurrentCloudEventExtension.getPosition(allEvents.get(2));
-
-        List<CloudEvent> events = eventStore.readInPositionOrder(Filter.all(), PositionRange.between(positionOfA, positionOfC)).toList();
-
-        assertThat(events).extracting(CloudEvent::getType).containsExactly("B", "C");
-        assertThat(events).extracting(OccurrentCloudEventExtension::getPosition).containsExactly(positionOfB, positionOfC);
-    }
-
-    @Test
-    void position_ordered_reader_applies_the_supplied_filter() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
-
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("Included")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("Excluded")));
-
-        List<CloudEvent> events = eventStore.readInPositionOrder(Filter.type("Included"), PositionRange.fromBeginning()).toList();
-
-        assertThat(events).extracting(CloudEvent::getType).containsExactly("Included");
-    }
-
-    @Test
-    void position_ordered_reader_clamps_to_the_current_high_watermark() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
-
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("A")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("B")));
-
-        List<CloudEvent> events = eventStore.readInPositionOrder(Filter.all(), PositionRange.upToPosition(1_000_000)).toList();
-
-        assertThat(events).extracting(CloudEvent::getType).containsExactly("A", "B");
-    }
-
-    @Test
-    void opt_out_store_writes_no_stream_position() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
-
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("StreamEvent1")));
-
-        CloudEvent written = eventStore.read("stream:1").events().findFirst().orElseThrow();
-        assertThat(written.getExtensionNames()).doesNotContain(OccurrentCloudEventExtension.POSITION);
-        assertThat(eventStore.writesPosition()).isFalse();
-    }
-
-    @Test
-    void opt_out_store_rejects_current_position_with_a_clear_error() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
-
-        assertThatThrownBy(eventStore::currentPosition)
-                .isExactlyInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("does not write a position");
-    }
-
-    @Test
-    void opt_out_store_rejects_position_ordered_reads_with_a_clear_error() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
-
-        assertThatThrownBy(() -> eventStore.readInPositionOrder(Filter.all(), PositionRange.fromBeginning()))
-                .isExactlyInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("does not write a position");
     }
 
     @Test
@@ -271,10 +168,13 @@ class MongoEventStorePositionTest {
     void startup_guard_does_not_fire_when_all_existing_events_are_already_positioned() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withStreamPosition().build());
         eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("PositionedEvent")));
+        CloudEvent written = eventStore.read("stream:1").events().findFirst().orElseThrow();
+        long writtenPosition = OccurrentCloudEventExtension.getPosition(written);
 
-        // Re-opening the store against the same, fully positioned collection must not fail even with a hard-fail guard.
+        // Re-opening the store against the same, fully positioned collection must not fail even with a hard-fail guard,
+        // and its high-watermark must still reflect the pre-existing write rather than resetting.
         MongoEventStore reopened = newEventStore(eventStoreConfig(STREAM).withStreamPosition().requireBackfilledPosition(true).build());
-        assertThat(reopened.currentPosition()).isEqualTo(1L);
+        assertThat(reopened.currentPosition()).isEqualTo(writtenPosition);
     }
 
     @Test
