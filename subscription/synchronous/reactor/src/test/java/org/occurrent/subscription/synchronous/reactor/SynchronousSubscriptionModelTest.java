@@ -103,6 +103,62 @@ class SynchronousSubscriptionModelTest {
         StepVerifier.create(subscription.waitUntilStarted(Duration.ofSeconds(5))).expectNext(true).verifyComplete();
     }
 
+    @Test
+    void a_stopped_model_dispatches_to_nobody_and_the_mono_still_completes() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> received = new ArrayList<>();
+        model.subscribe("sub", cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+
+        model.stop();
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined"))))
+                .verifyComplete();
+        assertThat(received).isEmpty();
+        assertThat(model.isPaused("sub")).isTrue();
+    }
+
+    @Test
+    void an_event_dispatched_while_paused_is_dropped_rather_than_delivered_on_resume() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> received = new ArrayList<>();
+        model.subscribe("sub", cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+
+        model.stop();
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("missed", "NameDefined")))).verifyComplete();
+        model.resumeSubscription("sub");
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("seen", "NameDefined")))).verifyComplete();
+
+        assertThat(received).containsExactly("seen");
+    }
+
+    @Test
+    void a_paused_subscription_is_skipped_while_its_siblings_still_receive() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> quiet = new ArrayList<>();
+        List<String> noisy = new ArrayList<>();
+        model.subscribe("quiet", cloudEvent -> Mono.fromRunnable(() -> quiet.add(cloudEvent.getId())));
+        model.subscribe("noisy", cloudEvent -> Mono.fromRunnable(() -> noisy.add(cloudEvent.getId())));
+
+        model.pauseSubscription("quiet");
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")))).verifyComplete();
+        assertThat(quiet).isEmpty();
+        assertThat(noisy).containsExactly("1");
+    }
+
+    @Test
+    void the_running_check_happens_when_the_mono_is_subscribed_not_when_it_is_assembled() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> received = new ArrayList<>();
+        model.subscribe("sub", cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
+
+        Mono<Void> assembledWhileRunning = model.dispatch(List.of(cloudEvent("1", "NameDefined")));
+        model.stop();
+
+        StepVerifier.create(assembledWhileRunning).verifyComplete();
+        assertThat(received).isEmpty();
+    }
+
     private static CloudEvent cloudEvent(String id, String type) {
         return CloudEventBuilder.v1()
                 .withId(id)

@@ -58,6 +58,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-synchronous-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-inmemory</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
