@@ -40,6 +40,8 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayName("DcbCommandDispatchers")
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
@@ -99,6 +101,93 @@ class DcbCommandDispatchersTest {
 
         // Then
         assertThat(readEvents("order-2")).containsExactly(new OrderShipped("order-2"));
+    }
+
+    @Nested
+    @DisplayName("decider dispatchAll")
+    class DeciderBatching {
+
+        /** Ships an order at most once, so a folded run can be told apart from separate appends, and rejects an explode. */
+        private CommandDispatcher<OrderCommand> dispatcher() {
+            Decider<OrderCommand, Boolean, OrderEvent> shipOnce = Decider.create(
+                    Boolean.FALSE,
+                    (OrderCommand command, Boolean alreadyShipped) -> {
+                        if (command instanceof ExplodeOrder) {
+                            throw new IllegalStateException("boom");
+                        }
+                        return alreadyShipped ? List.of() : List.of(new OrderShipped(command.orderId()));
+                    },
+                    (state, event) -> Boolean.TRUE
+            );
+            DcbDecider<OrderCommand, Boolean, OrderEvent> dcbDecider =
+                    DcbDecider.from(shipOnce, command -> orderQuery(command.orderId()), event -> Set.of(tagFor(event)));
+            return DcbCommandDispatchers.decider(deciderApplicationService, dcbDecider);
+        }
+
+        @Test
+        void a_run_inside_one_boundary_becomes_a_single_atomic_append() {
+            // Given a run of two commands in one boundary whose second one the decider rejects
+            List<OrderCommand> commands = List.of(new ShipOrder("order-10"), new ExplodeOrder("order-10"));
+
+            // When
+            assertThatThrownBy(() -> dispatcher().dispatchAll(commands)).isInstanceOf(IllegalStateException.class);
+
+            // Then nothing at all was appended, so the two ran as one execute rather than one append each
+            assertThat(readEvents("order-10")).isEmpty();
+        }
+
+        @Test
+        void a_run_is_folded_so_each_command_decides_against_what_the_previous_one_decided() {
+            // Given two ship commands for one order, where the decider ships an order at most once
+
+            // When
+            dispatcher().dispatchAll(List.of(new ShipOrder("order-11"), new ShipOrder("order-11")));
+
+            // Then the second command saw the first one's event and decided nothing
+            assertThat(readEvents("order-11")).containsExactly(new OrderShipped("order-11"));
+        }
+
+        @Test
+        void commands_are_never_reordered_to_make_a_run_longer() {
+            // Given order-12, order-13, then order-12 again, where the last one is rejected
+            List<OrderCommand> commands = List.of(
+                    new ShipOrder("order-12"), new ShipOrder("order-13"), new ExplodeOrder("order-12"));
+
+            // When
+            assertThatThrownBy(() -> dispatcher().dispatchAll(commands)).isInstanceOf(IllegalStateException.class);
+
+            // Then the first two were appended, so the trailing order-12 was not folded back into the leading one
+            assertThat(readEvents("order-12")).containsExactly(new OrderShipped("order-12"));
+            assertThat(readEvents("order-13")).containsExactly(new OrderShipped("order-13"));
+        }
+
+        @Test
+        void an_empty_batch_writes_nothing_which_is_what_a_reaction_arming_only_a_timer_produces() {
+            // The boundary is derived from the commands, so an empty batch has none to derive it from
+            assertThatCode(() -> dispatcher().dispatchAll(List.of())).doesNotThrowAnyException();
+        }
+
+        @Test
+        void a_command_the_decider_does_not_recognise_fails_the_batch_before_anything_is_appended() {
+            // Given a decider that has no boundary for a foreign command, which is what adapt produces
+            Decider<OrderCommand, Void, OrderEvent> shipmentDecider = Decider.create(
+                    null,
+                    (OrderCommand command, Void state) -> List.of(new OrderShipped(command.orderId())),
+                    (state, event) -> state
+            );
+            DcbDecider<OrderCommand, Void, OrderEvent> dcbDecider = DcbDecider.from(
+                    shipmentDecider,
+                    command -> command instanceof ExplodeOrder ? null : orderQuery(command.orderId()),
+                    event -> Set.of(tagFor(event)));
+            CommandDispatcher<OrderCommand> dispatcher = DcbCommandDispatchers.decider(deciderApplicationService, dcbDecider);
+
+            // When
+            assertThatThrownBy(() -> dispatcher.dispatchAll(List.of(new ShipOrder("order-14"), new ExplodeOrder("order-14"))))
+                    .isInstanceOf(IllegalArgumentException.class);
+
+            // Then the first command was not appended either, because boundaries are derived before any run is written
+            assertThat(readEvents("order-14")).isEmpty();
+        }
     }
 
     @Nested
@@ -177,6 +266,10 @@ class DcbCommandDispatchersTest {
     }
 
     private record ShipOrder(String orderId) implements OrderCommand {
+    }
+
+    /** Rejected by the deciders below, so a batch can be made to fail at a chosen position. */
+    private record ExplodeOrder(String orderId) implements OrderCommand {
     }
 
     private sealed interface OrderEvent {
