@@ -104,7 +104,7 @@ class SubscriptionAnnotationRegistrar {
         ResumeBehavior resumeBehavior = subscription.resumeBehavior();
         StartAt startAt = startPositionSupport.generateStartAt(subscription.id(), startPositionToUse, resumeBehavior);
 
-        boolean shouldWaitUntilStarted = StartPositionSupport.shouldWaitUntilStarted(startPositionToUse, subscription.startupMode());
+        boolean shouldWaitUntilStarted = StartPositionSupport.shouldWaitUntilStarted(startPositionToUse, subscription.startupMode()) && SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext);
         StreamSubscriptions<E> subscribable = applicationContext.getBean(StreamSubscriptions.class);
 
         startPositionSupport.applyStartupWorkarounds();
@@ -130,7 +130,7 @@ class SubscriptionAnnotationRegistrar {
         }
         StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), startAtGlobalPosition, annotation.resumeBehavior());
         boolean replaysHistory = startAtGlobalPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        boolean shouldWaitUntilStarted = SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        boolean shouldWaitUntilStarted = SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode()) && SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext);
         Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
 
         startPositionSupport.applyStartupWorkarounds();
@@ -199,7 +199,7 @@ class SubscriptionAnnotationRegistrar {
         }
         DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), startAtDcbPosition, annotation.resumeBehavior());
         boolean replaysHistory = startAtDcbPosition >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        boolean shouldWaitUntilStarted = SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        boolean shouldWaitUntilStarted = SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode()) && SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext);
         DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
 
         startPositionSupport.applyStartupWorkarounds();

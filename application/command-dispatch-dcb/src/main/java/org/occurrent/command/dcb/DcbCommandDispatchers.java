@@ -48,15 +48,13 @@ public final class DcbCommandDispatchers {
      * {@link CommandDispatcher#dispatchAll(List)} folds a run of <i>consecutive</i> commands resolving to the same
      * {@link DcbCriteria} into a single {@code execute}, so a reaction issuing three commands inside one boundary is
      * one append rather than three. The decider sees them in order and each one decides against what the ones before
-     * it decided. Order is preserved, so two commands in one boundary separated by one in a different boundary stay
-     * three separate appends.
+     * it decided. Only consecutive commands fold, so commands for boundary A, then boundary B, then boundary A again
+     * stay three appends, because the two boundary A commands are not next to each other.
      * <p>
      * Unlike the stream twin, the boundary is derived from the command by the decider rather than by a resolver, so a
-     * command this decider does not recognise fails the whole batch before anything is appended. That holds as long as
-     * the decider's criteria function answers the same for the same command, which DCB already requires of it, since
-     * the boundary is both the read query and the append condition. Grouping derives it once per command and
-     * {@code execute} derives it again for the run it is given, so a function that answered differently the second time
-     * could fail a later run after an earlier one had been written.
+     * command this decider does not recognise fails the whole batch before anything is appended. Each command's
+     * boundary is derived exactly once, when the batch is grouped, and the run is then executed under the boundary
+     * that grouped it.
      * <p>
      * Boundaries are compared by value, and one built from the same criteria in a different order counts as a
      * different boundary, which costs an extra append and never merges two that differ.
@@ -80,7 +78,7 @@ public final class DcbCommandDispatchers {
             @Override
             public void dispatchAll(List<C> commands) {
                 CommandGrouping.forEachRun(commands, dcbDecider::criteriaFor,
-                        (criteria, group) -> applicationService.execute(group, dcbDecider));
+                        (criteria, group) -> applicationService.execute(criteria, group, dcbDecider));
             }
         };
     }

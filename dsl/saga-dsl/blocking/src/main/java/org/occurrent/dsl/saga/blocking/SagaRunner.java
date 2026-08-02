@@ -39,6 +39,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -147,21 +148,34 @@ public final class SagaRunner<E, C> {
     public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
                                                              SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
                                                              @Nullable StartAt startAt, SagaRunnerConfig config) {
+        return run(subscriptionId, saga, stateStore, commandDispatcher, startAt, config, () -> true);
+    }
+
+    /**
+     * Runs {@code saga}, firing its timers only while {@code timersEnabled} says to, on top of any competing-consumer
+     * lease. Use it to keep a saga from issuing commands before the application is ready for it. Timers start firing on
+     * their own once it returns {@code true}, so nothing has to be restarted.
+     */
+    public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
+                                                             SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
+                                                             @Nullable StartAt startAt, SagaRunnerConfig config, BooleanSupplier timersEnabled) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(stateStore, "stateStore cannot be null");
         requireNonNull(commandDispatcher, "commandDispatcher cannot be null");
         requireNonNull(config, "config cannot be null");
+        requireNonNull(timersEnabled, "timersEnabled cannot be null");
 
-        SagaExecution<E, S, C> execution = new SagaExecution<>(saga, stateStore, commandDispatcher, cloudEventConverter, config);
+        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, config);
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
         Consumer<CloudEvent> action = execution::onCloudEvent;
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
         Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
         subscription.waitUntilStarted();
 
-        // Register the poller as a competing consumer under its own lease key, then poll only while this instance holds it.
-        // hasLock is an in-memory check the strategy's background refresh maintains, so a standby instance costs no query.
+        // Register the poller as a competing consumer under its own lease key, then poll only while this instance holds it
+        // and timersEnabled says to. hasLock is an in-memory check the strategy's background refresh maintains, and
+        // timersEnabled is expected to be similarly cheap, so a gated tick costs no store query either way.
         final @Nullable CompetingConsumerStrategy strategy = competingConsumerStrategy;
         final @Nullable String leaseKey;
         final @Nullable String holderId;
@@ -171,7 +185,7 @@ public final class SagaRunner<E, C> {
             String holder = UUID.randomUUID().toString();
             strategy.registerCompetingConsumer(key, holder);
             pollTask = () -> {
-                if (strategy.hasLock(key, holder)) {
+                if (timersEnabled.getAsBoolean() && strategy.hasLock(key, holder)) {
                     execution.pollTimers();
                 }
             };
@@ -180,7 +194,11 @@ public final class SagaRunner<E, C> {
         } else {
             leaseKey = null;
             holderId = null;
-            pollTask = execution::pollTimers;
+            pollTask = () -> {
+                if (timersEnabled.getAsBoolean()) {
+                    execution.pollTimers();
+                }
+            };
         }
 
         ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-saga-timer-" + subscriptionId));

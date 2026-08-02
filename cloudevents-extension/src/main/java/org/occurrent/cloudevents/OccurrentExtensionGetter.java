@@ -28,6 +28,12 @@ public class OccurrentExtensionGetter {
 
     /**
      * Get the stream version from a {@link CloudEvent} that has {@link OccurrentCloudEventExtension} applied.
+     * <p>
+     * Accepts a {@code Number} or a {@code String}, the same way
+     * {@link OccurrentCloudEventExtension#getPosition(CloudEvent)} does, because an event that has been through a
+     * CloudEvents JSON round trip carries this as a string. The CloudEvents SDK serializes any non-{@code Integer}
+     * number that way, so an event forwarded to a broker and reconstructed on the listener side arrives with a string
+     * here even though Occurrent wrote a {@code long}.
      *
      * @param cloudEvent The cloud event
      * @return the stream version
@@ -38,10 +44,13 @@ public class OccurrentExtensionGetter {
         }
 
         Object streamVersion = cloudEvent.getExtension(STREAM_VERSION);
-        if (!(streamVersion instanceof Long)) {
-            throw new IllegalArgumentException(CloudEvent.class.getSimpleName() + " does not contain a " + STREAM_VERSION + " value that is an instance of " + long.class.getSimpleName());
+        if (streamVersion instanceof Number number) {
+            return number.longValue();
         }
-        return (long) streamVersion;
+        if (streamVersion instanceof String string) {
+            return Long.parseLong(string);
+        }
+        throw new IllegalArgumentException(CloudEvent.class.getSimpleName() + " does not contain a " + STREAM_VERSION + " value that is a Number or a String");
     }
 
     /**

@@ -17,6 +17,7 @@
 
 package org.occurrent.springboot.common;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -241,13 +242,21 @@ public class OccurrentProperties {
         private boolean restartOnChangeStreamHistoryLost = true;
 
         /**
-         * Toggles whether subscriptions should be enabled (i.e. created and instantiated as Spring Bean).
-         * <p>
-         * Typically you only want to disable this if you don't need subscriptions or
-         * if you're subscriptions are running on another node.
-         * </p>
+         * How much of the subscription machinery to create and start, see {@link SubscriptionMode}. Defaults to
+         * {@link SubscriptionMode#AUTO}, which creates subscriptions and starts them.
          */
-        private boolean enabled = true;
+        private @Nullable SubscriptionMode mode;
+
+        /**
+         * Whether subscriptions are created as Spring beans at all.
+         *
+         * @deprecated Use {@code occurrent.subscription.mode} instead, where {@code false} became
+         * {@link SubscriptionMode#DISABLED} and {@code true} became {@link SubscriptionMode#AUTO}. Setting both is
+         * allowed only while they agree, so a rewritten configuration file and a leftover environment variable do not
+         * fail the application. This property is removed in the release after next.
+         */
+        @Deprecated(forRemoval = true)
+        private @Nullable Boolean enabled;
 
         /**
          * Tuning for the catch-up-then-live handover used by a push-fed projection's bootstrap.
@@ -270,12 +279,30 @@ public class OccurrentProperties {
             this.restartOnChangeStreamHistoryLost = restartOnChangeStreamHistoryLost;
         }
 
-        public boolean isEnabled() {
+        public @Nullable Boolean getEnabled() {
             return enabled;
         }
 
-        public void setEnabled(boolean enabled) {
+        public void setEnabled(@Nullable Boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public @Nullable SubscriptionMode getMode() {
+            return mode;
+        }
+
+        public void setMode(@Nullable SubscriptionMode mode) {
+            this.mode = mode;
+        }
+
+        /**
+         * The mode to actually use, resolving the deprecated {@code enabled} property when {@code mode} is not set.
+         *
+         * @return The resolved mode, {@link SubscriptionMode#AUTO} when neither property is set.
+         * @throws IllegalStateException if both properties are set and contradict each other
+         */
+        public SubscriptionMode resolveMode() {
+            return SubscriptionMode.resolve(mode, enabled);
         }
 
         public CatchupThenLiveProperties getCatchupThenLive() {

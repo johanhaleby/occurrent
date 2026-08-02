@@ -1,4 +1,4 @@
-# 86. A seam for reading a payload, rather than a JSON dependency
+# 87. A seam for reading a payload, rather than a JSON dependency
 
 Date: 2026-08-02
 

@@ -20,6 +20,10 @@ import org.occurrent.command.CommandDispatcher;
 import org.occurrent.command.CommandDispatchers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.format.EventFormat;
+import io.cloudevents.core.provider.EventFormatProvider;
+import io.cloudevents.jackson.JsonFormat;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -29,6 +33,7 @@ import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.decider.DeciderApplicationService;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaEnvelope;
@@ -39,6 +44,7 @@ import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 import java.net.URI;
 import java.time.Duration;
@@ -51,8 +57,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.function.IntPredicate;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
@@ -285,7 +293,7 @@ class SagaRunnerTest {
 
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(SagaStateStore<OrderState> store, int maxCasAttempts) {
             SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofMinutes(1), 100, maxCasAttempts);
-            return new SagaExecution<>(orderFulfillment(LONG_PAYMENT_TIMEOUT), store, command -> {
+            return new SagaExecution<>("cas-retry", orderFulfillment(LONG_PAYMENT_TIMEOUT), store, command -> {
             }, converter, config);
         }
 
@@ -419,16 +427,86 @@ class SagaRunnerTest {
     @Nested
     class ReplayDedup {
 
+        // InMemorySubscriptionModel cannot replay to a new subscription, so these drive a PushSubscriptionModel
+        // instead, which redelivers whatever you hand it twice. That is also the shape a broker listener has.
+        // Ships on every OrderPlaced and never becomes terminal, so a second delivery is governed by dedup alone
+        // rather than by the terminal-instance skip, which would hide the thing under test.
+        private Saga<OrderEvent, OrderState, OrderCommand> shipsOnEveryPlaced() {
+            return Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
+                    .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new ShipOrder(e.orderId()))))
+                    .build();
+        }
+
+        private SagaSubscription runOn(PushSubscriptionModel pushModel, String subscriptionId,
+                                       SagaStateStore<OrderState> stateStore, CommandDispatcher<OrderCommand> dispatcher) {
+            SagaSubscription subscription = SagaRunner.<OrderEvent, OrderCommand>agnostic(pushModel, converter)
+                    .run(subscriptionId, shipsOnEveryPlaced(), stateStore, dispatcher, null, FAST_POLL_CONFIG);
+            subscriptionsToClose.add(subscription);
+            return subscription;
+        }
+
+        private CloudEvent taggedEvent(OrderEvent event, String streamId, long streamVersion) {
+            return CloudEventBuilder.v1(converter.toCloudEvent(event))
+                    .withExtension(new OccurrentCloudEventExtension(streamId, streamVersion))
+                    .build();
+        }
+
         @Test
-        void note_replay_dedup_cannot_be_exercised_through_InMemorySubscriptionModel() {
-            // InMemorySubscriptionModel only supports starting a subscription from "now" or "default" (which is also
-            // "now" for this model, see InMemorySubscriptionModel.subscribe): it cannot replay already-published
-            // events to a brand-new subscription, so a second SagaRunner started against the same stateStore never
-            // receives the earlier OrderPlaced/PaymentReserved and this scenario cannot be driven end-to-end here.
-            // The dedup behaviour itself -- a redelivered event at or below the stored watermark is skipped, and a
-            // terminal instance ignores further input -- is exercised directly against the pure executor in
-            // SagaExecutionSupportTest (see TerminalInstance and RedeliveryDedup there).
-            assertThat(true).isTrue();
+        void a_redelivered_event_carrying_its_stream_version_is_recognised_and_not_reacted_to_twice() {
+            // Given a saga fed by a push model, as a broker listener would
+            PushSubscriptionModel pushModel = new PushSubscriptionModel();
+            SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
+            CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
+            runOn(pushModel, "push-dedup", stateStore, issued::add);
+            CloudEvent placed = taggedEvent(new OrderPlaced("e1", "order-1"), "order-1", 1L);
+
+            // When the same event is delivered twice, which at-least-once delivery does
+            pushModel.accept(placed);
+            pushModel.accept(placed);
+
+            // Then the reaction ran once
+            assertThat(issued).containsExactly(new ShipOrder("order-1"));
+        }
+
+        @Test
+        void a_redelivered_event_carrying_no_stream_metadata_is_reacted_to_twice() {
+            // Given the same saga fed events with none of the Occurrent extensions, which is what a listener that
+            // forwards a converter-produced CloudEvent delivers
+            PushSubscriptionModel pushModel = new PushSubscriptionModel();
+            SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
+            CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
+            runOn(pushModel, "push-no-dedup", stateStore, issued::add);
+            CloudEvent placed = converter.toCloudEvent(new OrderPlaced("e1", "order-2"));
+
+            // When
+            pushModel.accept(placed);
+            pushModel.accept(placed);
+
+            // Then the command goes out twice, which is the cost the warning names. Pinned so the consequence of a
+            // feed dropping the extensions is written down as behaviour rather than only in prose.
+            assertThat(issued).containsExactly(new ShipOrder("order-2"), new ShipOrder("order-2"));
+        }
+
+        @Test
+        void an_event_that_has_been_through_cloud_events_json_still_deduplicates() {
+            // Given the realistic broker shape: the stored event serialized out and rebuilt on the listener side,
+            // which turns the streamversion extension into a string
+            PushSubscriptionModel pushModel = new PushSubscriptionModel();
+            SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
+            CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
+            runOn(pushModel, "push-json-dedup", stateStore, issued::add);
+            EventFormat json = requireNonNull(EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE));
+            CloudEvent roundTripped = json.deserialize(json.serialize(taggedEvent(new OrderPlaced("e1", "order-3"), "order-3", 1L)));
+
+            // When
+            pushModel.accept(roundTripped);
+            pushModel.accept(roundTripped);
+
+            // Then dedup still works, so the round trip did not cost the saga its redelivery protection
+            assertThat(issued).containsExactly(new ShipOrder("order-3"));
         }
     }
 
@@ -519,7 +597,7 @@ class SagaRunnerTest {
         }
 
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(CommandDispatcher<OrderCommand> dispatcher) {
-            return new SagaExecution<>(issuesTwoCommandsOnStart(), SagaStateStore.inMemory(), dispatcher, converter, SagaRunnerConfig.defaults());
+            return new SagaExecution<>("dispatch-all", issuesTwoCommandsOnStart(), SagaStateStore.inMemory(), dispatcher, converter, SagaRunnerConfig.defaults());
         }
 
         @Test
@@ -714,6 +792,42 @@ class SagaRunnerTest {
             subscription.waitUntilStarted();
 
             await().atMost(Duration.ofSeconds(2)).until(() -> store.dueTimerQueries.get() > 0);
+        }
+    }
+
+    @Nested
+    class TimersEnabledGating {
+
+        private static final Duration FAST_POLL = Duration.ofMillis(30);
+        private static final SagaRunnerConfig FAST = new SagaRunnerConfig(FAST_POLL, 100, 50);
+
+        private SagaSubscription run(String subscriptionId, SagaStateStore<OrderState> stateStore,
+                                    CommandDispatcher<OrderCommand> dispatcher, BooleanSupplier timersEnabled) {
+            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.agnostic(subscriptionModel, converter);
+            SagaSubscription subscription = runner.run(subscriptionId, orderFulfillment(SHORT_PAYMENT_TIMEOUT), stateStore, dispatcher, null, FAST, timersEnabled);
+            subscriptionsToClose.add(subscription);
+            return subscription;
+        }
+
+        @Test
+        void a_due_timer_is_not_dispatched_while_the_supplier_returns_false_and_fires_once_it_returns_true() {
+            String orderId = "order-timers-enabled";
+            SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
+            CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
+            CommandDispatcher<OrderCommand> dispatcher = issued::add;
+            AtomicBoolean timersEnabled = new AtomicBoolean(false);
+            run("timers-enabled-gating", stateStore, dispatcher, timersEnabled::get).waitUntilStarted();
+
+            write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
+
+            // The timeout is short and the poller ticks fast, so several polls elapse with the timer due; none of them
+            // may dispatch while the supplier stays false.
+            await().pollDelay(SHORT_PAYMENT_TIMEOUT.multipliedBy(3)).atMost(5, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(issued).isEmpty());
+
+            timersEnabled.set(true);
+
+            await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> assertThat(issued).containsExactly(new CancelOrder(orderId)));
         }
     }
 }

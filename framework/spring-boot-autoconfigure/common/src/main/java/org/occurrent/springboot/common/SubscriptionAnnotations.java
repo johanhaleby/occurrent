@@ -343,6 +343,18 @@ public final class SubscriptionAnnotations {
     }
 
     /**
+     * Whether a registrar should wait for a subscription to start at all. Under {@link SubscriptionMode#MANUAL} nothing
+     * starts until the application says so, so waiting would block until it times out no matter what
+     * {@link StartupMode} the annotation asked for.
+     *
+     * @param applicationContext The context to read {@link OccurrentProperties} from.
+     * @return {@code false} when subscriptions are not started for you.
+     */
+    public static boolean subscriptionsStartOnTheirOwn(ApplicationContext applicationContext) {
+        return applicationContext.getBean(OccurrentProperties.class).getSubscription().resolveMode() == SubscriptionMode.AUTO;
+    }
+
+    /**
      * Decide whether a subscription should block until it has started, given whether it replays history and its
      * configured {@link StartupMode}. Shared verbatim by the blocking and reactive annotation processors, whose
      * start-position handling otherwise diverges.
