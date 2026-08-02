@@ -190,7 +190,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // this one. Hence once per runner rather than once per event.
     private void warnOnceIfRedeliveryCannotBeDetected(EventMeta meta) {
         if (!meta.carriesRedeliveryKey() && dedupUnavailableWarningLogged.compareAndSet(false, true)) {
-            log.warn("Saga '{}' received an event with no streamid, streamversion or position. A redelivered event " +
+            log.warn("Saga subscription '{}' received an event with no streamid, streamversion or position. A redelivered event " +
                      "cannot be recognised as one, so it will run the reaction again and issue its commands again. " +
                      "Forward the Occurrent CloudEvent extensions from the listener feeding this saga.", subscriptionId);
         }

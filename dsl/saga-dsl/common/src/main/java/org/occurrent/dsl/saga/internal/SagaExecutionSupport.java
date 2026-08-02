@@ -58,7 +58,7 @@ public final class SagaExecutionSupport {
 
         /**
          * Whether this carries enough to tell a redelivery from a new event, which is a stream id together with a
-         * stream version, or a position. {@link #isRedelivery} looks at the same two things, so the rule lives here
+         * stream version, or a position. {@code isRedelivery} looks at the same two things, so the rule lives here
          * instead of being written twice.
          */
         public boolean carriesRedeliveryKey() {
