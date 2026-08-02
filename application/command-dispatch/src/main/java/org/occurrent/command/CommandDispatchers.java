@@ -52,8 +52,8 @@ public final class CommandDispatchers {
      * {@link CommandDispatcher#dispatchAll(List)} folds a run of <i>consecutive</i> commands targeting the same stream
      * into a single {@code execute}, so a reaction issuing three commands against one stream is one append rather than
      * three. The decider sees them in order and each one decides against what the ones before it decided. Only
-     * consecutive commands fold, so commands for order A, then order B, then order A again stay three appends, because
-     * the two order A commands are not next to each other.
+     * consecutive commands fold, so commands for stream A, then stream B, then stream A again stay three appends,
+     * because the two stream A commands are not next to each other.
      *
      * @param applicationService the decider-backed application service to execute against
      * @param decider            the decider handling the saga's commands
@@ -91,8 +91,8 @@ public final class CommandDispatchers {
      * <p>
      * {@link CommandDispatcher#dispatchAll(List)} folds <i>consecutive</i> invocations targeting the same stream into a
      * single {@code execute}, using {@link ListCommandComposition#composeCommands(List)} so each function sees the
-     * events the ones before it decided. Only consecutive invocations fold, so invocations for order A, then order B,
-     * then order A again stay three appends, because the two order A invocations are not next to each other.
+     * events the ones before it decided. Only consecutive invocations fold, so invocations for stream A, then
+     * stream B, then stream A again stay three appends, because the two stream A invocations are not next to each other.
      *
      * @param applicationService the application service to execute each invocation's decision against
      * @param <E>                the event type of the streams being written to
