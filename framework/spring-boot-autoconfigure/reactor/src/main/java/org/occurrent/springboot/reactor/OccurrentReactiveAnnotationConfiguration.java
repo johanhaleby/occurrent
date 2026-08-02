@@ -17,7 +17,9 @@
 package org.occurrent.springboot.reactor;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 
 /**
@@ -32,7 +34,7 @@ import org.springframework.context.annotation.Configuration;
 public class OccurrentReactiveAnnotationConfiguration {
 
     @Bean
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     static OccurrentReactiveAnnotationBeanPostProcessor occurrentReactiveAnnotationBeanPostProcessor() {
         return new OccurrentReactiveAnnotationBeanPostProcessor();
     }

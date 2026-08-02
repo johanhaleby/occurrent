@@ -59,6 +59,7 @@ import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -175,14 +176,14 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(CheckpointStorage.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointStorage occurrentCheckpointStorage(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
         return new SpringMongoCheckpointStorage(mongoTemplate, occurrentProperties.getSubscription().getCollection());
     }
 
     @Bean
     @ConditionalOnMissingBean(SpringMongoLeaseCompetingConsumerStrategy.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public SpringMongoLeaseCompetingConsumerStrategy occurrentCompetingConsumerStrategy(MongoTemplate mongoTemplate, List<CompetingConsumerListener> competingConsumerListeners) {
         SpringMongoLeaseCompetingConsumerStrategy strategy = SpringMongoLeaseCompetingConsumerStrategy.withDefaults(mongoTemplate);
         competingConsumerListeners.forEach(strategy::addListener);
@@ -191,10 +192,13 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     // @Primary so that a Subscribable injection point (for example the asynchronous subscription DSLs) resolves to
     // this asynchronous model rather than the register-only SynchronousSubscriptionModel, which is also a Subscribable.
-    @Bean
+    // Named rather than inferred because under SubscriptionMode.MANUAL the bean is a wrapper, and the @PreDestroy on
+    // CompetingConsumerSubscriptionModel only counts while that class is the bean class. Closing the context has to
+    // reach it, or the Mongo listener container and the lease refresh thread outlive the application.
+    @Bean(destroyMethod = "shutdown")
     @Primary
     @ConditionalOnMissingBean(SubscriptionModel.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, CheckpointStorage storage,
                                                                         OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore, Environment environment) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
@@ -225,7 +229,15 @@ public class OccurrentMongoAutoConfiguration<E> {
         } else {
             subscriptionModel = durableSubscriptionModel;
         }
-        return new CompetingConsumerSubscriptionModel(subscriptionModel, competingConsumerStrategy);
+        CompetingConsumerSubscriptionModel competingConsumerSubscriptionModel = new CompetingConsumerSubscriptionModel(subscriptionModel, competingConsumerStrategy);
+        if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.MANUAL) {
+            return competingConsumerSubscriptionModel;
+        }
+        // Registering must not reach the stack at all, rather than reach it and be stopped afterwards. A catch-up
+        // replay reads the event store directly, so a subscription resuming from a stored checkpoint would deliver
+        // history to a handler nobody started. The Mongo model supplies the position to pin, since it is the one
+        // reading the feed.
+        return ManualStartSubscriptionModel.stoppedByDefault(competingConsumerSubscriptionModel, mongoSubscriptionModel, storage);
     }
 
     @Bean
@@ -249,7 +261,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Bean
     @Primary
     @ConditionalOnMissingBean(Subscriptions.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public Subscriptions<E> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
         return new Subscriptions<>(subscribable, cloudEventConverter);
     }
@@ -260,7 +272,7 @@ public class OccurrentMongoAutoConfiguration<E> {
      */
     @Bean
     @ConditionalOnMissingBean(StreamSubscriptions.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public StreamSubscriptions<E> occurrentStreamSubscriptionDsl(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
         return new StreamSubscriptions<>(subscribable, cloudEventConverter);
     }
@@ -273,9 +285,15 @@ public class OccurrentMongoAutoConfiguration<E> {
      */
     @Bean
     @ConditionalOnMissingBean(SynchronousSubscriptionModel.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel() {
-        return new SynchronousSubscriptionModel();
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
+    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel(OccurrentProperties occurrentProperties) {
+        SynchronousSubscriptionModel synchronousSubscriptionModel = new SynchronousSubscriptionModel();
+        // Stopped up front rather than after registration, so a synchronous handler registered under MANUAL is paused
+        // from the outset and a write does not run it.
+        if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
+            synchronousSubscriptionModel.stop();
+        }
+        return synchronousSubscriptionModel;
     }
 
     /**
@@ -302,7 +320,7 @@ public class OccurrentMongoAutoConfiguration<E> {
      */
     @Bean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
     @ConditionalOnMissingBean(name = OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public Subscriptions<E> occurrentSynchronousSubscriptionDsl(SynchronousSubscriptionModel synchronousSubscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         return new Subscriptions<>(synchronousSubscriptionModel, cloudEventConverter);
     }
@@ -315,8 +333,7 @@ public class OccurrentMongoAutoConfiguration<E> {
      */
     @Bean
     @ConditionalOnMissingBean(DcbSubscriptions.class)
-    @Conditional(OnDcbEventStoreCapabilityCondition.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional({OnDcbEventStoreCapabilityCondition.class, OnSubscriptionsNotDisabledCondition.class})
     public DcbSubscriptions<E> occurrentDcbSubscriptions(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         return new DcbSubscriptions<>(subscriptionModel, cloudEventConverter);
     }

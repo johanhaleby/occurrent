@@ -153,7 +153,7 @@ class SnapshotAnnotationRegistrar {
         }
         StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        boolean waitUntilStarted = SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        boolean waitUntilStarted = SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         startPositionSupport.applyStartupWorkarounds();
         if (stream) {
             StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
@@ -204,7 +204,7 @@ class SnapshotAnnotationRegistrar {
             store.save(key, new org.occurrent.dsl.snapshot.Snapshot<>(newState, position, schemaVersion));
         });
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        if (SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
+        if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
             subscription.waitUntilStarted();
         }
     }

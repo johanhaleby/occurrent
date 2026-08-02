@@ -207,6 +207,11 @@ public final class CatchupProjectionFeed<E> {
      * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,
      * after wiring the live feed, so events arriving during the replay are captured.
      */
+    // Package-private: lets DomainEventFeed.catchUp(String) find the one feed matching an id among several registered.
+    String id() {
+        return id;
+    }
+
     public void catchUp() {
         handover.catchUp(new BlockingHandover.Source<>() {
             @Override

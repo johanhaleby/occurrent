@@ -45,7 +45,9 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.Jackson3CloudEventConverterConfiguration;
+import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.SubscriptionMode;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
 import org.occurrent.springboot.common.OnDcbEventStoreCapabilityCondition;
 import org.occurrent.springboot.common.OnDomainEventQueriesCapabilityCondition;
@@ -166,7 +168,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(CheckpointStorage.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointStorage occurrentCheckpointStorage(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
         return new ReactorCheckpointStorage(mongo, occurrentProperties.getSubscription().getCollection());
     }
@@ -187,7 +189,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Bean(destroyMethod = "shutdown")
     @Primary
     @ConditionalOnMissingBean({SubscriptionModel.class, Subscribable.class})
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public ReactorDurableSubscriptionModel occurrentDurableSubscriptionModel(ReactiveMongoOperations mongo, CheckpointStorage storage,
                                                                              OccurrentProperties occurrentProperties, ObjectProvider<DcbEventStore> dcbEventStore,
                                                                              ApplicationContext applicationContext) {
@@ -241,14 +243,14 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Bean
     @Primary
     @ConditionalOnMissingBean(Subscriptions.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public Subscriptions<E> occurrentSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
         return new Subscriptions<>(subscribable, cloudEventConverter);
     }
 
     @Bean
     @ConditionalOnMissingBean(StreamSubscriptions.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public StreamSubscriptions<E> occurrentStreamSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
         return new StreamSubscriptions<>(subscribable, cloudEventConverter);
     }
@@ -261,9 +263,15 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      */
     @Bean
     @ConditionalOnMissingBean(SynchronousSubscriptionModel.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel() {
-        return new SynchronousSubscriptionModel();
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
+    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel(OccurrentProperties occurrentProperties) {
+        SynchronousSubscriptionModel synchronousSubscriptionModel = new SynchronousSubscriptionModel();
+        // Stopped up front rather than after registration, so a synchronous handler registered under MANUAL is paused
+        // from the outset and a write does not run it.
+        if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
+            synchronousSubscriptionModel.stop();
+        }
+        return synchronousSubscriptionModel;
     }
 
     /**
@@ -291,7 +299,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      */
     @Bean(OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
     @ConditionalOnMissingBean(name = OccurrentReactorBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public Subscriptions<E> occurrentSynchronousSubscriptions(SynchronousSubscriptionModel synchronousSubscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         return new Subscriptions<>(synchronousSubscriptionModel, cloudEventConverter);
     }
@@ -303,8 +311,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      */
     @Bean
     @ConditionalOnMissingBean(DcbSubscriptions.class)
-    @Conditional(OnDcbEventStoreCapabilityCondition.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional({OnDcbEventStoreCapabilityCondition.class, OnSubscriptionsNotDisabledCondition.class})
     public DcbSubscriptions<E> occurrentDcbSubscriptions(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         return new DcbSubscriptions<>(subscriptionModel, cloudEventConverter);
     }

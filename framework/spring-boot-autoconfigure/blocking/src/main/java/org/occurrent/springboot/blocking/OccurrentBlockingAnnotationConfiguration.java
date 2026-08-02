@@ -21,7 +21,9 @@ import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 
 /**
@@ -34,9 +36,22 @@ import org.springframework.context.annotation.Configuration;
 public class OccurrentBlockingAnnotationConfiguration {
 
     @Bean
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     static OccurrentBlockingAnnotationBeanPostProcessor occurrentBlockingAnnotationBeanPostProcessor() {
         return new OccurrentBlockingAnnotationBeanPostProcessor();
+    }
+
+    /**
+     * Lets an application start a {@code @Projection(source = PUSH)} that {@code occurrent.subscription.mode=manual}
+     * withheld at boot. Gated on the same property as the annotation post-processor that fills it in, since it has
+     * nothing to hold when annotation processing is off, and it exists under every mode (not only {@code manual}) so
+     * an application can inject it without conditioning its own wiring on the mode.
+     */
+    @Bean
+    @ConditionalOnMissingBean(ManualStartProjections.class)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
+    public ManualStartProjections occurrentManualStartProjections() {
+        return new ManualStartProjections();
     }
 
     /**
@@ -52,7 +67,7 @@ public class OccurrentBlockingAnnotationConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(SagaInstancesRegistry.class)
-    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public SagaInstancesRegistryImpl occurrentSagaInstancesRegistry() {
         // The declared return type is the implementation, not the SagaInstancesRegistry interface an application
         // injects, so that the registrar's by-type lookup of the writable type matches from the bean definition rather
