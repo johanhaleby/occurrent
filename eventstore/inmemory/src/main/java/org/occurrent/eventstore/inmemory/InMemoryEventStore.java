@@ -55,7 +55,6 @@ import static io.cloudevents.core.v1.CloudEventV1.*;
 import static java.util.Comparator.comparing;
 import static java.util.Comparator.nullsFirst;
 import static java.util.Objects.requireNonNull;
-import static java.util.function.Predicate.not;
 import static java.util.stream.Collectors.groupingBy;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
@@ -530,8 +529,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         // single replaceAll call this replaced was.
         synchronized (state) {
             new ArrayList<>(state.keySet()).forEach(streamId -> state.computeIfPresent(streamId, (__, cloudEvents) -> {
-                cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter, dataFieldReader)).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
-                CopyOnWriteArrayList<CloudEvent> remaining = cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter, dataFieldReader))).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
+                Map<Boolean, List<CloudEvent>> partitioned = cloudEvents.stream()
+                        .collect(Collectors.partitioningBy(cloudEvent -> matchesFilter(cloudEvent, filter, dataFieldReader)));
+                partitioned.get(true).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
+                CopyOnWriteArrayList<CloudEvent> remaining = new CopyOnWriteArrayList<>(partitioned.get(false));
                 return remaining.isEmpty() ? null : remaining;
             }));
         }

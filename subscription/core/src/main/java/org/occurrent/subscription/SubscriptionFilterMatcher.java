@@ -26,6 +26,7 @@ import java.util.function.Predicate;
 
 import org.occurrent.inmemory.filtermatching.DataFieldReader;
 
+import static java.util.Objects.requireNonNull;
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 
 /**
@@ -60,6 +61,7 @@ public final class SubscriptionFilterMatcher {
      * @return A predicate over cloud events.
      */
     public static Predicate<CloudEvent> matcherFor(@Nullable SubscriptionFilter filter, DataFieldReader dataFieldReader) {
+        requireNonNull(dataFieldReader, "DataFieldReader cannot be null");
         switch (filter) {
             case null -> {
                 return cloudEvent -> matchesFilter(cloudEvent, Filter.all(), dataFieldReader);
