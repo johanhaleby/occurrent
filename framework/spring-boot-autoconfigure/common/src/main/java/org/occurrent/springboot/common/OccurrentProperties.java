@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.DeprecatedConfigurationProperty;
 
 import java.net.URI;
 import java.time.Duration;
@@ -279,6 +280,10 @@ public class OccurrentProperties {
             this.restartOnChangeStreamHistoryLost = restartOnChangeStreamHistoryLost;
         }
 
+        // On the getter rather than the field, which is where Spring Boot's configuration-property processor reads it,
+        // so the generated metadata carries the replacement and an IDE can offer it.
+        @DeprecatedConfigurationProperty(replacement = "occurrent.subscription.mode", reason = "false became disabled and true became auto, and mode can also express manual.")
+        @Deprecated(forRemoval = true)
         public @Nullable Boolean getEnabled() {
             return enabled;
         }

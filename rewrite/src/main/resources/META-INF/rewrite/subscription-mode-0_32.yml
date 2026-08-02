@@ -1,0 +1,96 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantSubscriptionEnabled_0_32
+displayName: Drop occurrent.subscription.enabled where occurrent.subscription.mode is already set
+description: >-
+  Removes the deprecated occurrent.subscription.enabled from a configuration file that already sets
+  occurrent.subscription.mode. Setting both is allowed while they agree, so such a file is valid today, but
+  renaming the deprecated key in it would produce two occurrent.subscription.mode entries. The precondition is
+  evaluated per file, so a file that sets only the deprecated key is left for the rename below.
+preconditions:
+  - org.openrewrite.properties.search.FindProperties:
+      propertyKey: occurrent.subscription.mode
+  - org.openrewrite.yaml.search.FindProperty:
+      propertyKey: occurrent.subscription.mode
+recipeList:
+  - org.openrewrite.properties.DeleteProperty:
+      propertyKey: occurrent.subscription.enabled
+  - org.openrewrite.yaml.DeleteProperty:
+      propertyKey: occurrent.subscription.enabled
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateSubscriptionEnabledFalseInYaml_0_32
+displayName: Migrate occurrent.subscription.enabled=false in yaml
+description: >-
+  Rewrites the value and then the key together, gated on the value the file arrives with. The gate has to name the
+  boolean rather than the enum it becomes, because a precondition is evaluated against the file as it enters the
+  run rather than after the steps in this list. Value and key move together so a file holding something the mapping
+  cannot translate, an unresolved placeholder for example, keeps the deprecated key, which still works.
+preconditions:
+  - org.openrewrite.yaml.search.FindProperty:
+      propertyKey: occurrent.subscription.enabled
+      propertyValue: 'false'
+recipeList:
+  - org.openrewrite.yaml.ChangePropertyValue:
+      propertyKey: occurrent.subscription.enabled
+      oldValue: 'false'
+      newValue: disabled
+  - org.openrewrite.yaml.ChangePropertyKey:
+      oldPropertyKey: occurrent.subscription.enabled
+      newPropertyKey: occurrent.subscription.mode
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateSubscriptionEnabledTrueInYaml_0_32
+displayName: Migrate occurrent.subscription.enabled=true in yaml
+description: >-
+  The true half of the yaml migration, gated the same way as the false half above.
+preconditions:
+  - org.openrewrite.yaml.search.FindProperty:
+      propertyKey: occurrent.subscription.enabled
+      propertyValue: 'true'
+recipeList:
+  - org.openrewrite.yaml.ChangePropertyValue:
+      propertyKey: occurrent.subscription.enabled
+      oldValue: 'true'
+      newValue: auto
+  - org.openrewrite.yaml.ChangePropertyKey:
+      oldPropertyKey: occurrent.subscription.enabled
+      newPropertyKey: occurrent.subscription.mode
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateSubscriptionModeProperty_0_32
+displayName: Migrate occurrent.subscription.enabled to occurrent.subscription.mode (0.31.0 -> 0.32.0)
+description: >-
+  Rewrites the deprecated boolean occurrent.subscription.enabled to the occurrent.subscription.mode enum that
+  replaced it, in both .properties and .yaml configuration. false becomes disabled and true becomes auto. The
+  value is rewritten before the key, so a run that stops halfway leaves the old key holding a value it cannot
+  bind rather than the new key holding one. A value that is neither true nor false, an unresolved placeholder for
+  example, is left under the deprecated key, which still works for one more release.
+recipeList:
+  - org.occurrent.DropRedundantSubscriptionEnabled_0_32
+  - org.openrewrite.properties.ChangePropertyValue:
+      propertyKey: occurrent.subscription.enabled
+      oldValue: 'false'
+      newValue: disabled
+  - org.openrewrite.properties.ChangePropertyValue:
+      propertyKey: occurrent.subscription.enabled
+      oldValue: 'true'
+      newValue: auto
+  - org.occurrent.rewrite.RenameMappedSubscriptionEnabledKey
+  - org.occurrent.MigrateSubscriptionEnabledFalseInYaml_0_32
+  - org.occurrent.MigrateSubscriptionEnabledTrueInYaml_0_32
