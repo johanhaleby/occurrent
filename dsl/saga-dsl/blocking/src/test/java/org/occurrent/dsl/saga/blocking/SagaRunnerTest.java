@@ -57,6 +57,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.function.IntPredicate;
 
 import static java.util.Objects.requireNonNull;
@@ -791,6 +792,42 @@ class SagaRunnerTest {
             subscription.waitUntilStarted();
 
             await().atMost(Duration.ofSeconds(2)).until(() -> store.dueTimerQueries.get() > 0);
+        }
+    }
+
+    @Nested
+    class TimersEnabledGating {
+
+        private static final Duration FAST_POLL = Duration.ofMillis(30);
+        private static final SagaRunnerConfig FAST = new SagaRunnerConfig(FAST_POLL, 100, 50);
+
+        private SagaSubscription run(String subscriptionId, SagaStateStore<OrderState> stateStore,
+                                    CommandDispatcher<OrderCommand> dispatcher, BooleanSupplier timersEnabled) {
+            SagaRunner<OrderEvent, OrderCommand> runner = SagaRunner.agnostic(subscriptionModel, converter);
+            SagaSubscription subscription = runner.run(subscriptionId, orderFulfillment(SHORT_PAYMENT_TIMEOUT), stateStore, dispatcher, null, FAST, timersEnabled);
+            subscriptionsToClose.add(subscription);
+            return subscription;
+        }
+
+        @Test
+        void a_due_timer_is_not_dispatched_while_the_supplier_returns_false_and_fires_once_it_returns_true() {
+            String orderId = "order-timers-enabled";
+            SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
+            CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
+            CommandDispatcher<OrderCommand> dispatcher = issued::add;
+            AtomicBoolean timersEnabled = new AtomicBoolean(false);
+            run("timers-enabled-gating", stateStore, dispatcher, timersEnabled::get).waitUntilStarted();
+
+            write(orderId, new OrderPlaced(UUID.randomUUID().toString(), orderId));
+
+            // The timeout is short and the poller ticks fast, so several polls elapse with the timer due; none of them
+            // may dispatch while the supplier stays false.
+            await().pollDelay(SHORT_PAYMENT_TIMEOUT.multipliedBy(3)).atMost(5, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(issued).isEmpty());
+
+            timersEnabled.set(true);
+
+            await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> assertThat(issued).containsExactly(new CancelOrder(orderId)));
         }
     }
 }

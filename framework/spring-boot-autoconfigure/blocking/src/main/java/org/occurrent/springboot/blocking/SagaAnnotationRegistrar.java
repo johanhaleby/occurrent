@@ -31,6 +31,7 @@ import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
@@ -46,6 +47,7 @@ import java.util.Set;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
 
 /**
  * Registers {@code @Saga} factory methods: subscribes the saga to its events, materializes per-instance state, dispatches
@@ -106,9 +108,19 @@ class SagaAnnotationRegistrar {
         }
 
         startPositionSupport.applyStartupWorkarounds();
-        SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config);
+        SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id));
         sagaSubscriptions.add(sagaSubscription);
         publishSagaInstances(id, sagaSubscription);
+    }
+
+    // A saga must not issue commands while its own event subscription is not running, which is what
+    // occurrent.subscription.mode=manual leaves it as until the application resumes it. A model with no life cycle
+    // cannot answer, so those keep firing timers as before.
+    private static BooleanSupplier timersEnabledFor(Subscribable subscribable, String subscriptionId) {
+        if (subscribable instanceof SubscriptionModelLifeCycle lifeCycle) {
+            return () -> lifeCycle.isRunning(subscriptionId);
+        }
+        return () -> true;
     }
 
     /**

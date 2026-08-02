@@ -180,6 +180,37 @@ class DomainEventFeedTest {
     }
 
     @Test
+    void catch_up_of_a_single_id_catches_up_only_that_projection() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Integer> firstRepo = new ConcurrentHashMap<>();
+        ConcurrentHashMap<String, Integer> secondRepo = new ConcurrentHashMap<>();
+        feed.register("first", projection(), ViewStateRepository.create(firstRepo::get, firstRepo::put));
+        feed.register("second", projection(), ViewStateRepository.create(secondRepo::get, secondRepo::put));
+
+        feed.catchUp("first");
+        feed.accept(new Counted("live"));
+
+        // "first" was caught up and went live, so it saw the live event on top of its (empty) history.
+        assertThat(firstRepo.get("counter")).isEqualTo(1);
+        // "second" was never caught up, so it is still buffering and has not folded anything yet.
+        assertThat(secondRepo).isEmpty();
+    }
+
+    @Test
+    void catch_up_of_an_unregistered_id_throws() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+
+        Throwable thrown = catchThrowable(() -> feed.catchUp("missing"));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("missing").hasMessageContaining("No projection");
+    }
+
+    @Test
     void registering_two_projections_with_different_ids_does_not_throw() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();

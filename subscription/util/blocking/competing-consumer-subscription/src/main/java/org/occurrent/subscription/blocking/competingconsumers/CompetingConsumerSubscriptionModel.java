@@ -280,7 +280,11 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             logDebug("Successfully registered CompetingConsumer subscription (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
-            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Running()));
+            // Winning the lock while stopped records the consumer as paused rather than running, the same way every
+            // other subscription model registers into its paused collection when it is not running. The delegate has
+            // already parked the subscription itself, so there is nothing to pause here, only state to agree with.
+            CompetingConsumerState state = stoppedByUser.get() ? new CompetingConsumerState.Paused(true) : new CompetingConsumerState.Running();
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, state));
         } else {
             logDebug("CompetingConsumer already registered, overriding to Waiting (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Waiting(() -> {

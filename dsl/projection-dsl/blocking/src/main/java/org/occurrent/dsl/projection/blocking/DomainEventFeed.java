@@ -163,4 +163,22 @@ public final class DomainEventFeed<E> {
             feed.catchUp();
         }
     }
+
+    /**
+     * Run the one-time catch-up of the single projection registered under {@code id}. Use this instead of
+     * {@link #catchUpAll()} when a projection is registered well after the others on this feed already went live, so
+     * that catching it up does not re-run the catch-up of a projection that already ran it.
+     *
+     * @throws IllegalArgumentException if no projection with that id is registered on this feed
+     */
+    public void catchUp(String id) {
+        Objects.requireNonNull(id, "id cannot be null");
+        for (CatchupProjectionFeed<E> feed : feeds) {
+            if (feed.id().equals(id)) {
+                feed.catchUp();
+                return;
+            }
+        }
+        throw new IllegalArgumentException("No projection with id '" + id + "' is registered on this feed.");
+    }
 }
