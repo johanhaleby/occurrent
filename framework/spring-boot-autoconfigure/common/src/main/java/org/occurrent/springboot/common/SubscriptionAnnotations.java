@@ -343,11 +343,6 @@ public final class SubscriptionAnnotations {
     }
 
     /**
-     * Decide whether a subscription should block until it has started, given whether it replays history and its
-     * configured {@link StartupMode}. Shared verbatim by the blocking and reactive annotation processors, whose
-     * start-position handling otherwise diverges.
-     */
-    /**
      * Whether a registrar should wait for a subscription to start at all. Under {@link SubscriptionMode#MANUAL} nothing
      * starts until the application says so, so waiting would block until it times out no matter what
      * {@link StartupMode} the annotation asked for.
@@ -359,6 +354,11 @@ public final class SubscriptionAnnotations {
         return applicationContext.getBean(OccurrentProperties.class).getSubscription().resolveMode() == SubscriptionMode.AUTO;
     }
 
+    /**
+     * Decide whether a subscription should block until it has started, given whether it replays history and its
+     * configured {@link StartupMode}. Shared verbatim by the blocking and reactive annotation processors, whose
+     * start-position handling otherwise diverges.
+     */
     public static boolean shouldWaitUntilStarted(boolean replaysHistory, StartupMode startupMode) {
         return switch (startupMode) {
             // A subscription that replays history may have a lot to read, so by default it starts in the background.

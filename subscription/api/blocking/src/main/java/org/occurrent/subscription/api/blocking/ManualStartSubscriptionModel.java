@@ -174,6 +174,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      */
     @Override
     public void pauseSubscription(String subscriptionId) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
         if (isWithheld(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't running, it is registered but has not been started.");
         }
@@ -185,6 +186,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
         forget(subscriptionId);
         delegate.cancelSubscription(subscriptionId);
     }

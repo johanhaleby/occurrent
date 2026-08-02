@@ -16,7 +16,6 @@
 
 package org.occurrent.springboot.reactor;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;

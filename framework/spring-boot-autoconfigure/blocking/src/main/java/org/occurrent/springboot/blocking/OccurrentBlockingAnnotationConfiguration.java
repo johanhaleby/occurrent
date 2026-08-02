@@ -20,7 +20,6 @@ import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
