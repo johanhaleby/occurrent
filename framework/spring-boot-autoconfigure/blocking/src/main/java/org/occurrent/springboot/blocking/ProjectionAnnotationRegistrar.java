@@ -196,13 +196,18 @@ class ProjectionAnnotationRegistrar {
         pushModels.add(model);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(model, converter) : ProjectionRunner.agnostic(model, converter);
+        // Deliberately not SubscriptionAnnotations.shouldWaitUntilStarted, which maps DEFAULT to "background if it
+        // replays history". A push catch-up always replays from the beginning, so that would silently move every
+        // existing push projection off the startup path. Only an explicit BACKGROUND does that here.
+        boolean waitUntilStarted = annotation.startupMode() != StartupMode.BACKGROUND;
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)) {
-            // The catch-up replay runs here, synchronously, then hands over to the live push feed.
-            runner.project(id, projection, materializedView);
+            // With waitUntilStarted the catch-up replay finishes here before handing over to the live push feed;
+            // without it the replay runs on its own thread and this returns straight away.
+            runner.project(id, projection, materializedView, null, waitUntilStarted);
         } else {
             // This feed bypasses the SubscriptionModel bean entirely, so manual mode's own withholding never reaches
             // it. Defer the same call instead, to run once the application starts this projection itself.
-            applicationContext.getBean(ManualStartProjections.class).register(id, () -> runner.project(id, projection, materializedView));
+            applicationContext.getBean(ManualStartProjections.class).register(id, () -> runner.project(id, projection, materializedView, null, waitUntilStarted));
         }
     }
 
@@ -213,8 +218,8 @@ class ProjectionAnnotationRegistrar {
             throw new IllegalArgumentException("@Projection '%s' cannot combine source=PUSH with mode=SYNCHRONOUS: a push feed is asynchronous.".formatted(id));
         }
         if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
-                || annotation.resumeBehavior() != ResumeBehavior.DEFAULT || annotation.startupMode() != StartupMode.DEFAULT) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the catch-up always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
+                || annotation.resumeBehavior() != ResumeBehavior.DEFAULT) {
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH cannot set startAt, startAtGlobalPosition or resumeBehavior: the catch-up always replays from the beginning and live-resume is the broker's responsibility. startupMode is supported, so use startupMode = BACKGROUND to keep that replay off the startup path.".formatted(id));
         }
         if (!(descriptor instanceof Projection<?, ?, ?> raw)) {
             throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be catch-up-replayed in position order.".formatted(id));

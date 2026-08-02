@@ -65,14 +65,18 @@ class ProjectionAnnotationValidationTest {
     }
 
     @Test
-    void push_projection_with_catch_up_start_knobs_fails_fast() {
+    void push_projection_that_sets_a_start_position_fails_fast_and_points_at_startup_mode() {
         runner.withUserConfiguration(FeedConfiguration.class, PushStartKnobsConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
             assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("does not support the catch-up start knobs");
+                    .hasMessageContaining("cannot set startAt, startAtGlobalPosition or resumeBehavior")
+                    // startupMode is no longer in that list, and the message has to say so, since keeping a large
+                    // replay off the startup path is the reason someone reaches for it here.
+                    .hasMessageContaining("startupMode = BACKGROUND");
         });
     }
+
 
     @Test
     void push_projection_returning_a_dcb_projection_fails_fast() {
