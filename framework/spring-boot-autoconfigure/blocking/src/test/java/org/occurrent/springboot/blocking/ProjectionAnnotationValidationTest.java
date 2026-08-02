@@ -24,7 +24,9 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Mode;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Source;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.occurrent.annotation.StartPosition;
+import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
@@ -66,7 +68,9 @@ class ProjectionAnnotationValidationTest {
 
     @Test
     void push_projection_that_sets_a_start_position_fails_fast_and_points_at_startup_mode() {
-        runner.withUserConfiguration(FeedConfiguration.class, PushStartKnobsConfiguration.class).run(context -> {
+        // Deliberately the PushSubscriptionModel feed, not the DomainEventFeed one: this message tells the reader to
+        // use startupMode = BACKGROUND, and only that feed honours it.
+        runner.withUserConfiguration(PushModelFeedConfiguration.class, PushStartKnobsConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
             assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
                     .isInstanceOf(IllegalArgumentException.class)
@@ -77,6 +81,16 @@ class ProjectionAnnotationValidationTest {
         });
     }
 
+
+    @Test
+    void a_domain_feed_push_projection_that_sets_startup_mode_is_rejected_rather_than_ignored() {
+        runner.withUserConfiguration(FeedConfiguration.class, DomainFeedBackgroundConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot set startupMode when its feed is a DomainEventFeed");
+        });
+    }
 
     @Test
     void push_projection_returning_a_dcb_projection_fails_fast() {
@@ -174,6 +188,29 @@ class ProjectionAnnotationValidationTest {
         @Bean
         PushStartKnobsProjection pushStartKnobsProjection() {
             return new PushStartKnobsProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PushModelFeedConfiguration {
+        @Bean
+        PushSubscriptionModel pushModel() {
+            return new PushSubscriptionModel();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class DomainFeedBackgroundConfiguration {
+        @Bean
+        DomainFeedBackgroundProjection domainFeedBackgroundProjection() {
+            return new DomainFeedBackgroundProjection();
+        }
+    }
+
+    static class DomainFeedBackgroundProjection {
+        @Projection(id = "domain-feed-background", source = Source.PUSH, startupMode = StartupMode.BACKGROUND)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
         }
     }
 

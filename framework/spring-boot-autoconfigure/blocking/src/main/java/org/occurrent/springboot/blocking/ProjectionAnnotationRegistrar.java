@@ -232,6 +232,13 @@ class ProjectionAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerDomainPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, DomainEventFeed<?> feedBean) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
+        if (annotation.startupMode() != StartupMode.DEFAULT) {
+            // validatePushDescriptor stopped rejecting startupMode when the PushSubscriptionModel path learned to
+            // honour it, and that guard is shared with this one. Reject it here rather than accept it and do nothing,
+            // which is the failure mode the whole change was about. Lifted once a domain feed can catch up in the
+            // background too.
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH cannot set startupMode when its feed is a DomainEventFeed. Only a PushSubscriptionModel feed can keep its catch-up off the startup path so far.".formatted(id));
+        }
         MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);

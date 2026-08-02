@@ -32,6 +32,8 @@ import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.ReplayFilters;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
@@ -87,6 +89,8 @@ import java.util.stream.Stream;
  */
 @NullMarked
 public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
+
+    private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
 
     // Long enough that a replay noticing the shutdown at its next event always makes it, short enough that a parked
     // fold cannot hold a closing context open. Matches how SagaSubscription bounds its own poller shutdown.
@@ -189,6 +193,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
                 // Releasing here rather than in waitUntilStarted is deliberate twice over: a caller that never waits
                 // still gets the release, and because it runs before the task completes, a caller that does wait is
                 // guaranteed the id is free by the time it returns, so it can re-subscribe under the same id.
+                // Logged, not just rethrown. Under startupMode = BACKGROUND nobody calls waitUntilStarted, so without
+                // this the failure reaches no one: no replay, no live events, and an application that looks healthy.
+                // The reactor twin has logged here for the same reason since it was written.
+                log.error("Catch-up failed for subscription {}, releasing its registration on the live feed. It received "
+                        + "no replay and will receive no live events until it is subscribed again.", subscriptionId, e);
                 forget(subscriptionId);
                 liveFeed.cancelSubscription(subscriptionId);
                 throw e;
