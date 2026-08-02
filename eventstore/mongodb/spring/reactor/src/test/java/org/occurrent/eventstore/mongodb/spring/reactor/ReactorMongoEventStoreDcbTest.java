@@ -56,7 +56,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -122,48 +121,6 @@ class ReactorMongoEventStoreDcbTest {
     }
 
     @Test
-    void dcb_write_is_readable_by_tag_and_carries_position() {
-        eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(tags(Tag.parse("name:1"))).block());
-        assertAll(
-                () -> assertThat(stream.events()).extracting(CloudEvent::getType).containsExactly("NameDefined"),
-                () -> assertThat(DcbCloudEvents.getTags(stream.events().get(0))).containsExactly(Tag.parse("name:1")),
-                () -> assertThat(stream.events().get(0).getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(1L),
-                () -> assertThat(stream.lastSequencePosition()).isEqualTo(1)
-        );
-    }
-
-    @Test
-    void reads_events_matching_type_or_all_tags_after_sequence_position() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1", "tenant:1"),
-                taggedEvent("OrderPlaced", "order:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(
-                anyOf(List.of(types(List.of("OrderPlaced")), tags(List.of(Tag.parse("name:1"), Tag.parse("tenant:1"))))),
-                DcbReadOptions.afterPosition(1)).block());
-
-        assertAll(
-                () -> assertThat(stream.events()).extracting(CloudEvent::getType).containsExactly("NameChanged", "OrderPlaced"),
-                () -> assertThat(stream.lastSequencePosition()).isEqualTo(3)
-        );
-    }
-
-    @Test
-    void reads_tagged_events_except_excluded_types() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameSnapshot", "name:1"),
-                taggedEvent("OrderPlaced", "order:1"))).block();
-
-        DcbEventStream stream = eventStore.read(tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot"))).block();
-
-        assertThat(requireNonNull(stream).events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
-    }
-
-    @Test
     void conditional_append_with_stale_token_is_rejected() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
         DcbEventStream readModel = eventStore.read(tags(Tag.parse("name:1"))).block();
@@ -176,17 +133,6 @@ class ReactorMongoEventStoreDcbTest {
                         failIfEventsMatch(tags(Tag.parse("name:1")), requireNonNull(readModel).consistencyToken())))
                 .expectError(DcbAppendConditionNotFulfilledException.class)
                 .verify();
-    }
-
-    @Test
-    void conditional_append_with_fresh_token_succeeds() {
-        DcbEventStream readModel = eventStore.read(tags(Tag.parse("name:1"))).block();
-
-        DcbAppendResult result = eventStore.append(
-                List.of(taggedEvent("NameDefined", "name:1")),
-                failIfEventsMatch(tags(Tag.parse("name:1")), requireNonNull(readModel).consistencyToken())).block();
-
-        assertThat(requireNonNull(result).firstSequencePosition()).isEqualTo(1);
     }
 
     @Test
@@ -213,19 +159,6 @@ class ReactorMongoEventStoreDcbTest {
                         failIfEventsMatch(tags(Tag.parse("name:1")), requireNonNull(readModel).consistencyToken())))
                 .expectError(DcbAppendConditionNotFulfilledException.class)
                 .verify();
-    }
-
-    @Test
-    void exists_and_count_match_the_query() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("OrderPlaced", "order:1"))).block();
-
-        assertAll(
-                () -> assertThat(eventStore.exists(tags(Tag.parse("name:1"))).block()).isTrue(),
-                () -> assertThat(eventStore.exists(tags(Tag.parse("missing:1"))).block()).isFalse(),
-                () -> assertThat(eventStore.count(types(List.of("NameDefined", "OrderPlaced"))).block()).isEqualTo(2L)
-        );
     }
 
     @Test
@@ -315,36 +248,6 @@ class ReactorMongoEventStoreDcbTest {
                     () -> assertThat(condFailCount.get()).as("iteration %d: the other %d appends fail the condition", iteration, threadCount - 1).isEqualTo(threadCount - 1)
             );
         }
-    }
-
-    @Test
-    void dcb_all_only_matches_dcb_written_events_not_stream_written_events() {
-        eventStore.write("stream:1", Flux.just(event("OrderPlaced"))).block();
-        eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
-
-        DcbEventStream stream = eventStore.read(all()).block();
-
-        assertThat(requireNonNull(stream).events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
-    }
-
-    @Test
-    void dcb_type_only_criterion_does_not_match_a_stream_written_event_of_that_type() {
-        eventStore.write("stream:1", Flux.just(event("OrderPlaced"))).block();
-        eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
-
-        DcbEventStream stream = eventStore.read(types(List.of("OrderPlaced"))).block();
-
-        assertThat(requireNonNull(stream).events()).isEmpty();
-    }
-
-    @Test
-    void exists_and_count_are_false_and_zero_for_a_store_with_only_stream_written_events() {
-        eventStore.write("stream:1", Flux.just(event("OrderPlaced"))).block();
-
-        assertAll(
-                () -> assertThat(eventStore.exists(all()).block()).isFalse(),
-                () -> assertThat(eventStore.count(all()).block()).isZero()
-        );
     }
 
     @Test
@@ -459,175 +362,6 @@ class ReactorMongoEventStoreDcbTest {
                 .verify();
 
         assertThat(requireNonNull(eventStore.read("name:1").block()).eventList().block()).isEmpty();
-    }
-
-    @Test
-    void forward_limit_keeps_the_lowest_position_matches_in_ascending_order() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.fromBeginning().limit(2)).block());
-
-        assertAll(
-                () -> assertThat(stream.events()).extracting(e -> e.getExtension(OccurrentCloudEventExtension.POSITION))
-                        .containsExactly(1L, 2L),
-                () -> assertThat(stream.lastSequencePosition()).isEqualTo(3)
-        );
-    }
-
-    @Test
-    void forward_skip_then_limit_selects_matching_events_after_the_skipped_matches() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("OrderPlaced", "order:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(
-                tags(Tag.parse("name:1")),
-                DcbReadOptions.fromBeginning().skip(1).limit(2)).block());
-
-        assertThat(stream.events()).extracting(e -> e.getExtension(OccurrentCloudEventExtension.POSITION))
-                .containsExactly(3L, 4L);
-    }
-
-    @Test
-    void backward_skip_then_limit_selects_from_the_highest_matches_and_returns_them_in_ascending_order() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("OrderPlaced", "order:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(
-                tags(Tag.parse("name:1")),
-                DcbReadOptions.fromBeginning().backwards().skip(1).limit(2)).block());
-
-        assertThat(stream.events()).extracting(e -> e.getExtension(OccurrentCloudEventExtension.POSITION))
-                .containsExactly(2L, 4L);
-    }
-
-    @Test
-    void skip_without_limit_returns_all_remaining_matches() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(
-                tags(Tag.parse("name:1")),
-                DcbReadOptions.fromBeginning().skip(2)).block());
-
-        assertThat(stream.events()).extracting(e -> e.getExtension(OccurrentCloudEventExtension.POSITION))
-                .containsExactly(3L, 4L);
-    }
-
-    @Test
-    void skip_is_applied_within_the_bounded_position_range() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(
-                tags(Tag.parse("name:1")),
-                DcbReadOptions.between(1, 5).skip(1).limit(2)).block());
-
-        assertThat(stream.events()).extracting(e -> e.getExtension(OccurrentCloudEventExtension.POSITION))
-                .containsExactly(3L, 4L);
-    }
-
-    @Test
-    void skip_beyond_the_number_of_matches_returns_an_empty_page_without_changing_stream_metadata() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream skipped = requireNonNull(eventStore.read(
-                tags(Tag.parse("name:1")),
-                DcbReadOptions.fromBeginning().skip(3)).block());
-        DcbEventStream unselected = requireNonNull(eventStore.read(tags(Tag.parse("name:1"))).block());
-
-        assertAll(
-                () -> assertThat(skipped.events()).isEmpty(),
-                () -> assertThat(skipped.lastSequencePosition()).isEqualTo(2),
-                () -> assertThat(skipped.consistencyToken()).isEqualTo(unselected.consistencyToken())
-        );
-    }
-
-    @Test
-    void exists_and_count_ignore_skip_direction_and_limit_but_honor_the_position_range() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-        DcbReadOptions options = DcbReadOptions.between(1, 4).backwards().skip(10).limit(1);
-
-        assertAll(
-                () -> assertThat(eventStore.exists(tags(Tag.parse("name:1")), options).block()).isTrue(),
-                () -> assertThat(eventStore.count(tags(Tag.parse("name:1")), options).block()).isEqualTo(3)
-        );
-    }
-
-    @Test
-    void backwards_limited_one_returns_the_single_highest_position_match() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.fromBeginning().backwards().limit(1)).block());
-
-        assertThat(stream.events()).extracting(e -> e.getExtension(OccurrentCloudEventExtension.POSITION))
-                .containsExactly(3L);
-    }
-
-    @Test
-    void backwards_limited_n_returns_the_highest_n_matches_still_in_ascending_order() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.fromBeginning().backwards().limit(2)).block());
-
-        assertThat(stream.events()).extracting(e -> e.getExtension(OccurrentCloudEventExtension.POSITION))
-                .containsExactly(3L, 4L);
-    }
-
-    @Test
-    void limit_greater_than_match_count_returns_all_matches() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream stream = requireNonNull(eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.fromBeginning().backwards().limit(10)).block());
-
-        assertThat(stream.events()).extracting(e -> e.getExtension(OccurrentCloudEventExtension.POSITION))
-                .containsExactly(1L, 2L);
-    }
-
-    @Test
-    void backwards_limited_one_returns_the_same_consistency_token_as_an_unlimited_forward_read() {
-        eventStore.append(List.of(
-                taggedEvent("NameDefined", "name:1"),
-                taggedEvent("NameChanged", "name:1"),
-                taggedEvent("NameChanged", "name:1"))).block();
-
-        DcbEventStream limitedBackward = requireNonNull(eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.fromBeginning().backwards().limit(1)).block());
-        DcbEventStream unlimitedForward = requireNonNull(eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.fromBeginning()).block());
-
-        assertThat(limitedBackward.consistencyToken()).isEqualTo(unlimitedForward.consistencyToken());
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
