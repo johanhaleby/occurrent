@@ -24,6 +24,8 @@ import org.occurrent.filter.Filter;
 
 import java.util.function.Predicate;
 
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
+
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 
 /**
@@ -46,19 +48,31 @@ public final class SubscriptionFilterMatcher {
      * @return A predicate over cloud events.
      */
     public static Predicate<CloudEvent> matcherFor(@Nullable SubscriptionFilter filter) {
+        return matcherFor(filter, DataFieldReader.refusing());
+    }
+
+    /**
+     * Build a predicate that decides whether a cloud event matches the supplied subscription filter, reading a data
+     * payload field through the supplied reader when the filter asks for one.
+     *
+     * @param filter          The subscription filter, or {@code null} to match every event.
+     * @param dataFieldReader Reads a field out of an event's payload. {@link DataFieldReader#refusing()} to refuse.
+     * @return A predicate over cloud events.
+     */
+    public static Predicate<CloudEvent> matcherFor(@Nullable SubscriptionFilter filter, DataFieldReader dataFieldReader) {
         switch (filter) {
             case null -> {
-                return cloudEvent -> matchesFilter(cloudEvent, Filter.all());
+                return cloudEvent -> matchesFilter(cloudEvent, Filter.all(), dataFieldReader);
             }
             case StreamSubscriptionFilter streamSubscriptionFilter -> {
                 Filter f = streamSubscriptionFilter.filter();
-                return cloudEvent -> matchesFilter(cloudEvent, f);
+                return cloudEvent -> matchesFilter(cloudEvent, f, dataFieldReader);
             }
             case AgnosticSubscriptionFilter agnosticSubscriptionFilter -> {
                 // Capability-agnostic delivery: match only the plain Filter, with no capability guard, so both stream and
                 // DCB events are delivered. A plain Filter (no CapabilityFilter) matches events of every capability.
                 Filter f = agnosticSubscriptionFilter.filter();
-                return cloudEvent -> matchesFilter(cloudEvent, f);
+                return cloudEvent -> matchesFilter(cloudEvent, f, dataFieldReader);
             }
             case DcbSubscriptionFilter dcbSubscriptionFilter -> {
                 // Requires isDcbEvent (the DCB tags extension) rather than a positive position, since with

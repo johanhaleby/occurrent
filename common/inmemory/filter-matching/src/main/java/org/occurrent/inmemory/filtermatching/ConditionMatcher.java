@@ -23,11 +23,14 @@ import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandConditionName;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.URI;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 import static java.util.function.Predicate.isEqual;
@@ -43,18 +46,27 @@ public class ConditionMatcher {
 
     private static final Set<String> ATTRIBUTE_NAMES = Set.of(SPEC_VERSION, ID, TYPE, TIME, SOURCE, SUBJECT, DATA_SCHEMA, DATA_CONTENT_TYPE);
 
+    // Marks a data path that led nowhere, so every condition answers "no match" for it without going through any
+    // comparison logic. Kept distinct from null, which still means "this attribute or extension is absent" and
+    // keeps behaving exactly as before (see matchesRange).
+    private static final Object ABSENT = new Object();
+
     public static <T> boolean matchesCondition(CloudEvent cloudEvent, String fieldName, Condition<T> condition) {
+        return matchesCondition(cloudEvent, fieldName, condition, DataFieldReader.refusing());
+    }
+
+    public static <T> boolean matchesCondition(CloudEvent cloudEvent, String fieldName, Condition<T> condition, DataFieldReader dataFieldReader) {
         return switch (condition) {
-            case MultiOperandCondition<T> operation -> matchesMultiOperandCondition(cloudEvent, fieldName, operation);
-            case SingleOperandCondition<T> singleOperandCondition -> matchesSingleOperandCondition(cloudEvent, fieldName, singleOperandCondition);
-            case Condition.InOperandCondition<T> inOperandCondition -> matchesInOperandCondition(cloudEvent, fieldName, inOperandCondition);
+            case MultiOperandCondition<T> operation -> matchesMultiOperandCondition(cloudEvent, fieldName, operation, dataFieldReader);
+            case SingleOperandCondition<T> singleOperandCondition -> matchesSingleOperandCondition(cloudEvent, fieldName, singleOperandCondition, dataFieldReader);
+            case Condition.InOperandCondition<T> inOperandCondition -> matchesInOperandCondition(cloudEvent, fieldName, inOperandCondition, dataFieldReader);
         };
     }
 
-    private static <T> boolean matchesMultiOperandCondition(CloudEvent cloudEvent, String fieldName, MultiOperandCondition<T> operation) {
+    private static <T> boolean matchesMultiOperandCondition(CloudEvent cloudEvent, String fieldName, MultiOperandCondition<T> operation, DataFieldReader dataFieldReader) {
             Condition.MultiOperandConditionName operationName = operation.operationName();
             List<Condition<T>> operations = operation.operations();
-            Stream<Boolean> filters = operations.stream().map(c -> matchesCondition(cloudEvent, fieldName, c));
+            Stream<Boolean> filters = operations.stream().map(c -> matchesCondition(cloudEvent, fieldName, c, dataFieldReader));
             return switch (operationName) {
                 case AND -> filters.allMatch(isEqual(true));
                 case OR -> filters.anyMatch(isEqual(true));
@@ -62,32 +74,76 @@ public class ConditionMatcher {
             };
     }
 
-    private static <T> boolean matchesSingleOperandCondition(CloudEvent cloudEvent, String fieldName, SingleOperandCondition<T> singleOperandCondition) {
+    private static <T> boolean matchesSingleOperandCondition(CloudEvent cloudEvent, String fieldName, SingleOperandCondition<T> singleOperandCondition, DataFieldReader dataFieldReader) {
             T expected = singleOperandCondition.operand();
             SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
-            Object actual = extractValue(cloudEvent, fieldName);
+            Object actual = extractValue(cloudEvent, fieldName, dataFieldReader);
+            if (actual == ABSENT) {
+                return false;
+            }
             if (singleOperandConditionName == EQ) {
-                return Objects.equals(actual, expected);
+                return anyElementMatches(actual, element -> Objects.equals(element, expected));
             } else if (singleOperandConditionName == NE) {
-                return !Objects.equals(actual, expected);
+                // "No element equals" rather than "any element differs", the same reading MongoDB gives an array.
+                // Not pinned by the conformance suite, which only exercises EQ and the range operators on an array.
+                return !anyElementMatches(actual, element -> Objects.equals(element, expected));
             } else {
-                Comparable<Object> expectedComparable = toComparable(expected, "Expected value must implement " + Comparable.class.getName() + " in order to be used in Filter's");
-                Comparable<Object> actualComparable = toComparable(actual, "Value in CloudEvent must implement " + Comparable.class.getName() + " in order to be used in Filter's");
-                int comparisonResult = actualComparable.compareTo(expectedComparable);
-                return switch (singleOperandConditionName) {
-                    case LT -> comparisonResult < 0;
-                    case GT -> comparisonResult > 0;
-                    case LTE -> comparisonResult <= 0;
-                    case GTE -> comparisonResult >= 0;
-                    default -> throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
-                };
+                return anyElementMatches(actual, element -> matchesRange(element, expected, singleOperandConditionName));
             }
     }
 
-    private static <T> boolean matchesInOperandCondition(CloudEvent cloudEvent, String fieldName, Condition.InOperandCondition<T> inOperandCondition) {
-            Object actual = extractValue(cloudEvent, fieldName);
+    private static <T> boolean matchesInOperandCondition(CloudEvent cloudEvent, String fieldName, Condition.InOperandCondition<T> inOperandCondition, DataFieldReader dataFieldReader) {
+            Object actual = extractValue(cloudEvent, fieldName, dataFieldReader);
+            if (actual == ABSENT) {
+                return false;
+            }
             Collection<T> operand = inOperandCondition.operand();
-            return operand.stream().anyMatch(it -> Objects.equals(it, actual));
+            return anyElementMatches(actual, element -> operand.stream().anyMatch(it -> Objects.equals(it, element)));
+    }
+
+    // A collection value matches a condition if any element does, the same rule MongoDB applies to an array field.
+    private static boolean anyElementMatches(Object actual, Predicate<Object> matchesElement) {
+        if (actual instanceof Collection<?> collection) {
+            return collection.stream().anyMatch(matchesElement);
+        }
+        return matchesElement.test(actual);
+    }
+
+    private static <T> boolean matchesRange(Object actual, T expected, SingleOperandConditionName singleOperandConditionName) {
+        Comparable<Object> expectedComparable = toComparable(expected, "Expected value must implement " + Comparable.class.getName() + " in order to be used in Filter's");
+        int comparisonResult;
+        if (actual instanceof Number actualNumber && expected instanceof Number expectedNumber) {
+            // Compare by value rather than by Java type, so an Integer field matches gt(10) the same way a Double one does.
+            comparisonResult = toBigDecimal(actualNumber).compareTo(toBigDecimal(expectedNumber));
+        } else {
+            Comparable<Object> actualComparable = toComparable(actual, "Value in CloudEvent must implement " + Comparable.class.getName() + " in order to be used in Filter's");
+            try {
+                comparisonResult = actualComparable.compareTo(expectedComparable);
+            } catch (ClassCastException e) {
+                // Both sides are Comparable, just not with each other, e.g. a String compared to an Integer.
+                // A type mismatch means no match, not a crash.
+                return false;
+            }
+        }
+        return switch (singleOperandConditionName) {
+            case LT -> comparisonResult < 0;
+            case GT -> comparisonResult > 0;
+            case LTE -> comparisonResult <= 0;
+            case GTE -> comparisonResult >= 0;
+            default -> throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
+        };
+    }
+
+    private static BigDecimal toBigDecimal(Number number) {
+        if (number instanceof BigDecimal bigDecimal) {
+            return bigDecimal;
+        } else if (number instanceof BigInteger bigInteger) {
+            return new BigDecimal(bigInteger);
+        } else if (number instanceof Double || number instanceof Float) {
+            return BigDecimal.valueOf(number.doubleValue());
+        } else {
+            return BigDecimal.valueOf(number.longValue());
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -98,10 +154,10 @@ public class ConditionMatcher {
         return (Comparable<Object>) operand;
     }
 
-    private static Object extractValue(CloudEvent cloudEvent, String fieldName) {
-        // TODO data if content-type is json
+    private static Object extractValue(CloudEvent cloudEvent, String fieldName, DataFieldReader dataFieldReader) {
         if (fieldName.startsWith(DATA + ".")) {
-            throw new IllegalArgumentException("Currently, it's not possible to query the data field from in-memory event stores/subscriptions. The good thing is that Occurrent is open-source, so feel free to contribute :) (https://github.com/johanhaleby/occurrent/issues/58).");
+            String path = fieldName.substring((DATA + ".").length());
+            return dataFieldReader.read(cloudEvent, path).orElse(ABSENT);
         }
 
         Object object = ATTRIBUTE_NAMES.contains(fieldName) ? cloudEvent.getAttribute(fieldName) : cloudEvent.getExtension(fieldName);

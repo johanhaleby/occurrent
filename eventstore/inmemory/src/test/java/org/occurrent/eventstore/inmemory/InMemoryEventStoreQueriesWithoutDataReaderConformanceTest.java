@@ -1,0 +1,35 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.eventstore.inmemory;
+
+import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
+import org.occurrent.tck.eventstore.blocking.EventStoreQueriesConformance;
+
+/**
+ * The same suite against a store built with no {@code DataFieldReader}, which is what a caller gets by default.
+ * <p>
+ * This exists so the suite's other branch is exercised by a real store. Every store shipping with Occurrent can now
+ * filter on a payload, and without this the assertion that a store declining the capability must refuse rather than
+ * quietly match nothing would only ever run against an implementation outside this repository.
+ */
+class InMemoryEventStoreQueriesWithoutDataReaderConformanceTest extends EventStoreQueriesConformance {
+
+    @Override
+    protected EventStoreFixture createFixture() {
+        return new InMemoryEventStoreConformanceFixture(false);
+    }
+}

@@ -25,6 +25,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>filter-matching</module>
+        <module>filter-matching-jackson</module>
     </modules>
 
     <artifactId>inmemory</artifactId>

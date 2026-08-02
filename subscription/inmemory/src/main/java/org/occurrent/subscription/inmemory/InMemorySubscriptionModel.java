@@ -26,6 +26,7 @@ import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -58,6 +59,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
 
     private volatile boolean shutdown = false;
     private volatile boolean running = true;
+    private final DataFieldReader dataFieldReader;
 
 
     /**
@@ -93,6 +95,25 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
      * @param queue                The blocking queue to use for this instance.
      */
     public InMemorySubscriptionModel(ExecutorService cloudEventDispatcher, RetryStrategy retryStrategy, Supplier<BlockingQueue<CloudEvent>> queue) {
+        this(cloudEventDispatcher, retryStrategy, queue, DataFieldReader.refusing());
+    }
+
+    /**
+     * Create an instance of {@link InMemorySubscriptionModel} that can answer a subscription filter on a
+     * {@code data} payload field by reading it through the supplied reader. Without one, such a filter is refused
+     * rather than silently matching nothing.
+     *
+     * @param cloudEventDispatcher The {@link ExecutorService} that will be used when dispatching cloud events to subscribers
+     * @param retryStrategy        The retry strategy
+     * @param queue                The blocking queue to use for this instance.
+     * @param dataFieldReader      Reads a field out of an event's payload. Occurrent ships a Jackson-backed one in
+     *                             {@code occurrent-common-inmemory-filter-matching-jackson}.
+     */
+    public InMemorySubscriptionModel(ExecutorService cloudEventDispatcher, RetryStrategy retryStrategy, Supplier<BlockingQueue<CloudEvent>> queue, DataFieldReader dataFieldReader) {
+        if (dataFieldReader == null) {
+            throw new IllegalArgumentException(DataFieldReader.class.getSimpleName() + " cannot be null");
+        }
+        this.dataFieldReader = dataFieldReader;
         if (cloudEventDispatcher == null) {
             throw new IllegalArgumentException("cloudEventDispatcher cannot be null");
         } else if (retryStrategy == null) {
@@ -126,7 +147,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
             throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
         }
 
-        final Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
+        final Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter, dataFieldReader);
 
         InMemorySubscription subscription = new InMemorySubscription(subscriptionId, queueSupplier.get(), action, matcher, retryStrategy);
         subscriptions.put(subscriptionId, subscription);

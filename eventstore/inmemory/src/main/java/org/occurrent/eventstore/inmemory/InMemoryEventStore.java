@@ -62,6 +62,8 @@ import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERS
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
+
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 
 /**
@@ -86,6 +88,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     // Whether stream-written events get a global position from the same counter DCB uses, so stream and DCB events
     // share one sequence. Turn it off with withoutStreamPosition() for a STREAM-only store that wants no position.
     private final boolean streamPositionEnabled;
+
+    // Reads a field out of an event's data payload so Filter.data(..) can be answered. Refuses by default, since
+    // reading a payload means parsing it and this store has no parser. Supply one with withDataFieldReader(..).
+    private final DataFieldReader dataFieldReader;
 
     /**
      * Create an instance of {@link InMemoryEventStore}
@@ -121,9 +127,14 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     private InMemoryEventStore(Consumer<List<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled) {
+        this(listener, dcbStreamIdGenerator, streamPositionEnabled, DataFieldReader.refusing());
+    }
+
+    private InMemoryEventStore(Consumer<List<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled, DataFieldReader dataFieldReader) {
         this.listener = requireNonNull(listener, "listener cannot be null");
         this.dcbStreamIdGenerator = requireNonNull(dcbStreamIdGenerator, DcbStreamIdGenerator.class.getSimpleName() + " cannot be null");
         this.streamPositionEnabled = streamPositionEnabled;
+        this.dataFieldReader = requireNonNull(dataFieldReader, DataFieldReader.class.getSimpleName() + " cannot be null");
     }
 
     /**
@@ -131,7 +142,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * STREAM-only store, since DCB events always carry a position.
      */
     public InMemoryEventStore withoutStreamPosition() {
-        return new InMemoryEventStore(listener, dcbStreamIdGenerator, false);
+        return new InMemoryEventStore(listener, dcbStreamIdGenerator, false, dataFieldReader);
     }
 
     /**
@@ -139,7 +150,18 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * one sequence.
      */
     public InMemoryEventStore withStreamPosition() {
-        return new InMemoryEventStore(listener, dcbStreamIdGenerator, true);
+        return new InMemoryEventStore(listener, dcbStreamIdGenerator, true, dataFieldReader);
+    }
+
+    /**
+     * Returns a copy of this store that can answer {@link org.occurrent.filter.Filter#data(String, org.occurrent.condition.Condition)}
+     * by reading the supplied field reader. Without one, a data filter is refused rather than silently matching nothing.
+     * <p>
+     * Occurrent ships a Jackson-backed reader in {@code occurrent-common-inmemory-filter-matching-jackson}. As with
+     * the other withers, this returns a new empty store, so call it before writing anything.
+     */
+    public InMemoryEventStore withDataFieldReader(DataFieldReader dataFieldReader) {
+        return new InMemoryEventStore(listener, dcbStreamIdGenerator, streamPositionEnabled, dataFieldReader);
     }
 
     /**
@@ -406,7 +428,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             return allEvents()
                     .filter(event -> position(event) > afterPosition)
                     .filter(event -> position(event) <= upToPosition)
-                    .filter(event -> matchesFilter(event, filter))
+                    .filter(event -> matchesFilter(event, filter, dataFieldReader))
                     .sorted(Comparator.comparingLong(InMemoryEventStore::position))
                     .toList()
                     .stream();
@@ -508,8 +530,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         // single replaceAll call this replaced was.
         synchronized (state) {
             new ArrayList<>(state.keySet()).forEach(streamId -> state.computeIfPresent(streamId, (__, cloudEvents) -> {
-                cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
-                CopyOnWriteArrayList<CloudEvent> remaining = cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
+                cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter, dataFieldReader)).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
+                CopyOnWriteArrayList<CloudEvent> remaining = cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter, dataFieldReader))).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
                 return remaining.isEmpty() ? null : remaining;
             }));
         }
@@ -558,7 +580,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         synchronized (state) {
             snapshot = new ArrayList<>(state.values());
         }
-        Stream<CloudEvent> stream = snapshot.stream().flatMap(List::stream).filter(cloudEvent -> matchesFilter(cloudEvent, filter));
+        Stream<CloudEvent> stream = snapshot.stream().flatMap(List::stream).filter(cloudEvent -> matchesFilter(cloudEvent, filter, dataFieldReader));
 
         if (sortBy instanceof SortBy.Unsorted) {
             // Use natural ascending by default
@@ -573,7 +595,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     @Override
     public long count(Filter filter) {
         synchronized (state) {
-            return state.values().stream().mapToLong(cloudEvents -> cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).count()).reduce(0, Long::sum);
+            return state.values().stream().mapToLong(cloudEvents -> cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter, dataFieldReader)).count()).reduce(0, Long::sum);
         }
     }
 
@@ -600,7 +622,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         } else {
             StreamReadFilterValidator.validate(filter);
             Filter readFilter = StreamReadFilterToFilterMapper.map(filter);
-            eventsAfterFilter = events.stream().filter(cloudEvent -> matchesFilter(cloudEvent, readFilter)).toList();
+            eventsAfterFilter = events.stream().filter(cloudEvent -> matchesFilter(cloudEvent, readFilter, dataFieldReader)).toList();
         }
 
         if (skip == 0 && limit == Integer.MAX_VALUE) {

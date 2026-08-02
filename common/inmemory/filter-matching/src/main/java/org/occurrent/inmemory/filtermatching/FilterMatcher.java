@@ -35,16 +35,20 @@ import static org.occurrent.filter.Filter.SingleConditionFilter;
 public class FilterMatcher {
 
     public static boolean matchesFilter(CloudEvent cloudEvent, Filter filter) {
+        return matchesFilter(cloudEvent, filter, DataFieldReader.refusing());
+    }
+
+    public static boolean matchesFilter(CloudEvent cloudEvent, Filter filter, DataFieldReader dataFieldReader) {
         if (filter == null) {
             throw new IllegalArgumentException(Filter.class.getSimpleName() + " cannot be null");
         }
 
         return switch (filter) {
             case All ignored -> true;
-            case SingleConditionFilter scf -> ConditionMatcher.matchesCondition(cloudEvent, scf.fieldName(), scf.condition());
+            case SingleConditionFilter scf -> ConditionMatcher.matchesCondition(cloudEvent, scf.fieldName(), scf.condition(), dataFieldReader);
             case CapabilityFilter cpf -> matchesCapabilityFilter(cloudEvent, cpf);
             case CompositionFilter cf -> {
-                Predicate<Filter> matchingPredicate = f -> matchesFilter(cloudEvent, f);
+                Predicate<Filter> matchingPredicate = f -> matchesFilter(cloudEvent, f, dataFieldReader);
                 yield switch (cf.operator()) {
                     case AND -> cf.filters().stream().allMatch(matchingPredicate);
                     case OR -> cf.filters().stream().anyMatch(matchingPredicate);
