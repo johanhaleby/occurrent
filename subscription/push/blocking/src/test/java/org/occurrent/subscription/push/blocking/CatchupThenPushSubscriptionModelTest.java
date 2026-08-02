@@ -249,6 +249,72 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("writesPosition");
     }
 
+    @Test
+    void a_subscription_reports_running_once_it_has_handed_over_to_the_live_feed() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+
+        // Load-bearing beyond introspection: a @Saga's timer poller is gated on isRunning(id), so a model that answers
+        // false here stops that saga firing timers at all, silently and for good.
+        assertThat(model.isRunning("proj")).isTrue();
+        assertThat(model.isRunning()).isTrue();
+        assertThat(model.isPaused("proj")).isFalse();
+    }
+
+    @Test
+    void stopping_the_model_stops_delivering_the_live_feed() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        List<String> delivered = new ArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
+
+        model.stop();
+        feed.accept(cloudEvent("1", "Created"));
+
+        assertThat(delivered).isEmpty();
+    }
+
+    @Test
+    void a_paused_subscription_withholds_live_events_and_resuming_brings_it_back() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        List<String> delivered = new ArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
+
+        model.pauseSubscription("proj");
+        assertThat(model.isPaused("proj")).isTrue();
+        feed.accept(cloudEvent("1", "Created"));
+        assertThat(delivered).isEmpty();
+
+        model.resumeSubscription("proj");
+        feed.accept(cloudEvent("2", "Updated"));
+
+        // Dropped, not deferred: "1" arrived while paused and is gone, which is the documented contract (ADR 85).
+        assertThat(delivered).containsExactly("2");
+    }
+
+    @Test
+    void cancelling_a_subscription_releases_it_from_the_live_feed() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        List<String> delivered = new ArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
+
+        model.cancelSubscription("proj");
+        feed.accept(cloudEvent("1", "Created"));
+
+        assertThat(delivered).isEmpty();
+        assertThat(model.isRunning("proj")).isFalse();
+    }
+
     // --- helpers ---
 
     private static PositionOrderedReader readerThatOnEachElementPushes(List<CloudEvent> history, CloudEvent pushWhenSeen, PushSubscriptionModel feed) {

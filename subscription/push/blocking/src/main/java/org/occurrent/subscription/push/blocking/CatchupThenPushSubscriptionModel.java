@@ -26,7 +26,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
@@ -35,6 +35,8 @@ import org.occurrent.subscription.internal.ReplayFilters;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -75,12 +77,24 @@ import java.util.stream.Stream;
  * delegated per-subscription to {@link BlockingHandover}, shared with {@code CatchupProjectionFeed}.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements Subscribable {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
 
     private final PositionOrderedReader reader;
     private final PushSubscriptionModel liveFeed;
     private final @Nullable CheckpointStorage catchupMarker;
     private final CatchupThenLiveOptions options;
+
+    // Set by stop(), cleared by start(...). Read by the replay so stopping the model interrupts a replay in flight, not
+    // just the live feed the replay has not handed over to yet.
+    private volatile boolean stopped = false;
+    private volatile boolean shuttingDown = false;
+    // Subscriptions whose replay is running. The live feed cannot answer for them: it knows the id (this model
+    // registers there first) but it is buffering rather than delivering, so it would report a subscription that is
+    // not yet folding anything as running.
+    private final ConcurrentMap<String, Boolean> replayingSubscriptions = new ConcurrentHashMap<>();
+    // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
+    // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
+    private final ConcurrentMap<String, Boolean> pauseRequestedDuringReplay = new ConcurrentHashMap<>();
 
     /**
      * @param reader          Reads the projection's history in position order for the catch-up replay.
@@ -121,6 +135,8 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
+        // Marked before the replay begins, so isRunning(id) answers for it from the moment it is registered.
+        replayingSubscriptions.put(subscriptionId, true);
 
         try {
             handover.catchUp(new BlockingHandover.Source<>() {
@@ -146,9 +162,13 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
             // RuntimeException as its stored failure. So something like a NoClassDefFoundError from a lazily loaded
             // class inside the fold would otherwise leave the registration in place AND leave the handover buffering
             // every live event until it overflows, surfacing far from the cause.
+            replayingSubscriptions.remove(subscriptionId);
+            pauseRequestedDuringReplay.remove(subscriptionId);
             liveFeed.cancelSubscription(subscriptionId);
             throw e;
         }
+        replayingSubscriptions.remove(subscriptionId);
+        applyPendingPauseIfAny(subscriptionId);
         return new AlreadyStartedSubscription(subscriptionId);
     }
 
@@ -161,6 +181,91 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
             // The stored position marks that the catch-up replay completed at this head, not a live resume watermark.
             catchupMarker.save(subscriptionId, GlobalCheckpoint.of(reader.currentPosition()));
         }
+    }
+
+    /**
+     * Whether the replay for {@code subscriptionId} should keep going: the model is neither shutting down nor stopped,
+     * and the subscription has not been cancelled out from under it.
+     */
+    private boolean shouldKeepReplaying(String subscriptionId) {
+        return !shuttingDown && !stopped && replayingSubscriptions.containsKey(subscriptionId);
+    }
+
+    private void applyPendingPauseIfAny(String subscriptionId) {
+        if (pauseRequestedDuringReplay.remove(subscriptionId) != null) {
+            liveFeed.pauseSubscription(subscriptionId);
+        }
+    }
+
+    // --- Life cycle. The live feed owns delivery, so most of this is a fan-out; what this model adds is an answer for
+    // the window where a replay is in flight, which the live feed cannot give because it is buffering rather than
+    // delivering. ---
+
+    @Override
+    public void stop() {
+        stopped = true;
+        liveFeed.stop();
+    }
+
+    @Override
+    public void start(boolean resumeSubscriptionsAutomatically) {
+        stopped = false;
+        liveFeed.start(resumeSubscriptionsAutomatically);
+    }
+
+    @Override
+    public boolean isRunning() {
+        return !replayingSubscriptions.isEmpty() || liveFeed.isRunning();
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return replayingSubscriptions.containsKey(subscriptionId) || liveFeed.isRunning(subscriptionId);
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return pauseRequestedDuringReplay.containsKey(subscriptionId) || liveFeed.isPaused(subscriptionId);
+    }
+
+    @Override
+    public void pauseSubscription(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        if (replayingSubscriptions.containsKey(subscriptionId)) {
+            // The live feed would accept the pause, but the replay does not go through it, so pausing there now would
+            // report the subscription paused while its history keeps folding. Record it and apply it at the handover.
+            pauseRequestedDuringReplay.put(subscriptionId, true);
+        } else {
+            liveFeed.pauseSubscription(subscriptionId);
+        }
+    }
+
+    @Override
+    public Subscription resumeSubscription(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        if (pauseRequestedDuringReplay.remove(subscriptionId) != null) {
+            // Paused and resumed while its replay was still running, so the live feed was never told and has nothing
+            // to resume. Dropping the request is the whole of it.
+            return new AlreadyStartedSubscription(subscriptionId);
+        }
+        return liveFeed.resumeSubscription(subscriptionId);
+    }
+
+    @Override
+    public void cancelSubscription(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        // Removing it here is what stops a replay in flight: shouldKeepReplaying reads this map.
+        replayingSubscriptions.remove(subscriptionId);
+        pauseRequestedDuringReplay.remove(subscriptionId);
+        liveFeed.cancelSubscription(subscriptionId);
+    }
+
+    @Override
+    public void shutdown() {
+        shuttingDown = true;
+        replayingSubscriptions.clear();
+        pauseRequestedDuringReplay.clear();
+        liveFeed.shutdown();
     }
 
     private record AlreadyStartedSubscription(String id) implements Subscription {
