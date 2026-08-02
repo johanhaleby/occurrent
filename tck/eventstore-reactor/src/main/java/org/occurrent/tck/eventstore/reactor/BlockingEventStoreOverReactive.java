@@ -30,6 +30,12 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
+import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbAppendResult;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.filter.Filter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -56,24 +62,27 @@ import static java.util.Objects.requireNonNull;
  */
 @NullMarked
 public final class BlockingEventStoreOverReactive
-        implements EventStore, EventStoreQueries, EventStoreOperations, ReadEventStreamWithFilter, PositionOrderedReader {
+        implements EventStore, EventStoreQueries, EventStoreOperations, ReadEventStreamWithFilter, PositionOrderedReader, DcbEventStore {
 
     private final org.occurrent.eventstore.api.reactor.EventStore eventStore;
     private final org.occurrent.eventstore.api.reactor.EventStoreQueries queries;
     private final org.occurrent.eventstore.api.reactor.EventStoreOperations operations;
     private final org.occurrent.eventstore.api.reactor.ReadEventStreamWithFilter filteredReader;
     private final org.occurrent.eventstore.api.reactor.PositionOrderedReader positionOrderedReader;
+    private final org.occurrent.eventstore.api.dcb.reactor.DcbEventStore dcbEventStore;
 
     private BlockingEventStoreOverReactive(org.occurrent.eventstore.api.reactor.EventStore eventStore,
                                           org.occurrent.eventstore.api.reactor.EventStoreQueries queries,
                                           org.occurrent.eventstore.api.reactor.EventStoreOperations operations,
                                           org.occurrent.eventstore.api.reactor.ReadEventStreamWithFilter filteredReader,
-                                          org.occurrent.eventstore.api.reactor.PositionOrderedReader positionOrderedReader) {
+                                          org.occurrent.eventstore.api.reactor.PositionOrderedReader positionOrderedReader,
+                                          org.occurrent.eventstore.api.dcb.reactor.DcbEventStore dcbEventStore) {
         this.eventStore = requireNonNull(eventStore, "Reactive event store cannot be null");
         this.queries = requireNonNull(queries, "Reactive event store queries cannot be null");
         this.operations = requireNonNull(operations, "Reactive event store operations cannot be null");
         this.filteredReader = requireNonNull(filteredReader, "Reactive filtered reader cannot be null");
         this.positionOrderedReader = requireNonNull(positionOrderedReader, "Reactive position ordered reader cannot be null");
+        this.dcbEventStore = requireNonNull(dcbEventStore, "Reactive DCB event store cannot be null");
     }
 
     /**
@@ -84,9 +93,10 @@ public final class BlockingEventStoreOverReactive
             & org.occurrent.eventstore.api.reactor.EventStoreQueries
             & org.occurrent.eventstore.api.reactor.EventStoreOperations
             & org.occurrent.eventstore.api.reactor.ReadEventStreamWithFilter
-            & org.occurrent.eventstore.api.reactor.PositionOrderedReader> BlockingEventStoreOverReactive of(T store) {
+            & org.occurrent.eventstore.api.reactor.PositionOrderedReader
+            & org.occurrent.eventstore.api.dcb.reactor.DcbEventStore> BlockingEventStoreOverReactive of(T store) {
         requireNonNull(store, "Reactive event store cannot be null");
-        return new BlockingEventStoreOverReactive(store, store, store, store, store);
+        return new BlockingEventStoreOverReactive(store, store, store, store, store, store);
     }
 
     /**
@@ -96,8 +106,9 @@ public final class BlockingEventStoreOverReactive
                                                     org.occurrent.eventstore.api.reactor.EventStoreQueries queries,
                                                     org.occurrent.eventstore.api.reactor.EventStoreOperations operations,
                                                     org.occurrent.eventstore.api.reactor.ReadEventStreamWithFilter filteredReader,
-                                                    org.occurrent.eventstore.api.reactor.PositionOrderedReader positionOrderedReader) {
-        return new BlockingEventStoreOverReactive(eventStore, queries, operations, filteredReader, positionOrderedReader);
+                                                    org.occurrent.eventstore.api.reactor.PositionOrderedReader positionOrderedReader,
+                                                    org.occurrent.eventstore.api.dcb.reactor.DcbEventStore dcbEventStore) {
+        return new BlockingEventStoreOverReactive(eventStore, queries, operations, filteredReader, positionOrderedReader, dcbEventStore);
     }
 
     // EventStore
@@ -184,6 +195,38 @@ public final class BlockingEventStoreOverReactive
     @Override
     public boolean writesPosition() {
         return positionOrderedReader.writesPosition();
+    }
+
+    // DcbEventStore
+
+    // exists(DcbCriteria, DcbReadOptions) and count(DcbCriteria, DcbReadOptions) are overridden here rather than left
+    // to the blocking interface's defaults, because those defaults would perform their own read on top of a value
+    // this bridge has already blocked for. The reactive store may implement them more efficiently, and the bridge
+    // must exercise that implementation rather than the blocking interface default.
+
+    @Override
+    public DcbEventStream read(DcbCriteria criteria, DcbReadOptions options) {
+        return blockRequiringAValue(dcbEventStore.read(criteria, options), "read(DcbCriteria, DcbReadOptions)");
+    }
+
+    @Override
+    public boolean exists(DcbCriteria criteria, DcbReadOptions options) {
+        return blockRequiringAValue(dcbEventStore.exists(criteria, options), "exists(DcbCriteria, DcbReadOptions)");
+    }
+
+    @Override
+    public long count(DcbCriteria criteria, DcbReadOptions options) {
+        return blockRequiringAValue(dcbEventStore.count(criteria, options), "count(DcbCriteria, DcbReadOptions)");
+    }
+
+    @Override
+    public DcbAppendResult append(List<CloudEvent> events) {
+        return blockRequiringAValue(dcbEventStore.append(events), "append(List)");
+    }
+
+    @Override
+    public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
+        return blockRequiringAValue(dcbEventStore.append(events, condition), "append(List, DcbAppendCondition)");
     }
 
     /**
