@@ -174,6 +174,20 @@ public interface EventStoreFixture {
     }
 
     /**
+     * How this store decides whether a token-qualified DCB append condition was violated. Required when
+     * {@link EventStoreCapability#DCB} is declared, with no default, because there is no answer that is right often
+     * enough to inherit and getting it wrong makes the suite assert the opposite of what the store does.
+     * <p>
+     * This is a declaration rather than a question put to the store because there is nothing to ask: the model is a
+     * property of how the write path is built, and no method on {@link DcbEventStore} reports it. That is the same
+     * line {@code timePrecision()} sits on, and the opposite side of it from {@code PositionOrderedReader.writesPosition()},
+     * which the suites ask rather than being told.
+     */
+    default DcbAppendConditionModel appendConditionModel() {
+        throw notOverridden("appendConditionModel", EventStoreCapability.DCB);
+    }
+
+    /**
      * Position-ordered reads. Required by every store. A store that does not write positions still has to answer for
      * that, and the suite asks the store itself through {@link PositionOrderedReader#writesPosition()} rather than
      * being told in advance by the fixture.

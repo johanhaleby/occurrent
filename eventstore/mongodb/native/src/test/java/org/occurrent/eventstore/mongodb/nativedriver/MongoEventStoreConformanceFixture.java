@@ -25,7 +25,9 @@ import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
+import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.tck.eventstore.blocking.DcbAppendConditionModel;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
 
@@ -51,13 +53,16 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
         this.timeRepresentation = timeRepresentation;
         this.mongoClient = MongoClients.create(connectionString);
         this.database = requireNonNull(connectionString.getDatabase());
-        this.eventStore = new MongoEventStore(mongoClient, database, "events",
-                new EventStoreConfig(timeRepresentation));
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .timeRepresentation(timeRepresentation)
+                .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
+                .build();
+        this.eventStore = new MongoEventStore(mongoClient, database, "events", config);
     }
 
     @Override
     public Set<EventStoreCapability> capabilities() {
-        return Set.of(EventStoreCapability.STREAM);
+        return Set.of(EventStoreCapability.STREAM, EventStoreCapability.DCB);
     }
 
     @Override
@@ -95,6 +100,20 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public PositionOrderedReader positionOrderedReader() {
         return eventStore;
+    }
+
+    @Override
+    public DcbEventStore dcbEventStore() {
+        return eventStore;
+    }
+
+    /**
+     * The store answers a token-qualified condition from per-boundary tag markers rather than by rescanning events
+     * (ADR 21).
+     */
+    @Override
+    public DcbAppendConditionModel appendConditionModel() {
+        return DcbAppendConditionModel.TAG_MARKER;
     }
 
     @Override
