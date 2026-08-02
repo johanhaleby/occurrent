@@ -80,7 +80,7 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
     @Test
     @Timeout(120)
     void appends_to_one_boundary_from_several_threads_leave_exactly_one_winner() {
-        int threadCount = 4;
+        int threadCount = 8;
 
         for (int iteration = 0; iteration < ITERATIONS; iteration++) {
             String show = "show:" + iteration;
@@ -180,8 +180,62 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
 
     @Test
     @Timeout(120)
+    void two_overlapping_tag_scoped_conditions_cannot_both_win() {
+        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
+            String show = "show:" + iteration;
+            String row = "row:" + iteration;
+
+            // One writer guards the show, the other guards the show and the row together. The narrower boundary is
+            // inside the wider one, so an event carrying both tags falls in each. Overlap by tag rather than by
+            // type, which is the shape a store keying conditions on per-tag markers is most likely to get right for
+            // the wrong reason.
+            DcbCriteria wide = DcbCriteria.tags(tag(show));
+            DcbCriteria narrow = DcbCriteria.tags(tag(show), tag(row));
+            DcbAppendCondition onWide = failIfEventsMatch(wide, dcbEventStore().read(wide).consistencyToken());
+            DcbAppendCondition onNarrow = failIfEventsMatch(narrow, dcbEventStore().read(narrow).consistencyToken());
+
+            assertExactlyOneWinnerOfTwo(iteration, "a one-tag and a two-tag condition", wide,
+                    taggedEventWithId("wide-" + iteration, RESERVED, show, row), onWide,
+                    taggedEventWithId("narrow-" + iteration, RESERVED, show, row), onNarrow);
+        }
+    }
+
+    @Test
+    @Timeout(120)
+    void appends_to_a_boundary_spanning_two_tags_leave_exactly_one_winner() {
+        int threadCount = 8;
+
+        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
+            String show = "show:" + iteration;
+            String row = "row:" + iteration;
+            // A boundary of two tags at once. A store deriving conflicts from per-tag markers has two of them to keep
+            // in step here, and keeping one in step is not the same as keeping both.
+            DcbCriteria boundary = DcbCriteria.tags(tag(show), tag(row));
+            DcbConsistencyToken token = dcbEventStore().read(boundary).consistencyToken();
+            int currentIteration = iteration;
+
+            List<Outcome<String>> outcomes = ConcurrentRendezvous.collide(threadCount, index -> {
+                String eventId = "spanning-" + currentIteration + "-" + index;
+                CloudEvent event = taggedEventWithId(eventId, RESERVED, show, row);
+                return () -> {
+                    dcbEventStore().append(List.of(event), failIfEventsMatch(boundary, token));
+                    return eventId;
+                };
+            });
+
+            String winner = assertExactlyOneWinner(iteration, outcomes,
+                    threadCount + " threads appending to a boundary spanning two tags");
+            assertThat(idsOf(dcbEventStore().read(boundary).events()))
+                    .as("Iteration %d: a boundary of two tags must admit exactly one of the racing appends",
+                            iteration)
+                    .containsExactly(winner);
+        }
+    }
+
+    @Test
+    @Timeout(120)
     void an_untokenized_guard_admits_exactly_one_of_several_racing_creates() {
-        int threadCount = 4;
+        int threadCount = 8;
 
         for (int iteration = 0; iteration < ITERATIONS; iteration++) {
             String show = "show:" + iteration;
