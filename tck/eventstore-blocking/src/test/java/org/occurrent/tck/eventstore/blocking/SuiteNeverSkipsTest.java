@@ -82,6 +82,11 @@ class SuiteNeverSkipsTest {
         assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbStreamInteropConformance.class);
     }
 
+    @Test
+    void the_dcb_concurrency_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbConcurrencyConformance.class);
+    }
+
     private static void assertSuiteFailsEveryTestAndSkipsNone(Class<?> suite) {
         Events tests = EngineTestKit.engine("junit-jupiter")
                 .selectors(selectClass(suite))
@@ -346,6 +351,34 @@ class SuiteNeverSkipsTest {
                 @Override
                 public PositionOrderedReader positionOrderedReader() {
                     return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbEventStore dcbEventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbAppendConditionModel appendConditionModel() {
+                    return DcbAppendConditionModel.EXACT_CRITERIA;
+                }
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingConformance}, but for {@link DcbConcurrencyConformance}. Every append against
+     * {@link NoopStore} throws {@link UnsupportedOperationException}, so a race between them has no winner and every
+     * test must fail rather than pass or skip.
+     */
+    static class HonoursNothingDcbConcurrencyConformance extends DcbConcurrencyConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.DCB);
                 }
 
                 @Override
