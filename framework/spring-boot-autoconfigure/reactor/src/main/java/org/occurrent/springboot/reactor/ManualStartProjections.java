@@ -71,26 +71,31 @@ public final class ManualStartProjections {
      */
     public Mono<Void> start(String id) {
         Objects.requireNonNull(id, "id cannot be null");
-        // Claimed on subscribe rather than here, so a Mono that is built and never subscribed leaves the projection
-        // withheld instead of dropping its startup work.
-        return Mono.defer(() -> {
-            final Supplier<Mono<Void>> startup;
-            synchronized (pending) {
-                startup = pending.remove(id);
-            }
-            return startup == null ? Mono.empty() : startup.get();
-        });
+        return startAndReport(id).then();
     }
 
     /**
      * Start every projection still withheld, one after another, in the order each was registered.
      *
-     * @return The ids started, in that order, empty if none were withheld.
+     * @return The ids this call started, in that order, empty if none were withheld. An id another caller claimed
+     * first is left out, so the list says what happened rather than what was pending when the call began.
      */
     public Mono<List<String>> startAll() {
+        return Flux.defer(() -> Flux.fromIterable(pendingIds()))
+                .concatMap(this::startAndReport)
+                .collectList();
+    }
+
+    // Emits the id when this call was the one that claimed it, and nothing when it was already started or was never
+    // withheld. Claimed on subscribe rather than when the Mono is built, so one that is built and never subscribed
+    // leaves the projection withheld instead of dropping its startup work.
+    private Mono<String> startAndReport(String id) {
         return Mono.defer(() -> {
-            List<String> ids = pendingIds();
-            return Flux.fromIterable(ids).concatMap(this::start).then(Mono.just(ids));
+            final Supplier<Mono<Void>> startup;
+            synchronized (pending) {
+                startup = pending.remove(id);
+            }
+            return startup == null ? Mono.empty() : startup.get().then(Mono.just(id));
         });
     }
 
