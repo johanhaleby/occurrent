@@ -218,6 +218,8 @@ public final class CatchupProjectionFeed<E> {
      * @return A {@link Mono} that completes when the catch-up replay has finished and the feed has gone live.
      */
     public Mono<Void> catchUp() {
+        // then() drops whether the catch-up finished or was stopped. Nothing can stop this feed's replay yet, so the
+        // distinction has no caller here.
         return handover.catchUp(new ReactiveHandover.Source<>() {
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
@@ -234,7 +236,7 @@ public final class CatchupProjectionFeed<E> {
             public Mono<Void> markCaughtUp() {
                 return CatchupProjectionFeed.this.markCaughtUp();
             }
-        });
+        }).then();
     }
 
     // A null id would collapse every such event to one de-dup key and silently drop deliveries, so fail loud instead.

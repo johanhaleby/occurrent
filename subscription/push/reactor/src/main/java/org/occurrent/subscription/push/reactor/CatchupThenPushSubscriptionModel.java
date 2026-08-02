@@ -102,7 +102,7 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not lost.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
 
-        Mono<Void> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
+        Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
                 return CatchupThenPushSubscriptionModel.this.alreadyCaughtUp(subscriptionId);
@@ -133,7 +133,7 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // specifically the one registered above. An application that cancels and re-subscribes the same id while this
         // replay is still running would lose the new registration. Reaching that needs the id reused mid-catch-up on
         // this same feed, and cancelling by id is the only handle the feed offers.
-        Mono<Void> releaseOnFailure = catchupDone.doOnError(error -> {
+        Mono<Boolean> releaseOnFailure = catchupDone.doOnError(error -> {
             log.error("Catch-up failed for subscription {}, releasing its registration on the live feed. It received no "
                     + "replay and will receive no live events until it is subscribed again.", subscriptionId, error);
             liveFeed.cancelSubscription(subscriptionId);
@@ -142,7 +142,9 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         }, error -> {
         });
 
-        return new AlreadyStartedSubscription(subscriptionId, releaseOnFailure);
+        // then() rather than the Mono itself: waitUntilStarted is a Mono<Void>, and whether the catch-up finished or
+        // was stopped is not yet exposed on this stack. The cache() above means both share one subscription.
+        return new AlreadyStartedSubscription(subscriptionId, releaseOnFailure.then());
     }
 
     private Mono<Boolean> alreadyCaughtUp(String subscriptionId) {

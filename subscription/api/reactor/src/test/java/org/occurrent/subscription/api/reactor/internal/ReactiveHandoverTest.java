@@ -258,6 +258,51 @@ class ReactiveHandoverTest {
         return new FakeSource(history, alreadyCaughtUp);
     }
 
+    @Test
+    void a_stopped_replay_emits_false_and_records_no_marker() {
+        List<String> delivered = new ArrayList<>();
+        ReactiveHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of("R1", "R2", "R3"), false);
+        source.stopAfter(2);
+
+        StepVerifier.create(handover.catchUp(source)).expectNext(false).verifyComplete();
+
+        assertThat(delivered).containsExactly("R1", "R2");
+        // Recording completion here would make the next catch-up skip a history it never finished folding.
+        assertThat(source.markCaughtUpCallCount()).isZero();
+    }
+
+    @Test
+    void a_stopped_replay_leaves_the_handover_usable_and_completes_live_acks_rather_than_failing_them() {
+        List<String> delivered = new ArrayList<>();
+        ReactiveHandover<String> handover = handover(delivered);
+        FakeSource stopped = source(List.of("R1", "R2"), false);
+        stopped.stopAfter(1);
+
+        StepVerifier.create(handover.catchUp(stopped)).expectNext(false).verifyComplete();
+
+        // A failed catch-up errors this ack. A stopped one completes it: the payload was dropped, not rejected, which
+        // is what lets a shared feed keep serving its other projections.
+        StepVerifier.create(handover.accept("L1")).verifyComplete();
+        assertThat(delivered).containsExactly("R1");
+    }
+
+    @Test
+    void a_later_catch_up_revives_a_handover_a_previous_one_stopped() {
+        List<String> delivered = new ArrayList<>();
+        ReactiveHandover<String> handover = handover(delivered);
+        FakeSource stopped = source(List.of("R1", "R2"), false);
+        stopped.stopAfter(1);
+        StepVerifier.create(handover.catchUp(stopped)).expectNext(false).verifyComplete();
+
+        FakeSource retried = source(List.of("R1", "R2"), false);
+        StepVerifier.create(handover.catchUp(retried)).expectNext(true).verifyComplete();
+
+        assertThat(retried.markCaughtUpCallCount()).isEqualTo(1);
+        StepVerifier.create(handover.accept("L1")).verifyComplete();
+        assertThat(delivered).containsExactly("R1", "R1", "R2", "L1");
+    }
+
     private static final class FakeSource implements ReactiveHandover.Source<String> {
         private final List<String> history;
         private final boolean alreadyCaughtUp;
@@ -265,6 +310,21 @@ class ReactiveHandoverTest {
         private Runnable onMarkCaughtUp;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
+        private int stopAfter = Integer.MAX_VALUE;
+        private int keepReplayingCallCount = 0;
+
+        private void stopAfter(int deliveries) {
+            this.stopAfter = deliveries;
+        }
+
+        @Override
+        public boolean keepReplaying() {
+            return keepReplayingCallCount++ < stopAfter;
+        }
+
+        private int markCaughtUpCallCount() {
+            return markCaughtUpCallCount;
+        }
 
         private FakeSource(List<String> history, boolean alreadyCaughtUp) {
             this.history = history;
