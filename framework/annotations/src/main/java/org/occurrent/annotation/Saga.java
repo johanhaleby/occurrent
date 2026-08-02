@@ -135,4 +135,53 @@ public @interface Saga {
      * default) means unset.
      */
     String commandDispatcherName() default "";
+
+    /**
+     * Where the saga reads its events from. {@link Source#EVENT_STORE} (the default) uses the framework's asynchronous
+     * catch-up and durable subscription models. {@link Source#PUSH} feeds the saga from an external push feed
+     * (RabbitMQ, Kafka, ...) instead, wrapped in a replay-then-push catch-up. Select the feed bean with
+     * {@link #subscriptionModel()} or {@link #subscriptionModelName()}. Unlike {@link Projection}, only a
+     * {@code PushSubscriptionModel} is accepted, since a {@code DomainEventFeed} carries no stream metadata and a saga
+     * needs it, see below.
+     * <p>
+     * A push saga catches up before it goes live: the framework puts a replay in front of the feed, folds the saga up
+     * from the event store, and then hands over to the live feed. Set {@link #catchup()} to {@link Catchup#NONE} to
+     * skip the replay and take live events only, which is what a saga fed by another application's broker needs, since
+     * the local event store holds none of those events. Neither choice takes a start position, so {@link #startAt()},
+     * {@link #startAtGlobalPosition()}, {@link #resumeBehavior()} and {@link #startupMode()} are rejected rather than
+     * silently ignored: the replay always starts at the beginning, and where the live feed resumes after a restart is
+     * the broker's business, not Occurrent's.
+     * <p>
+     * <strong>Forward the Occurrent CloudEvent extensions from your listener.</strong> A saga recognises a redelivered
+     * event by its {@code streamid} together with its {@code streamversion}, or by its {@code position}. Push delivery
+     * is at-least-once, so an event arriving with none of those is reacted to a second time and its commands are issued
+     * a second time. The catch-up leg is safe either way, because it replays from the event store, whose events always
+     * carry them. It is the live leg that depends on what the listener forwards. The saga logs a warning the first time
+     * it sees an event without them.
+     */
+    Source source() default Source.EVENT_STORE;
+
+    /**
+     * Whether a {@link Source#PUSH} saga is backfilled from the event store before it goes live.
+     * {@link Catchup#FROM_EVENT_STORE} (the default) replays history once and hands over,
+     * {@link Catchup#NONE} goes straight to the live feed and needs no event store at all. Setting this on a
+     * {@link Source#EVENT_STORE} saga is rejected, since that saga chooses its history with {@link #startAt()}.
+     */
+    Catchup catchup() default Catchup.FROM_EVENT_STORE;
+
+    /**
+     * The {@code PushSubscriptionModel} bean to feed this saga when {@link #source()} is {@link Source#PUSH}, given as
+     * the bean's type. {@link Void} (the default) leaves the type unset, in which case {@link #subscriptionModelName()}
+     * or the unique {@code PushSubscriptionModel} bean applies. When several beans of the given type exist,
+     * disambiguate with {@link #subscriptionModelName()}. Ignored for {@link Source#EVENT_STORE}.
+     */
+    Class<?> subscriptionModel() default Void.class;
+
+    /**
+     * Optional Spring bean name of the {@code PushSubscriptionModel}, used when {@link #source()} is
+     * {@link Source#PUSH}. Used on its own to resolve the feed by name, or together with {@link #subscriptionModel()}
+     * to pick one bean when several of that type exist. An empty string (the default) means unset. Ignored for
+     * {@link Source#EVENT_STORE}.
+     */
+    String subscriptionModelName() default "";
 }

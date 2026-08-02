@@ -38,11 +38,13 @@ import java.util.function.Supplier;
  * is {@code auto} and the projection already ran at boot), completes without doing anything rather than failing, so a
  * caller does not need to track what it already started.
  * <p>
- * The reactor twin of the blocking {@code ManualStartProjections}, differing in that the startup work runs when the
- * returned {@link Mono} is subscribed rather than when the method is called.
+ * The reactor twin of the blocking {@code ManualStartPushSources}, differing in that the startup work runs when the
+ * returned {@link Mono} is subscribed rather than when the method is called. The blocking one also withholds a
+ * {@code @Saga(source = PUSH)}, which this one has no equivalent of because {@code @Saga} is blocking-only. The name is
+ * kept in step with it anyway, so the two stacks do not diverge over a difference that is not theirs.
  */
 @NullMarked
-public final class ManualStartProjections {
+public final class ManualStartPushSources {
 
     private final Map<String, Supplier<Mono<Void>>> pending = new LinkedHashMap<>();
 

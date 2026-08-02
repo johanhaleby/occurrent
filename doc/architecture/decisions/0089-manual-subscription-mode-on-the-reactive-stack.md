@@ -49,8 +49,10 @@ eighth, a push projection's catch-up, blocks unconditionally and is handled belo
 
 **A push projection is withheld by a registry, not by the model.** A `@Projection(source = PUSH)` is fed
 by a `PushSubscriptionModel` or `DomainEventFeed` bean the application supplies, so stopping Occurrent's
-own model never reaches it. A reactor `ManualStartProjections` records the startup work instead of running
-it, and the application calls `start(id)` or `startAll()` when it is ready. Same shape as the blocking
+own model never reaches it. A reactor `ManualStartPushSources` records the startup work instead of running
+it, and the application calls `start(id)` or `startAll()` when it is ready. (Named `ManualStartProjections`
+when this was written; renamed in [ADR 96](0096-a-push-fed-saga-may-have-no-history-to-replay.md) when a
+push-fed saga began using the same registry.) Same shape as the blocking
 twin, except the work runs when the returned `Mono` is subscribed rather than when the method is called,
 and the id is claimed at that same moment so a `Mono` that is built and never subscribed leaves the
 projection withheld rather than dropping it.

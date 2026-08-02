@@ -5,7 +5,8 @@ Date: 2026-08-02
 ## Status
 
 Accepted. Written for the blocking stack; the reactor model and the domain-event feed followed shortly after, see the
-2026-08-02 amendment at the end. `@Saga(source = PUSH)` still follows separately, in #349.
+2026-08-02 amendment at the end. `@Saga(source = PUSH)` followed separately in #349, see
+[ADR 96](0096-a-push-fed-saga-may-have-no-history-to-replay.md).
 
 ## Context
 
@@ -24,7 +25,9 @@ reasoning holds for the other three. It does not hold for `startupMode`, which i
 about whether the application waits for it.
 
 ADR 86 solved an adjacent problem a different way. Under `occurrent.subscription.mode = manual`,
-`ManualStartProjections` withholds a push projection's startup work until the application asks for it. That is an
+`ManualStartPushSources` (named `ManualStartProjections` when this was written, see
+[ADR 96](0096-a-push-fed-saga-may-have-no-history-to-replay.md)) withholds a push projection's startup work until the
+application asks for it. That is an
 escape hatch rather than this: `start(id)` runs the withheld work with `startup.run()` on the caller's thread, so the
 replay still blocks whoever calls it. Deferring is not backgrounding.
 
@@ -140,7 +143,7 @@ unambiguously per-projection.
 **A background failure needs somewhere to go, and an `ERROR` log is not enough on its own.** Under `BACKGROUND` nobody
 waits, so the failure surfaces from nothing: the context refreshed long ago and the projection is left with an empty
 read model on a healthy-looking application. Both starters now contribute a `BackgroundCatchupFailures` bean, written
-by the annotation processor and injected by the application, the same shape as `ManualStartProjections` and
+by the annotation processor and injected by the application, the same shape as `ManualStartPushSources` and
 `SagaInstancesRegistry`. Deliberately not a Spring `ApplicationEvent`: Occurrent publishes none anywhere, and the only
 hits in the repository are inside `example/`. The log stays as the backstop. On the `PushSubscriptionModel` path the
 registrar joins the subscription on a thread of its own purely to record the failure, because registration has to stay

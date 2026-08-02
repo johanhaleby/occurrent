@@ -282,6 +282,20 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
         return pauseRequestedDuringReplay.containsKey(subscriptionId) || liveFeed.isPaused(subscriptionId);
     }
 
+    /**
+     * Whether {@code subscriptionId} is still replaying history and has not yet handed over to the live feed.
+     * <p>
+     * Deliberately not answerable from {@link #isRunning(String)}, which is {@code true} throughout a replay, matching
+     * what an event-store catch-up model reports. A caller that needs the handover specifically has to be able to ask
+     * for it: a saga fed by this model gates its timers on being live, and firing a timeout mid-replay would decide
+     * against state that is only half folded up. {@code false} for an id this model has never seen, so absence and
+     * handed-over read the same way, which is what a poll wants.
+     */
+    public boolean isCatchingUp(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return replayingSubscriptions.containsKey(subscriptionId);
+    }
+
     @Override
     public void pauseSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
