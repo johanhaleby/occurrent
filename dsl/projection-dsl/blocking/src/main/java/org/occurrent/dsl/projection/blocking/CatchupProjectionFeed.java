@@ -202,16 +202,16 @@ public final class CatchupProjectionFeed<E> {
         }
     }
 
-    /**
-     * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
-     * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,
-     * after wiring the live feed, so events arriving during the replay are captured.
-     */
     // Package-private: lets DomainEventFeed.catchUp(String) find the one feed matching an id among several registered.
     String id() {
         return id;
     }
 
+    /**
+     * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
+     * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,
+     * after wiring the live feed, so events arriving during the replay are captured.
+     */
     public void catchUp() {
         handover.catchUp(new BlockingHandover.Source<>() {
             @Override

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.mongo.reactor;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -27,10 +27,8 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
-import org.occurrent.application.service.blocking.ApplicationService;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.application.service.reactor.ApplicationService;
+import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -40,6 +38,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Mono;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
@@ -47,7 +46,6 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -58,40 +56,42 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
- * Proves {@code occurrent.subscription.mode=manual}: the subscription beans exist and every annotated subscription is
- * registered, but nothing runs until the application resumes it.
+ * Proves {@code occurrent.subscription.mode=manual} on the reactive stack: the subscription beans exist and every
+ * annotated subscription is registered, but nothing runs until the application resumes it.
  * <p>
  * The subscriber deliberately asks for {@link StartupMode#WAIT_UNTIL_STARTED}, which under {@code manual} would block
- * the context if the registrars did not skip the wait. That wait happens while Spring builds the context, before the
- * test method runs, so {@link Timeout} does not cover it: a dropped gate hangs the build rather than reporting a
- * failure.
+ * the context forever if the registrars did not skip the wait, since a paused reactive subscription's
+ * {@code waitUntilStarted()} never completes. That is what this test costs if a gate is ever dropped: the wait happens
+ * while Spring builds the context, before the test method runs, so {@link Timeout} does not cover it and the build
+ * hangs instead of reporting a failure. Verified by removing one gate and watching a run that normally takes about a
+ * minute pass ten without finishing.
  * <p>
  * One test method rather than three, because resuming is a one-way move and Spring caches the context for the whole
  * class. Split up, whichever method ran first would decide what the others saw.
  */
-@DisplayName("Subscription mode manual")
+@DisplayName("Reactive subscription mode manual")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @SpringBootTest(
-        classes = SubscriptionModeManualMongoTest.ManualModeApplication.class,
+        classes = ReactiveSubscriptionModeManualMongoTest.ManualModeApplication.class,
         properties = {
                 "occurrent.event-store.capabilities=stream",
                 "occurrent.subscription.mode=manual",
-                "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:subscription-mode-manual-test"
+                "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:reactive-subscription-mode-manual-test"
         }
 )
-@Import(SubscriptionModeManualMongoTest.MongoDbContainerConfiguration.class)
+@Import(ReactiveSubscriptionModeManualMongoTest.MongoDbContainerConfiguration.class)
 @Testcontainers
 @Timeout(60)
-class SubscriptionModeManualMongoTest {
+class ReactiveSubscriptionModeManualMongoTest {
 
-    private static final URI SOURCE = URI.create("urn:occurrent:subscription-mode-manual-test");
-    private static final String SUBSCRIPTION_ID = "manualModeSubscriber";
+    private static final URI SOURCE = URI.create("urn:occurrent:reactive-subscription-mode-manual-test");
+    private static final String SUBSCRIPTION_ID = "reactiveManualModeSubscriber";
 
     @Autowired
     private ApplicationService<TestEvent> applicationService;
 
     @Autowired
-    private SubscriptionModel subscriptionModel;
+    private SubscriptionModelLifeCycle subscriptionModel;
 
     @Autowired
     private ManualModeSubscriber subscriber;
@@ -99,32 +99,24 @@ class SubscriptionModeManualMongoTest {
     @Test
     void a_subscription_stays_paused_until_the_application_resumes_it() {
         assertAll(
+                () -> assertThat(subscriptionModel.isRunning()).isFalse(),
                 () -> assertThat(subscriptionModel.isPaused(SUBSCRIPTION_ID)).isTrue(),
-                () -> assertThat(subscriptionModel.isRunning(SUBSCRIPTION_ID)).isFalse(),
-                // Nothing was handed to the model reading the change stream, so no change stream was opened at boot.
-                // That is the startup cost this mode exists to remove, and it is invisible from the outermost model.
-                () -> assertThat(subscriptionIdsKnownToTheChangeStreamModel()).isEmpty()
+                () -> assertThat(subscriptionModel.isRunning(SUBSCRIPTION_ID)).isFalse()
         );
 
         TestEvent whileWaiting = event();
-        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(whileWaiting));
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(whileWaiting)).block();
         await().during(ofSeconds(2)).atMost(ofSeconds(10)).until(() -> subscriber.received().isEmpty());
 
-        subscriptionModel.resumeSubscription(SUBSCRIPTION_ID).waitUntilStarted(ofSeconds(10));
+        subscriptionModel.resumeSubscription(SUBSCRIPTION_ID).waitUntilStarted().block(ofSeconds(10));
 
         TestEvent afterResuming = event();
-        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(afterResuming));
+        applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(afterResuming)).block();
         // Both of them: waiting withholds events rather than losing them, because the position was pinned when the
         // subscription was registered rather than when it was started.
         await().atMost(ofSeconds(20)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(subscriber.received()).extracting(TestEvent::eventId)
                         .contains(whileWaiting.eventId(), afterResuming.eventId()));
-        assertThat(subscriptionIdsKnownToTheChangeStreamModel()).contains(SUBSCRIPTION_ID);
-    }
-
-    private Set<String> subscriptionIdsKnownToTheChangeStreamModel() {
-        SubscriptionModel innermost = ((DelegatingSubscriptionModel) subscriptionModel).getDelegatedSubscriptionModelRecursively();
-        return IntrospectableSubscriptionModel.of(innermost).orElseThrow().subscriptionIds();
     }
 
     private static TestEvent event() {
@@ -135,8 +127,9 @@ class SubscriptionModeManualMongoTest {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
         @StreamSubscription(id = SUBSCRIPTION_ID, startupMode = StartupMode.WAIT_UNTIL_STARTED)
-        void on(TestEvent event) {
+        Mono<Void> on(TestEvent event) {
             received.add(event);
+            return Mono.empty();
         }
 
         List<TestEvent> received() {
@@ -155,7 +148,7 @@ class SubscriptionModeManualMongoTest {
     }
 
     @SpringBootApplication
-    @EnableOccurrent
+    @EnableOccurrentReactive
     static class ManualModeApplication {
 
         @Bean
