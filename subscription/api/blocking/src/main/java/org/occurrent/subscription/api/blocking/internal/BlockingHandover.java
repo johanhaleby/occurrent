@@ -23,6 +23,7 @@ import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.util.ArrayDeque;
+import java.util.Iterator;
 import java.util.Objects;
 import java.util.Queue;
 import java.util.function.Consumer;
@@ -66,6 +67,23 @@ public final class BlockingHandover<T> {
          * drained, so an implementation that reads "the current head" reads it <em>after</em> the replay, not before.
          */
         void markCaughtUp();
+
+        /**
+         * Whether the replay should keep going, consulted once per replayed payload before it is folded. Return
+         * {@code false} to stop a replay already in flight, for example because the model was stopped or the whole
+         * thing is shutting down.
+         * <p>
+         * A stop is <strong>not</strong> a failure and the engine keeps the two apart. Stopping unwinds without
+         * draining the live buffer, without going live, and without calling {@link #markCaughtUp()}, so a partial
+         * replay is never recorded as a finished one and the next catch-up replays the whole history again. It also
+         * records no failure, so the handover stays usable rather than rejecting every later payload the way a failed
+         * catch-up does. What it does do is drop live payloads instead of buffering them, since nothing is going to
+         * fold them and a bounded buffer would otherwise fill and overflow. That is the same dropped-not-deferred
+         * contract a stopped subscription model already has, see ADR 85.
+         */
+        default boolean keepReplaying() {
+            return true;
+        }
     }
 
     private final Consumer<T> deliver;
@@ -77,6 +95,7 @@ public final class BlockingHandover<T> {
     private final Queue<T> buffer = new ArrayDeque<>();
     private final BoundedIdCache deliveredIds;
     private boolean live = false;
+    private boolean stopped = false;
     private @Nullable Throwable catchUpFailure = null;
 
     private BlockingHandover(Consumer<T> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
@@ -120,6 +139,11 @@ public final class BlockingHandover<T> {
                 deliverLive(payload);
                 return;
             }
+            if (stopped) {
+                // Dropped rather than buffered: the replay that would have drained this buffer was stopped, so nothing
+                // is coming to fold it and buffering would just fill up and overflow.
+                return;
+            }
             if (buffer.size() >= maxBufferedEvents) {
                 throw new IllegalStateException(HandoverMessages.bufferOverflow(maxBufferedEvents));
             }
@@ -130,16 +154,33 @@ public final class BlockingHandover<T> {
     /**
      * Run the one-time catch-up: replay the source's history (unless already caught up), then drain the buffered live
      * payloads and go live, then mark the catch-up complete.
+     *
+     * @return {@code true} when the catch-up finished and the handover is live, {@code false} when
+     * {@link Source#keepReplaying()} stopped it partway. A failure throws rather than returning either.
      */
-    public void catchUp(Source<T> source) {
+    public boolean catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
+        synchronized (lock) {
+            // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
+            // again rather than only by building a new one.
+            stopped = false;
+        }
         try {
             if (source.isAlreadyCaughtUp()) {
                 drainBufferAndGoLive();
-                return;
+                return true;
             }
+            boolean stoppedMidReplay = false;
             try (Stream<T> history = source.replay()) {
-                history.forEach(replayed -> {
+                Iterator<T> replaying = history.iterator();
+                while (replaying.hasNext()) {
+                    // Checked before the fold rather than after, so a stop takes effect on the payload it arrived for
+                    // rather than one later.
+                    if (!source.keepReplaying()) {
+                        stoppedMidReplay = true;
+                        break;
+                    }
+                    T replayed = replaying.next();
                     // Outside the monitor on purpose: only the cache write needs it, neither the caller's fold nor its
                     // key function.
                     String key = dedupKey(replayed);
@@ -147,10 +188,19 @@ public final class BlockingHandover<T> {
                     synchronized (lock) {
                         deliveredIds.add(key);
                     }
-                });
+                }
+            }
+            if (stoppedMidReplay) {
+                // No drain, no going live, and no marker. Recording completion here is the one thing that would make
+                // the next start skip a history it never finished folding.
+                synchronized (lock) {
+                    stopped = true;
+                }
+                return false;
             }
             drainBufferAndGoLive();
             source.markCaughtUp();
+            return true;
         } catch (RuntimeException e) {
             // Record the failure so a live payload fed after a failed catch-up fails fast instead of buffering until
             // overflow and hiding the error.

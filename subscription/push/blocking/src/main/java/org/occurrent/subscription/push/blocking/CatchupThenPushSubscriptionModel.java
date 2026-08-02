@@ -108,7 +108,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
     // Subscriptions whose replay is running. The live feed cannot answer for them: it knows the id (this model
     // registers there first) but it is buffering rather than delivering, so it would report a subscription that is
     // not yet folding anything as running.
-    private final ConcurrentMap<String, Future<Void>> replayingSubscriptions = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Future<Boolean>> replayingSubscriptions = new ConcurrentHashMap<>();
     // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
     // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
     private final ConcurrentMap<String, Boolean> pauseRequestedDuringReplay = new ConcurrentHashMap<>();
@@ -160,17 +160,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
 
             @Override
             public Stream<CloudEvent> replay() {
-                // Checked per event, before the fold, so stopping the model lands within one event rather than at the
-                // end of the history. It throws rather than ending the stream because the handover drains its buffer,
-                // goes live and writes the catch-up marker as soon as the replay completes normally. A stop that
-                // completed normally would therefore record a partial replay as a finished one, and the marker is what
-                // makes the next start skip the replay entirely.
-                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
-                        .peek(__ -> {
-                            if (!shouldKeepReplaying(subscriptionId)) {
-                                throw new CatchupStopped(subscriptionId);
-                            }
-                        });
+                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
+            }
+
+            @Override
+            public boolean keepReplaying() {
+                return shouldKeepReplaying(subscriptionId);
             }
 
             @Override
@@ -179,9 +174,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
             }
         };
 
-        FutureTask<Void> replay = new FutureTask<>(() -> {
+        FutureTask<Boolean> replay = new FutureTask<>(() -> {
+            final boolean caughtUp;
             try {
-                handover.catchUp(source);
+                caughtUp = handover.catchUp(source);
             } catch (RuntimeException | Error e) {
                 // The handover was registered before the replay, so a failure here would otherwise leave a handler that
                 // rethrows the failure for every later event, taking the id with it and starving the handlers behind it.
@@ -203,8 +199,16 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
                 throw e;
             }
             forget(subscriptionId);
+            if (!caughtUp) {
+                // Stopped rather than failed, so the handover is intact and nothing is marked. Release the
+                // registration anyway: nothing will revive this replay, and leaving it registered would leave a
+                // subscription that silently drops every live event. A fresh subscribe is the recovery, the same as
+                // for the event-store catch-up model.
+                liveFeed.cancelSubscription(subscriptionId);
+                return false;
+            }
             applyPendingPauseIfAny(subscriptionId);
-            return null;
+            return true;
         });
         // Registered before the thread starts, so isRunning(id) answers for it the moment subscribe returns rather than
         // whenever the replay thread happens to get scheduled.
@@ -292,7 +296,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
             // Paused and resumed while its replay was still running, so the live feed was never told and has nothing to
             // resume. Dropping the request is the whole of it, but hand back a handle that still tracks the replay
             // rather than one that claims to be started.
-            Future<Void> replay = replayingSubscriptions.get(subscriptionId);
+            Future<Boolean> replay = replayingSubscriptions.get(subscriptionId);
             if (replay != null) {
                 return new CatchingUpSubscription(subscriptionId, replay);
             }
@@ -301,7 +305,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
             // resume a subscription it never paused.
             return liveFeed.isPaused(subscriptionId)
                     ? liveFeed.resumeSubscription(subscriptionId)
-                    : new CatchingUpSubscription(subscriptionId, CompletableFuture.completedFuture(null));
+                    : new CatchingUpSubscription(subscriptionId, CompletableFuture.completedFuture(true));
         }
         return liveFeed.resumeSubscription(subscriptionId);
     }
@@ -334,7 +338,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
 
     private void awaitReplays(Duration timeout) {
         long deadline = System.nanoTime() + timeout.toNanos();
-        for (Future<Void> replay : replayingSubscriptions.values()) {
+        for (Future<Boolean> replay : replayingSubscriptions.values()) {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
                 return;
@@ -352,25 +356,17 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
         }
     }
 
-    /** Thrown out of the replay when the model is stopped, shut down, or the subscription is cancelled mid-replay. */
-    private static final class CatchupStopped extends RuntimeException {
-        CatchupStopped(String subscriptionId) {
-            // No stack trace and not writable: this is a control signal for a deliberate stop, not a fault to diagnose.
-            super("The catch-up for subscription '" + subscriptionId + "' was stopped before it finished", null, false, false);
-        }
-    }
-
     /**
      * A subscription whose catch-up is running on its own thread. {@code waitUntilStarted} is the only thing that joins
      * it, which is what lets a caller choose to keep the replay off the startup path.
      */
-    private record CatchingUpSubscription(String id, Future<Void> replay) implements Subscription {
+    private record CatchingUpSubscription(String id, Future<Boolean> replay) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
             try {
-                replay.get(safeTimeout.timeout(), safeTimeout.timeUnit());
-                return true;
+                // false when the replay was stopped rather than finished: not started, but not a failure either.
+                return replay.get(safeTimeout.timeout(), safeTimeout.timeUnit());
             } catch (TimeoutException e) {
                 return false;
             } catch (InterruptedException e) {
@@ -380,12 +376,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
                 // Rethrown rather than reported as false, unlike the event-store catch-up's handle. A projection's
                 // runner discards this return value, so swallowing a replay failure would start an application whose
                 // read model is silently empty.
-                return switch (e.getCause()) {
-                    case CatchupStopped ignored -> false;
+                switch (e.getCause()) {
                     case RuntimeException cause -> throw cause;
                     case Error cause -> throw cause;
                     case null, default -> throw new IllegalStateException("The catch-up for subscription '" + id + "' failed", e.getCause());
-                };
+                }
             }
         }
     }
