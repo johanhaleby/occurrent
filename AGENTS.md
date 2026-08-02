@@ -41,6 +41,18 @@ The same release distinction governs whether an API change is safe to make freel
 
 - Java 21 and Kotlin coexist in most modules.
 - Public APIs are small capability interfaces composed together, not large monoliths.
+- **"Nothing in this repository calls it" is not evidence that nobody needs it.** Occurrent is a published library, so
+  its callers are outside this repository, and the tests and examples here are not the population of users. The
+  changelog section below states this for removing or reshaping an API; it applies just as much to *adding* one. An
+  overload or accessor that completes an obvious gap in a public type earns its place because a user driving that type
+  directly cannot work around its absence, not because something in this tree calls it. `SagaRunner.run` waiting
+  unconditionally is the shape of the mistake: no in-repo caller wanted a choice, and a user embedding it had no way to
+  get one.
+  <br>What this does not license is inventing a public interface for a design that is not settled yet. The line is
+  between completing a type that already exists and shipping a new abstraction whose only consumer is imagined. When
+  the second is tempting, build it where its first real use lands.
+  <br>Everything added this way still needs tests, unless testing it is genuinely disproportionate in effort or runtime.
+  Tests are how a capability with no in-repo caller stays honest.
 - Nullness uses JSpecify (`@NullMarked`, `@Nullable`) in newer APIs, not uniformly across older code.
 - Validate nulls and invalid arguments eagerly, with `Objects.requireNonNull` or `IllegalArgumentException`.
 - Prefer static factories and builders for fluent public APIs.
