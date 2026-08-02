@@ -17,6 +17,7 @@
 package org.occurrent.springboot.reactor;
 
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
@@ -36,5 +37,18 @@ public class OccurrentReactiveAnnotationConfiguration {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     static OccurrentReactiveAnnotationBeanPostProcessor occurrentReactiveAnnotationBeanPostProcessor() {
         return new OccurrentReactiveAnnotationBeanPostProcessor();
+    }
+
+    /**
+     * Lets an application start a {@code @Projection(source = PUSH)} that {@code occurrent.subscription.mode=manual}
+     * withheld at boot. Gated on the same property as the annotation post-processor that fills it in, since it has
+     * nothing to hold when annotation processing is off, and it exists under every mode (not only {@code manual}) so
+     * an application can inject it without conditioning its own wiring on the mode.
+     */
+    @Bean
+    @ConditionalOnMissingBean(ManualStartProjections.class)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
+    public ManualStartProjections occurrentManualStartProjections() {
+        return new ManualStartProjections();
     }
 }

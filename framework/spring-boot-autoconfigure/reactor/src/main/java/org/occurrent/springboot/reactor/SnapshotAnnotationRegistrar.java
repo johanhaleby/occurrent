@@ -53,6 +53,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
+import static org.occurrent.springboot.common.SubscriptionAnnotations.subscriptionsStartOnTheirOwn;
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
 /**
@@ -167,7 +168,7 @@ class SnapshotAnnotationRegistrar {
             throw new IllegalArgumentException("@Snapshot '%s' asks to replay history, but this store does not write a global position, so the reactive position-based catch-up cannot replay. Use startAt = NOW or DEFAULT.".formatted(id));
         }
         StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
-        boolean waitUntilStarted = shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        boolean waitUntilStarted = subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
         startPositionSupport.applyStartupWorkarounds();
         if (stream) {
             StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
@@ -226,7 +227,7 @@ class SnapshotAnnotationRegistrar {
             });
         });
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        if (shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
+        if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
             subscription.waitUntilStarted().block();
         }
     }

@@ -184,4 +184,27 @@ public final class DomainEventFeed<E> {
     public Mono<Void> catchUpAll() {
         return Flux.fromIterable(feeds).concatMap(CatchupProjectionFeed::catchUp).then();
     }
+
+    /**
+     * Run the one-time catch-up of the single projection registered under {@code id}. Use this instead of
+     * {@link #catchUpAll()} when a projection is registered well after the others on this feed already went live, so
+     * that catching it up does not re-run the catch-up of a projection that already ran it.
+     *
+     * The lookup happens when the returned {@link Mono} is subscribed, so a projection registered between building
+     * this {@link Mono} and subscribing to it is found. An id that matches nothing fails the {@link Mono} with an
+     * {@link IllegalArgumentException} rather than throwing here.
+     *
+     * @return A {@link Mono} that completes once that projection has caught up and gone live.
+     */
+    public Mono<Void> catchUp(String id) {
+        Objects.requireNonNull(id, "id cannot be null");
+        return Mono.defer(() -> {
+            for (CatchupProjectionFeed<E> feed : feeds) {
+                if (feed.id().equals(id)) {
+                    return feed.catchUp();
+                }
+            }
+            return Mono.error(new IllegalArgumentException("No projection with id '" + id + "' is registered on this feed."));
+        });
+    }
 }

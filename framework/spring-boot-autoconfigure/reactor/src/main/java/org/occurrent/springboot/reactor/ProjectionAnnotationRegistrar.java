@@ -58,6 +58,7 @@ import java.util.Set;
 import java.util.function.Function;
 
 import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
+import static org.occurrent.springboot.common.SubscriptionAnnotations.subscriptionsStartOnTheirOwn;
 
 /**
  * Scans a bean for {@link org.occurrent.annotation.Projection} factory methods in
@@ -123,7 +124,7 @@ class ProjectionAnnotationRegistrar {
             DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
             startPositionSupport.applyStartupWorkarounds();
             var subscription = projectDcb(runner, id, dcbProjection, resolveStore(annotation, id), startAt);
-            if (shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
+            if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                 subscription.waitUntilStarted().block();
             }
         } else if (descriptor instanceof Projection<?, ?, ?> raw) {
@@ -147,7 +148,7 @@ class ProjectionAnnotationRegistrar {
                 StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
                 startPositionSupport.applyStartupWorkarounds();
                 var subscription = projectAgnosticOrStream(runner, id, projection, resolveStore(annotation, id), startAt);
-                if (shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
+                if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                     subscription.waitUntilStarted().block();
                 }
             }
@@ -173,9 +174,16 @@ class ProjectionAnnotationRegistrar {
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker, catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ReactiveProjectionRunner<E> runner = stream ? ReactiveProjectionRunner.stream(model, converter) : ReactiveProjectionRunner.agnostic(model, converter);
-        // The catch-up replay runs when the pipeline is subscribed; block until it has handed over to the live feed.
-        var subscription = projectAgnosticOrStream(runner, id, projection, resolveStore(annotation, id), null);
-        subscription.waitUntilStarted().block();
+        Object store = resolveStore(annotation, id);
+        if (subscriptionsStartOnTheirOwn(applicationContext)) {
+            // The catch-up replay runs when the pipeline is subscribed, so block until it has handed over to the live feed.
+            projectAgnosticOrStream(runner, id, projection, store, null).waitUntilStarted().block();
+        } else {
+            // This feed bypasses the subscription model bean entirely, so manual mode's own withholding never reaches
+            // it. Defer the same call instead, to run once the application starts this projection itself.
+            applicationContext.getBean(ManualStartProjections.class).register(id,
+                    () -> projectAgnosticOrStream(runner, id, projection, store, null).waitUntilStarted());
+        }
     }
 
     // Register a source=PUSH projection whose feed bean is a DomainEventFeed. The reactor feed folds via a
@@ -185,16 +193,29 @@ class ProjectionAnnotationRegistrar {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         Object store = resolveStore(annotation, id);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
+        Runnable registerOnFeed;
         if (store instanceof ViewStateRepository) {
-            feed.register(id, projection, (ViewStateRepository<S, ID>) store);
+            registerOnFeed = () -> feed.register(id, projection, (ViewStateRepository<S, ID>) store);
         } else {
             // resolveStore guarantees a ViewStateRepository or MaterializedView, so this is a MaterializedView. Drive it
             // with a reactive fold (folded on boundedElastic, as the normal reactor projection path does).
             Function<E, Mono<Void>> fold = Projections.reactiveUpdate((MaterializedView<E>) store);
             Filter replayFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
-            feed.register(id, fold, replayFilter);
+            registerOnFeed = () -> feed.register(id, fold, replayFilter);
         }
-        domainFeedsToCatchUp.add(feed);
+        if (subscriptionsStartOnTheirOwn(applicationContext)) {
+            registerOnFeed.run();
+            domainFeedsToCatchUp.add(feed);
+        } else {
+            // register(...) alone puts the feed into buffering mode immediately, so deferring only the catch-up would
+            // let accept(...) buffer into a bounded buffer rather than fold, and eventually overflow it. Defer both
+            // together, so nothing about this projection reaches the feed until the application starts it, and
+            // running the deferred work leaves the feed in the same state registering it under auto mode would.
+            applicationContext.getBean(ManualStartProjections.class).register(id, () -> {
+                registerOnFeed.run();
+                return feed.catchUp(id);
+            });
+        }
     }
 
     // Common validation for a source=PUSH projection: no synchronous mode, no catch-up start knobs, must be a Projection.

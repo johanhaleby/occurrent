@@ -196,7 +196,14 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation(),
                 ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
-        return new ReactorDurableSubscriptionModel(composeCatchupLayer(mongoSubscriptionModel, eventStoreProperties, dcbEventStore, applicationContext), storage);
+        ReactorDurableSubscriptionModel durableSubscriptionModel = new ReactorDurableSubscriptionModel(composeCatchupLayer(mongoSubscriptionModel, eventStoreProperties, dcbEventStore, applicationContext), storage);
+        if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
+            // Stopped here rather than after the annotations are scanned, so every subscription is registered on a
+            // model that is already stopped and none of them delivers anything until the application starts it. No
+            // reactor model implements Spring's Lifecycle, so nothing starts it back up on its own.
+            durableSubscriptionModel.stop();
+        }
+        return durableSubscriptionModel;
     }
 
     /**

@@ -210,6 +210,11 @@ public final class CatchupProjectionFeed<E> {
         return handover.accept(new DeliveredEvent<>(metadata, event));
     }
 
+    // Package-private: lets DomainEventFeed.catchUp(String) find the one feed matching an id among several registered.
+    String id() {
+        return id;
+    }
+
     /**
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), record the
      * completion marker, then start delivering the live feed. The returned {@link Mono} completes when the replay and
