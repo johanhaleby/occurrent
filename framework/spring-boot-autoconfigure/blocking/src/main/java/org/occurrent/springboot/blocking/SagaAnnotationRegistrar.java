@@ -28,6 +28,7 @@ import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -107,15 +108,23 @@ class SagaAnnotationRegistrar {
             runner = runner.competingConsumerStrategy(competingConsumerStrategy);
         }
 
+        // A saga replaying its history from the beginning defaults to starting in the background, exactly as
+        // @Subscription and @Projection do. startupMode was accepted and ignored here until now, so a saga always
+        // held up startup whatever it asked for.
+        boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
+        boolean waitUntilStarted = SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)
+                && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+
         startPositionSupport.applyStartupWorkarounds();
-        SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id));
+        SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
         publishSagaInstances(id, sagaSubscription);
     }
 
     // A saga must not issue commands while its own event subscription is not running, which is what
-    // occurrent.subscription.mode=manual leaves it as until the application resumes it. A model with no life cycle
-    // cannot answer, so those keep firing timers as before.
+    // occurrent.subscription.mode=manual leaves it as until the application resumes it, and what a saga starting in
+    // the background is until its replay hands over. A model with no life cycle cannot answer, so those keep firing
+    // timers as before.
     private static BooleanSupplier timersEnabledFor(Subscribable subscribable, String subscriptionId) {
         if (subscribable instanceof SubscriptionModelLifeCycle lifeCycle) {
             return () -> lifeCycle.isRunning(subscriptionId);
