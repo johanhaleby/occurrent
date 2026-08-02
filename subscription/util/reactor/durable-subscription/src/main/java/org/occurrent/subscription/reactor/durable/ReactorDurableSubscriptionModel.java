@@ -147,8 +147,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                         return Mono.empty();
                     })
                     .cache();
-            positionNow.subscribe();
-            InternalSubscription internalSubscription = new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, Mono.never(), positionNow);
+            // Kept as this subscription's disposable so shutdown and cancellation stop a read that is still in flight.
+            Disposable reading = positionNow.subscribe();
+            InternalSubscription internalSubscription = new InternalSubscription(reading, currentStartAt, filter, action, Mono.never(), positionNow);
             pausedSubscriptions.put(subscriptionId, internalSubscription);
             return new ReactorDurableSubscription(subscriptionId, internalSubscription.started);
         }
@@ -264,7 +265,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         if (internalSubscription != null) {
             internalSubscription.disposable.dispose();
         }
-        pausedSubscriptions.remove(subscriptionId);
+        // A paused subscription can hold a position read that is still in flight, which shutdown already disposes.
+        InternalSubscription pausedSubscription = pausedSubscriptions.remove(subscriptionId);
+        if (pausedSubscription != null) {
+            pausedSubscription.disposable.dispose();
+        }
         // Best-effort asynchronous cleanup of the stored position. cancelSubscription is void (fire-and-forget), so the
         // delete runs on its own without blocking the caller.
         storage.delete(subscriptionId).subscribe(unused -> {
