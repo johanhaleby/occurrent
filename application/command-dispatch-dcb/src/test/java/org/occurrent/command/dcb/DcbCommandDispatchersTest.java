@@ -38,6 +38,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import java.net.URI;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -122,6 +123,31 @@ class DcbCommandDispatchersTest {
             DcbDecider<OrderCommand, Boolean, OrderEvent> dcbDecider =
                     DcbDecider.from(shipOnce, command -> orderQuery(command.orderId()), event -> Set.of(tagFor(event)));
             return DcbCommandDispatchers.decider(deciderApplicationService, dcbDecider);
+        }
+
+        @Test
+        void each_commands_boundary_is_derived_exactly_once_per_batch() {
+            // Given a criteria function that counts how often it is asked
+            AtomicInteger derivations = new AtomicInteger();
+            Decider<OrderCommand, Void, OrderEvent> shipmentDecider = Decider.create(
+                    null,
+                    (OrderCommand command, Void state) -> List.of(new OrderShipped(command.orderId())),
+                    (state, event) -> state
+            );
+            DcbDecider<OrderCommand, Void, OrderEvent> dcbDecider = DcbDecider.from(
+                    shipmentDecider,
+                    command -> {
+                        derivations.incrementAndGet();
+                        return orderQuery(command.orderId());
+                    },
+                    event -> Set.of(tagFor(event)));
+            CommandDispatcher<OrderCommand> dispatcher = DcbCommandDispatchers.decider(deciderApplicationService, dcbDecider);
+
+            // When a run of three commands sharing one boundary is dispatched as a batch
+            dispatcher.dispatchAll(List.of(new ShipOrder("order-15"), new ShipOrder("order-15"), new ShipOrder("order-15")));
+
+            // Then grouping resolved each one and the execute reused what grouping already had
+            assertThat(derivations).hasValue(3);
         }
 
         @Test
