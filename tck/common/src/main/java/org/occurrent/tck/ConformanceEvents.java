@@ -140,6 +140,17 @@ public final class ConformanceEvents {
     }
 
     /**
+     * An event carrying the supplied JSON body, for a suite that needs a payload shape the other factories do not
+     * build: a nested object, a number, an array, or a body whose root is not an object at all.
+     *
+     * @param json the body verbatim, so a caller can write the exact shape it means to test
+     */
+    public static CloudEvent eventWithJsonData(String id, String type, String json) {
+        requireNonNull(json, "json cannot be null");
+        return CloudEventBuilder.v1(event(id, type)).withData(json.getBytes(StandardCharsets.UTF_8)).build();
+    }
+
+    /**
      * The exact bytes {@link #event(String, String, String, OffsetDateTime)} uses as the event body, so a suite can
      * assert that a store round-trips a payload byte for byte.
      */

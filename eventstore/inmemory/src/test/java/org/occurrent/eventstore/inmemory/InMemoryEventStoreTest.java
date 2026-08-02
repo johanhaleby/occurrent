@@ -74,7 +74,7 @@ public class InMemoryEventStoreTest {
      * the issue tracking the missing feature, so it is worth keeping where it belongs.
      */
     @Test
-    void rejecting_a_data_filter_points_at_the_issue_tracking_the_missing_feature() {
+    void rejecting_a_data_filter_says_how_to_enable_one() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         // An event has to be there for the filter to be evaluated at all, since a query over nothing never reaches it.
         unconditionallyPersist(eventStore, "name1", new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name"));
@@ -82,10 +82,10 @@ public class InMemoryEventStoreTest {
         Throwable thrown = catchThrowable(() -> eventStore.query(data("name", eq("name2"))).forEach(__ -> {
         }));
 
-        assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage(
-                "Currently, it's not possible to query the data field from in-memory event stores/subscriptions. "
-                        + "The good thing is that Occurrent is open-source, so feel free to contribute :) "
-                        + "(https://github.com/johanhaleby/occurrent/issues/58).");
+        assertThat(thrown)
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("was not given a DataFieldReader")
+                .hasMessageContaining("occurrent-common-inmemory-filter-matching-jackson");
     }
 
     @Nested
