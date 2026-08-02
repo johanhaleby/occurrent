@@ -129,20 +129,32 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         if (shutdown) {
             throw new IllegalStateException("Cannot start subscription because the subscription model is shutdown.");
         }
-        return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action);
+        return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action, null);
     }
 
-    private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Function<CloudEvent, Mono<Void>> action) {
+    private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt,
+                                                   Function<CloudEvent, Mono<Void>> action, @Nullable Mono<Checkpoint> positionAtRegistration) {
         if (!running) {
             // The model is stopped: don't subscribe at all, so waitUntilStarted() doesn't complete for a subscription
             // that won't deliver anything until start(true)/resumeSubscription actually starts it.
-            InternalSubscription internalSubscription = new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, Mono.never());
+            //
+            // Read where the feed is now and hold it, because starting this subscription later would otherwise begin
+            // wherever the feed had reached by then, skipping everything written while it waited. Nothing is stored
+            // until the subscription starts, so one that never starts leaves nothing behind.
+            Mono<Checkpoint> positionNow = subscription.globalCheckpoint()
+                    .onErrorResume(throwable -> {
+                        log.warn("Could not read the current position while registering subscription {}, it will be read again when the subscription starts", subscriptionId, throwable);
+                        return Mono.empty();
+                    })
+                    .cache();
+            positionNow.subscribe();
+            InternalSubscription internalSubscription = new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, Mono.never(), positionNow);
             pausedSubscriptions.put(subscriptionId, internalSubscription);
             return new ReactorDurableSubscription(subscriptionId, internalSubscription.started);
         }
         Sinks.Empty<Void> startedSink = Sinks.empty();
-        runningSubscriptions.put(subscriptionId, new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, startedSink.asMono()));
-        Disposable disposable = resolveStartAt(subscriptionId, currentStartAt.get())
+        runningSubscriptions.put(subscriptionId, new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, startedSink.asMono(), positionAtRegistration));
+        Disposable disposable = resolveStartAt(subscriptionId, currentStartAt.get(), positionAtRegistration)
                 .flatMapMany(resolvedStartAt -> {
                     currentStartAt.set(resolvedStartAt);
                     return source(subscriptionId, filter, resolvedStartAt, action, currentStartAt, true, startedSink);
@@ -157,7 +169,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                             startedSink.tryEmitError(throwable);
                             runningSubscriptions.remove(subscriptionId);
                         });
-        InternalSubscription internalSubscription = new InternalSubscription(disposable, currentStartAt, filter, action, startedSink.asMono());
+        InternalSubscription internalSubscription = new InternalSubscription(disposable, currentStartAt, filter, action, startedSink.asMono(), positionAtRegistration);
         if (runningSubscriptions.replace(subscriptionId, internalSubscription) == null) {
             // The placeholder was already removed by a synchronous error, so this subscription is already dead.
             disposable.dispose();
@@ -182,11 +194,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // the subscription-model default reads the last stored position (initializing it from the global position when
     // absent); a dynamic StartAt is resolved against this model's context and recursed, an empty result meaning "opt
     // out"; any concrete StartAt passes through unchanged.
-    private Mono<StartAt> resolveStartAt(String subscriptionId, StartAt startAt) {
+    private Mono<StartAt> resolveStartAt(String subscriptionId, StartAt startAt, @Nullable Mono<Checkpoint> positionAtRegistration) {
         if (startAt.isDefault()) {
+            // A stored position always wins, so this only seeds one the first time a subscription runs. It prefers the
+            // position read when the subscription was registered, which is earlier than now for one registered on a
+            // stopped model, and reads the position again when there is none.
+            Mono<Checkpoint> seed = positionAtRegistration == null
+                    ? subscription.globalCheckpoint()
+                    : positionAtRegistration.switchIfEmpty(subscription.globalCheckpoint());
             return storage.read(subscriptionId)
-                    .switchIfEmpty(Mono.defer(() -> subscription.globalCheckpoint()
-                            .flatMap(globalCheckpoint -> storage.save(subscriptionId, globalCheckpoint))))
+                    .switchIfEmpty(Mono.defer(() -> seed.flatMap(checkpoint -> storage.save(subscriptionId, checkpoint))))
                     .map(StartAt::checkpoint)
                     .switchIfEmpty(Mono.fromSupplier(StartAt::now));
         } else if (startAt.isDynamic()) {
@@ -194,7 +211,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             if (nextStartAt == null) {
                 return Mono.empty();
             }
-            return resolveStartAt(subscriptionId, nextStartAt);
+            return resolveStartAt(subscriptionId, nextStartAt, positionAtRegistration);
         }
         return Mono.just(startAt);
     }
@@ -232,7 +249,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         running = true;
         // Reuse the same currentStartAt reference so resume continues from the position of the last event delivered
         // before the subscription was paused, rather than replaying (or skipping) from the original StartAt.
-        return startInternalSubscription(subscriptionId, internalSubscription.filter, internalSubscription.currentStartAt, internalSubscription.action);
+        return startInternalSubscription(subscriptionId, internalSubscription.filter, internalSubscription.currentStartAt, internalSubscription.action,
+                internalSubscription.positionAtRegistration);
     }
 
     /**
@@ -305,13 +323,19 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         final @Nullable SubscriptionFilter filter;
         final Function<CloudEvent, Mono<Void>> action;
         final Mono<Void> started;
+        // Where the feed was when this subscription was registered on a stopped model, so starting it later resumes
+        // from then rather than from wherever the feed has reached by that point. Null for one registered while
+        // running, which has no gap to cover.
+        final @Nullable Mono<Checkpoint> positionAtRegistration;
 
-        private InternalSubscription(Disposable disposable, AtomicReference<StartAt> currentStartAt, @Nullable SubscriptionFilter filter, Function<CloudEvent, Mono<Void>> action, Mono<Void> started) {
+        private InternalSubscription(Disposable disposable, AtomicReference<StartAt> currentStartAt, @Nullable SubscriptionFilter filter,
+                                     Function<CloudEvent, Mono<Void>> action, Mono<Void> started, @Nullable Mono<Checkpoint> positionAtRegistration) {
             this.disposable = disposable;
             this.currentStartAt = currentStartAt;
             this.filter = filter;
             this.action = action;
             this.started = started;
+            this.positionAtRegistration = positionAtRegistration;
         }
     }
 
