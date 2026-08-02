@@ -54,8 +54,10 @@ import org.springframework.data.repository.CrudRepository;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Set;
 
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
@@ -73,11 +75,20 @@ class ProjectionAnnotationRegistrar {
     private final Set<String> registeredIds;
     // Domain-push feeds collected during projection registration, caught up once after all are registered.
     private final Set<DomainEventFeed<?>> domainFeedsToCatchUp = Collections.newSetFromMap(new IdentityHashMap<>());
+    // Push catch-up models created here, kept so the context can stop their replay threads on the way down.
+    private final List<CatchupThenPushSubscriptionModel> pushModels = new ArrayList<>();
 
     ProjectionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
         this.registeredIds = registeredIds;
+    }
+
+    // Stop every push catch-up model this registrar created, waiting for any replay still in flight to unwind, so no
+    // replay thread survives the context that owns the store it is folding into.
+    void close() {
+        pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
+        pushModels.clear();
     }
 
     // Catch up each domain-push feed once, after all its projections are registered.
@@ -180,6 +191,9 @@ class ProjectionAnnotationRegistrar {
         PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
         CheckpointStorage catchupMarker = applicationContext.getBean(CheckpointStorage.class);
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker, catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
+        // Retained so close() can stop it. Its replay runs on its own thread, so a context that closes without
+        // stopping it leaves that replay folding into a store that is closing with it.
+        pushModels.add(model);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(model, converter) : ProjectionRunner.agnostic(model, converter);
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)) {
