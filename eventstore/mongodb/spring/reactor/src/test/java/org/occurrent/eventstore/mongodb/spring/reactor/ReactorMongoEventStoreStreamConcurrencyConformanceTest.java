@@ -21,6 +21,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.blocking.StreamConcurrencyConformance;
+import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
