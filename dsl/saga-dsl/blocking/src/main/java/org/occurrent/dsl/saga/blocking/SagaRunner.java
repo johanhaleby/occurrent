@@ -153,7 +153,7 @@ public final class SagaRunner<E, C> {
         requireNonNull(commandDispatcher, "commandDispatcher cannot be null");
         requireNonNull(config, "config cannot be null");
 
-        SagaExecution<E, S, C> execution = new SagaExecution<>(saga, stateStore, commandDispatcher, cloudEventConverter, config);
+        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, config);
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
         Consumer<CloudEvent> action = execution::onCloudEvent;
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
