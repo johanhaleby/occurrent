@@ -107,6 +107,20 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
                 assertThat(context).getBean(DataFieldReader.class).isSameAs(own));
     }
 
+
+    @Test
+    void no_data_field_reader_bean_exists_and_the_auto_configuration_still_loads_without_the_jackson_reader() {
+        // The Jackson artifact is optional, so this proves the auto-configuration class loads and the rest of the
+        // context still wires when it is absent, rather than failing on a type it references only inside a bean method.
+        contextRunner()
+                .withClassLoader(new FilteredClassLoader(JacksonDataFieldReader.class))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(DataFieldReader.class);
+                    assertThat(context).hasSingleBean(SynchronousSubscriptionModel.class);
+                });
+    }
+
     private ApplicationContextRunner contextRunner() {
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(OccurrentReactiveMongoAutoConfiguration.class))
