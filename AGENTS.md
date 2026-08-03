@@ -23,6 +23,33 @@ Occurrent is a Maven multi-module JVM event-sourcing library built on CloudEvent
 
 DCB (Dynamic Consistency Boundary) is a capability layered on the same CloudEvent storage, not a parallel event model. It is shipped for the in-memory, native, and both Spring MongoDB (blocking and reactive) event stores.
 
+## Claiming a GitHub issue before working on it
+
+Several agent sessions run against this repository at the same time, and they cannot see each other. GitHub is the only shared state, so the issue itself is the lock.
+
+Before you start work on an issue, and before you *suggest* an issue to the user as the next thing to pick up, check that nobody else already holds it:
+
+```
+gh issue view <N> --json state,labels,assignees,comments
+```
+
+Treat the issue as taken if it carries the `in-progress` label, has an assignee, or has a recent claim comment. Say so and pick something else rather than starting in parallel.
+
+If it is free, claim it *before* the first line of work, not after:
+
+```
+gh issue edit <N> --add-label in-progress
+gh issue comment <N> --body "Claimed by an AI session on <UTC timestamp>, branch \`<branch>\`."
+```
+
+The claim is a lease, not a deed. Release it when the work is done or abandoned:
+
+- When a pull request is opened, reference the issue from the PR body (`Fixes #N`) and drop the label — the PR is a stronger, self-updating claim than the label is.
+- If you stop without a PR, remove the label and comment that you are dropping it, so the issue does not stay silently blocked.
+- A claim with no branch, no PR, and no activity for a day or so is stale. Take it over, but say in a comment that you are doing it.
+
+The check applies to any GitHub task you act on, including issues the user names directly. Claiming is cheap and a duplicated implementation is not.
+
 ## Architecture Decision Records
 
 ADRs live in `doc/architecture/decisions/`, **not** `doc/adr/`. Filenames are `NNNN-kebab-case-title.md`, numbered sequentially from the highest existing number. Write one for architectural decisions, not for minor implementation details.
