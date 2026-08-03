@@ -271,6 +271,7 @@ Docs (#420, #421) follow the release-gated held-branch convention, and **#420 mu
 ## Orchestrator Operating Notes
 
 - Read this file first at every session start. It is ground truth over in-context recollection.
+- **Concurrent sessions share only GitHub.** Before starting or even proposing work on an issue, check it is unclaimed (`in-progress` label, assignee, recent claim comment) and claim it with the label plus a claim comment before the first edit. Release it when a PR is opened or the work is dropped. Full protocol in `AGENTS.md` ("Claiming a GitHub issue before working on it"). Pass the same rule into every delegated brief that touches an issue — subagents do not read GitHub on their own initiative.
 - Route rather than default to doing the work: delegate substantial work (roughly 10+ minutes, 2+ files, or anything in a fragile area), handle trivial one-line/single-file work inline, and ask the user one consolidated question only when they alone can decide.
 - Before delegating, re-read the relevant sections here and use code-review-graph where it helps (`get_minimal_context_tool`, impact radius, relationship queries). Briefs must carry goal, owned files, forbidden files, conventions copied in verbatim, exact `rtk` verification commands, out-of-scope, and the blocked-resolution protocol.
 - After delegated work completes, review scope and actual verification (verification you cannot see did not happen), then update this file as a durable map, not a change log.
