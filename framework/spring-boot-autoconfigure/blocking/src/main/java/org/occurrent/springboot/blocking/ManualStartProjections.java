@@ -18,6 +18,7 @@ package org.occurrent.springboot.blocking;
 
 import org.jspecify.annotations.NullMarked;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,24 +64,36 @@ public final class ManualStartProjections {
      */
     public void start(String id) {
         Objects.requireNonNull(id, "id cannot be null");
-        Runnable startup;
-        synchronized (pending) {
-            startup = pending.remove(id);
-        }
-        if (startup != null) {
-            startup.run();
-        }
+        startAndReport(id);
     }
 
     /**
      * Start every projection still withheld, in the order each was registered.
      *
-     * @return the ids started, in that order, empty if none were withheld
+     * @return the ids this call started, in that order, empty if none were withheld. An id another caller claimed
+     * first is left out, so the list says what happened rather than what was pending when the call began
      */
     public List<String> startAll() {
-        List<String> ids = pendingIds();
-        ids.forEach(this::start);
-        return ids;
+        List<String> started = new ArrayList<>();
+        for (String id : pendingIds()) {
+            if (startAndReport(id)) {
+                started.add(id);
+            }
+        }
+        return List.copyOf(started);
+    }
+
+    // True when this call was the one that claimed the id, false when it was already started or never withheld.
+    private boolean startAndReport(String id) {
+        final Runnable startup;
+        synchronized (pending) {
+            startup = pending.remove(id);
+        }
+        if (startup == null) {
+            return false;
+        }
+        startup.run();
+        return true;
     }
 
     /**

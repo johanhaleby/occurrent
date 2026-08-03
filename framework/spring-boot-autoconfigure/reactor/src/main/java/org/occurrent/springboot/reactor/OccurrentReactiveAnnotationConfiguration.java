@@ -42,6 +42,19 @@ public class OccurrentReactiveAnnotationConfiguration {
     }
 
     /**
+     * Lets an application start a {@code @Projection(source = PUSH)} that {@code occurrent.subscription.mode=manual}
+     * withheld at boot. Gated on the same property as the annotation post-processor that fills it in, since it has
+     * nothing to hold when annotation processing is off, and it exists under every mode (not only {@code manual}) so
+     * an application can inject it without conditioning its own wiring on the mode.
+     */
+    @Bean
+    @ConditionalOnMissingBean(ManualStartProjections.class)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
+    public ManualStartProjections occurrentManualStartProjections() {
+        return new ManualStartProjections();
+    }
+
+    /**
      * Lets an application see a {@code @Projection(source = PUSH, startupMode = BACKGROUND)} whose catch-up failed.
      * Nobody waits for a background replay, so a failure has nowhere to be thrown and the context is long refreshed by
      * the time it happens. Gated the same way as the post-processor that writes it, and present under every startup

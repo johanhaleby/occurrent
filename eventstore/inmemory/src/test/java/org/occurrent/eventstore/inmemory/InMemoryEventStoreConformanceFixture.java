@@ -23,6 +23,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
 
@@ -34,7 +35,23 @@ import java.util.Set;
  */
 class InMemoryEventStoreConformanceFixture implements EventStoreFixture {
 
-    private final InMemoryEventStore eventStore = new InMemoryEventStore();
+    private final InMemoryEventStore eventStore;
+    private final boolean supportsDataFilter;
+
+    InMemoryEventStoreConformanceFixture() {
+        this(true);
+    }
+
+    /**
+     * @param withDataFieldReader whether the store under test can reach into a payload. Both answers are a supported
+     *                            configuration, so the suite asserts a documented outcome either way.
+     */
+    InMemoryEventStoreConformanceFixture(boolean withDataFieldReader) {
+        this.supportsDataFilter = withDataFieldReader;
+        this.eventStore = withDataFieldReader
+                ? new InMemoryEventStore().withDataFieldReader(new JacksonDataFieldReader())
+                : new InMemoryEventStore();
+    }
 
     @Override
     public Set<EventStoreCapability> capabilities() {
@@ -98,12 +115,11 @@ class InMemoryEventStoreConformanceFixture implements EventStoreFixture {
     }
 
     /**
-     * The in-memory store keeps a payload as opaque bytes, so it has nothing to reach into and rejects
-     * {@link org.occurrent.filter.Filter#data}. See
-     * <a href="https://github.com/johanhaleby/occurrent/issues/58">issue 58</a>.
+     * The store under test is built with a Jackson-backed reader, so it can reach into a payload. A store built
+     * without one refuses instead, which {@link InMemoryEventStoreQueriesWithoutDataReaderConformanceTest} covers.
      */
     @Override
     public boolean supportsDataFilter() {
-        return false;
+        return supportsDataFilter;
     }
 }

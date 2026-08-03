@@ -62,8 +62,9 @@ import static org.junit.jupiter.api.Assertions.assertAll;
  * registered, but nothing runs until the application resumes it.
  * <p>
  * The subscriber deliberately asks for {@link StartupMode#WAIT_UNTIL_STARTED}, which under {@code manual} would block
- * the context until it timed out if the registrars did not skip the wait. The {@link Timeout} is what proves they do,
- * since a hanging context fails the test rather than hanging the build.
+ * the context if the registrars did not skip the wait. That wait happens while Spring builds the context, before the
+ * test method runs, so {@link Timeout} does not cover it: a dropped gate hangs the build rather than reporting a
+ * failure.
  * <p>
  * One test method rather than three, because resuming is a one-way move and Spring caches the context for the whole
  * class. Split up, whichever method ran first would decide what the others saw.

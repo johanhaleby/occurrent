@@ -31,8 +31,10 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import reactor.core.publisher.Flux;
@@ -84,6 +86,7 @@ class DomainEventFeedBackgroundCatchupFailureTest {
     }
 
     @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
     static class FailingDomainFeedConfiguration {
 
         @Bean

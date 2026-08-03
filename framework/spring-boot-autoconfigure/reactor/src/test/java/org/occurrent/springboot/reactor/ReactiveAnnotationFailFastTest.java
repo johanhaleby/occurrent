@@ -466,6 +466,7 @@ class ReactiveAnnotationFailFastTest {
     }
 
     @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
     static class SharedDomainEventFeedConfiguration {
         @Bean
         CloudEventConverter<TestEvent> cloudEventConverter() {

@@ -272,6 +272,136 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
     @DisplayName("filtering on the data payload")
     class FilteringOnData {
 
+        /**
+         * The payload shapes the tests below query. Written once so every test sees the same store, and named for what
+         * makes each one interesting rather than for its content.
+         */
+        private void writePayloads() {
+            eventStore().write(STREAM_ID, List.of(
+                    ConformanceEvents.eventWithJsonData("flat", DEFINED, "{\"name\":\"alice\"}"),
+                    ConformanceEvents.eventWithJsonData("nested", DEFINED, "{\"person\":{\"city\":\"Malmo\"},\"name\":\"bob\"}"),
+                    ConformanceEvents.eventWithJsonData("whole", DEFINED, "{\"amount\":42,\"name\":\"carol\"}"),
+                    ConformanceEvents.eventWithJsonData("fraction", DEFINED, "{\"amount\":42.5,\"name\":\"dave\"}"),
+                    ConformanceEvents.eventWithJsonData("listed", DEFINED, "{\"tags\":[\"red\",\"blue\"],\"name\":\"erin\"}"),
+                    ConformanceEvents.eventWithJsonData("rootArray", DEFINED, "[1,2,3]")));
+        }
+
+        /**
+         * Runs the assertions when the store declares it can read a payload, and otherwise asserts that it refuses.
+         * Returning early after asserting the refusal is not a skip: the store answered for itself either way.
+         */
+        private boolean declinesDataFilters(Filter probe) {
+            // Call this after writing, never before. A query over an empty store never reaches the filter, so a store
+            // that would refuse the filter returns nothing instead of throwing.
+
+            if (fixture().supportsDataFilter()) {
+                return false;
+            }
+            assertThat(catchThrowable(() -> idsOf(queries().query(probe))))
+                    .as("a store that declares it cannot filter on the data payload must reject Filter.data(..)")
+                    .isExactlyInstanceOf(IllegalArgumentException.class);
+            return true;
+        }
+
+        @Test
+        void filters_on_a_nested_field_through_a_dotted_path() {
+            Filter byCity = Filter.data("person.city", eq("Malmo"));
+            writePayloads();
+            if (declinesDataFilters(byCity)) {
+                return;
+            }
+
+            assertAll(
+                    () -> assertThat(idsOf(queries().query(byCity)))
+                            .as("a dotted path must reach a field inside a nested object")
+                            .containsExactly("nested"),
+                    () -> assertThat(idsOf(queries().query(Filter.data("person.city", eq("Lund")))))
+                            .as("a dotted path that reaches the field but not the value must match nothing")
+                            .isEmpty()
+            );
+        }
+
+        @Test
+        void reads_a_number_as_a_number_rather_than_as_its_text() {
+            Filter byNumber = Filter.data("amount", eq(42));
+            writePayloads();
+            if (declinesDataFilters(byNumber)) {
+                return;
+            }
+
+            assertAll(
+                    () -> assertThat(idsOf(queries().query(byNumber)))
+                            .as("a numeric operand must match a numeric field")
+                            .containsExactly("whole"),
+                    () -> assertThat(idsOf(queries().query(Filter.data("amount", eq("42")))))
+                            .as("a text operand must not match a numeric field, because the two are different values "
+                                    + "rather than two spellings of one")
+                            .isEmpty()
+            );
+        }
+
+        @Test
+        void compares_numbers_by_value_but_refuses_to_compare_across_types() {
+            Filter above = Filter.data("amount", gt(10));
+            writePayloads();
+            if (declinesDataFilters(above)) {
+                return;
+            }
+
+            assertAll(
+                    () -> assertThat(idsOf(queries().query(above)))
+                            .as("a range operator must compare a whole number and a fraction by value")
+                            .containsExactlyInAnyOrder("whole", "fraction"),
+                    () -> assertThat(idsOf(queries().query(Filter.data("amount", lt(100)))))
+                            .as("and must do so in the other direction too")
+                            .containsExactlyInAnyOrder("whole", "fraction"),
+                    () -> assertThat(idsOf(queries().query(Filter.data("amount", gt("10")))))
+                            .as("a range operator given an operand of a different type than the stored value must "
+                                    + "match nothing, rather than failing")
+                            .isEmpty()
+            );
+        }
+
+        @Test
+        void matches_an_element_inside_an_array_field() {
+            Filter tagged = Filter.data("tags", eq("red"));
+            writePayloads();
+            if (declinesDataFilters(tagged)) {
+                return;
+            }
+
+            assertAll(
+                    () -> assertThat(idsOf(queries().query(tagged)))
+                            .as("comparing an array field to a value must match when the array holds that value")
+                            .containsExactly("listed"),
+                    () -> assertThat(idsOf(queries().query(Filter.data("tags", eq("green")))))
+                            .as("and must not match when it does not")
+                            .isEmpty()
+            );
+        }
+
+        @Test
+        void matches_nothing_when_the_path_leads_nowhere() {
+            Filter nowhere = Filter.data("nosuchfield", eq("x"));
+            writePayloads();
+            if (declinesDataFilters(nowhere)) {
+                return;
+            }
+
+            assertAll(
+                    () -> assertThat(idsOf(queries().query(nowhere)))
+                            .as("a field no payload has must match nothing")
+                            .isEmpty(),
+                    () -> assertThat(idsOf(queries().query(Filter.data("name.deeper", eq("x")))))
+                            .as("a path that continues past a value that is not an object must match nothing")
+                            .isEmpty(),
+                    () -> assertThat(idsOf(queries().query(Filter.data("0", eq(1)))))
+                            .as("a payload whose root is an array rather than an object is not reachable by field, "
+                                    + "so nothing matches")
+                            .isEmpty()
+            );
+        }
+
         @Test
         void filters_on_a_field_inside_the_data_payload_according_to_what_the_fixture_declares() {
             // ConformanceEvents builds a body of {"name":"<subject>"}, so filtering data.name for a subject picks out

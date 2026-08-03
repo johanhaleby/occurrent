@@ -33,6 +33,8 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.occurrent.springboot.common.OccurrentProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import reactor.core.publisher.Flux;
@@ -123,6 +125,7 @@ class DomainEventFeedProjectionPushStartupModeTest {
     }
 
     @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
     static class DomainFeedConfiguration {
 
         // A DomainEventFeed is not itself a Subscribable, unlike PushSubscriptionModel, so without this bean

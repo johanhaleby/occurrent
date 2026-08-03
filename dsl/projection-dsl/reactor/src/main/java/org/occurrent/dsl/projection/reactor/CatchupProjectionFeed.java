@@ -261,7 +261,7 @@ public final class CatchupProjectionFeed<E> {
         stopped = true;
     }
 
-    // Package-private: lets DomainEventFeed name the projection already registered when it refuses a second one.
+    // Package-private: lets DomainEventFeed check the id it was given and name the projection it already has.
     String id() {
         return id;
     }
