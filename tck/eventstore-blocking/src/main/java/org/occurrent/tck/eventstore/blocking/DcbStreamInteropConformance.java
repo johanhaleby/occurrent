@@ -124,20 +124,28 @@ public abstract class DcbStreamInteropConformance extends EventStoreConformance 
 
     @Test
     void a_dcb_append_and_a_stream_write_share_one_position_sequence() {
-        eventStore().write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("A", DEFINED)));
-        DcbAppendResult dcbAppend = dcbEventStore().append(List.of(taggedEventWithId("B", CHANGED, NAME_1)));
+        // A stream write bracketed by DCB appends, so the sequence is checked in both directions. Writing only
+        // stream-then-DCB would leave the other half unproven, which is a store advancing its position past a DCB
+        // append when a stream write follows one.
+        DcbAppendResult firstAppend = dcbEventStore().append(List.of(taggedEventWithId("A", DEFINED, NAME_1)));
+        eventStore().write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("B", DEFINED)));
+        DcbAppendResult lastAppend = dcbEventStore().append(List.of(taggedEventWithId("C", CHANGED, NAME_1)));
 
         // Read back through the position-ordered reader, which is the one view over both modes at once. Nothing here
-        // asserts a literal position or that the two are contiguous: a store reserving position blocks outside its
+        // asserts a literal position or that any two are contiguous: a store reserving position blocks outside its
         // write transaction can leave a gap between any two writes (ADR 84).
         assertThat(idsOf(positionOrderedReader().readInPositionOrder(Filter.all(), PositionRange.fromBeginning())))
-                .as("One global position sequence covers both modes, so a stream write and a later DCB append must "
-                        + "come back in the order they happened rather than grouped by mode")
-                .containsExactly("A", "B");
+                .as("One global position sequence covers both modes, so writes must come back in the order they "
+                        + "happened rather than grouped by mode, whichever mode wrote first")
+                .containsExactly("A", "B", "C");
+        assertThat(lastAppend.firstSequencePosition())
+                .as("A DCB append after a stream write must be assigned a strictly higher position, so the stream "
+                        + "write advanced the same counter the DCB append draws from")
+                .isGreaterThan(firstAppend.lastSequencePosition());
         assertThat(positionOrderedReader().currentPosition())
                 .as("currentPosition() is a high-watermark over the whole store, so it must have reached the "
-                        + "position the DCB append reported")
-                .isGreaterThanOrEqualTo(dcbAppend.lastSequencePosition());
+                        + "position the last DCB append reported")
+                .isGreaterThanOrEqualTo(lastAppend.lastSequencePosition());
     }
 
     @Test

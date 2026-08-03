@@ -31,7 +31,6 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -106,34 +105,6 @@ class ReactorMongoEventStorePositionTest {
 
     private ReactorMongoEventStore storeWith(EventStoreCapability first, EventStoreCapability... rest) {
         return storeWith(new EventStoreConfig.Builder().eventStoreCapabilities(first, rest));
-    }
-
-    @Test
-    void stream_events_get_a_monotonic_position_shared_with_dcb_events_when_both_capabilities_enabled() {
-        ReactorMongoEventStore eventStore = storeWith(STREAM, DCB);
-
-        eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
-        eventStore.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("SomethingHappened"))).block();
-        eventStore.append(List.of(taggedEvent("NameChanged", "name:1"))).block();
-
-        List<CloudEvent> nameEvents = eventStore.read(DcbCriteria.tags(Tag.parse("name:1"))).block().events();
-        List<CloudEvent> streamEvents = eventStore.read("stream-1", 0, Integer.MAX_VALUE)
-                .flatMapMany(es -> es.events()).collectList().block();
-
-        assertThat(requireNonNull(streamEvents)).hasSize(1);
-
-        long nameDefinedPosition = OccurrentCloudEventExtension.getPosition(nameEvents.get(0));
-        long streamEventPosition = OccurrentCloudEventExtension.getPosition(streamEvents.get(0));
-        long nameChangedPosition = OccurrentCloudEventExtension.getPosition(nameEvents.get(1));
-
-        // Positions are shared with DCB: the two DCB appends bracket the stream write in the single global sequence.
-        // A retried write may reserve (and abandon) an earlier block under contention, so positions can have gaps
-        // (ADR 0021); only strict monotonic ordering across the interleaved writes is guaranteed, never contiguity
-        // or a literal value (DcbAppendResult).
-        assertThat(nameDefinedPosition).isPositive();
-        assertThat(streamEventPosition).isGreaterThan(nameDefinedPosition);
-        assertThat(nameChangedPosition).isGreaterThan(streamEventPosition);
-        assertThat(eventStore.currentPosition().block()).isGreaterThanOrEqualTo(nameChangedPosition);
     }
 
     @Test

@@ -27,11 +27,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.Tag;
-import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -87,32 +83,6 @@ class SpringMongoEventStorePositionTest {
         MongoClient mongoClient = MongoClients.create(connectionString);
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-    }
-
-    @Test
-    void stream_events_get_a_monotonic_position_shared_with_dcb_when_stream_position_is_enabled() {
-        SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM, DCB).build());
-
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
-        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
-        eventStore.write("stream:1", WriteCondition.anyStreamVersion(), List.of(event("NameRenamed")));
-
-        List<CloudEvent> streamEvents = eventStore.read("stream:1").events().toList();
-        assertThat(streamEvents).hasSize(2);
-        long firstStreamEventPosition = OccurrentCloudEventExtension.getPosition(streamEvents.get(0));
-        long secondStreamEventPosition = OccurrentCloudEventExtension.getPosition(streamEvents.get(1));
-
-        CloudEvent dcbEvent = eventStore.read(DcbCriteria.tags(Tag.parse("name:1"))).events().get(0);
-        long dcbEventPosition = OccurrentCloudEventExtension.getPosition(dcbEvent);
-
-        // Positions are shared with DCB: the two writes bracket the DCB append in the single global sequence. A
-        // retried write may reserve (and abandon) an earlier block under contention, so positions can have gaps
-        // (DcbAppendResult: callers must not assume the positions of different appends are contiguous); only strict
-        // monotonic ordering across the interleaved writes is guaranteed.
-        assertThat(firstStreamEventPosition).isPositive();
-        assertThat(dcbEventPosition).isGreaterThan(firstStreamEventPosition);
-        assertThat(secondStreamEventPosition).isGreaterThan(dcbEventPosition);
-        assertThat(eventStore.currentPosition()).isGreaterThanOrEqualTo(secondStreamEventPosition);
     }
 
     @Test
@@ -211,10 +181,6 @@ class SpringMongoEventStorePositionTest {
                 .transactionConfig(mongoTransactionManager)
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(capability, additionalCapabilities);
-    }
-
-    private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

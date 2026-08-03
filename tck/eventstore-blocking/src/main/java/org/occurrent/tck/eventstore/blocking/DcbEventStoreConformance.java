@@ -222,6 +222,47 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
+        void reads_an_event_matching_either_a_type_only_or_a_tag_only_alternative() {
+            DcbAppendResult first = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_2)));
+            dcbEventStore().append(List.of(taggedEvent(SNAPSHOT, NAME_1)));
+            dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_2)));
+            dcbEventStore().append(List.of(taggedEvent(IMPORTED, "name:3")));
+
+            // One alternative constrains only a type, the other only a tag, which is a different shape from ORing
+            // two alternatives of the same kind. Combined with a lower bound, so the window and the union have to
+            // both be applied rather than one of them quietly winning.
+            DcbCriteria criteria = DcbCriteria.anyOf(DcbCriteria.type(CHANGED), DcbCriteria.tags(tag(NAME_1)));
+
+            assertThat(typesOf(dcbEventStore()
+                    .read(criteria, DcbReadOptions.afterPosition(first.lastSequencePosition())).events()))
+                    .as("Alternatives constraining different things must still be OR-ed, and the position window "
+                            + "must still apply to the union")
+                    .containsExactly(SNAPSHOT, CHANGED);
+        }
+
+        @Test
+        void combines_types_tags_and_excluded_types_in_one_alternative() {
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_1)));
+            dcbEventStore().append(List.of(taggedEvent(SNAPSHOT, NAME_1)));
+            dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_2)));
+
+            // All three constraints at once. The exclusion cannot name a listed type, because DcbCriterion rejects
+            // that at construction, so alongside a type list an exclusion can only ever name a type the list already
+            // leaves out. It is therefore redundant here by construction, and that is exactly what makes it worth
+            // asserting: a store treating excludedTypes as anything other than a filter, for example as a second
+            // positive list, would return the wrong events for a criterion that should behave as if it were absent.
+            DcbCriteria criteria = DcbCriteria.types(DEFINED, CHANGED)
+                    .tags(tag(NAME_1))
+                    .excludingTypes(SNAPSHOT);
+
+            assertThat(typesOf(dcbEventStore().read(criteria).events()))
+                    .as("A criterion carrying types, tags and an exclusion must apply all three, and an exclusion "
+                            + "that the type list already rules out must change nothing")
+                    .containsExactly(DEFINED, CHANGED);
+        }
+
+        @Test
         void reads_a_dcb_event_carrying_no_tags_through_a_type_scoped_criteria() {
             dcbEventStore().append(List.of(untaggedDcbEvent(DEFINED)));
 
@@ -262,6 +303,23 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             assertThat(matchesNothing.lastSequencePosition())
                     .as("lastSequencePosition is the store's DCB head, not the highest matched position, so a read "
                             + "that matched nothing must still report at least the position last appended")
+                    .isGreaterThanOrEqualTo(last.lastSequencePosition());
+        }
+
+        @Test
+        void observes_the_store_head_rather_than_the_highest_position_it_matched() {
+            DcbAppendResult matched = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            DcbAppendResult last = dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_2)));
+
+            DcbEventStream read = dcbEventStore().read(DcbCriteria.tags(tag(NAME_1)));
+
+            assertThat(typesOf(read.events()))
+                    .as("Only the event in the read boundary may come back").containsExactly(DEFINED);
+            assertThat(read.lastSequencePosition())
+                    .as("A read matching some but not all events must report the store head, which is past the "
+                            + "highest position it matched. Reporting the highest match instead is the mistake that "
+                            + "makes the head look like a per-query cursor")
+                    .isGreaterThan(matched.lastSequencePosition())
                     .isGreaterThanOrEqualTo(last.lastSequencePosition());
         }
     }
@@ -415,6 +473,54 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
                     .as("The position window selects the matching set first, and skip and limit then page within it, "
                             + "so neither may reach an event the window excluded")
                     .containsExactly(IMPORTED);
+
+            DcbReadOptions fromTheOtherEnd = DcbReadOptions
+                    .between(first.lastSequencePosition(), fourth.lastSequencePosition())
+                    .backwards()
+                    .skip(1)
+                    .limit(1);
+
+            assertThat(typesOf(dcbEventStore().read(DcbCriteria.tags(tag(NAME_1)), fromTheOtherEnd).events()))
+                    .as("Paging from the newest end must page within the same window, so the newest match inside it "
+                            + "is skipped and the one before it returned, never an event outside the window")
+                    .containsExactly(IMPORTED);
+        }
+
+        @Test
+        void a_backward_limit_beyond_the_match_count_returns_every_match() {
+            appendThreeEventsTaggedName1();
+
+            assertThat(typesOf(dcbEventStore()
+                    .read(DcbCriteria.tags(tag(NAME_1)), DcbReadOptions.fromBeginning().backwards().limit(10)).events()))
+                    .as("Asking for more matches than exist must behave the same from either end")
+                    .containsExactly(DEFINED, CHANGED, IMPORTED);
+        }
+
+        @Test
+        void a_skip_equal_to_the_match_count_returns_no_events() {
+            appendThreeEventsTaggedName1();
+
+            assertThat(dcbEventStore()
+                    .read(DcbCriteria.tags(tag(NAME_1)), DcbReadOptions.fromBeginning().skip(3)).events())
+                    .as("Skipping exactly as many matches as exist must leave nothing, which is the boundary case "
+                            + "either side of it is easy to get right by accident")
+                    .isEmpty();
+        }
+
+        @Test
+        void a_bounded_read_still_reports_the_true_store_head() {
+            DcbAppendResult first = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            DcbAppendResult last = dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_1)));
+
+            DcbEventStream bounded = dcbEventStore()
+                    .read(DcbCriteria.tags(tag(NAME_1)), DcbReadOptions.upToPosition(first.lastSequencePosition()));
+
+            assertThat(typesOf(bounded.events()))
+                    .as("The window must still bound which events come back").containsExactly(DEFINED);
+            assertThat(bounded.lastSequencePosition())
+                    .as("The head is the store's, not the window's, so bounding a read to an earlier position must "
+                            + "not make the head look older than it is")
+                    .isGreaterThanOrEqualTo(last.lastSequencePosition());
         }
 
         @Test
@@ -436,9 +542,16 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
                     .isEqualTo(whole);
         }
 
+        /**
+         * Three matches with a non-matching event between each pair, so the matches do not occupy consecutive
+         * positions. A store that paged over stored positions rather than over the matched set would pass every
+         * assertion below if the matches were contiguous, which is the whole reason for the interleaving.
+         */
         private void appendThreeEventsTaggedName1() {
             dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            dcbEventStore().append(List.of(taggedEvent(SNAPSHOT, NAME_2)));
             dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_1)));
+            dcbEventStore().append(List.of(taggedEvent(SNAPSHOT, NAME_2)));
             dcbEventStore().append(List.of(taggedEvent(IMPORTED, NAME_1)));
         }
     }
@@ -472,13 +585,22 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         @Test
         void respect_the_position_window() {
             DcbAppendResult first = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
-            dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_1)));
+            DcbAppendResult second = dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_1)));
             DcbCriteria criteria = DcbCriteria.tags(tag(NAME_1));
 
             assertThat(dcbEventStore().count(criteria, DcbReadOptions.afterPosition(first.lastSequencePosition())))
                     .as("count must only count inside the position window").isEqualTo(1);
+            assertThat(dcbEventStore().count(criteria, DcbReadOptions.upToPosition(first.lastSequencePosition())))
+                    .as("count must respect an upper bound as well as a lower one").isEqualTo(1);
+            assertThat(dcbEventStore().count(criteria,
+                    DcbReadOptions.between(first.lastSequencePosition(), second.lastSequencePosition())))
+                    .as("count must respect a window bounded at both ends").isEqualTo(1);
             assertThat(dcbEventStore().exists(criteria, DcbReadOptions.upToPosition(first.lastSequencePosition())))
                     .as("exists must answer for the position window it was given").isTrue();
+            assertThat(dcbEventStore().exists(criteria, DcbReadOptions.afterPosition(second.lastSequencePosition())))
+                    .as("A window holding no match must make exists false, which is the half a store answering "
+                            + "exists without applying the window would get wrong")
+                    .isFalse();
         }
 
         @Test
@@ -489,6 +611,15 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
                     taggedEvent(IMPORTED, NAME_1)));
             DcbCriteria criteria = DcbCriteria.tags(tag(NAME_1));
             DcbReadOptions narrowed = DcbReadOptions.fromBeginning().backwards().skip(2).limit(1);
+
+            // Paging options are ignored while the position window is not, so the two have to be exercised together.
+            // A store that discarded the whole DcbReadOptions rather than only its paging part would pass a test
+            // that only ever asked with fromBeginning().
+            long headAfterTwo = dcbEventStore().read(criteria, DcbReadOptions.fromBeginning().limit(2))
+                    .events().stream().mapToLong(OccurrentCloudEventExtension::getPosition).max().orElseThrow();
+            assertThat(dcbEventStore().count(criteria, DcbReadOptions.upToPosition(headAfterTwo).backwards().skip(2).limit(1)))
+                    .as("count must ignore direction, skip and limit while still applying the position window")
+                    .isEqualTo(2);
 
             assertThat(dcbEventStore().count(criteria, narrowed))
                     .as("count is documented to ignore direction, skip and limit, so it must count the whole "
