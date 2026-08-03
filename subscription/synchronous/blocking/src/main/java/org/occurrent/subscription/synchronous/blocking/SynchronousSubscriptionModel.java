@@ -18,7 +18,6 @@ package org.occurrent.subscription.synchronous.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
@@ -44,19 +43,14 @@ import java.util.function.Consumer;
 public class SynchronousSubscriptionModel extends RegisteringSubscribable implements SynchronousEventDispatcher, Consumer<List<CloudEvent>> {
 
     /**
-     * Creates a model that refuses a subscription filter on a {@code data} payload field, which is what it has always
-     * done.
+     * Several handlers, unlike the push models, which take one each. Fan-out is safe here because there is no broker
+     * and no acknowledgement to share: the events arrive from the write that just produced them, and a handler
+     * exception propagates to the writer rather than stranding the handlers behind it. Under a transaction the write
+     * rolls back, so nothing is folded by anyone. See ADR 90 for the isolation argument that makes the push sinks
+     * single-consumer, and the follow-up it leaves open for the no-transaction case here.
      */
     public SynchronousSubscriptionModel() {
-    }
-
-    /**
-     * Creates a model that can answer a subscription filter on a {@code data} payload field by reading it through
-     * {@code dataFieldReader}. Occurrent ships a Jackson-backed one in
-     * {@code occurrent-common-inmemory-filter-matching-jackson}.
-     */
-    public SynchronousSubscriptionModel(DataFieldReader dataFieldReader) {
-        super(dataFieldReader);
+        super(Consumers.MANY);
     }
 
     /**

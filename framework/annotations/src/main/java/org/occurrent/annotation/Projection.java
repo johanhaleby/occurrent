@@ -115,6 +115,11 @@ public @interface Projection {
      * Specify how the projection behaves during startup. The default defers to the framework
      * (typically {@link StartupMode#BACKGROUND} if replaying history, otherwise
      * {@link StartupMode#WAIT_UNTIL_STARTED}).
+     * <p>
+     * A {@link Source#PUSH} projection is the exception: its catch-up always replays from the beginning, so reading
+     * {@link StartupMode#DEFAULT} as "background because it replays history" would move every push projection off the
+     * startup path. {@code DEFAULT} therefore waits there, and only an explicit {@link StartupMode#BACKGROUND} does
+     * not.
      */
     StartupMode startupMode() default StartupMode.DEFAULT;
 
@@ -159,9 +164,10 @@ public @interface Projection {
      * push feed (RabbitMQ, Kafka, ...) instead, wrapped in a replay-then-push catch-up. Select the feed bean
      * with {@link #subscriptionModel()} or {@link #subscriptionModelName()}. Its type decides how live events are
      * delivered (a {@code PushSubscriptionModel} delivers CloudEvents, a {@code DomainEventFeed} delivers domain events
-     * directly). Push source is mutually exclusive with {@link Mode#SYNCHRONOUS} and with the catch-up start knobs
-     * ({@link #startAt()}, {@link #startAtGlobalPosition()}, {@link #resumeBehavior()}, {@link #startupMode()}), since
-     * the catch-up always replays from the beginning and live-resume is the broker's responsibility.
+     * directly). A push source is mutually exclusive with {@link Mode#SYNCHRONOUS}, and it rejects {@link #startAt()},
+     * {@link #startAtGlobalPosition()} and {@link #resumeBehavior()}, since the catch-up always replays from the
+     * beginning and where the live feed resumes is the broker's responsibility. {@link #startupMode()} <em>is</em>
+     * supported: set it to {@link StartupMode#BACKGROUND} to keep that replay off the startup path.
      */
     Source source() default Source.EVENT_STORE;
 

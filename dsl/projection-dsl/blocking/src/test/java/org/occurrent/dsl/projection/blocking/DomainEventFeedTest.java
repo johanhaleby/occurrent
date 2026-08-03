@@ -32,11 +32,17 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import java.net.URI;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,7 +66,12 @@ class DomainEventFeedTest {
 
         Throwable thrown = catchThrowable(() -> feed.register("counter", projection(), repository));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("counter").hasMessageContaining("already registered");
+        // The message comes from SingleConsumerMessages.singleConsumerOnly, shared with the push subscription models,
+        // so it names the registered projection and the one refused rather than saying "already registered".
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("counter")
+                .hasMessageContaining("already feeds")
+                .hasMessageContaining("refused");
     }
 
     @Test
@@ -120,25 +131,23 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void a_failed_catch_up_all_is_terminal_and_blocks_the_projections_behind_it() {
+    void a_failed_catch_up_all_is_terminal_for_the_projection() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(failingReader(store), converter, Counted::eventId);
 
-        ConcurrentHashMap<String, Integer> first = new ConcurrentHashMap<>();
-        ConcurrentHashMap<String, Integer> second = new ConcurrentHashMap<>();
-        feed.register("first", projection(), ViewStateRepository.create(first::get, first::put));
-        feed.register("second", projection(), ViewStateRepository.create(second::get, second::put));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
 
         Throwable catchUpFailure = catchThrowable(feed::catchUpAll);
         assertThat(catchUpFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
-        // The feed does not drop the poisoned projection, so it stays first in the fan-out and its stored failure
-        // blocks delivery to the one behind it. That is the terminal contract catchUpAll documents.
+        // The feed does not drop the poisoned projection, so every event fed afterwards fails fast instead of
+        // silently buffering behind a catch-up that never completed. That is the terminal contract catchUpAll
+        // documents. A feed drives exactly one projection now, so there is nothing behind it left to block.
         Throwable liveFailure = catchThrowable(() -> feed.accept(new Counted("1")));
 
         assertThat(liveFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
-        assertThat(second).isEmpty();
     }
 
     private static PositionOrderedReader failingReader(PositionOrderedReader delegate) {
@@ -180,23 +189,19 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void catch_up_of_a_single_id_catches_up_only_that_projection() {
+    void catch_up_of_the_registered_id_catches_up_the_projection() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
 
-        ConcurrentHashMap<String, Integer> firstRepo = new ConcurrentHashMap<>();
-        ConcurrentHashMap<String, Integer> secondRepo = new ConcurrentHashMap<>();
-        feed.register("first", projection(), ViewStateRepository.create(firstRepo::get, firstRepo::put));
-        feed.register("second", projection(), ViewStateRepository.create(secondRepo::get, secondRepo::put));
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
 
-        feed.catchUp("first");
+        feed.catchUp("counter");
         feed.accept(new Counted("live"));
 
-        // "first" was caught up and went live, so it saw the live event on top of its (empty) history.
-        assertThat(firstRepo.get("counter")).isEqualTo(1);
-        // "second" was never caught up, so it is still buffering and has not folded anything yet.
-        assertThat(secondRepo).isEmpty();
+        // Caught up (on empty history) and went live, so it saw the live event.
+        assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     @Test
@@ -211,7 +216,23 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void registering_two_projections_with_different_ids_does_not_throw() {
+    void catch_up_of_an_id_that_does_not_match_the_registered_projection_throws() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        // Distinct from catch_up_of_an_unregistered_id_throws: here a projection IS registered, just under a
+        // different id, so this exercises the mismatch branch rather than the nothing-registered one.
+        Throwable thrown = catchThrowable(() -> feed.catchUp("not-counter"));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("not-counter").hasMessageContaining("No projection");
+    }
+
+    @Test
+    void registering_two_projections_with_different_ids_throws() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
@@ -222,27 +243,112 @@ class DomainEventFeedTest {
 
         Throwable thrown = catchThrowable(() -> feed.register("counter-2", projection(), repository));
 
-        assertThat(thrown).isNull();
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("counter-1")
+                .hasMessageContaining("counter-2");
+
+        // The first registration is unaffected by the refused second one: it still works.
+        feed.catchUpAll();
+        feed.accept(new Counted("1"));
+        assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     @Test
-    void accept_with_metadata_fans_out_to_every_registered_projection_with_the_metadata_intact() {
+    void accept_with_metadata_feeds_the_registered_projection_with_the_metadata_intact() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
 
-        ConcurrentHashMap<String, Long> repoA = new ConcurrentHashMap<>();
-        ConcurrentHashMap<String, Long> repoB = new ConcurrentHashMap<>();
-        ViewStateRepository<Long, String> repositoryA = ViewStateRepository.create(repoA::get, repoA::put);
-        ViewStateRepository<Long, String> repositoryB = ViewStateRepository.create(repoB::get, repoB::put);
-        feed.register("a", positionKeyedProjection(), repositoryA);
-        feed.register("b", positionKeyedProjection(), repositoryB);
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        feed.register("positions", positionKeyedProjection(), repository);
         feed.catchUpAll();
 
         feed.accept(metadata("stream-1", 7L), new Counted("live"));
 
-        assertThat(repoA.get("stream-1")).isEqualTo(7L);
-        assertThat(repoB.get("stream-1")).isEqualTo(7L);
+        assertThat(repo.get("stream-1")).isEqualTo(7L);
+    }
+
+    @Test
+    void stopping_a_catch_up_mid_replay_does_not_write_the_marker_and_a_later_catch_up_replays_from_the_beginning() throws InterruptedException {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        CountDownLatch parked = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        AtomicInteger deliveries = new AtomicInteger();
+        // Blocks the replay right after it folds the first event, before the loop rechecks whether to keep going, so
+        // the test can call stopCatchUp() while a replay is genuinely still in flight instead of racing a sleep
+        // against it. Counts deliveries rather than reading the cumulative counter's final value, because a projection
+        // that folds "+1" onto its current state (like this one) double-counts once a second full replay folds on top
+        // of what the first, aborted one already wrote.
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, (id, state) -> {
+            repo.put(id, state);
+            if (deliveries.incrementAndGet() == 1) {
+                parked.countDown();
+                awaitUninterruptibly(proceed);
+            }
+        });
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId, marker);
+        feed.register("counter", projection(), repository);
+
+        Thread replay = new Thread(feed::catchUpAll);
+        replay.start();
+        parked.await();
+        feed.stopCatchUp();
+        proceed.countDown();
+        replay.join(TimeUnit.SECONDS.toMillis(5));
+
+        assertThat(replay.isAlive()).isFalse();
+        // Only the first event was folded, because the stop landed before the second one.
+        assertThat(deliveries.get()).isEqualTo(1);
+        // A partial replay is never recorded as a finished one.
+        assertThat(marker.exists("counter")).isFalse();
+
+        // The feed is still usable: a later catch-up replays the whole history again, from the beginning, so both
+        // events are folded once more rather than only the one the stop skipped.
+        feed.catchUpAll();
+        assertThat(deliveries.get()).isEqualTo(3);
+
+        feed.accept(new Counted("3"));
+        assertThat(deliveries.get()).isEqualTo(4);
+    }
+
+    private static void awaitUninterruptibly(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static final class InMemoryCheckpointStorage implements CheckpointStorage {
+        private final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
+
+        @Override
+        public Checkpoint read(String subscriptionId) {
+            return checkpoints.get(subscriptionId);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+            checkpoints.put(subscriptionId, checkpoint);
+            return checkpoint;
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            checkpoints.remove(subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return checkpoints.containsKey(subscriptionId);
+        }
     }
 
     private static Projection<Long, Counted, String> positionKeyedProjection() {

@@ -18,7 +18,6 @@ package org.occurrent.subscription.push.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Pushable;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
@@ -33,8 +32,13 @@ import java.util.function.Consumer;
  * RabbitMQ or Kafka listener, a Spring application event, or an HTTP endpoint. The application registers handlers with
  * {@link #subscribe(String, SubscriptionFilter, org.occurrent.subscription.StartAt, Consumer) subscribe} (directly, or
  * through the projection DSL) and the listener hands each received event to {@link #accept(CloudEvent)}, which routes it
- * to every handler whose {@link SubscriptionFilter} matches, on the calling thread. A handler exception propagates to
+ * to the handler if its {@link SubscriptionFilter} matches, on the calling thread. A handler exception propagates to
  * the caller, so the listener can decide whether to acknowledge or redeliver.
+ * <p>
+ * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
+ * what forces it: this model has exactly one per received event, so several handlers on it would share the decision to
+ * acknowledge or redeliver, and a handler that keeps failing would hold up every handler behind it. Declare one model
+ * per projection or saga, each fed by its own queue. See ADR 90.
  * <p>
  * Occurrent stays transport-neutral: this model has no dependency on any broker. The pushed events must carry the
  * Occurrent cloud-event extensions the handlers rely on (at minimum {@code streamid} and {@code streamversion}, add
@@ -50,23 +54,8 @@ import java.util.function.Consumer;
 public class PushSubscriptionModel extends RegisteringSubscribable implements Pushable {
 
     /**
-     * Creates a model that refuses a subscription filter on a {@code data} payload field, which is what it has always
-     * done.
-     */
-    public PushSubscriptionModel() {
-    }
-
-    /**
-     * Creates a model that can answer a subscription filter on a {@code data} payload field by reading it through
-     * {@code dataFieldReader}. Occurrent ships a Jackson-backed one in
-     * {@code occurrent-common-inmemory-filter-matching-jackson}.
-     */
-    public PushSubscriptionModel(DataFieldReader dataFieldReader) {
-        super(dataFieldReader);
-    }
-
-    /**
-     * Feed a single event to the model, routing it to every matching registered handler, on the calling thread.
+     * Feed a single event to the model, routing it to the registered handler if its filter matches, on the calling
+     * thread.
      *
      * @param cloudEvent The event received from the external source.
      */

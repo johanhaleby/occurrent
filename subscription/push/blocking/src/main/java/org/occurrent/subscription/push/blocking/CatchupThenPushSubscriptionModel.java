@@ -26,15 +26,29 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.ReplayFilters;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.occurrent.subscription.DurationToTimeoutConverter;
+import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -75,12 +89,30 @@ import java.util.stream.Stream;
  * delegated per-subscription to {@link BlockingHandover}, shared with {@code CatchupProjectionFeed}.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements Subscribable {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
+
+    private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
+
+    // Long enough that a replay noticing the shutdown at its next event always makes it, short enough that a parked
+    // fold cannot hold a closing context open. Matches how SagaSubscription bounds its own poller shutdown.
+    private static final Duration SHUTDOWN_REPLAY_TIMEOUT = Duration.ofSeconds(5);
 
     private final PositionOrderedReader reader;
     private final PushSubscriptionModel liveFeed;
     private final @Nullable CheckpointStorage catchupMarker;
     private final CatchupThenLiveOptions options;
+
+    // Set by stop(), cleared by start(...). Read by the replay so stopping the model interrupts a replay in flight, not
+    // just the live feed the replay has not handed over to yet.
+    private volatile boolean stopped = false;
+    private volatile boolean shuttingDown = false;
+    // Subscriptions whose replay is running. The live feed cannot answer for them: it knows the id (this model
+    // registers there first) but it is buffering rather than delivering, so it would report a subscription that is
+    // not yet folding anything as running.
+    private final ConcurrentMap<String, Future<Boolean>> replayingSubscriptions = new ConcurrentHashMap<>();
+    // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
+    // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
+    private final ConcurrentMap<String, Boolean> pauseRequestedDuringReplay = new ConcurrentHashMap<>();
 
     /**
      * @param reader          Reads the projection's history in position order for the catch-up replay.
@@ -121,35 +153,74 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
+        // The task needs to name itself to forget(), so the entry it removes is its own rather than whatever holds
+        // the id by then. Without that, a cancel followed by a re-subscribe of the same id lets this replay keep
+        // going against the new subscription's entry and then delete it, silently killing the new subscription.
+        AtomicReference<Future<Boolean>> self = new AtomicReference<>();
+        BlockingHandover.Source<CloudEvent> source = new BlockingHandover.Source<>() {
+            @Override
+            public boolean isAlreadyCaughtUp() {
+                return CatchupThenPushSubscriptionModel.this.isAlreadyCaughtUp(subscriptionId);
+            }
 
-        try {
-            handover.catchUp(new BlockingHandover.Source<>() {
-                @Override
-                public boolean isAlreadyCaughtUp() {
-                    return CatchupThenPushSubscriptionModel.this.isAlreadyCaughtUp(subscriptionId);
-                }
+            @Override
+            public Stream<CloudEvent> replay() {
+                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
+            }
 
-                @Override
-                public Stream<CloudEvent> replay() {
-                    return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning());
-                }
+            @Override
+            public boolean keepReplaying() {
+                return shouldKeepReplaying(subscriptionId, self.get());
+            }
 
-                @Override
-                public void markCaughtUp() {
-                    CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
-                }
-            });
-        } catch (RuntimeException | Error e) {
-            // The handover was registered before the replay, so a failure here would otherwise leave a handler that
-            // rethrows the failure for every later event, taking the id with it and starving the handlers behind it.
-            // Error is caught alongside RuntimeException and rethrown unchanged, because the handover only records a
-            // RuntimeException as its stored failure. So something like a NoClassDefFoundError from a lazily loaded
-            // class inside the fold would otherwise leave the registration in place AND leave the handover buffering
-            // every live event until it overflows, surfacing far from the cause.
-            liveFeed.cancelSubscription(subscriptionId);
-            throw e;
+            @Override
+            public void markCaughtUp() {
+                CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
+            }
+        };
+
+        FutureTask<Boolean> replay = new FutureTask<>(() -> {
+            final boolean caughtUp;
+            try {
+                caughtUp = handover.catchUp(source);
+            } catch (RuntimeException | Error e) {
+                // The handover was registered before the replay, so a failure here would otherwise leave a handler
+                // that rethrows it for every later event while holding the id. Released here rather than in
+                // waitUntilStarted so a caller that never waits still gets it, and one that does finds the id free.
+                // Logged because under startupMode = BACKGROUND nobody waits, and the failure would otherwise reach
+                // no one. Error is caught alongside RuntimeException because the handover records only the latter, so
+                // something like a NoClassDefFoundError from the fold would leave the registration in place.
+                log.error("Catch-up failed for subscription {}, releasing its registration on the live feed. It received "
+                        + "no replay and will receive no live events until it is subscribed again.", subscriptionId, e);
+                forget(subscriptionId, self.get());
+                liveFeed.cancelSubscription(subscriptionId);
+                throw e;
+            }
+            forget(subscriptionId, self.get());
+            if (!caughtUp) {
+                // Stopped rather than failed, so the handover is intact and nothing is marked. Release the
+                // registration anyway: nothing will revive this replay, and leaving it registered would leave a
+                // subscription that silently drops every live event. A fresh subscribe is the recovery, the same as
+                // for the event-store catch-up model.
+                liveFeed.cancelSubscription(subscriptionId);
+                return false;
+            }
+            applyPendingPauseIfAny(subscriptionId);
+            return true;
+        });
+        self.set(replay);
+        // Registered before the thread starts, so isRunning(id) answers for it the moment subscribe returns rather than
+        // whenever the replay thread happens to get scheduled.
+        replayingSubscriptions.put(subscriptionId, replay);
+        Thread.ofVirtual().name("occurrent-push-catchup-" + subscriptionId).start(replay);
+        return new CatchingUpSubscription(subscriptionId, replay);
+    }
+
+    // Removes this replay's own entry, never one a later subscribe put there under the same id.
+    private void forget(String subscriptionId, @Nullable Future<Boolean> replay) {
+        if (replay != null) {
+            replayingSubscriptions.remove(subscriptionId, replay);
         }
-        return new AlreadyStartedSubscription(subscriptionId);
     }
 
     private boolean isAlreadyCaughtUp(String subscriptionId) {
@@ -163,11 +234,159 @@ public class CatchupThenPushSubscriptionModel implements Subscribable {
         }
     }
 
-    private record AlreadyStartedSubscription(String id) implements Subscription {
+    /**
+     * Whether the replay for {@code subscriptionId} should keep going: the model is neither shutting down nor stopped,
+     * and the subscription has not been cancelled out from under it.
+     */
+    private boolean shouldKeepReplaying(String subscriptionId, @Nullable Future<Boolean> replay) {
+        return !shuttingDown && !stopped && replay != null && replayingSubscriptions.get(subscriptionId) == replay;
+    }
+
+    // Checked against the live feed rather than applied blindly. A stop landing between the last replayed event and
+    // here already paused everything, and pausing again throws, which would report a catch-up that actually finished
+    // as a failure.
+    private void applyPendingPauseIfAny(String subscriptionId) {
+        if (pauseRequestedDuringReplay.remove(subscriptionId) != null && liveFeed.isRunning(subscriptionId)) {
+            liveFeed.pauseSubscription(subscriptionId);
+        }
+    }
+
+    // --- Life cycle. The live feed owns delivery, so most of this is a fan-out; what this model adds is an answer for
+    // the window where a replay is in flight, which the live feed cannot give because it is buffering rather than
+    // delivering. ---
+
+    @Override
+    public void stop() {
+        stopped = true;
+        liveFeed.stop();
+    }
+
+    @Override
+    public void start(boolean resumeSubscriptionsAutomatically) {
+        stopped = false;
+        liveFeed.start(resumeSubscriptionsAutomatically);
+    }
+
+    @Override
+    public boolean isRunning() {
+        return !replayingSubscriptions.isEmpty() || liveFeed.isRunning();
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return replayingSubscriptions.containsKey(subscriptionId) || liveFeed.isRunning(subscriptionId);
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return pauseRequestedDuringReplay.containsKey(subscriptionId) || liveFeed.isPaused(subscriptionId);
+    }
+
+    @Override
+    public void pauseSubscription(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        if (replayingSubscriptions.containsKey(subscriptionId)) {
+            // The live feed would accept the pause, but the replay does not go through it, so pausing there now would
+            // report the subscription paused while its history keeps folding. Record it and apply it at the handover.
+            pauseRequestedDuringReplay.put(subscriptionId, true);
+        } else {
+            liveFeed.pauseSubscription(subscriptionId);
+        }
+    }
+
+    @Override
+    public Subscription resumeSubscription(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        if (pauseRequestedDuringReplay.remove(subscriptionId) != null) {
+            // Paused and resumed while its replay was still running, so the live feed was never told and has nothing to
+            // resume. Dropping the request is the whole of it, but hand back a handle that still tracks the replay
+            // rather than one that claims to be started.
+            Future<Boolean> replay = replayingSubscriptions.get(subscriptionId);
+            if (replay != null) {
+                return new CatchingUpSubscription(subscriptionId, replay);
+            }
+            // The replay finished between dropping the request and looking it up, so whether the handover managed to
+            // apply the pause first is a race. Resume only if it actually landed, since the live feed refuses to
+            // resume a subscription it never paused.
+            return liveFeed.isPaused(subscriptionId)
+                    ? liveFeed.resumeSubscription(subscriptionId)
+                    : new CatchingUpSubscription(subscriptionId, CompletableFuture.completedFuture(true));
+        }
+        return liveFeed.resumeSubscription(subscriptionId);
+    }
+
+    @Override
+    public void cancelSubscription(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        // Removing it here is what stops a replay in flight: shouldKeepReplaying reads this map.
+        replayingSubscriptions.remove(subscriptionId);
+        pauseRequestedDuringReplay.remove(subscriptionId);
+        liveFeed.cancelSubscription(subscriptionId);
+    }
+
+    /**
+     * Stops every replay still in flight and waits for them to unwind before shutting the live feed down.
+     * <p>
+     * The waiting is the point. A replay runs on its own thread, so without it a context that is closing would leave
+     * one folding into a store that is closing with it, surfacing as an error from a thread nobody owns. A replay
+     * notices the shutdown at its next event, so the wait is normally brief. It gives up after five seconds anyway,
+     * because the fold is application code and may never return.
+     */
+    @Override
+    public void shutdown() {
+        shuttingDown = true;
+        awaitReplays(SHUTDOWN_REPLAY_TIMEOUT);
+        replayingSubscriptions.clear();
+        pauseRequestedDuringReplay.clear();
+        liveFeed.shutdown();
+    }
+
+    private void awaitReplays(Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        for (Future<Boolean> replay : replayingSubscriptions.values()) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                return;
+            }
+            try {
+                replay.get(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (TimeoutException e) {
+                return;
+            } catch (ExecutionException e) {
+                // Already reported to whoever waited on this subscription, and a shutdown has nowhere useful to put it.
+            }
+        }
+    }
+
+    /**
+     * A subscription whose catch-up is running on its own thread. {@code waitUntilStarted} is the only thing that joins
+     * it, which is what lets a caller choose to keep the replay off the startup path.
+     */
+    private record CatchingUpSubscription(String id, Future<Boolean> replay) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
-            // The catch-up replay completes synchronously in subscribe before this handle is returned.
-            return true;
+            Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
+            try {
+                // false when the replay was stopped rather than finished: not started, but not a failure either.
+                return replay.get(safeTimeout.timeout(), safeTimeout.timeUnit());
+            } catch (TimeoutException e) {
+                return false;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            } catch (ExecutionException e) {
+                // Rethrown rather than reported as false, unlike the event-store catch-up's handle. A projection's
+                // runner discards this return value, so swallowing a replay failure would start an application whose
+                // read model is silently empty.
+                switch (e.getCause()) {
+                    case RuntimeException cause -> throw cause;
+                    case Error cause -> throw cause;
+                    case null, default -> throw new IllegalStateException("The catch-up for subscription '" + id + "' failed", e.getCause());
+                }
+            }
         }
     }
 }

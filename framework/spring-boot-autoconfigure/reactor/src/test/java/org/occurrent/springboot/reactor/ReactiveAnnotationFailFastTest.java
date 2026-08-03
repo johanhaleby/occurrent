@@ -30,16 +30,28 @@ import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.projection.reactor.DomainEventFeed;
 import org.occurrent.dsl.snapshot.SnapshotView;
+import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.filter.Filter;
+import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -126,7 +138,7 @@ class ReactiveAnnotationFailFastTest {
     }
 
     @Test
-    void a_push_projection_does_not_support_the_catchup_start_knobs() {
+    void a_push_projection_that_sets_a_start_position_fails_fast_and_points_at_startup_mode() {
         new ApplicationContextRunner()
                 .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
                 .withUserConfiguration(ConverterSubscribableAndPushFeedConfiguration.class, PushWithStartKnobProjectionConfiguration.class)
@@ -134,7 +146,12 @@ class ReactiveAnnotationFailFastTest {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
                             .isInstanceOf(IllegalArgumentException.class)
-                            .hasMessageContaining("does not support the catch-up start knobs");
+                            .hasMessageContaining("cannot set startAt, startAtGlobalPosition or resumeBehavior")
+                            // startupMode is no longer in that list, reworded to match the blocking stack's message
+                            // exactly, since keeping a large replay off the startup path is the reason someone
+                            // reaches for it here.
+                            .hasMessageContaining("startupMode = BACKGROUND")
+                            .hasMessageNotContaining("does not support the catch-up start knobs");
                 });
     }
 
@@ -161,6 +178,38 @@ class ReactiveAnnotationFailFastTest {
                     assertThat(context.getStartupFailure())
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining("neither a PushSubscriptionModel nor a DomainEventFeed");
+                });
+    }
+
+    @Test
+    void two_push_projections_on_the_same_push_subscription_model_fail_the_context_naming_both_ids() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(SharedPushModelConfiguration.class, TwoPushSinkProjectionsConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("push-sink-a")
+                            .hasMessageContaining("push-sink-b")
+                            .hasMessageContaining("a push sink feeds exactly one consumer")
+                            .hasMessageContaining("Declare one sink per projection");
+                });
+    }
+
+    @Test
+    void two_push_projections_on_the_same_domain_event_feed_fail_the_context_naming_both_ids() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(SharedDomainEventFeedConfiguration.class, TwoDomainFeedSinkProjectionsConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("domain-feed-sink-a")
+                            .hasMessageContaining("domain-feed-sink-b")
+                            .hasMessageContaining("a push sink feeds exactly one consumer")
+                            .hasMessageContaining("Declare one sink per projection");
                 });
     }
 
@@ -330,6 +379,166 @@ class ReactiveAnnotationFailFastTest {
         PushWrongFeedTypeProjectionHolder pushWrongFeedTypeProjectionHolder() {
             return new PushWrongFeedTypeProjectionHolder();
         }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class SharedPushModelConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> cloudEventConverter() {
+            return testEventConverter();
+        }
+
+        @Bean
+        PushSubscriptionModel pushModel() {
+            return new PushSubscriptionModel();
+        }
+
+        // A real fake, not a mock: the reactive catch-up calls hasElement() on what read() returns, and a mock's null
+        // default breaks there before the sink collision is ever reached.
+        @Bean
+        CheckpointStorage checkpointStorage() {
+            return new CheckpointStorage() {
+                @Override
+                public Mono<Checkpoint> read(String subscriptionId) {
+                    return Mono.empty();
+                }
+
+                @Override
+                public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                    return Mono.just(checkpoint);
+                }
+
+                @Override
+                public Mono<Void> delete(String subscriptionId) {
+                    return Mono.empty();
+                }
+            };
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, store::put);
+        }
+
+        @Bean
+        PositionOrderedReader reader() {
+            return new PositionOrderedReader() {
+                @Override
+                public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    return Flux.empty();
+                }
+
+                @Override
+                public Mono<Long> currentPosition() {
+                    return Mono.just(0L);
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TwoPushSinkProjectionsConfiguration {
+        @Bean
+        TwoPushSinkProjections twoPushSinkProjections() {
+            return new TwoPushSinkProjections();
+        }
+    }
+
+    // Both factory methods resolve the same shared PushSubscriptionModel bean by type (neither names it explicitly),
+    // so the second registration collides with the first on the underlying sink.
+    static class TwoPushSinkProjections {
+        @org.occurrent.annotation.Projection(id = "push-sink-a", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> first() {
+            return countProjection();
+        }
+
+        @org.occurrent.annotation.Projection(id = "push-sink-b", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> second() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class SharedDomainEventFeedConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> cloudEventConverter() {
+            return testEventConverter();
+        }
+
+        // A DomainEventFeed is not itself a Subscribable, unlike PushSubscriptionModel, so without this bean
+        // afterSingletonsInstantiated's early-return guard would skip annotation processing entirely and the
+        // collision below would never be reached.
+        @Bean
+        Subscribable subscribable() {
+            return mock(Subscribable.class);
+        }
+
+        @Bean
+        DomainEventFeed<TestEvent> domainEventFeed(CloudEventConverter<TestEvent> converter) {
+            // A real (empty) reader rather than a mock: DomainEventFeed.register validates writesPosition() before
+            // the single-consumer check even runs, and a Mockito mock's boolean default (false) trips that first.
+            PositionOrderedReader emptyReader = new PositionOrderedReader() {
+                @Override
+                public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    return Flux.empty();
+                }
+
+                @Override
+                public Mono<Long> currentPosition() {
+                    return Mono.just(0L);
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+            return new DomainEventFeed<>(emptyReader, converter, event -> "k");
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, store::put);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TwoDomainFeedSinkProjectionsConfiguration {
+        @Bean
+        TwoDomainFeedSinkProjections twoDomainFeedSinkProjections() {
+            return new TwoDomainFeedSinkProjections();
+        }
+    }
+
+    // Both factory methods resolve the same shared DomainEventFeed bean by type, so the second register() call
+    // collides with the first: the feed is claimed synchronously, before any catch-up runs, so the mocked reader is
+    // never touched.
+    static class TwoDomainFeedSinkProjections {
+        @org.occurrent.annotation.Projection(id = "domain-feed-sink-a", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> first() {
+            return countProjection();
+        }
+
+        @org.occurrent.annotation.Projection(id = "domain-feed-sink-b", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> second() {
+            return countProjection();
+        }
+    }
+
+    private static org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> countProjection() {
+        return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                .id(event -> "k")
+                .on(TestEvent.class, (state, event) -> state + 1)
+                .build();
     }
 
     static class PushWrongFeedTypeProjectionHolder {

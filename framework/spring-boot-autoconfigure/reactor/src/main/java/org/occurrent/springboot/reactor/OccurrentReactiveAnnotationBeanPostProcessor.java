@@ -26,6 +26,7 @@ import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.context.ApplicationContext;
@@ -58,7 +59,7 @@ import java.util.Set;
  * registry, and delegates the actual annotation processing to the package-private collaborators built in
  * {@link #setApplicationContext}.
  */
-class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton {
+class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware, SmartInitializingSingleton, DisposableBean {
 
     private ApplicationContext applicationContext;
 
@@ -127,6 +128,16 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         projectionRegistrar.catchUpCollectedFeeds();
         for (Object[] sm : snapshotMethods) {
             snapshotRegistrar.processSnapshotAnnotation(applicationContext.getBean((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]);
+        }
+    }
+
+    // Stop every catch-up the projection registrar started, so no replay outlives the context that owns the store it
+    // is folding into. The blocking twin has had this hook since the push catch-up gained a life cycle. This class
+    // implemented no destroy callback at all until the reactor model gained one too.
+    @Override
+    public void destroy() {
+        if (projectionRegistrar != null) {
+            projectionRegistrar.close();
         }
     }
 

@@ -76,6 +76,8 @@ public final class CatchupProjectionFeed<E> {
     private final String id;
 
     private final ReactiveHandover<DeliveredEvent<E>> handover;
+    // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
+    private volatile boolean stopped = false;
 
     private CatchupProjectionFeed(String id, BiFunction<EventMetadata, E, Mono<Void>> fold, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -210,11 +212,6 @@ public final class CatchupProjectionFeed<E> {
         return handover.accept(new DeliveredEvent<>(metadata, event));
     }
 
-    // Package-private: lets DomainEventFeed.catchUp(String) find the one feed matching an id among several registered.
-    String id() {
-        return id;
-    }
-
     /**
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), record the
      * completion marker, then start delivering the live feed. The returned {@link Mono} completes when the replay and
@@ -223,6 +220,13 @@ public final class CatchupProjectionFeed<E> {
      * @return A {@link Mono} that completes when the catch-up replay has finished and the feed has gone live.
      */
     public Mono<Void> catchUp() {
+        // Cleared here rather than on subscribe, so a feed stopped once can catch up again instead of stopping
+        // instantly on the first replayed event. Deliberately NOT wrapped in Mono.defer: the handover subscribes its
+        // own pipeline as soon as this call is made, so deferring would let a re-subscription of the returned Mono
+        // start a second catch-up over the same one-subscriber live sink, which fails it permanently.
+        stopped = false;
+        // then() drops whether the catch-up finished or was stopped. A stop here is always one this feed's own owner
+        // asked for, so it already knows.
         return handover.catchUp(new ReactiveHandover.Source<>() {
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
@@ -236,10 +240,30 @@ public final class CatchupProjectionFeed<E> {
             }
 
             @Override
+            public boolean keepReplaying() {
+                return !stopped;
+            }
+
+            @Override
             public Mono<Void> markCaughtUp() {
                 return CatchupProjectionFeed.this.markCaughtUp();
             }
-        });
+        }).then();
+    }
+
+    /**
+     * Stop a replay still in flight. It notices at its next event and unwinds without draining the live buffer, going
+     * live, or recording the completion marker, so a partial replay is never recorded as a finished one and the next
+     * {@link #catchUp()} replays the whole history again. A stop is not a failure: the feed stays usable rather than
+     * failing every later event.
+     */
+    public void stopCatchUp() {
+        stopped = true;
+    }
+
+    // Package-private: lets DomainEventFeed check the id it was given and name the projection it already has.
+    String id() {
+        return id;
     }
 
     // A null id would collapse every such event to one de-dup key and silently drop deliveries, so fail loud instead.

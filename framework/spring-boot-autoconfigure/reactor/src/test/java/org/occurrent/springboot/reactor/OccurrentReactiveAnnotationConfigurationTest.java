@@ -16,21 +16,52 @@
 
 package org.occurrent.springboot.reactor;
 
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.Source;
+import org.occurrent.annotation.StartupMode;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.filter.Filter;
+import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+import java.net.URI;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Pins that the store-neutral reactive configuration actually contributes the annotation post-processor, and that the
- * subscription kill switch removes it. Both halves are needed: an absence-only test passes just as happily when the
- * {@code @Bean} method is gone entirely.
+ * Asserts that the store-neutral reactive configuration actually contributes the annotation post-processor, that the
+ * subscription kill switch removes it, and that Spring actually calls {@code destroy} on it when the context shuts
+ * down. All three are needed: an absence-only test passes just as happily when the {@code @Bean} method is gone
+ * entirely, and the destroy callback is what stops a background push or domain-feed catch-up replay
+ * ({@code ProjectionAnnotationRegistrar.close()}) from outliving the context that owns the store it folds into.
  * <p>
- * The reactive twin of {@code AnnotationBeanPostProcessorDestroyCallbackTest} in the blocking module, and the only
- * container-free coverage of this configuration class (the store starter's equivalent is Docker-gated).
+ * The reactive twin of {@code AnnotationBeanPostProcessorDestroyCallbackTest} in the blocking module (which asserts
+ * the same destroy callback firing, there for a callback that also stops saga timer pollers, which this stack has
+ * none of), and the only container-free coverage of this configuration class (the store starter's equivalent is
+ * Docker-gated).
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class OccurrentReactiveAnnotationConfigurationTest {
@@ -53,5 +84,185 @@ class OccurrentReactiveAnnotationConfigurationTest {
     void turning_subscriptions_off_removes_the_post_processor_entirely() {
         runner.withPropertyValues("occurrent.subscription.enabled=false")
                 .run(context -> assertThat(context).doesNotHaveBean(OccurrentReactiveAnnotationBeanPostProcessor.class));
+    }
+
+    // Both starters moved BackgroundCatchupFailures to org.occurrent.springboot.common, contributed by each of them.
+    // Without these, deleting the @Bean method from this configuration class would break no test here: the
+    // BackgroundCatchupFailureTest declares its own bean in the user configuration, which satisfies
+    // @ConditionalOnMissingBean regardless of whether the starter contributes one.
+    @Test
+    void the_background_catchup_failures_bean_is_contributed_by_default() {
+        runner.run(context -> assertThat(context).hasSingleBean(BackgroundCatchupFailures.class));
+    }
+
+    @Test
+    void the_background_catchup_failures_bean_is_contributed_when_subscriptions_are_explicitly_enabled() {
+        runner.withPropertyValues("occurrent.subscription.enabled=true")
+                .run(context -> assertThat(context).hasSingleBean(BackgroundCatchupFailures.class));
+    }
+
+    @Test
+    void turning_subscriptions_off_removes_the_background_catchup_failures_bean_entirely() {
+        runner.withPropertyValues("occurrent.subscription.enabled=false")
+                .run(context -> assertThat(context).doesNotHaveBean(BackgroundCatchupFailures.class));
+    }
+
+    @Test
+    void closing_the_context_runs_the_destroy_callback_that_stops_background_catch_up_replays() {
+        ParkedReplayConfiguration.reset();
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(ParkedReplayConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(ParkedReplayConfiguration.FIRST_EVENT_PARKED[0].await(5, TimeUnit.SECONDS)).isTrue();
+
+                    // Runs close() on its own thread: it blocks inside CatchupThenPushSubscriptionModel.shutdown(),
+                    // which waits for the still-parked replay below to unwind, so closing on this thread would
+                    // deadlock against the release further down.
+                    Thread closer = new Thread(context::close);
+                    closer.start();
+                    closer.join(200);
+                    // Confirms close() is genuinely blocked awaiting the parked replay, i.e. that the destroy
+                    // callback already reached shutdown() and is waiting there, before the replay is released.
+                    // Without this ordering, releasing it here would prove nothing about whether the stop landed.
+                    assertThat(closer.isAlive()).isTrue();
+
+                    ParkedReplayConfiguration.PROCEED[0].countDown();
+                    closer.join(TimeUnit.SECONDS.toMillis(5));
+                    assertThat(closer.isAlive()).isFalse();
+                });
+
+        // Only the first of two events was folded: the destroy callback's shutdown() landed the stop before the
+        // second event's turn (CatchupThenPushSubscriptionModel's concatMap re-checks keepReplaying() between the
+        // two). An empty ProjectionAnnotationRegistrar.close() body, or a destroy() that stopped calling it, would
+        // leave this at 2 instead.
+        assertThat(ParkedReplayConfiguration.FOLDED.get()).isEqualTo(1);
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class ParkedReplayConfiguration {
+
+        private static final CountDownLatch[] FIRST_EVENT_PARKED = {new CountDownLatch(1)};
+        private static final CountDownLatch[] PROCEED = {new CountDownLatch(1)};
+        private static final AtomicInteger FOLDED = new AtomicInteger();
+
+        static void reset() {
+            FIRST_EVENT_PARKED[0] = new CountDownLatch(1);
+            PROCEED[0] = new CountDownLatch(1);
+            FOLDED.set(0);
+        }
+
+        @Bean
+        PushSubscriptionModel pushModel() {
+            return new PushSubscriptionModel();
+        }
+
+        @Bean
+        CheckpointStorage checkpointStorage() {
+            return new CheckpointStorage() {
+                @Override
+                public Mono<Checkpoint> read(String subscriptionId) {
+                    return Mono.empty();
+                }
+
+                @Override
+                public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                    return Mono.just(checkpoint);
+                }
+
+                @Override
+                public Mono<Void> delete(String subscriptionId) {
+                    return Mono.empty();
+                }
+            };
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, (id, value) -> {
+                store.put(id, value);
+                // Blocks the fold of the first event until the test releases it, so the replay is genuinely still
+                // in flight (parked between the two events below) when the test calls context.close().
+                if (FOLDED.incrementAndGet() == 1) {
+                    FIRST_EVENT_PARKED[0].countDown();
+                    try {
+                        if (!PROCEED[0].await(10, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("Timed out waiting to be released");
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    }
+                }
+            });
+        }
+
+        // Two events, so a second one that is never folded is what proves the stop landed rather than the replay
+        // simply running out of history on its own.
+        @Bean
+        PositionOrderedReader reader() {
+            return new PositionOrderedReader() {
+                @Override
+                public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    return Flux.just(cloudEvent("first"), cloudEvent("second"));
+                }
+
+                @Override
+                public Mono<Long> currentPosition() {
+                    return Mono.just(2L);
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> cloudEventConverter() {
+            return new CloudEventConverter<>() {
+                @Override
+                public CloudEvent toCloudEvent(TestEvent domainEvent) {
+                    return cloudEvent(domainEvent.id());
+                }
+
+                @Override
+                public TestEvent toDomainEvent(CloudEvent cloudEvent) {
+                    return new TestEvent(cloudEvent.getId());
+                }
+
+                @Override
+                public String getCloudEventType(Class<? extends TestEvent> type) {
+                    return type.getSimpleName();
+                }
+            };
+        }
+
+        @Bean
+        BackgroundProjection backgroundProjection() {
+            return new BackgroundProjection();
+        }
+
+        static class BackgroundProjection {
+            @Projection(id = "reactive-config-destroy-callback-background", source = Source.PUSH, startupMode = StartupMode.BACKGROUND)
+            org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+                return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                        .id(event -> "k")
+                        .on(TestEvent.class, (state, event) -> state + 1)
+                        .build();
+            }
+        }
+
+        record TestEvent(String id) {
+        }
+
+        private static CloudEvent cloudEvent(String id) {
+            return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("TestEvent").build();
+        }
     }
 }
