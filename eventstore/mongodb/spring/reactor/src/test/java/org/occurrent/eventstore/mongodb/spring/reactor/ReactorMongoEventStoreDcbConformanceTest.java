@@ -18,9 +18,8 @@ package org.occurrent.eventstore.mongodb.spring.reactor;
 
 import com.mongodb.ConnectionString;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.tck.eventstore.blocking.DcbEventStoreConformance;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.eventstore.blocking.StreamConcurrencyConformance;
 import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.junit.jupiter.Container;
@@ -31,12 +30,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Runs the blocking stream write-write concurrency suite against the reactive store through
- * {@link BlockingEventStoreOverReactive}, so the scenarios are described once rather than a second time in terms of
- * {@code Mono} and {@code Flux}.
+ * Runs the blocking DCB suite against the reactive store through {@link BlockingEventStoreOverReactive}, so the
+ * scenarios are described once rather than a second time in terms of {@code Mono} and {@code Flux}.
  */
 @Testcontainers
-class ReactorMongoEventStoreStreamConcurrencyConformanceTest extends StreamConcurrencyConformance {
+class ReactorMongoEventStoreDcbConformanceTest extends DcbEventStoreConformance {
 
     @Container
     private static final MongoDBContainer mongoDBContainer;
@@ -59,6 +57,6 @@ class ReactorMongoEventStoreStreamConcurrencyConformanceTest extends StreamConcu
 
     @Override
     protected EventStoreFixture createFixture() {
-        return new ReactorMongoEventStoreConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"), TimeRepresentation.RFC_3339_STRING);
+        return new ReactorMongoEventStoreConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
     }
 }

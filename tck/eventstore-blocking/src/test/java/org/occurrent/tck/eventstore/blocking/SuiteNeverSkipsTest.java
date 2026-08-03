@@ -28,6 +28,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
+import org.occurrent.eventstore.api.dcb.DcbEventStore;
 
 import java.util.Set;
 
@@ -36,9 +37,9 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
 
 /**
  * A TCK that can be satisfied by doing nothing is worse than no TCK, so this runs {@link StreamEventStoreConformance},
- * {@link StreamConcurrencyConformance}, {@link StreamPositionConformance} and {@link StreamPositionDisabledConformance}
- * against a store that honours none of the contract and asserts that the suite notices. Every test must fail, none
- * may pass, and none may be skipped or aborted.
+ * {@link StreamConcurrencyConformance}, {@link StreamPositionConformance}, {@link StreamPositionDisabledConformance},
+ * {@link DcbEventStoreConformance} and {@link DcbStreamInteropConformance} against a store that honours none of the
+ * contract and asserts that the suite notices. Every test must fail, none may pass, and none may be skipped or aborted.
  * <p>
  * The last part is the one worth having. The suites are written without {@code Assumptions} on purpose, so that an
  * unsupported behaviour fails loudly instead of vanishing from the report, and this is the only check that the rule is
@@ -69,6 +70,16 @@ class SuiteNeverSkipsTest {
     @Test
     void the_position_disabled_suite_fails_every_test_and_skips_none_of_them_against_a_fixture_that_declines_it() {
         assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingPositionDisabledConformance.class);
+    }
+
+    @Test
+    void the_dcb_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbConformance.class);
+    }
+
+    @Test
+    void the_dcb_stream_interop_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbStreamInteropConformance.class);
     }
 
     private static void assertSuiteFailsEveryTestAndSkipsNone(Class<?> suite) {
@@ -265,6 +276,87 @@ class SuiteNeverSkipsTest {
                 }
 
                 // storeWithoutPosition() deliberately left at its default: Optional.empty()
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingConformance}, but for {@link DcbEventStoreConformance}. Every DCB call against
+     * {@link NoopStore} throws {@link UnsupportedOperationException}, so every DCB test must fail rather than pass or
+     * skip.
+     */
+    static class HonoursNothingDcbConformance extends DcbEventStoreConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.DCB);
+                }
+
+                @Override
+                public DcbEventStore dcbEventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbAppendConditionModel appendConditionModel() {
+                    return DcbAppendConditionModel.EXACT_CRITERIA;
+                }
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingConformance}, but for {@link DcbStreamInteropConformance}, which needs both
+     * {@link EventStoreCapability#STREAM} and {@link EventStoreCapability#DCB}. Every call against {@link NoopStore}
+     * throws {@link UnsupportedOperationException}, so every test must fail rather than pass or skip.
+     */
+    static class HonoursNothingDcbStreamInteropConformance extends DcbStreamInteropConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.STREAM, EventStoreCapability.DCB);
+                }
+
+                @Override
+                public EventStore eventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreQueries queries() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreOperations operations() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public ReadEventStreamWithFilter filteredReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public PositionOrderedReader positionOrderedReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbEventStore dcbEventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbAppendConditionModel appendConditionModel() {
+                    return DcbAppendConditionModel.EXACT_CRITERIA;
+                }
             };
         }
     }

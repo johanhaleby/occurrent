@@ -20,6 +20,7 @@ import com.mongodb.ConnectionString;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.blocking.StreamEventStoreConformance;
+import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;

@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
+import org.occurrent.tck.eventstore.blocking.DcbAppendConditionModel;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
 
@@ -81,6 +82,11 @@ class InMemoryEventStoreConformanceFixture implements EventStoreFixture {
     @Override
     public DcbEventStore dcbEventStore() {
         return eventStore;
+    }
+
+    @Override
+    public DcbAppendConditionModel appendConditionModel() {
+        return DcbAppendConditionModel.EXACT_CRITERIA;
     }
 
     @Override

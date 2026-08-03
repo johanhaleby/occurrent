@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
-package org.occurrent.eventstore.mongodb.spring.reactor;
+package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.ConnectionString;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.tck.eventstore.blocking.DcbStreamInteropConformance;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.eventstore.blocking.StreamConcurrencyConformance;
-import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -30,13 +28,8 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Runs the blocking stream write-write concurrency suite against the reactive store through
- * {@link BlockingEventStoreOverReactive}, so the scenarios are described once rather than a second time in terms of
- * {@code Mono} and {@code Flux}.
- */
 @Testcontainers
-class ReactorMongoEventStoreStreamConcurrencyConformanceTest extends StreamConcurrencyConformance {
+class SpringMongoEventStoreDcbStreamInteropConformanceTest extends DcbStreamInteropConformance {
 
     @Container
     private static final MongoDBContainer mongoDBContainer;
@@ -46,8 +39,7 @@ class ReactorMongoEventStoreStreamConcurrencyConformanceTest extends StreamConcu
                 .withReplicaSet();
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
-        mongoDBContainer.withReuse(true);
-        mongoDBContainer.setPortBindings(ports);
+        mongoDBContainer.withReuse(true).setPortBindings(ports);
     }
 
     /**
@@ -59,6 +51,9 @@ class ReactorMongoEventStoreStreamConcurrencyConformanceTest extends StreamConcu
 
     @Override
     protected EventStoreFixture createFixture() {
-        return new ReactorMongoEventStoreConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"), TimeRepresentation.RFC_3339_STRING);
+        // The database here is "test" and the collection "events". Appending ".events" to the replica-set URL does
+        // not change the database, because MongoDB forbids a dot in a database name, so only getCollection() sees it.
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        return new SpringMongoEventStoreConformanceFixture(connectionString);
     }
 }
