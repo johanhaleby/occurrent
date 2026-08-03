@@ -109,6 +109,7 @@ public abstract class EventStoreConformance {
         }
         if (required.contains(EventStoreCapability.DCB)) {
             created.dcbEventStore();
+            created.appendConditionModel();
         }
     }
 
@@ -151,6 +152,10 @@ public abstract class EventStoreConformance {
 
     protected final DcbEventStore dcbEventStore() {
         return fixture().dcbEventStore();
+    }
+
+    protected final DcbAppendConditionModel appendConditionModel() {
+        return fixture().appendConditionModel();
     }
 
     protected final PositionOrderedReader positionOrderedReader() {
