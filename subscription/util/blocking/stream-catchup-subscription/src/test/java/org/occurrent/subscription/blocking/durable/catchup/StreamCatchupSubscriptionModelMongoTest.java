@@ -86,7 +86,7 @@ class StreamCatchupSubscriptionModelMongoTest {
             .withReuse(true);
 
     @RegisterExtension
-    FlushMongoDBExtension flush = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".streamcatchupblocking"));
+    FlushMongoDBExtension flush = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl("streamcatchupblocking")));
 
     private SpringMongoEventStore eventStore;
     private SpringMongoSubscriptionModel subscriptionModel;
@@ -95,7 +95,7 @@ class StreamCatchupSubscriptionModelMongoTest {
 
     @BeforeEach
     void create_instances() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".streamcatchupblocking");
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl("streamcatchupblocking"));
         mongoClient = MongoClients.create(connectionString);
         MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager tx = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
