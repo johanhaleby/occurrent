@@ -14,75 +14,77 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.blocking;
+package org.occurrent.springboot.reactor;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Source;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.projection.reactor.DomainEventFeed;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
-import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.common.OccurrentProperties;
-import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.occurrent.subscription.api.reactor.Subscribable;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * {@code @Projection(source = PUSH, startupMode = BACKGROUND)}: the catch-up replay stops holding up startup.
+ * The reactor twin of the blocking {@code DomainEventFeedProjectionPushStartupModeTest}: a domain-push catch-up also
+ * replays the whole event store on this stack, so {@code startupMode = BACKGROUND} has to keep that off the startup
+ * path here too. The replay is parked on a {@link CompletableFuture} (rather than a blocking latch inside the
+ * publisher) so the two outcomes are distinguishable: with {@code BACKGROUND} the context refreshes while the replay
+ * is still parked, and without it the refresh waits.
  * <p>
- * A push catch-up replays the whole event store, so an application with a large history had no way to start until it
- * finished. The replay is parked here so the two outcomes are distinguishable: with {@code BACKGROUND} the context
- * refreshes while the replay is still parked, and without it the refresh waits.
- * <p>
- * Container-free, because a fake reader and the real push model are all this needs.
+ * Container-free, because a fake reader and the real {@code DomainEventFeed} are all this needs.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class ProjectionPushStartupModeTest {
+// Backstop for the case this class exists to guard against: if BACKGROUND stopped being honoured, the context
+// refresh would block on the parked replay, the test body (which completes RELEASE_REPLAY) would never run, and
+// without this the whole suite would hang until the CI job's own timeout instead of failing here.
+@Timeout(30)
+class DomainEventFeedProjectionPushStartupModeTest {
 
-    // Held by the reader bean so the test can park a replay and release it. Static because the Spring context builds
-    // the beans, and reset per test.
-    private static final CountDownLatch[] REPLAY_REACHED = {new CountDownLatch(1)};
-    private static final CountDownLatch[] RELEASE_REPLAY = {new CountDownLatch(1)};
+    private static final AtomicReference<CountDownLatch> REPLAY_REACHED = new AtomicReference<>(new CountDownLatch(1));
+    private static final AtomicReference<CompletableFuture<Void>> RELEASE_REPLAY = new AtomicReference<>(new CompletableFuture<>());
 
     private ApplicationContextRunner runnerWith(Class<?> projectionConfiguration) {
-        REPLAY_REACHED[0] = new CountDownLatch(1);
-        RELEASE_REPLAY[0] = new CountDownLatch(1);
+        REPLAY_REACHED.set(new CountDownLatch(1));
+        RELEASE_REPLAY.set(new CompletableFuture<>());
         return new ApplicationContextRunner()
-                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(PushConfiguration.class, projectionConfiguration);
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(DomainFeedConfiguration.class, projectionConfiguration);
     }
 
     @Test
-    void a_background_push_projection_lets_the_context_refresh_while_its_replay_is_still_running() {
+    void a_background_domain_feed_projection_lets_the_context_refresh_while_its_replay_is_still_running() {
         runnerWith(BackgroundProjectionConfiguration.class).run(context -> {
-            // Refreshed with the replay still parked, which is the whole feature: without it this line is not reached
-            // until the replay finishes.
             assertThat(context).hasNotFailed();
-            assertThat(REPLAY_REACHED[0].await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(REPLAY_REACHED.get().await(5, TimeUnit.SECONDS)).isTrue();
 
-            RELEASE_REPLAY[0].countDown();
+            RELEASE_REPLAY.get().complete(null);
 
             @SuppressWarnings("unchecked")
             ViewStateRepository<Integer, String> store = context.getBean(ViewStateRepository.class);
@@ -113,25 +115,21 @@ class ProjectionPushStartupModeTest {
 
         // The replay is parked inside the fold, so a refresh that honours the default cannot have returned. This is
         // what fails if DEFAULT ever starts meaning BACKGROUND, and it fails every time rather than losing a race.
-        assertThat(REPLAY_REACHED[0].await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(REPLAY_REACHED.get().await(5, TimeUnit.SECONDS)).isTrue();
         assertThat(refreshReturned).isFalse();
 
-        RELEASE_REPLAY[0].countDown();
+        RELEASE_REPLAY.get().complete(null);
         assertThat(refreshFinished.await(10, TimeUnit.SECONDS)).isTrue();
     }
 
     @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties(OccurrentProperties.class)
-    static class PushConfiguration {
+    static class DomainFeedConfiguration {
 
+        // A DomainEventFeed is not itself a Subscribable, unlike PushSubscriptionModel, so without this bean
+        // afterSingletonsInstantiated's early-return guard would skip annotation processing entirely.
         @Bean
-        PushSubscriptionModel pushModel() {
-            return new PushSubscriptionModel();
-        }
-
-        @Bean
-        CheckpointStorage checkpointStorage() {
-            return mock(CheckpointStorage.class);
+        Subscribable subscribable() {
+            return mock(Subscribable.class);
         }
 
         @Bean
@@ -140,38 +138,6 @@ class ProjectionPushStartupModeTest {
             return ViewStateRepository.create(store::get, (id, value) -> {
                 store.put(id, value);
             });
-        }
-
-        // Parks on the way into the single replayed event, so a test can observe whether the context refreshed
-        // without waiting for it.
-        @Bean
-        PositionOrderedReader reader() {
-            return new PositionOrderedReader() {
-                @Override
-                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-                    return Stream.of(cloudEvent("history")).peek(ignored -> {
-                        REPLAY_REACHED[0].countDown();
-                        try {
-                            if (!RELEASE_REPLAY[0].await(5, TimeUnit.SECONDS)) {
-                                throw new IllegalStateException("Timed out waiting to be released");
-                            }
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            throw new IllegalStateException(e);
-                        }
-                    });
-                }
-
-                @Override
-                public long currentPosition() {
-                    return 1;
-                }
-
-                @Override
-                public boolean writesPosition() {
-                    return true;
-                }
-            };
         }
 
         @Bean
@@ -193,6 +159,33 @@ class ProjectionPushStartupModeTest {
                 }
             };
         }
+
+        // Parks on the way into the single replayed event, so a test can observe whether the context refreshed
+        // without waiting for it. Bounded the same way the blocking twin's reader throws after a 5-second await: if
+        // BACKGROUND stopped being honoured, the refresh thread would otherwise block here forever instead of the
+        // test that never releases the future ever completing it.
+        @Bean
+        DomainEventFeed<TestEvent> domainEventFeed(CloudEventConverter<TestEvent> converter) {
+            PositionOrderedReader reader = new PositionOrderedReader() {
+                @Override
+                public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    return Flux.just(cloudEvent("history"))
+                            .delayUntil(ignored -> Mono.fromRunnable(() -> REPLAY_REACHED.get().countDown())
+                                    .then(Mono.fromFuture(RELEASE_REPLAY.get()).timeout(Duration.ofSeconds(5))));
+                }
+
+                @Override
+                public Mono<Long> currentPosition() {
+                    return Mono.just(1L);
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+            return new DomainEventFeed<>(reader, converter, TestEvent::id);
+        }
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -204,7 +197,7 @@ class ProjectionPushStartupModeTest {
     }
 
     static class BackgroundProjection {
-        @Projection(id = "push-background", source = Source.PUSH, startupMode = StartupMode.BACKGROUND)
+        @Projection(id = "domain-feed-push-background-reactive", source = Source.PUSH, startupMode = StartupMode.BACKGROUND)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return countProjection();
         }
@@ -219,7 +212,7 @@ class ProjectionPushStartupModeTest {
     }
 
     static class DefaultProjection {
-        @Projection(id = "push-default", source = Source.PUSH)
+        @Projection(id = "domain-feed-push-default-reactive", source = Source.PUSH)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return countProjection();
         }

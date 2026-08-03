@@ -38,14 +38,18 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
+import org.occurrent.springboot.common.BackgroundCatchupFailures;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
@@ -54,11 +58,16 @@ import org.springframework.data.repository.CrudRepository;
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
@@ -70,13 +79,36 @@ import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
  */
 class ProjectionAnnotationRegistrar {
 
+    private static final Logger log = LoggerFactory.getLogger(ProjectionAnnotationRegistrar.class);
+
+    // How long close() waits for the catch-ups it started itself, after the push models have already stopped theirs.
+    // Long enough for a replay to notice the stop at its next event, short enough that a parked fold cannot hold a
+    // closing context open.
+    private static final Duration SHUTDOWN_CATCHUP_TIMEOUT = Duration.ofSeconds(5);
+
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
     private final Set<String> registeredIds;
-    // Domain-push feeds collected during projection registration, caught up once after all are registered.
-    private final Set<DomainEventFeed<?>> domainFeedsToCatchUp = Collections.newSetFromMap(new IdentityHashMap<>());
+    // Domain-push feeds collected during projection registration, caught up once after every projection is registered.
+    // A list rather than a set now that a feed carries one projection: each entry is one projection's catch-up, and
+    // each carries its own startupMode, so there is nothing left to de-duplicate.
+    private final List<DomainFeedCatchUp> domainFeedsToCatchUp = new ArrayList<>();
     // Push catch-up models created here, kept so the context can stop their replay threads on the way down.
     private final List<CatchupThenPushSubscriptionModel> pushModels = new ArrayList<>();
+    // Catch-ups this registrar started on a thread of its own, plus how to stop each one. Concurrent because under
+    // occurrent.subscription.mode = manual these are added from whichever thread calls ManualStartProjections.start,
+    // which can run long after refresh and alongside close().
+    private final List<BackgroundCatchUp> backgroundCatchUps = new CopyOnWriteArrayList<>();
+    // Set by close(). A background catch-up checks it before starting, because stopping a feed only takes effect once
+    // the replay is running: a stop that lands before the thread gets scheduled would otherwise be cleared by the
+    // catch-up itself and the whole history would replay into a closing store.
+    private volatile boolean closing = false;
+
+    private record DomainFeedCatchUp(String id, DomainEventFeed<?> feed, boolean waitUntilStarted) {
+    }
+
+    private record BackgroundCatchUp(Future<?> task, Runnable stop) {
+    }
 
     ProjectionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
         this.applicationContext = applicationContext;
@@ -84,18 +116,74 @@ class ProjectionAnnotationRegistrar {
         this.registeredIds = registeredIds;
     }
 
-    // Stop every push catch-up model this registrar created, waiting for any replay still in flight to unwind, so no
-    // replay thread survives the context that owns the store it is folding into.
+    // Stop every catch-up this registrar started or created a model for, waiting for any replay still in flight to
+    // unwind, so no replay thread survives the context that owns the store it is folding into.
     void close() {
+        closing = true;
+        // The models first, because their shutdown is what stops a push replay and so releases the watcher joined
+        // below. Each model waits for its own replays, so this can take that long again before the join starts.
         pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
         pushModels.clear();
+        backgroundCatchUps.forEach(background -> background.stop().run());
+        long deadline = System.nanoTime() + SHUTDOWN_CATCHUP_TIMEOUT.toNanos();
+        for (BackgroundCatchUp background : backgroundCatchUps) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                break;
+            }
+            try {
+                background.task().get(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (TimeoutException | ExecutionException e) {
+                // A failure was already recorded and logged where it happened, and a shutdown has nowhere useful to
+                // put either that or a timeout. Keep unwinding the rest.
+            }
+        }
+        backgroundCatchUps.clear();
     }
 
-    // Catch up each domain-push feed once, after all its projections are registered.
+    // Catch up each domain-push feed once, after every projection is registered.
     void catchUpCollectedFeeds() {
-        for (DomainEventFeed<?> feed : domainFeedsToCatchUp) {
-            feed.catchUpAll();
+        for (DomainFeedCatchUp pending : domainFeedsToCatchUp) {
+            if (pending.waitUntilStarted()) {
+                pending.feed().catchUpAll();
+            } else {
+                // startupMode = BACKGROUND. The feed itself deliberately has no background overload, since a caller
+                // that wants the replay off its own thread can run catchUpAll() on a thread it owns. This is that
+                // caller: the registrar is what knows the startupMode, so it is what decides the threading.
+                runInBackground("occurrent-domain-feed-catchup", pending.id(),
+                        () -> pending.feed().catchUpAll(), pending.feed()::stopCatchUp);
+            }
         }
+        domainFeedsToCatchUp.clear();
+    }
+
+    // Run catch-up work on a virtual thread this registrar owns, recording a failure where the application can see it.
+    // Nobody joins the task except close(), which is the whole point of BACKGROUND, so the failure has to be put
+    // somewhere rather than thrown.
+    private void runInBackground(String threadName, String id, Runnable work, Runnable stop) {
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            try {
+                if (closing) {
+                    return null;
+                }
+                work.run();
+            } catch (RuntimeException | Error e) {
+                log.error("The background catch-up of projection {} failed. It has folded no history and will receive "
+                        + "no live events until the application is restarted.", id, e);
+                // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the
+                // post processor directly has no reason to, and losing the record is better than losing the log too.
+                BackgroundCatchupFailures failures = applicationContext.getBeanProvider(BackgroundCatchupFailures.class).getIfAvailable();
+                if (failures != null) {
+                    failures.recordFailure(id, e);
+                }
+            }
+            return null;
+        });
+        backgroundCatchUps.add(new BackgroundCatchUp(task, stop));
+        Thread.ofVirtual().name(threadName + "-" + id).start(task);
     }
 
     @SuppressWarnings("unchecked")
@@ -196,20 +284,32 @@ class ProjectionAnnotationRegistrar {
         pushModels.add(model);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(model, converter) : ProjectionRunner.agnostic(model, converter);
-        // Deliberately not SubscriptionAnnotations.shouldWaitUntilStarted, which maps DEFAULT to "background if it
-        // replays history". A push catch-up always replays from the beginning, so that would silently move every
-        // existing push projection off the startup path. Only an explicit BACKGROUND does that here.
-        boolean waitUntilStarted = annotation.startupMode() != StartupMode.BACKGROUND;
+        boolean waitUntilStarted = SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode());
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)) {
             // With waitUntilStarted the catch-up replay finishes here before handing over to the live push feed;
             // without it the replay runs on its own thread and this returns straight away.
-            runner.project(id, projection, materializedView, null, waitUntilStarted);
-        } else {
-            // This feed bypasses the SubscriptionModel bean entirely, so manual mode's own withholding never reaches
-            // it. Defer the same call instead, to run once the application starts this projection itself.
-            applicationContext.getBean(ManualStartProjections.class).register(id, () -> runner.project(id, projection, materializedView, null, waitUntilStarted));
+            Subscription subscription = runner.project(id, projection, materializedView, null, waitUntilStarted);
+            if (!waitUntilStarted) {
+                // Nobody is left to see this replay fail, so join it on a thread of this registrar's own purely to
+                // record the failure. Stopping it is close()'s job through the model, so this needs no stop of its own.
+                runInBackground("occurrent-push-catchup-watch", id, subscription::waitUntilStarted, () -> {
+                });
+            }
+            return;
         }
+        // This feed bypasses the SubscriptionModel bean entirely, so manual mode's own withholding never reaches it.
+        // Defer the same work instead, to run once the application starts this projection itself. It has to be the
+        // same work: ManualStartProjections.start returns void, so the application never sees the handle and could
+        // not watch a background replay for itself.
+        applicationContext.getBean(ManualStartProjections.class).register(id, () -> {
+            Subscription deferred = runner.project(id, projection, materializedView, null, waitUntilStarted);
+            if (!waitUntilStarted) {
+                runInBackground("occurrent-push-catchup-watch", id, deferred::waitUntilStarted, () -> {
+                });
+            }
+        });
     }
+
 
     // Common validation for a source=PUSH projection: no synchronous mode, no catch-up start knobs, must be a Projection.
     @SuppressWarnings("unchecked")
@@ -232,19 +332,13 @@ class ProjectionAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerDomainPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, DomainEventFeed<?> feedBean) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
-        if (annotation.startupMode() != StartupMode.DEFAULT) {
-            // validatePushDescriptor stopped rejecting startupMode when the PushSubscriptionModel path learned to
-            // honour it, and that guard is shared with this one. Reject it here rather than accept it and do nothing,
-            // which is the failure mode the whole change was about. Lifted once a domain feed can catch up in the
-            // background too.
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH cannot set startupMode when its feed is a DomainEventFeed. Only a PushSubscriptionModel feed can keep its catch-up off the startup path so far.".formatted(id));
-        }
         MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
+        boolean waitUntilStarted = SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode());
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)) {
             feed.register(id, materializedView, eventFilter);
-            domainFeedsToCatchUp.add(feed);
+            domainFeedsToCatchUp.add(new DomainFeedCatchUp(id, feed, waitUntilStarted));
         } else {
             // register(...) alone puts the feed into buffering mode immediately, so deferring only the catch-up would
             // let accept(...) buffer into a bounded buffer rather than fold, and eventually overflow it. Defer both
@@ -252,7 +346,13 @@ class ProjectionAnnotationRegistrar {
             // running the deferred work leaves the feed in the same state registering it under auto mode would.
             applicationContext.getBean(ManualStartProjections.class).register(id, () -> {
                 feed.register(id, materializedView, eventFilter);
-                feed.catchUp(id);
+                if (waitUntilStarted) {
+                    feed.catchUp(id);
+                } else {
+                    // Same treatment as auto mode, or startAll() would block for a full replay on a projection that
+                    // asked for BACKGROUND.
+                    runInBackground("occurrent-domain-feed-catchup", id, () -> feed.catchUp(id), feed::stopCatchUp);
+                }
             });
         }
     }

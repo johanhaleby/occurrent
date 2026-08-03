@@ -20,6 +20,7 @@ import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.occurrent.springboot.common.BackgroundCatchupFailures;
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
@@ -51,6 +52,19 @@ public class OccurrentBlockingAnnotationConfiguration {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public ManualStartProjections occurrentManualStartProjections() {
         return new ManualStartProjections();
+    }
+
+    /**
+     * Lets an application see a {@code @Projection(source = PUSH, startupMode = BACKGROUND)} whose catch-up failed.
+     * Nobody waits for a background replay, so a failure has nowhere to be thrown and the context is long refreshed by
+     * the time it happens. Gated the same way as the post-processor that writes it, and present under every startup
+     * mode so an application can inject it without conditioning its own wiring on the mode.
+     */
+    @Bean
+    @ConditionalOnMissingBean(BackgroundCatchupFailures.class)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
+    public BackgroundCatchupFailures occurrentBackgroundCatchupFailures() {
+        return new BackgroundCatchupFailures();
     }
 
     /**

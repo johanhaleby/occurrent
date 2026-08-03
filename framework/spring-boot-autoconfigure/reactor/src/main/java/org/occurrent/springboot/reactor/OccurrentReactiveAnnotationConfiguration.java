@@ -16,18 +16,21 @@
 
 package org.occurrent.springboot.reactor;
 
+import org.occurrent.springboot.common.BackgroundCatchupFailures;
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * The store-neutral half of a reactive Occurrent starter: the annotation post-processor. A store starter imports this
- * and contributes the store-specific seams ({@link DefaultReactiveSnapshotStoreProvider} and
- * {@code StartupWorkaround}) as beans of its own.
+ * The store-neutral half of a reactive Occurrent starter: the annotation post-processor and the background catch-up
+ * failures it records. A store starter imports this and contributes the store-specific seams
+ * ({@link DefaultReactiveSnapshotStoreProvider} and {@code StartupWorkaround}) as beans of its own.
  * <p>
- * Unlike the blocking twin there is no saga instances registry here, since {@code @Saga} is blocking-only, and no
- * read-model store seam, since the reactive stack has no zero-config projection store default.
+ * Unlike the blocking twin there is no saga instances registry here, since {@code @Saga} is blocking-only, no
+ * read-model store seam, since the reactive stack has no zero-config projection store default, and no manual-start
+ * registry, since {@code occurrent.subscription.mode = manual} is blocking-only so far.
  */
 @Configuration(proxyBeanMethods = false)
 public class OccurrentReactiveAnnotationConfiguration {
@@ -36,5 +39,18 @@ public class OccurrentReactiveAnnotationConfiguration {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     static OccurrentReactiveAnnotationBeanPostProcessor occurrentReactiveAnnotationBeanPostProcessor() {
         return new OccurrentReactiveAnnotationBeanPostProcessor();
+    }
+
+    /**
+     * Lets an application see a {@code @Projection(source = PUSH, startupMode = BACKGROUND)} whose catch-up failed.
+     * Nobody waits for a background replay, so a failure has nowhere to be thrown and the context is long refreshed by
+     * the time it happens. Gated the same way as the post-processor that writes it, and present under every startup
+     * mode so an application can inject it without conditioning its own wiring on the mode.
+     */
+    @Bean
+    @ConditionalOnMissingBean(BackgroundCatchupFailures.class)
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
+    public BackgroundCatchupFailures occurrentBackgroundCatchupFailures() {
+        return new BackgroundCatchupFailures();
     }
 }

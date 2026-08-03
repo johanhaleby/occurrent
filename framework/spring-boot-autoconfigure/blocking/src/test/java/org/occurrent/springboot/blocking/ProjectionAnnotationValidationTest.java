@@ -30,14 +30,24 @@ import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.filter.Filter;
+import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.NestedExceptionUtils;
 
 import java.net.URI;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -45,9 +55,12 @@ import static org.mockito.Mockito.mock;
 /**
  * Characterizes the {@code @Projection} validation branches that fail fast before any subscription model or store is
  * consulted, so they reproduce without a running store (no Docker): the {@code source=PUSH} guards (no synchronous
- * mode, no catch-up start knobs, no DcbProjection, and a feed bean that is neither a {@code PushSubscriptionModel} nor
- * a {@code DomainEventFeed}), and the convention-based store resolution failing when the factory return type carries no
- * concrete state type and no store bean exists. Each must fail fast at context startup with the exact message.
+ * mode, no catch-up start knobs, no DcbProjection, a feed bean that is neither a {@code PushSubscriptionModel} nor a
+ * {@code DomainEventFeed}, and two projections resolving the same push sink, see ADR 88), and the convention-based
+ * store resolution failing when the factory return type carries no concrete state type and no store bean exists. Each
+ * must fail fast at context startup with the exact message. One test is deliberately the mirror image of that theme:
+ * a domain-feed push projection with {@code startupMode = BACKGROUND} must be accepted, not rejected, now that ADR 88
+ * makes a domain-push feed unambiguously one projection's own.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ProjectionAnnotationValidationTest {
@@ -83,12 +96,39 @@ class ProjectionAnnotationValidationTest {
 
 
     @Test
-    void a_domain_feed_push_projection_that_sets_startup_mode_is_rejected_rather_than_ignored() {
-        runner.withUserConfiguration(FeedConfiguration.class, DomainFeedBackgroundConfiguration.class).run(context -> {
+    void a_domain_feed_push_projection_that_sets_startup_mode_is_accepted_rather_than_rejected() {
+        // The feed is a DomainEventFeed, not a PushSubscriptionModel, but startupMode = BACKGROUND is honoured here
+        // too: the catch-up runs on a thread the registrar owns instead of holding up the refresh. See
+        // DomainEventFeedProjectionPushStartupModeTest for the fuller proof (parked replay, context refreshes,
+        // released replay fills the store). This test only checks that the context does not fail fast, which is
+        // what the rejection used to do before ADR 88 made a domain-push feed unambiguously one projection's own.
+        runner.withUserConfiguration(DomainFeedBackgroundConfiguration.class).run(context ->
+                assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void two_push_projections_on_the_same_push_subscription_model_fail_the_context_naming_both_ids() {
+        runner.withUserConfiguration(SharedPushModelConfiguration.class, TwoPushSinkProjectionsConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
             assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("cannot set startupMode when its feed is a DomainEventFeed");
+                    .hasMessageContaining("push-sink-a")
+                    .hasMessageContaining("push-sink-b")
+                    .hasMessageContaining("a push sink feeds exactly one consumer")
+                    .hasMessageContaining("Declare one sink per projection");
+        });
+    }
+
+    @Test
+    void two_push_projections_on_the_same_domain_event_feed_fail_the_context_naming_both_ids() {
+        runner.withUserConfiguration(SharedDomainEventFeedConfiguration.class, TwoDomainFeedSinkProjectionsConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("domain-feed-sink-a")
+                    .hasMessageContaining("domain-feed-sink-b")
+                    .hasMessageContaining("a push sink feeds exactly one consumer")
+                    .hasMessageContaining("Declare one sink per projection");
         });
     }
 
@@ -200,7 +240,42 @@ class ProjectionAnnotationValidationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
     static class DomainFeedBackgroundConfiguration {
+        @Bean
+        DomainEventFeed<TestEvent> domainEventFeed(CloudEventConverter<TestEvent> converter) {
+            // A real (empty) reader rather than a mock: this test lets the catch-up actually run in the background,
+            // unlike the other FeedConfiguration-based tests above which fail validation before the feed is ever used.
+            PositionOrderedReader emptyReader = new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    return Stream.empty();
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 0;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+            return new DomainEventFeed<>(emptyReader, converter, event -> "k");
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, store::put);
+        }
+
+        @Bean
+        BackgroundCatchupFailures backgroundCatchupFailures() {
+            return new BackgroundCatchupFailures();
+        }
+
         @Bean
         DomainFeedBackgroundProjection domainFeedBackgroundProjection() {
             return new DomainFeedBackgroundProjection();
@@ -210,6 +285,124 @@ class ProjectionAnnotationValidationTest {
     static class DomainFeedBackgroundProjection {
         @Projection(id = "domain-feed-background", source = Source.PUSH, startupMode = StartupMode.BACKGROUND)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class SharedPushModelConfiguration {
+        @Bean
+        PushSubscriptionModel pushModel() {
+            return new PushSubscriptionModel();
+        }
+
+        @Bean
+        CheckpointStorage checkpointStorage() {
+            return mock(CheckpointStorage.class);
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, store::put);
+        }
+
+        @Bean
+        PositionOrderedReader reader() {
+            return new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    return Stream.empty();
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 0;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TwoPushSinkProjectionsConfiguration {
+        @Bean
+        TwoPushSinkProjections twoPushSinkProjections() {
+            return new TwoPushSinkProjections();
+        }
+    }
+
+    // Both factory methods resolve the same shared PushSubscriptionModel bean by type (neither names it explicitly),
+    // so the second registration collides with the first on the underlying sink.
+    static class TwoPushSinkProjections {
+        @Projection(id = "push-sink-a", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> first() {
+            return countProjection();
+        }
+
+        @Projection(id = "push-sink-b", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> second() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class SharedDomainEventFeedConfiguration {
+        @Bean
+        DomainEventFeed<TestEvent> domainEventFeed(CloudEventConverter<TestEvent> converter) {
+            // A real (empty) reader rather than a mock: DomainEventFeed.register validates writesPosition() before
+            // the single-consumer check even runs, and a Mockito mock's boolean default (false) trips that first.
+            PositionOrderedReader emptyReader = new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    return Stream.empty();
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 0;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+            return new DomainEventFeed<>(emptyReader, converter, event -> "k");
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, store::put);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class TwoDomainFeedSinkProjectionsConfiguration {
+        @Bean
+        TwoDomainFeedSinkProjections twoDomainFeedSinkProjections() {
+            return new TwoDomainFeedSinkProjections();
+        }
+    }
+
+    // Both factory methods resolve the same shared DomainEventFeed bean by type, so the second register() call
+    // collides with the first: the feed is claimed synchronously, before any catch-up runs, so the mocked reader is
+    // never touched.
+    static class TwoDomainFeedSinkProjections {
+        @Projection(id = "domain-feed-sink-a", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> first() {
+            return countProjection();
+        }
+
+        @Projection(id = "domain-feed-sink-b", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> second() {
             return countProjection();
         }
     }

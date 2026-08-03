@@ -367,4 +367,18 @@ public final class SubscriptionAnnotations {
             case BACKGROUND -> false;
         };
     }
+
+    /**
+     * The same decision for a {@code @Projection(source = PUSH)}, where only an explicit {@code BACKGROUND} keeps the
+     * catch-up off the startup path.
+     * <p>
+     * Deliberately not {@link #shouldWaitUntilStarted(boolean, StartupMode)}, which maps {@code DEFAULT} to
+     * "background if it replays history". A push catch-up always replays from the beginning, so reusing that would
+     * move every existing push projection off the startup path without anyone asking for it. Shared by all four push
+     * registration paths (a {@code PushSubscriptionModel} or a {@code DomainEventFeed}, on either stack) so they
+     * cannot drift apart on this.
+     */
+    public static boolean pushCatchUpShouldWaitUntilStarted(StartupMode startupMode) {
+        return startupMode != StartupMode.BACKGROUND;
+    }
 }

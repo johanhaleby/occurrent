@@ -137,7 +137,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
 
     @Override
     public void destroy() {
-        sagaRegistrar.close();
-        projectionRegistrar.close();
+        // In a finally so a saga that fails to close still leaves no projection replay running.
+        try {
+            sagaRegistrar.close();
+        } finally {
+            projectionRegistrar.close();
+        }
     }
 }

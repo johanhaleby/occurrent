@@ -36,6 +36,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
+import org.occurrent.springboot.common.BackgroundCatchupFailures;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
@@ -46,13 +47,15 @@ import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.push.reactor.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import reactor.core.publisher.Mono;
 
 import java.lang.reflect.Method;
-import java.util.Collections;
-import java.util.IdentityHashMap;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
@@ -67,17 +70,56 @@ import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWait
  */
 class ProjectionAnnotationRegistrar {
 
+    private static final Logger log = LoggerFactory.getLogger(ProjectionAnnotationRegistrar.class);
+
+    // How long close() waits for the background catch-ups it started. Matches the blocking twin.
+    private static final Duration SHUTDOWN_CATCHUP_TIMEOUT = Duration.ofSeconds(5);
+
     private final ApplicationContext applicationContext;
     private final Set<String> registeredIds;
     private final StartPositionSupport startPositionSupport;
 
-    // Domain-push feeds collected during projection registration, caught up once after all are registered.
-    private final Set<DomainEventFeed<?>> domainFeedsToCatchUp = Collections.newSetFromMap(new IdentityHashMap<>());
+    // Domain-push feeds collected during projection registration, caught up once after every projection is
+    // registered. A list rather than a set now that a feed carries one projection: each entry is one projection's
+    // catch-up and carries its own startupMode, so there is nothing left to de-duplicate.
+    private final List<DomainFeedCatchUp> domainFeedsToCatchUp = new ArrayList<>();
+    // Push catch-up models created here, kept so the context can stop their replays on the way down.
+    private final List<CatchupThenPushSubscriptionModel> pushModels = new ArrayList<>();
+    // Domain feeds whose catch-up was started in the background, kept so the context can stop those too, each with
+    // the signal close() waits on afterwards.
+    private final List<DomainEventFeed<?>> backgroundFeeds = new ArrayList<>();
+    private final List<Mono<Void>> backgroundCatchUps = new ArrayList<>();
+
+    private record DomainFeedCatchUp(String id, DomainEventFeed<?> feed, boolean waitUntilStarted) {
+    }
 
     ProjectionAnnotationRegistrar(ApplicationContext applicationContext, Set<String> registeredIds, StartPositionSupport startPositionSupport) {
         this.applicationContext = applicationContext;
         this.registeredIds = registeredIds;
         this.startPositionSupport = startPositionSupport;
+    }
+
+    // Stop every catch-up this registrar started and wait for it to unwind, so no replay is still folding into a
+    // store the closing context is about to dispose. Telling a replay to stop is not enough on its own: it notices at
+    // its next event, and the store can be gone by then.
+    void close() {
+        pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
+        pushModels.clear();
+        backgroundFeeds.forEach(DomainEventFeed::stopCatchUp);
+        backgroundFeeds.clear();
+        long deadline = System.nanoTime() + SHUTDOWN_CATCHUP_TIMEOUT.toNanos();
+        for (Mono<Void> catchUp : backgroundCatchUps) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                break;
+            }
+            try {
+                catchUp.block(Duration.ofNanos(remaining));
+            } catch (RuntimeException e) {
+                // Already logged and recorded where it happened, and a shutdown has nowhere useful to put a timeout.
+            }
+        }
+        backgroundCatchUps.clear();
     }
 
     @SuppressWarnings("unchecked")
@@ -156,10 +198,35 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
-    // Catch up each domain-push feed once, after all its projections are registered.
+    // Catch up each domain-push feed once, after every projection is registered.
     void catchUpCollectedFeeds() {
-        for (DomainEventFeed<?> feed : domainFeedsToCatchUp) {
-            feed.catchUpAll().block();
+        for (DomainFeedCatchUp pending : domainFeedsToCatchUp) {
+            if (pending.waitUntilStarted()) {
+                pending.feed().catchUpAll().block();
+            } else {
+                // startupMode = BACKGROUND. No thread of our own here, unlike the blocking twin: subscribing without
+                // blocking is all it takes, since the handover runs the replay on boundedElastic.
+                backgroundFeeds.add(pending.feed());
+                // cache() so close() can wait on the same run rather than starting a second one.
+                Mono<Void> catchUp = pending.feed().catchUpAll().cache();
+                backgroundCatchUps.add(catchUp);
+                catchUp.subscribe(ignored -> {
+                }, error -> recordBackgroundFailure(pending.id(), error));
+            }
+        }
+        domainFeedsToCatchUp.clear();
+    }
+
+    // Put a background catch-up failure where the application can read it. Nobody waited for the replay, which is the
+    // whole point of BACKGROUND, so the failure has to be recorded rather than thrown.
+    private void recordBackgroundFailure(String id, Throwable error) {
+        log.error("The background catch-up of projection {} failed. It has folded no history and will receive no live "
+                + "events until the application is restarted.", id, error);
+        // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the post
+        // processor directly has no reason to, and losing the record is better than losing the log too.
+        BackgroundCatchupFailures failures = applicationContext.getBeanProvider(BackgroundCatchupFailures.class).getIfAvailable();
+        if (failures != null) {
+            failures.recordFailure(id, error);
         }
     }
 
@@ -171,11 +238,20 @@ class ProjectionAnnotationRegistrar {
         PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
         CheckpointStorage catchupMarker = applicationContext.getBean(CheckpointStorage.class);
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker, catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
+        // Retained so close() can stop it. Its replay runs on boundedElastic, so a context that closes without
+        // stopping it leaves that replay folding into a store that is closing with it.
+        pushModels.add(model);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ReactiveProjectionRunner<E> runner = stream ? ReactiveProjectionRunner.stream(model, converter) : ReactiveProjectionRunner.agnostic(model, converter);
-        // The catch-up replay runs when the pipeline is subscribed; block until it has handed over to the live feed.
+        // Registration happens here, on the refresh thread, which is what captures an event committing mid-replay.
+        // Only the replay is elsewhere.
         var subscription = projectAgnosticOrStream(runner, id, projection, resolveStore(annotation, id), null);
-        subscription.waitUntilStarted().block();
+        if (SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())) {
+            subscription.waitUntilStarted().block();
+        } else {
+            subscription.waitUntilStarted().subscribe(ignored -> {
+            }, error -> recordBackgroundFailure(id, error));
+        }
     }
 
     // Register a source=PUSH projection whose feed bean is a DomainEventFeed. The reactor feed folds via a
@@ -194,7 +270,7 @@ class ProjectionAnnotationRegistrar {
             Filter replayFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
             feed.register(id, fold, replayFilter);
         }
-        domainFeedsToCatchUp.add(feed);
+        domainFeedsToCatchUp.add(new DomainFeedCatchUp(id, feed, SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())));
     }
 
     // Common validation for a source=PUSH projection: no synchronous mode, no catch-up start knobs, must be a Projection.
@@ -204,8 +280,8 @@ class ProjectionAnnotationRegistrar {
             throw new IllegalArgumentException("@Projection '%s' cannot combine source=PUSH with mode=SYNCHRONOUS: a push feed is asynchronous.".formatted(id));
         }
         if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
-                || annotation.resumeBehavior() != ResumeBehavior.DEFAULT || annotation.startupMode() != StartupMode.DEFAULT) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH does not support the catch-up start knobs (startAt, startAtGlobalPosition, resumeBehavior, startupMode): the catch-up always replays from the beginning and live-resume is the broker's responsibility.".formatted(id));
+                || annotation.resumeBehavior() != ResumeBehavior.DEFAULT) {
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH cannot set startAt, startAtGlobalPosition or resumeBehavior: the catch-up always replays from the beginning and live-resume is the broker's responsibility. startupMode is supported, so use startupMode = BACKGROUND to keep that replay off the startup path.".formatted(id));
         }
         if (!(descriptor instanceof Projection<?, ?, ?> raw)) {
             throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be catch-up-replayed in position order.".formatted(id));
