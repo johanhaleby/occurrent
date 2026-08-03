@@ -28,6 +28,7 @@ import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -107,15 +108,23 @@ class SagaAnnotationRegistrar {
             runner = runner.competingConsumerStrategy(competingConsumerStrategy);
         }
 
+        // A saga replaying its history from the beginning defaults to starting in the background, exactly as
+        // @Subscription and @Projection do. startupMode was accepted and ignored here until now, so a saga always
+        // held up startup whatever it asked for.
+        boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
+        boolean waitUntilStarted = SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)
+                && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+
         startPositionSupport.applyStartupWorkarounds();
-        SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id));
+        SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
         publishSagaInstances(id, sagaSubscription);
     }
 
     // A saga must not issue commands while its own event subscription is not running, which is what
-    // occurrent.subscription.mode=manual leaves it as until the application resumes it. A model with no life cycle
-    // cannot answer, so those keep firing timers as before.
+    // occurrent.subscription.mode=manual leaves it as until the application resumes it, and what a saga starting in
+    // the background is until its replay hands over. A model with no life cycle cannot answer, so those keep firing
+    // timers as before.
     private static BooleanSupplier timersEnabledFor(Subscribable subscribable, String subscriptionId) {
         if (subscribable instanceof SubscriptionModelLifeCycle lifeCycle) {
             return () -> lifeCycle.isRunning(subscriptionId);
@@ -154,7 +163,7 @@ class SagaAnnotationRegistrar {
             throw new IllegalStateException("A SagaInstancesRegistry bean is defined that Occurrent cannot populate, so it would stay empty forever and report no sagas. The registry is read-only for applications and is auto-configured; remove your own bean and inject SagaInstancesRegistry instead.");
         }
         // Unreachable through the wiring this library ships: the registry bean and the post-processor that runs this code
-        // are gated on the same occurrent.subscription.enabled property, so whenever a saga is registered at all, either
+        // are gated on the same occurrent.subscription.mode property, so whenever a saga is registered at all, either
         // the auto-configured registry or a user-supplied one exists (and the branch above rejects the latter). Kept
         // rather than asserted, so the two conditions drifting apart in future degrades to a warning instead of an NPE,
         // and because a hand-built harness can reach it. Must not fail a saga that is otherwise running fine.

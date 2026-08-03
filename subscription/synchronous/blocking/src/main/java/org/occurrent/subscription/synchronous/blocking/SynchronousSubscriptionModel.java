@@ -43,6 +43,17 @@ import java.util.function.Consumer;
 public class SynchronousSubscriptionModel extends RegisteringSubscribable implements SynchronousEventDispatcher, Consumer<List<CloudEvent>> {
 
     /**
+     * Several handlers, unlike the push models, which take one each. Fan-out is safe here because there is no broker
+     * and no acknowledgement to share: the events arrive from the write that just produced them, and a handler
+     * exception propagates to the writer rather than stranding the handlers behind it. Under a transaction the write
+     * rolls back, so nothing is folded by anyone. See ADR 90 for the isolation argument that makes the push sinks
+     * single-consumer, and the follow-up it leaves open for the no-transaction case here.
+     */
+    public SynchronousSubscriptionModel() {
+        super(Consumers.MANY);
+    }
+
+    /**
      * Dispatch the supplied cloud events to every matching registered handler, synchronously, on the calling
      * thread, in registration order. Called by the application service with the events it just wrote.
      *

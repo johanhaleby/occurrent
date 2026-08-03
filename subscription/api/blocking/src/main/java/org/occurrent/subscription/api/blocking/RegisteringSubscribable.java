@@ -22,12 +22,14 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
+import org.occurrent.subscription.internal.SingleConsumerMessages;
 
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -48,9 +50,34 @@ import java.util.function.Predicate;
  * <p>
  * Subclasses expose their own ingestion API (for example a synchronous at-write-time {@code dispatch(List)} or an
  * externally driven {@code accept(CloudEvent)}) and delegate to {@link #route(CloudEvent)} to deliver each event.
+ * <p>
+ * <strong>One consumer unless a subclass says otherwise.</strong> A subclass declares its {@link Consumers} through
+ * the constructor, and the no-argument constructor means {@link Consumers#ONE}. That default is the safe one: an
+ * externally driven sink delivers one message under one acknowledgement, so several consumers on it would mean one
+ * failing consumer holding up the rest, which the isolation rule in {@code AGENTS.md} forbids. Only a subclass that
+ * has an argument for why fan-out is safe for it, as the synchronous write-path dispatcher does, passes
+ * {@link Consumers#MANY}. See ADR 90.
  */
 @NullMarked
 public abstract class RegisteringSubscribable implements Subscribable, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel {
+
+    /**
+     * How many consumers a subclass accepts, fixed at construction.
+     */
+    public enum Consumers {
+        /**
+         * One consumer. A second {@code subscribe} is refused, naming the consumer already registered. Cancelling
+         * the registered one frees the sink for another, since this counts what is registered now rather than
+         * whether anything ever was.
+         */
+        ONE,
+        /**
+         * Several consumers, each receiving every matching event. Safe only where a failure cannot strand a sibling:
+         * the synchronous models qualify because there is no broker and no acknowledgement, so a handler failure
+         * fails the write itself.
+         */
+        MANY
+    }
 
     private record Registration(String id, Predicate<CloudEvent> matcher, Consumer<CloudEvent> action) {
     }
@@ -58,7 +85,32 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
     private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
     private final Set<String> pausedSubscriptions = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<Registration> registrations = new CopyOnWriteArrayList<>();
+    private final Consumers consumers;
+    // The sole consumer's id under Consumers.ONE, or null while the sink is free. An AtomicReference rather than a
+    // registrations.isEmpty() check so claiming the slot is one atomic step, and cleared on cancel so the id can be
+    // re-subscribed (which a failed push catch-up relies on).
+    private final AtomicReference<@Nullable String> soleSubscriptionId = new AtomicReference<>();
+    // Held only while subscribe and cancelSubscription rearrange the four collections above, never by route, which
+    // reads a CopyOnWriteArrayList snapshot. Without it a cancel landing between the slot claim and the registration
+    // frees the slot while leaving the handler registered, and a second id could then claim it and fan out.
+    private final Object registrationLock = new Object();
     private volatile boolean running = true;
+
+    /**
+     * Accepts a single consumer. The default because a sink that fans out cannot keep its consumers isolated from one
+     * another, so opting into that has to be deliberate.
+     */
+    protected RegisteringSubscribable() {
+        this(Consumers.ONE);
+    }
+
+    /**
+     * @param consumers How many consumers this subclass accepts. Pass {@link Consumers#MANY} only with a reason why
+     *                  one consumer's failure cannot strand another.
+     */
+    protected RegisteringSubscribable(Consumers consumers) {
+        this.consumers = Objects.requireNonNull(consumers, "consumers cannot be null");
+    }
 
     @Override
     public final Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -67,14 +119,22 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
         Objects.requireNonNull(action, "action cannot be null");
         // Build the matcher before reserving the id, so an unsupported filter does not leave the id permanently taken.
         Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
-        if (!subscriptionIds.add(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
-        }
-        registrations.add(new Registration(subscriptionId, matcher, action));
-        // Registering on a stopped model yields a paused subscription, so a caller that stopped the model before
-        // wiring its handlers can resume them one at a time.
-        if (!running) {
-            pausedSubscriptions.add(subscriptionId);
+        synchronized (registrationLock) {
+            if (!subscriptionIds.add(subscriptionId)) {
+                throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
+            }
+            if (consumers == Consumers.ONE && !soleSubscriptionId.compareAndSet(null, subscriptionId)) {
+                // Release the id again: the duplicate-id check above took it, and this registration is not happening.
+                subscriptionIds.remove(subscriptionId);
+                throw new IllegalArgumentException(SingleConsumerMessages.singleConsumerOnly(
+                        getClass().getSimpleName(), "subscription", String.valueOf(soleSubscriptionId.get()), subscriptionId));
+            }
+            registrations.add(new Registration(subscriptionId, matcher, action));
+            // Registering on a stopped model yields a paused subscription, so a caller that stopped the model before
+            // wiring its handlers can resume them one at a time.
+            if (!running) {
+                pausedSubscriptions.add(subscriptionId);
+            }
         }
         return new AlreadyStartedSubscription(subscriptionId);
     }
@@ -82,10 +142,13 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
     @Override
     public final void cancelSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        // Drop the registration before releasing the id, so the id is never free while its handler can still be routed to.
-        registrations.removeIf(registration -> registration.id().equals(subscriptionId));
-        subscriptionIds.remove(subscriptionId);
-        pausedSubscriptions.remove(subscriptionId);
+        synchronized (registrationLock) {
+            // Drop the registration before releasing the id, so the id is never free while its handler can still be routed to.
+            registrations.removeIf(registration -> registration.id().equals(subscriptionId));
+            subscriptionIds.remove(subscriptionId);
+            pausedSubscriptions.remove(subscriptionId);
+            soleSubscriptionId.compareAndSet(subscriptionId, null);
+        }
     }
 
     @Override
@@ -140,6 +203,24 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
             throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't running.");
         }
         pausedSubscriptions.add(subscriptionId);
+    }
+
+    /**
+     * Drop every registration and stop routing. Unlike {@link #stop()} this is not reversible: the ids are released
+     * and the handlers are gone, so a shut-down model delivers nothing even after {@link #start(boolean)}.
+     * <p>
+     * Overridden because the interface default does nothing, which left a shut-down model still delivering every
+     * event fed to it.
+     */
+    @Override
+    public final void shutdown() {
+        running = false;
+        synchronized (registrationLock) {
+            registrations.clear();
+            subscriptionIds.clear();
+            pausedSubscriptions.clear();
+            soleSubscriptionId.set(null);
+        }
     }
 
     /**

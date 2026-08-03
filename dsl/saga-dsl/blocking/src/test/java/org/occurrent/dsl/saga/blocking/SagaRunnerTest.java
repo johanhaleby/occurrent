@@ -53,6 +53,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -169,6 +171,45 @@ class SagaRunnerTest {
 
     private void write(String orderId, OrderEvent... events) {
         eventStore.write(orderId, converter.toCloudEvents(List.of(events)));
+    }
+
+    @Test
+    void a_saga_run_without_waiting_returns_before_its_replay_has_folded() throws Exception {
+        CountDownLatch foldReached = new CountDownLatch(1);
+        CountDownLatch releaseFold = new CountDownLatch(1);
+        CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel pushModel = new PushSubscriptionModel();
+        Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                .correlateAll(OrderEvent::orderId)
+                .startsOn(OrderPlaced.class)
+                .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
+                .react(OrderPlaced.class, (state, e) -> List.of(SagaEffect.issue(new ShipOrder(e.orderId()))))
+                .build();
+
+        SagaSubscription subscription = SagaRunner.<OrderEvent, OrderCommand>agnostic(pushModel, converter)
+                .run("no-wait", saga, SagaStateStore.inMemory(), command -> {
+                    issued.add(command);
+                    foldReached.countDown();
+                    try {
+                        assertThat(releaseFold.await(5, TimeUnit.SECONDS)).isTrue();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                    }
+                }, null, FAST_POLL_CONFIG, () -> true, false);
+        subscriptionsToClose.add(subscription);
+
+        // The fold parks on another thread, so reaching this line at all is the point: waiting would keep the caller
+        // inside run until the whole thing had folded.
+        CompletableFuture<Void> pushed = CompletableFuture.runAsync(() -> pushModel.accept(
+                CloudEventBuilder.v1(converter.toCloudEvent(new OrderPlaced("e1", "order-1")))
+                        .withExtension(new OccurrentCloudEventExtension("order-1", 1L))
+                        .build()));
+        assertThat(foldReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        releaseFold.countDown();
+        pushed.get(5, TimeUnit.SECONDS);
+        assertThat(issued).containsExactly(new ShipOrder("order-1"));
     }
 
     @Nested

@@ -19,6 +19,7 @@ package org.occurrent.springboot.blocking;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.springboot.common.BackgroundCatchupFailures;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -81,6 +82,33 @@ class AnnotationBeanPostProcessorDestroyCallbackTest {
                 .withConfiguration(AutoConfigurations.of(OccurrentBlockingAnnotationConfiguration.class))
                 .withPropertyValues("occurrent.subscription.enabled=false")
                 .run(context -> assertThat(context).doesNotHaveBean(OccurrentBlockingAnnotationBeanPostProcessor.class));
+    }
+
+    // Both starters moved BackgroundCatchupFailures to org.occurrent.springboot.common, contributed by each of them.
+    // Without these, deleting the @Bean method from this configuration class would break no test here: the
+    // BackgroundCatchupFailureTest declares its own bean in the user configuration, which satisfies
+    // @ConditionalOnMissingBean regardless of whether the starter contributes one.
+    @Test
+    void the_background_catchup_failures_bean_is_contributed_by_default() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OccurrentBlockingAnnotationConfiguration.class))
+                .run(context -> assertThat(context).hasSingleBean(BackgroundCatchupFailures.class));
+    }
+
+    @Test
+    void the_background_catchup_failures_bean_is_contributed_when_subscriptions_are_explicitly_enabled() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OccurrentBlockingAnnotationConfiguration.class))
+                .withPropertyValues("occurrent.subscription.enabled=true")
+                .run(context -> assertThat(context).hasSingleBean(BackgroundCatchupFailures.class));
+    }
+
+    @Test
+    void turning_subscriptions_off_removes_the_background_catchup_failures_bean_entirely() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OccurrentBlockingAnnotationConfiguration.class))
+                .withPropertyValues("occurrent.subscription.enabled=false")
+                .run(context -> assertThat(context).doesNotHaveBean(BackgroundCatchupFailures.class));
     }
 
     static class RecordingPostProcessor extends OccurrentBlockingAnnotationBeanPostProcessor {

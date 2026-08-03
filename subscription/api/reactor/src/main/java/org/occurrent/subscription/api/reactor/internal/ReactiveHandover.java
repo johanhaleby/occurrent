@@ -25,6 +25,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.Objects;
 import java.util.Set;
@@ -39,7 +40,8 @@ import java.util.function.Supplier;
  * marker is recorded, then the live feed is delivered. Live payloads arriving during the replay are buffered in a
  * bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id extracted from the payload. Each phase
  * is serialized by its own {@code concatMap} and the phases run one after another, so the de-dup cache is only ever
- * touched by one thread at a time and needs no locking. Extracted from (and mirrors exactly) the reactor projection
+ * touched by one thread at a time. That is ordering, not visibility: an asynchronous fold completes on whichever
+ * thread ran it, so {@code BoundedIdCache} is synchronized and must stay that way. Extracted from (and mirrors exactly) the reactor projection
  * feed and the reactor push subscription model.
  * <p>
  * {@code T} is the payload type, one for both phases. The caller decides what a payload carries, so where a replayed
@@ -57,6 +59,11 @@ import java.util.function.Supplier;
  * folded during the catch-up window, whereas here a live payload's {@code accept} {@link Mono} completes only once
  * its fold has actually run (including payloads buffered during the replay), even though the catch-up-done signal
  * itself already fired. Neither ordering is "fixed" by this extraction. Both are preserved as-is.
+ * <p>
+ * <strong>The replay runs on {@code boundedElastic}, not on the thread that called {@link #catchUp(Source)}.</strong>
+ * This engine subscribes its own pipeline, so a caller that never touches the returned {@link Mono} still gets a
+ * replay, and it gets one off its own thread. Join it through the returned {@code Mono} when the caller does want to
+ * wait.
  */
 @NullMarked
 public final class ReactiveHandover<T> {
@@ -74,6 +81,19 @@ public final class ReactiveHandover<T> {
 
         /** Record that the catch-up completed. */
         Mono<Void> markCaughtUp();
+
+        /**
+         * Whether the replay should keep going, asked once per payload before it is folded. Return {@code false} to
+         * stop one already in flight, because the model was stopped or is shutting down.
+         * <p>
+         * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
+         * called, and no terminal error is recorded, so the next catch-up replays the whole history and the handover
+         * stays usable. Live payloads arriving after a stop are dropped and their acks complete rather than hang, the
+         * same dropped-not-deferred contract a stopped subscription model has (ADR 85).
+         */
+        default boolean keepReplaying() {
+            return true;
+        }
     }
 
     private final Function<T, Mono<Void>> deliver;
@@ -85,6 +105,7 @@ public final class ReactiveHandover<T> {
     // caller's accept Monos hanging forever.
     private final Set<MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
+    private volatile boolean stopped = false;
 
     private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options) {
         this.deliver = deliver;
@@ -121,11 +142,23 @@ public final class ReactiveHandover<T> {
                 ackSink.error(failure);
                 return;
             }
+            if (stopped) {
+                // Dropped rather than buffered, and the ack completes rather than failing: the replay that would have
+                // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85).
+                ackSink.success();
+                return;
+            }
             pendingLiveAcks.add(ackSink);
-            // Re-check after registering: if the catch-up failed concurrently, fail this ack rather than hang.
+            // Re-check both after registering. A stop or a failure landing between the checks above and this add
+            // would otherwise leave the ack unresolved, because the handler that resolves the pending acks has
+            // already run, and the caller's Mono would never complete.
             failure = terminalError.get();
             if (failure != null) {
                 ackSink.error(failure);
+                return;
+            }
+            if (stopped) {
+                ackSink.success();
                 return;
             }
             String key;
@@ -146,11 +179,15 @@ public final class ReactiveHandover<T> {
     /**
      * Run the one-time catch-up: replay the source's history, record the completion marker, then start delivering the
      * live feed. The returned {@link Mono} completes when the replay and marker are done (see the class javadoc for
-     * how that relates to the buffered live payloads).
+     * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
+     * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead.
      */
-    public Mono<Void> catchUp(Source<T> source) {
+    public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
-        Sinks.One<Void> catchupDone = Sinks.one();
+        // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying again
+        // rather than only by building a new one.
+        stopped = false;
+        Sinks.One<Boolean> catchupDone = Sinks.one();
 
         // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
         // written only when the replay actually ran (not on a restart that skips it).
@@ -164,18 +201,38 @@ public final class ReactiveHandover<T> {
                 .flatMapMany(done -> done
                         ? Flux.<Item>empty()
                         : source.replay().map(this::replayedItem))
-                .concatMap(this::deliver)
+                // Checked inside the concatMap function rather than upstream of it. An upstream takeWhile would run at
+                // emission, and concatMap prefetches, so it could race far ahead of the folds. This is serialized per
+                // payload with the fold itself, which is the same reason the three phases below are sequential.
+                .concatMap(item -> source.keepReplaying() ? deliver(item) : Mono.error(CatchupStopped.INSTANCE))
                 .then();
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp());
 
         replayFolded
                 .then(recordMarker)
-                .doOnSuccess(ignored -> catchupDone.tryEmitEmpty())
+                .doOnSuccess(ignored -> catchupDone.tryEmitValue(true))
                 .thenMany(liveSink.asFlux().concatMap(this::deliver))
+                // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
+                // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated
+                // projection. boundedElastic because the replay folds through blocking bridges.
+                .subscribeOn(Schedulers.boundedElastic())
                 .subscribe(ignored -> {
                 }, error -> {
+                    if (error == CatchupStopped.INSTANCE) {
+                        // Stopped, not failed. No marker, no drain, and no terminal error, so the handover stays
+                        // usable. The buffered acks still have to be resolved or their callers hang forever; they
+                        // complete rather than fail, because the payload was dropped rather than rejected.
+                        stopped = true;
+                        catchupDone.tryEmitValue(false);
+                        pendingLiveAcks.forEach(MonoSink::success);
+                        return;
+                    }
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
                     // Fail their acks and reject later ones, so the caller sees the error instead of hanging.
+                    // Known gap: catchupDone has already emitted by the time the live phase runs, so a failure from
+                    // that phase cannot be reported through it and reaches no caller. This module has no logger to
+                    // fall back on either. Live folds are guarded by onErrorResume, so the reachable triggers are
+                    // narrow, and closing it means moving the completion signal off the marker phase.
                     terminalError.set(error);
                     catchupDone.tryEmitError(error);
                     pendingLiveAcks.forEach(sink -> sink.error(error));
@@ -184,8 +241,21 @@ public final class ReactiveHandover<T> {
         return catchupDone.asMono();
     }
 
+    /**
+     * Unwinds the replay pipeline on a deliberate stop. A singleton with no stack trace: it is a control signal handled
+     * entirely inside this engine, never surfaced to a caller, and compared by identity so a fold that throws
+     * something similar cannot be mistaken for it.
+     */
+    private static final class CatchupStopped extends RuntimeException {
+        private static final CatchupStopped INSTANCE = new CatchupStopped();
+
+        private CatchupStopped() {
+            super("The catch-up was stopped before it finished", null, false, false);
+        }
+    }
+
     // Serialized by concatMap within a phase, and the phases run sequentially, so the de-dup cache is touched by one
-    // thread at a time and needs no synchronization.
+    // thread at a time. Those calls still land on different threads, so the cache does its own synchronization.
     private Mono<Void> deliver(Item item) {
         MonoSink<Void> ack = item.ack();
         if (ack != null) {

@@ -159,6 +159,24 @@ public final class SagaRunner<E, C> {
     public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
                                                              SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
                                                              @Nullable StartAt startAt, SagaRunnerConfig config, BooleanSupplier timersEnabled) {
+        return run(subscriptionId, saga, stateStore, commandDispatcher, startAt, config, timersEnabled, true);
+    }
+
+    /**
+     * Runs {@code saga}, waiting for its subscription to start only if {@code waitUntilStarted} says to.
+     * <p>
+     * Pass {@code false} to keep a catch-up replay off the startup path, which is what
+     * {@code @Saga(startupMode = BACKGROUND)} does. The saga then folds its history while the caller carries on, and
+     * a replay failure surfaces from the returned subscription rather than from here.
+     * <p>
+     * Gate {@code timersEnabled} on the same readiness when you do. Without waiting, this returns while the replay is
+     * still folding, so an unguarded poller can fire a timer for an instance whose later events have not been applied
+     * yet, and every lost compare-and-swap re-dispatches that reaction's whole command list.
+     */
+    public <S extends @Nullable Object> SagaSubscription run(String subscriptionId, Saga<E, S, C> saga,
+                                                             SagaStateStore<S> stateStore, CommandDispatcher<C> commandDispatcher,
+                                                             @Nullable StartAt startAt, SagaRunnerConfig config,
+                                                             BooleanSupplier timersEnabled, boolean waitUntilStarted) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(saga, "saga cannot be null");
         requireNonNull(stateStore, "stateStore cannot be null");
@@ -171,7 +189,12 @@ public final class SagaRunner<E, C> {
         Consumer<CloudEvent> action = execution::onCloudEvent;
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
         Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
-        subscription.waitUntilStarted();
+        // Deliberately above the lease registration and the poller's executor below. A replay failure thrown here
+        // aborts before either is allocated, so nothing leaks and the caller never receives a SagaSubscription it
+        // would have to close. Skipping the wait skips that protection too, which is what timersEnabled is for.
+        if (waitUntilStarted) {
+            subscription.waitUntilStarted();
+        }
 
         // Register the poller as a competing consumer under its own lease key, then poll only while this instance holds it
         // and timersEnabled says to. hasLock is an in-memory check the strategy's background refresh maintains, and
