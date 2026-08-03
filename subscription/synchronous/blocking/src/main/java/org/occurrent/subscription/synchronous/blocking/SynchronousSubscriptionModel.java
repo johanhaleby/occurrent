@@ -18,6 +18,7 @@ package org.occurrent.subscription.synchronous.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
@@ -41,6 +42,22 @@ import java.util.function.Consumer;
  */
 @NullMarked
 public class SynchronousSubscriptionModel extends RegisteringSubscribable implements SynchronousEventDispatcher, Consumer<List<CloudEvent>> {
+
+    /**
+     * Creates a model that refuses a subscription filter on a {@code data} payload field, which is what it has always
+     * done.
+     */
+    public SynchronousSubscriptionModel() {
+    }
+
+    /**
+     * Creates a model that can answer a subscription filter on a {@code data} payload field by reading it through
+     * {@code dataFieldReader}. Occurrent ships a Jackson-backed one in
+     * {@code occurrent-common-inmemory-filter-matching-jackson}.
+     */
+    public SynchronousSubscriptionModel(DataFieldReader dataFieldReader) {
+        super(dataFieldReader);
+    }
 
     /**
      * Dispatch the supplied cloud events to every matching registered handler, synchronously, on the calling

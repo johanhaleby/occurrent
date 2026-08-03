@@ -78,6 +78,16 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
     }
 
     /**
+     * Create a new {@link InMemorySubscriptionModel} with the same defaults as {@link #InMemorySubscriptionModel()},
+     * that can also answer a subscription filter on a {@code data} payload field by reading it through
+     * {@code dataFieldReader}. Occurrent ships a Jackson-backed one in
+     * {@code occurrent-common-inmemory-filter-matching-jackson}.
+     */
+    public InMemorySubscriptionModel(DataFieldReader dataFieldReader) {
+        this(Executors.newCachedThreadPool(), RetryStrategy.fixed(200), LinkedBlockingQueue::new, dataFieldReader);
+    }
+
+    /**
      * Create an instance of {@link InMemorySubscriptionModel} with the given parameters
      *
      * @param cloudEventDispatcher The {@link ExecutorService} that will be used when dispatching cloud events to subscribers

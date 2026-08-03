@@ -18,6 +18,7 @@ package org.occurrent.subscription.synchronous.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
@@ -41,6 +42,22 @@ import java.util.List;
  */
 @NullMarked
 public class SynchronousSubscriptionModel extends RegisteringSubscribable implements ReactiveSynchronousEventDispatcher {
+
+    /**
+     * Creates a model that refuses a subscription filter on a {@code data} payload field, which is what it has always
+     * done.
+     */
+    public SynchronousSubscriptionModel() {
+    }
+
+    /**
+     * Creates a model that can answer a subscription filter on a {@code data} payload field by reading it through
+     * {@code dataFieldReader}. Occurrent ships a Jackson-backed one in
+     * {@code occurrent-common-inmemory-filter-matching-jackson}.
+     */
+    public SynchronousSubscriptionModel(DataFieldReader dataFieldReader) {
+        super(dataFieldReader);
+    }
 
     @Override
     public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents) {

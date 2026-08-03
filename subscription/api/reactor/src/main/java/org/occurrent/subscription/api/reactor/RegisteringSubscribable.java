@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -57,6 +58,24 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
     private final Set<String> pausedSubscriptions = ConcurrentHashMap.newKeySet();
     private final CopyOnWriteArrayList<Registration> registrations = new CopyOnWriteArrayList<>();
     private volatile boolean running = true;
+    private final DataFieldReader dataFieldReader;
+
+    /**
+     * Creates a model that refuses a subscription filter on a {@code data} payload field, which is what a subclass
+     * built without a reader has always done.
+     */
+    protected RegisteringSubscribable() {
+        this(DataFieldReader.refusing());
+    }
+
+    /**
+     * Creates a model that can answer a subscription filter on a {@code data} payload field by reading it through
+     * {@code dataFieldReader}. Occurrent ships a Jackson-backed one in
+     * {@code occurrent-common-inmemory-filter-matching-jackson}.
+     */
+    protected RegisteringSubscribable(DataFieldReader dataFieldReader) {
+        this.dataFieldReader = Objects.requireNonNull(dataFieldReader, DataFieldReader.class.getSimpleName() + " cannot be null");
+    }
 
     @Override
     public final Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
@@ -64,7 +83,7 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
         // Build the matcher before reserving the id, so an unsupported filter does not leave the id permanently taken.
-        Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
+        Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter, dataFieldReader);
         if (!subscriptionIds.add(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
         }

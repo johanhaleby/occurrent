@@ -84,6 +84,14 @@
             <artifactId>assertj-core</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- A real payload reader, so the data-filter tests exercise reading rather than a stub. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-common-inmemory-filter-matching-jackson</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
 </project>

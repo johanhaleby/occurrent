@@ -25,6 +25,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.inmemory.filtermatching.FilterMatcher;
+import org.occurrent.inmemory.filtermatching.PayloadConditions;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StreamSubscriptionFilter;
@@ -200,19 +201,23 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         // For a capability-agnostic subscription the scope is null, so the caller's filter is used unchanged and events
         // of every capability are delivered.
         Filter filter = withCapabilityScope(callerFilter);
+        // What the in-process predicates below can decide for themselves. A condition on the data payload is treated as
+        // already satisfied, because reading a payload needs a DataFieldReader this model wraps no store to obtain, and
+        // the store applied the real condition to have delivered the event (ADR 92).
+        Filter locallyCheckable = PayloadConditions.assumingPayloadConditionsMatch(filter);
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorStreamCatchupSubscriptionModel.class));
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             // Not a catch-up position, so go straight to live. Filter in-process too, so a backend that does not
             // honor the filter server-side still only delivers matching events, and skip events without a position.
             return subscriptionModel.subscribe(StreamSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
-                    .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter));
+                    .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, locallyCheckable));
         }
 
         long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
         CatchupReader reader = new StreamCatchupReader(positionOrderedReader, filter);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
-        Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter);
+        Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, locallyCheckable);
         return pipeline.catchup(subscriptionModel, StreamSubscriptionFilter.filter(filter), livePredicate, startPosition);
     }
 

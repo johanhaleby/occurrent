@@ -21,6 +21,8 @@ import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
@@ -86,6 +88,23 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         String database = requireNonNull(connectionString.getDatabase());
         databaseFactory = new SimpleReactiveMongoDatabaseFactory(client, database);
         mongoTemplate = new ReactiveMongoTemplate(client, database);
+    }
+
+
+    @Test
+    void a_data_field_reader_is_contributed_when_the_jackson_reader_is_on_the_classpath() {
+        // The Jackson reader is a test dependency of this module, so the conditional bean is active here. An
+        // application opts in the same way, by adding occurrent-common-inmemory-filter-matching-jackson.
+        contextRunner().run(context ->
+                assertThat(context).getBean(DataFieldReader.class).isInstanceOf(JacksonDataFieldReader.class));
+    }
+
+    @Test
+    void an_application_supplied_data_field_reader_wins() {
+        DataFieldReader own = (cloudEvent, path) -> java.util.Optional.empty();
+
+        contextRunner().withBean(DataFieldReader.class, () -> own).run(context ->
+                assertThat(context).getBean(DataFieldReader.class).isSameAs(own));
     }
 
     private ApplicationContextRunner contextRunner() {

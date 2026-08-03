@@ -204,5 +204,17 @@
             <artifactId>testcontainers-mongodb</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+          Optional: the payload reader the auto-configured DataFieldReader bean returns. Optional rather than required
+          because it pulls a JSON library, and an application that never filters a subscription on a payload field
+          should not pay for it. The bean is @ConditionalOnClass on it, so adding this artifact is how you opt in.
+        -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-common-inmemory-filter-matching-jackson</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+
     </dependencies>
 </project>
