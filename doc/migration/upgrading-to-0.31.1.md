@@ -17,7 +17,7 @@ may need your attention:
 them. A broker message carries one acknowledgement decision, so those consumers shared it: a consumer that kept failing
 held up every consumer behind it on every redelivery, and once the broker gave up and dead-lettered the message they
 never saw it at all. That breaks the isolation Occurrent now holds itself to, so the shared configuration is no longer
-expressible. [ADR 88](../architecture/decisions/0088-a-push-sink-feeds-one-consumer.md) has the full reasoning.
+expressible. [ADR 90](../architecture/decisions/0090-a-push-sink-feeds-one-consumer.md) has the full reasoning.
 
 You are affected only if two or more consumers register on the same sink instance. If each of your push projections
 already has its own bean, nothing changes.

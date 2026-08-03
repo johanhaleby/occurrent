@@ -362,13 +362,13 @@ feed.
 
 ## Amendment (2026-08-02): a push sink feeds one consumer, so there is no fan-out left to reason about
 
-Superseded by [ADR 88](0088-a-push-sink-feeds-one-consumer.md). The description above of `PushSubscriptionModel` and
+Superseded by [ADR 90](0090-a-push-sink-feeds-one-consumer.md). The description above of `PushSubscriptionModel` and
 `DomainEventFeed` as fan-out sinks, and the rejection of "a separate per-projection feed factory" as "a narrower
 fan-out", no longer describe the code: both sinks now take exactly one consumer and refuse a second registration.
 
 The original rejection was argued on API surface. It never weighed error isolation, and that is what decides it. One
 received message carries one acknowledgement decision, so several consumers on one sink share it, and a consumer that
-keeps failing holds up every consumer behind it on every redelivery. ADR 88 has the full argument.
+keeps failing holds up every consumer behind it on every redelivery. ADR 90 has the full argument.
 
 What survives from this ADR: the unguarded ordered `route` loop, kept so a push source's error reaches the listener and
 it can nack (the 2026-07-28 amendment), is unchanged and still right. The fix was never to guard the loop; it was for

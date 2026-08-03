@@ -71,7 +71,7 @@ class PushSubscriptionModelTest {
 
     @Test
     void a_second_consumer_is_refused_and_the_first_still_works() {
-        // PushSubscriptionModel feeds exactly one consumer (ADR 88): a push sink has one broker acknowledgement per
+        // PushSubscriptionModel feeds exactly one consumer (ADR 90): a push sink has one broker acknowledgement per
         // message, so fan-out would let one failing consumer hold up every consumer behind it.
         PushSubscriptionModel model = new PushSubscriptionModel();
         List<String> received = new ArrayList<>();

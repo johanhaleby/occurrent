@@ -56,10 +56,10 @@ import static org.mockito.Mockito.mock;
  * Characterizes the {@code @Projection} validation branches that fail fast before any subscription model or store is
  * consulted, so they reproduce without a running store (no Docker): the {@code source=PUSH} guards (no synchronous
  * mode, no catch-up start knobs, no DcbProjection, a feed bean that is neither a {@code PushSubscriptionModel} nor a
- * {@code DomainEventFeed}, and two projections resolving the same push sink, see ADR 88), and the convention-based
+ * {@code DomainEventFeed}, and two projections resolving the same push sink, see ADR 90), and the convention-based
  * store resolution failing when the factory return type carries no concrete state type and no store bean exists. Each
  * must fail fast at context startup with the exact message. One test is deliberately the mirror image of that theme:
- * a domain-feed push projection with {@code startupMode = BACKGROUND} must be accepted, not rejected, now that ADR 88
+ * a domain-feed push projection with {@code startupMode = BACKGROUND} must be accepted, not rejected, now that ADR 90
  * makes a domain-push feed unambiguously one projection's own.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -101,7 +101,7 @@ class ProjectionAnnotationValidationTest {
         // too: the catch-up runs on a thread the registrar owns instead of holding up the refresh. See
         // DomainEventFeedProjectionPushStartupModeTest for the fuller proof (parked replay, context refreshes,
         // released replay fills the store). This test only checks that the context does not fail fast, which is
-        // what the rejection used to do before ADR 88 made a domain-push feed unambiguously one projection's own.
+        // what the rejection used to do before ADR 90 made a domain-push feed unambiguously one projection's own.
         runner.withUserConfiguration(DomainFeedBackgroundConfiguration.class).run(context ->
                 assertThat(context).hasNotFailed());
     }

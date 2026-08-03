@@ -42,7 +42,7 @@ import java.util.function.BiFunction;
  * <strong>One feed feeds one projection</strong>, and a second {@link #register} is refused. The acknowledgement is
  * what forces it: the listener has exactly one decision per received message, so several projections on one feed would
  * share it, and a projection that keeps failing would hold up every projection behind it. Declare one feed per
- * projection, each fed by its own queue. See ADR 88.
+ * projection, each fed by its own queue. See ADR 90.
  * <p>
  * The {@code occurrent.subscription.catchup-then-live.*} properties do <strong>not</strong> reach this feed. Your
  * application declares this bean, so tune its catch-up by passing {@link CatchupThenLiveOptions} to the constructor.

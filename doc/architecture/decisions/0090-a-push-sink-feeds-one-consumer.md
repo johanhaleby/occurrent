@@ -1,4 +1,4 @@
-# 88. A push sink feeds one consumer
+# 90. A push sink feeds one consumer
 
 Date: 2026-08-02
 

@@ -37,7 +37,7 @@ import reactor.core.publisher.Mono;
  * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
  * what forces it: this model has exactly one per received event, so several handlers on it would share the decision to
  * acknowledge or redeliver, and a handler that keeps failing would hold up every handler behind it. Declare one model
- * per projection or saga, each fed by its own queue. See ADR 88.
+ * per projection or saga, each fed by its own queue. See ADR 90.
  * <p>
  * Occurrent stays transport-neutral: this model has no dependency on any broker. The pushed events must carry the
  * Occurrent cloud-event extensions the handlers rely on (at minimum {@code streamid} and {@code streamversion}, add

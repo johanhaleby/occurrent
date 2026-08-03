@@ -19,7 +19,7 @@ package org.occurrent.subscription.internal;
 /**
  * The wording shared verbatim by every push sink that takes a single consumer, kept in one place so the four call
  * sites (the blocking and reactor push subscription models, and the blocking and reactor domain-event feeds) cannot
- * drift. See ADR 88 for why the sinks are single-consumer.
+ * drift. See ADR 90 for why the sinks are single-consumer.
  * <p>
  * This message is the migration path for the change, so it has to carry the whole story: there is no OpenRewrite
  * recipe for a bean topology, and a startup failure naming both consumers is more useful than one would be.

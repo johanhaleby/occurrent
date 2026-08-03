@@ -54,7 +54,7 @@ import java.util.function.Predicate;
  * externally driven sink delivers one message under one acknowledgement, so several consumers on it would mean one
  * failing consumer holding up the rest, which the isolation rule in {@code AGENTS.md} forbids. Only a subclass that
  * has an argument for why fan-out is safe for it, as the synchronous write-path dispatcher does, passes
- * {@link Consumers#MANY}. See ADR 88.
+ * {@link Consumers#MANY}. See ADR 90.
  */
 @NullMarked
 public abstract class RegisteringSubscribable implements Subscribable, SubscriptionModelLifeCycle {

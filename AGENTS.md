@@ -47,7 +47,7 @@ another one being faulty.** It applies per consumer, so a shared delivery carryi
 consumers cannot satisfy it whatever else the design has going for it: one consumer that keeps failing holds up the
 acknowledgement, and every consumer behind it either never sees the message or loses it when the broker gives up on
 it. Check a push or fan-out design against this before anything else. It is what decided the one-sink-per-consumer
-topology in ADR 88.
+topology in ADR 90.
 
 **Aim for the best long-term answer, not the cheapest one that passes.** An easier solution is fine when it yields
 roughly the same result. It is not fine when the gap is isolation or correctness.

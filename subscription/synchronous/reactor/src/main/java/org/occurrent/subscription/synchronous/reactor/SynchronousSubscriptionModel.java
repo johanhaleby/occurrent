@@ -46,7 +46,7 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
      * Several handlers, unlike the push models, which take one each. Fan-out is safe here because there is no broker
      * and no acknowledgement to share: the events arrive from the write that just produced them, and a handler error
      * propagates to the writer rather than stranding the handlers behind it. Under a reactive transaction the write
-     * rolls back, so nothing is folded by anyone. See ADR 88 for the isolation argument that makes the push sinks
+     * rolls back, so nothing is folded by anyone. See ADR 90 for the isolation argument that makes the push sinks
      * single-consumer, and the follow-up it leaves open for the no-transaction case here.
      */
     public SynchronousSubscriptionModel() {

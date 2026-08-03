@@ -1,4 +1,4 @@
-# 87. A push catch-up replays off the startup path
+# 89. A push catch-up replays off the startup path
 
 Date: 2026-08-02
 
@@ -133,7 +133,7 @@ returns the handle and the caller composes. The Spring registrar gates its own e
 and no background overload. Stopping is the thing a caller cannot do for itself; backgrounding is not, since a caller
 can already run `catchUpAll()` on a thread it owns. The Spring registrar is that caller, because it is what knows the
 `startupMode`: it runs the catch-up on a virtual thread it owns and stops the feed from `close()`. On reactor it needs
-no thread at all, since subscribing without blocking is enough once the handover schedules itself. ADR 88, which made a
+no thread at all, since subscribing without blocking is enough once the handover schedules itself. ADR 90, which made a
 feed carry exactly one projection, is what makes this well defined: `startupMode` on a domain-feed projection is now
 unambiguously per-projection.
 
