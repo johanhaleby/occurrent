@@ -28,7 +28,7 @@ a matcher reads nothing. `DataFieldReader.refusing()` throws when a payload is a
 
 ## Decision
 
-**Nothing is reshaped, because the reader-taking overloads already existed.** `SubscriptionFilterMatcher.matcherFor`
+**No existing signature changes, because the reader-taking overloads already existed.** `SubscriptionFilterMatcher.matcherFor`
 and `FilterMatcher.matchesFilter` have taken a `DataFieldReader` since ADR 87. The reader-less overloads simply
 default to refusing. So the fix is threading, and every change is a new overload or an optional parameter. The option
 of making the matchers instance-shaped, which #499 called the cleanest, would have been a breaking change to two
@@ -46,10 +46,16 @@ only delivers matching events. That reason holds for attributes and extensions, 
 not extend to a payload, because reading one needs a JSON dependency this model has no way to obtain: it wraps an
 arbitrary `CheckpointAwareSubscriptionModel`, not a store it could ask.
 
-So the live predicates replace every `data.` condition with one that matches anything and check the rest as before.
-Replaced, not removed: dropping a payload condition out of an `OR` would change what the filter means and silently
-discard an event that matched only on the payload. `PayloadConditions.assumingPayloadConditionsMatch` is that rewrite,
-and it lives in `common/inmemory/filter-matching` because that module already owns what can be matched in memory.
+So the live predicates check everything except a payload condition, which they treat as already satisfied.
+Internally that is a rewrite replacing each `data.` condition with one that matches anything. Replaced, not removed:
+dropping a payload condition out of an `OR` would change what the filter means and silently discard an event that
+matched only on the payload.
+
+**What is exposed is the matching, not the rewritten filter.** `FilterMatcher.matcherIgnoringPayloadConditions(Filter)`
+returns a `Predicate<CloudEvent>` and the rewrite stays package-private. A widened `Filter` handed out publicly could
+reach a store query, which would then match more than the filter that was written with nothing at the call site to say
+so. A predicate cannot be used that way. It also fixes where the widening happens: once, when the predicate is built,
+rather than per event.
 
 **The consequence, chosen deliberately:** a third-party subscription model that ignores a payload filter now
 over-delivers rather than throwing. Occurrent ships no such model. The only non-wrapper reactor

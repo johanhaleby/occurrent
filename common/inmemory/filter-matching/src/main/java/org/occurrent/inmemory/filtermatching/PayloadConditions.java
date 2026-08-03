@@ -27,16 +27,16 @@ import static org.occurrent.filter.Filter.CompositionFilter;
 import static org.occurrent.filter.Filter.SingleConditionFilter;
 
 /**
- * Rewrites a {@link Filter} so that a condition on a field inside an event's {@code data} payload is treated as
- * already satisfied, leaving every other condition to be checked as before.
+ * Rewrites a {@link Filter} so that a condition on a field inside an event's {@code data} payload is treated as already
+ * satisfied, leaving every other condition to be checked as before.
  * <p>
- * This is for a caller that re-checks a filter in memory against an event a store has already matched, and cannot read
- * a payload because it has no {@link DataFieldReader}. Attributes and extensions are free to re-check. A payload is
- * not, so re-checking it means either refusing outright or trusting the store, and the store applied the real
- * condition to have delivered the event at all.
+ * Package-private on purpose. The rewritten filter matches more events than the one it came from, which is right for
+ * matching an event a store has already filtered and wrong for anything else. Handed out publicly it could reach a
+ * store query, which would then be quietly wider than the filter that was written. {@link
+ * FilterMatcher#matcherIgnoringPayloadConditions(Filter)} exposes the matching without exposing the widened filter.
  */
 @NullMarked
-public final class PayloadConditions {
+final class PayloadConditions {
 
     private static final String DATA_PREFIX = Filter.DATA + ".";
 
@@ -52,7 +52,7 @@ public final class PayloadConditions {
      * {@code type = X} and discard an event that matched only on the amount. Matching anything is correct under both
      * {@code AND} and {@code OR}.
      */
-    public static Filter assumingPayloadConditionsMatch(Filter filter) {
+    static Filter assumingPayloadConditionsMatch(Filter filter) {
         if (filter == null) {
             throw new IllegalArgumentException(Filter.class.getSimpleName() + " cannot be null");
         }
@@ -64,21 +64,6 @@ public final class PayloadConditions {
             }
             case All all -> all;
             case CapabilityFilter cpf -> cpf;
-        };
-    }
-
-    /**
-     * Whether {@code filter} contains any condition on a {@code data} payload field, at any depth.
-     */
-    public static boolean containsPayloadCondition(Filter filter) {
-        if (filter == null) {
-            throw new IllegalArgumentException(Filter.class.getSimpleName() + " cannot be null");
-        }
-        return switch (filter) {
-            case SingleConditionFilter scf -> isPayloadCondition(scf);
-            case CompositionFilter cf -> cf.filters().stream().anyMatch(PayloadConditions::containsPayloadCondition);
-            case All ignored -> false;
-            case CapabilityFilter ignored -> false;
         };
     }
 

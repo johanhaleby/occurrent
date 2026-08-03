@@ -18,6 +18,7 @@ package org.occurrent.subscription.push.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.Pushable;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
@@ -46,6 +47,23 @@ import reactor.core.publisher.Mono;
  */
 @NullMarked
 public class PushSubscriptionModel extends RegisteringSubscribable implements Pushable {
+
+    /**
+     * Creates a model that refuses a subscription filter on a {@code data} payload field, which is what it has always
+     * done.
+     */
+    public PushSubscriptionModel() {
+        super(Consumers.ONE);
+    }
+
+    /**
+     * Creates a model that can answer a subscription filter on a {@code data} payload field by reading it through
+     * {@code dataFieldReader}. Occurrent ships a Jackson-backed one in
+     * {@code occurrent-common-inmemory-filter-matching-jackson}. Without one, such a filter is refused.
+     */
+    public PushSubscriptionModel(DataFieldReader dataFieldReader) {
+        super(Consumers.ONE, dataFieldReader);
+    }
 
     /**
      * Feed a single event to the model, routing it to the registered handler if its filter matches.
