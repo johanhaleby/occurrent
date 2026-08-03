@@ -32,11 +32,17 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 
+import org.occurrent.subscription.api.blocking.Subscription;
+
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -58,7 +64,7 @@ class CatchupThenPushSubscriptionModelTest {
 
         List<String> delivered = new ArrayList<>();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
-        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
 
         assertThat(delivered).containsExactly("1", "2", "3");
 
@@ -78,7 +84,7 @@ class CatchupThenPushSubscriptionModelTest {
 
         List<String> delivered = new ArrayList<>();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
-        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
 
         // e2 deduped by id: delivered once, via the replay.
         assertThat(delivered).containsExactly("1", "2", "3");
@@ -95,7 +101,7 @@ class CatchupThenPushSubscriptionModelTest {
 
         List<String> delivered = new ArrayList<>();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
-        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
 
         assertThat(delivered).containsExactly("1", "2", "late");
     }
@@ -117,7 +123,8 @@ class CatchupThenPushSubscriptionModelTest {
         sink.set(feed1);
         List<String> firstRun = new ArrayList<>();
         new CatchupThenPushSubscriptionModel(store, feed1, marker)
-                .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> firstRun.add(ce.getId()));
+                .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> firstRun.add(ce.getId()))
+                .waitUntilStarted();
         assertThat(firstRun).containsExactly("1", "2");
 
         // Restart: fresh feed and model, same store and marker. The replay is skipped.
@@ -125,7 +132,8 @@ class CatchupThenPushSubscriptionModelTest {
         sink.set(feed2);
         List<String> secondRun = new ArrayList<>();
         new CatchupThenPushSubscriptionModel(store, feed2, marker)
-                .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()));
+                .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()))
+                .waitUntilStarted();
         assertThat(secondRun).isEmpty();
 
         // Only live events flow after the restart, resumed by the broker (here, the forwarding store).
@@ -144,9 +152,11 @@ class CatchupThenPushSubscriptionModelTest {
         PositionOrderedReader reader = readerThatOnFirstElementPushesMany(List.of(e1), List.of(l1, l2, l3), feed);
 
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null, new CatchupThenLiveOptions(10, 2));
-        Throwable thrown = catchThrowable(() ->
-                model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
-                }));
+        // The overflow is thrown by the handover on the replay thread, so it surfaces from waitUntilStarted rather
+        // than from subscribe.
+        var subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+        Throwable thrown = catchThrowable(subscription::waitUntilStarted);
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("buffer overflowed");
     }
@@ -184,9 +194,9 @@ class CatchupThenPushSubscriptionModelTest {
 
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader, liveFeed, null);
 
-        Throwable replayFailure = catchThrowable(() ->
-                model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
-                }));
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        Throwable replayFailure = catchThrowable(subscription::waitUntilStarted);
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
         // The dead handler is released on the catch-up failure path, so a later live event is simply a no-op delivery
@@ -201,16 +211,18 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
 
         CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
-        Throwable replayFailure = catchThrowable(() ->
-                failingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
-                }));
+        var failed = failingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        // Waiting is also what orders the release: it runs on the replay thread before the task completes, so the id
+        // is free by the time this returns.
+        Throwable replayFailure = catchThrowable(failed::waitUntilStarted);
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
         List<String> delivered = new ArrayList<>();
         PositionOrderedReader workingReader = reader(Stream::empty, 0);
         CatchupThenPushSubscriptionModel workingModel = new CatchupThenPushSubscriptionModel(workingReader, liveFeed, null);
         Throwable secondSubscribeFailure = catchThrowable(() ->
-                workingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())));
+                workingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted());
 
         assertThat(secondSubscribeFailure).isNull();
 
@@ -223,15 +235,15 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
 
         CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
-        Throwable replayFailure = catchThrowable(() ->
-                failingModel.subscribe("failed", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
-                }));
+        var failed = failingModel.subscribe("failed", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        Throwable replayFailure = catchThrowable(failed::waitUntilStarted);
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
         List<String> delivered = new ArrayList<>();
         PositionOrderedReader workingReader = reader(Stream::empty, 0);
         CatchupThenPushSubscriptionModel healthyModel = new CatchupThenPushSubscriptionModel(workingReader, liveFeed, null);
-        healthyModel.subscribe("healthy", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId()));
+        healthyModel.subscribe("healthy", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
 
         Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
 
@@ -247,6 +259,226 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> new CatchupThenPushSubscriptionModel(reader, feed, null));
 
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("writesPosition");
+    }
+
+    @Test
+    void a_subscription_reports_running_once_it_has_handed_over_to_the_live_feed() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        }).waitUntilStarted();
+
+        // Load-bearing beyond introspection: a @Saga's timer poller is gated on isRunning(id), so a model that answers
+        // false here stops that saga firing timers at all, silently and for good.
+        assertThat(model.isRunning("proj")).isTrue();
+        assertThat(model.isRunning()).isTrue();
+        assertThat(model.isPaused("proj")).isFalse();
+    }
+
+    @Test
+    void stopping_the_model_stops_delivering_the_live_feed() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        List<String> delivered = new ArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
+
+        model.stop();
+        feed.accept(cloudEvent("1", "Created"));
+
+        assertThat(delivered).isEmpty();
+    }
+
+    @Test
+    void a_paused_subscription_withholds_live_events_and_resuming_brings_it_back() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        List<String> delivered = new ArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
+
+        model.pauseSubscription("proj");
+        assertThat(model.isPaused("proj")).isTrue();
+        feed.accept(cloudEvent("1", "Created"));
+        assertThat(delivered).isEmpty();
+
+        model.resumeSubscription("proj");
+        feed.accept(cloudEvent("2", "Updated"));
+
+        // Dropped, not deferred: "1" arrived while paused and is gone, which is the documented contract (ADR 85).
+        assertThat(delivered).containsExactly("2");
+    }
+
+    @Test
+    void cancelling_a_subscription_releases_it_from_the_live_feed() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        List<String> delivered = new ArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
+
+        model.cancelSubscription("proj");
+        feed.accept(cloudEvent("1", "Created"));
+
+        assertThat(delivered).isEmpty();
+        assertThat(model.isRunning("proj")).isFalse();
+    }
+
+    @Test
+    void wait_until_started_returns_only_once_the_whole_replay_has_been_folded() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+
+        CountDownLatch reachedLast = new CountDownLatch(1);
+        CountDownLatch releaseLast = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        // Gate the LAST fold rather than the first. The reactor twin's handover records that gating the first does not
+        // reproduce the analogous bug, because a prefetch can let the pipeline advance while an early item is still
+        // folding.
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            delivered.add(ce.getId());
+            if (ce.getId().equals("3")) {
+                reachedLast.countDown();
+                awaitLatch(releaseLast);
+            }
+        });
+
+        assertThat(reachedLast.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(subscription.waitUntilStarted(Duration.ofMillis(100))).isFalse();
+
+        releaseLast.countDown();
+
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        assertThat(delivered).containsExactly("1", "2", "3");
+    }
+
+    @Test
+    void events_pushed_during_a_background_replay_are_delivered_after_the_drain() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(__ -> {
+        });
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            delivered.add(ce.getId());
+            if (ce.getId().equals("1")) {
+                replayStarted.countDown();
+                awaitLatch(releaseReplay);
+            }
+        });
+
+        assertThat(replayStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        // Live while the replay is parked. The handover buffers it rather than folding it out of order.
+        feed.accept(cloudEvent("live", "Updated"));
+        releaseReplay.countDown();
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        assertThat(delivered).containsExactly("1", "2", "live");
+    }
+
+    @Test
+    void stopping_the_model_halts_a_replay_in_flight_and_leaves_the_marker_unwritten() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        AtomicReference<PushSubscriptionModel> sink = new AtomicReference<>();
+        InMemoryEventStore store = new InMemoryEventStore(events -> {
+            PushSubscriptionModel current = sink.get();
+            if (current != null) {
+                current.accept(events);
+            }
+        });
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+
+        PushSubscriptionModel feed1 = new PushSubscriptionModel();
+        sink.set(feed1);
+        CountDownLatch firstFolded = new CountDownLatch(1);
+        CountDownLatch releaseFold = new CountDownLatch(1);
+        List<String> firstRun = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel stopped = new CatchupThenPushSubscriptionModel(store, feed1, marker);
+        // Park inside the first fold so stop() genuinely lands mid-replay. Without the park the three events replay
+        // faster than the test can stop anything, and the assertions below would pass against a completed catch-up.
+        Subscription subscription = stopped.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            firstRun.add(ce.getId());
+            firstFolded.countDown();
+            awaitLatch(releaseFold);
+        });
+
+        assertThat(firstFolded.await(5, TimeUnit.SECONDS)).isTrue();
+        stopped.stop();
+        releaseFold.countDown();
+
+        // Not started, but not a failure either, so this reports false rather than throwing.
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+        assertThat(stopped.isRunning("proj")).isFalse();
+        assertThat(firstRun).isNotEmpty();
+
+        // The whole point: a partial replay must not look like a finished one. If the marker were written here, the
+        // next start would skip the replay and the events never folded would be lost with nothing to show for it.
+        assertThat(marker.exists("proj")).isFalse();
+
+        PushSubscriptionModel feed2 = new PushSubscriptionModel();
+        sink.set(feed2);
+        List<String> secondRun = new CopyOnWriteArrayList<>();
+        new CatchupThenPushSubscriptionModel(store, feed2, marker)
+                .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()))
+                .waitUntilStarted();
+
+        assertThat(secondRun).containsExactly("1", "2", "3");
+        assertThat(marker.exists("proj")).isTrue();
+    }
+
+    @Test
+    void an_error_from_the_fold_surfaces_unchanged_and_releases_the_registration() {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> {
+            throw new NoClassDefFoundError("lazily loaded class boom");
+        }, 0);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, liveFeed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+        Throwable thrown = catchThrowable(subscription::waitUntilStarted);
+
+        assertThat(thrown).isInstanceOf(NoClassDefFoundError.class).hasMessageContaining("lazily loaded class boom");
+        assertThat(catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")))).isNull();
+    }
+
+    @Test
+    void a_caller_that_never_waits_still_gets_the_registration_released_on_failure() throws Exception {
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
+
+        // Deliberately no waitUntilStarted, which is what startupMode = BACKGROUND does.
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+
+        // The release runs on the replay thread, so it lands without anyone joining it.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (liveFeed.subscriptionIds().contains("sub") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(liveFeed.subscriptionIds()).doesNotContain("sub");
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting for the latch");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     // --- helpers ---

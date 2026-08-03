@@ -30,6 +30,8 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -37,9 +39,14 @@ import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,7 +71,12 @@ class DomainEventFeedTest {
 
         Throwable thrown = catchThrowable(() -> feed.register("counter", projection(), repository));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("counter").hasMessageContaining("already registered");
+        // The message comes from SingleConsumerMessages.singleConsumerOnly, shared with the push subscription models,
+        // so it names the registered projection and the one refused rather than saying "already registered".
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("counter")
+                .hasMessageContaining("already feeds")
+                .hasMessageContaining("refused");
     }
 
     @Test
@@ -101,7 +113,7 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void registering_two_projections_with_different_ids_does_not_throw() {
+    void registering_two_projections_with_different_ids_throws() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
 
@@ -111,26 +123,106 @@ class DomainEventFeedTest {
 
         Throwable thrown = catchThrowable(() -> feed.register("counter-2", projection(), repository));
 
-        assertThat(thrown).isNull();
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("counter-1")
+                .hasMessageContaining("counter-2");
+
+        // The first registration is unaffected by the refused second one: it still works.
+        feed.catchUpAll().block();
+        feed.accept(new Counted("1")).block();
+        assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     @Test
-    void accept_with_metadata_fans_out_to_every_registered_projection_with_the_metadata_intact() {
+    void accept_with_metadata_feeds_the_registered_projection_with_the_metadata_intact() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
 
-        ConcurrentHashMap<String, Long> repoA = new ConcurrentHashMap<>();
-        ConcurrentHashMap<String, Long> repoB = new ConcurrentHashMap<>();
-        ViewStateRepository<Long, String> repositoryA = ViewStateRepository.create(repoA::get, repoA::put);
-        ViewStateRepository<Long, String> repositoryB = ViewStateRepository.create(repoB::get, repoB::put);
-        feed.register("a", positionKeyedProjection(), repositoryA);
-        feed.register("b", positionKeyedProjection(), repositoryB);
+        ConcurrentHashMap<String, Long> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Long, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        feed.register("positions", positionKeyedProjection(), repository);
         feed.catchUpAll().block();
 
         feed.accept(metadata("stream-1", 7L), new Counted("live")).block();
 
-        assertThat(repoA.get("stream-1")).isEqualTo(7L);
-        assertThat(repoB.get("stream-1")).isEqualTo(7L);
+        assertThat(repo.get("stream-1")).isEqualTo(7L);
+    }
+
+    @Test
+    void stopping_a_catch_up_mid_replay_does_not_write_the_marker_and_a_later_catch_up_replays_from_the_beginning() throws InterruptedException {
+        CloudEventConverter<Counted> converter = countedConverter();
+        CountDownLatch parked = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        AtomicInteger deliveries = new AtomicInteger();
+        // Blocks the replay's fold for the first event before it returns, so the catch-up is genuinely still running
+        // (on boundedElastic) when the test calls stopCatchUp(), landing the stop deterministically rather than by
+        // racing a sleep against it. Counts deliveries rather than reading the cumulative counter's final value,
+        // because a projection that folds "+1" onto its current state (like this one) double-counts once a second
+        // full replay folds on top of what the first, aborted one already wrote.
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, (id, state) -> {
+            repo.put(id, state);
+            if (deliveries.incrementAndGet() == 1) {
+                parked.countDown();
+                awaitUninterruptibly(proceed);
+            }
+        });
+        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
+        feed.register("counter", projection(), repository);
+
+        CountDownLatch catchUpFinished = new CountDownLatch(1);
+        // doFinally is a real join on the stopped catch-up, unlike subscribe()'s own return: it counts down only once
+        // the Mono has actually terminated, so awaiting it proves the stop landed instead of polling for a side effect
+        // (the fold's increment, which is what releases "parked" below) that already happened before stopCatchUp() was
+        // even called.
+        feed.catchUpAll().doFinally(signal -> catchUpFinished.countDown()).subscribe(); // runs on boundedElastic, so this returns before it finishes
+        parked.await();
+        feed.stopCatchUp();
+        proceed.countDown();
+
+        assertThat(catchUpFinished.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(deliveries.get()).isEqualTo(1);
+        // A partial replay is never recorded as a finished one.
+        assertThat(marker.read("counter").blockOptional()).isEmpty();
+
+        // The feed is still usable: a later catch-up replays the whole history again, from the beginning, so both
+        // events are folded once more rather than only the one the stop skipped. block() already joins the fold, so
+        // the assertion right after it needs no additional wait.
+        feed.catchUpAll().block();
+        assertThat(deliveries.get()).isEqualTo(3);
+
+        feed.accept(new Counted("3")).block();
+        assertThat(deliveries.get()).isEqualTo(4);
+    }
+
+    private static void awaitUninterruptibly(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static final class InMemoryReactiveCheckpointStorage implements CheckpointStorage {
+        private final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
+
+        @Override
+        public Mono<Checkpoint> read(String subscriptionId) {
+            return Mono.justOrEmpty(checkpoints.get(subscriptionId));
+        }
+
+        @Override
+        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+            checkpoints.put(subscriptionId, checkpoint);
+            return Mono.just(checkpoint);
+        }
+
+        @Override
+        public Mono<Void> delete(String subscriptionId) {
+            return Mono.fromRunnable(() -> checkpoints.remove(subscriptionId));
+        }
     }
 
     @Test
@@ -205,6 +297,30 @@ class DomainEventFeedTest {
             @Override
             public Mono<Long> currentPosition() {
                 return Mono.just(0L);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+    }
+
+    // A reader whose history is the given event ids, in position order. Used only by the stop-mid-replay test.
+    private static PositionOrderedReader reader(String... eventIds) {
+        List<CloudEvent> events = new ArrayList<>();
+        for (String id : eventIds) {
+            events.add(CloudEventBuilder.v1().withId(id).withSource(SOURCE).withType("Counted").build());
+        }
+        return new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.fromIterable(events);
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just((long) events.size());
             }
 
             @Override

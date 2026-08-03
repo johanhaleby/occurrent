@@ -132,6 +132,21 @@ public final class ProjectionRunner<E> {
      * and calls {@code materializedView.update(event)} for every matching event.
      */
     public Subscription project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView, @Nullable StartAt startAt) {
+        return project(subscriptionId, projection, materializedView, startAt, true);
+    }
+
+    /**
+     * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
+     * and calls {@code materializedView.update(event)} for every matching event, waiting for the subscription to start
+     * only if {@code waitUntilStarted} says to.
+     * <p>
+     * Pass {@code false} to keep a catch-up replay off the startup path, which is what
+     * {@code @Projection(startupMode = BACKGROUND)} does. The projection then starts folding history on its own thread
+     * while the caller carries on, so a read model is briefly incomplete rather than an application being briefly
+     * unavailable. A replay failure surfaces from the returned subscription's {@code waitUntilStarted} instead of from
+     * here, so a caller that passes {@code false} and never waits will not see it.
+     */
+    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView, @Nullable StartAt startAt, boolean waitUntilStarted) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(materializedView, "materializedView cannot be null");
@@ -139,7 +154,9 @@ public final class ProjectionRunner<E> {
         Consumer<CloudEvent> action = cloudEvent -> materializedView.update(EventMetadata.from(cloudEvent), cloudEventConverter.toDomainEvent(cloudEvent));
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
         Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
-        subscription.waitUntilStarted();
+        if (waitUntilStarted) {
+            subscription.waitUntilStarted();
+        }
         return subscription;
     }
 }

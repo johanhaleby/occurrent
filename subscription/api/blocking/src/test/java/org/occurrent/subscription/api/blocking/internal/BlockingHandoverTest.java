@@ -98,6 +98,27 @@ class BlockingHandoverTest {
         assertThat(delivered).containsExactly("1");
     }
 
+    // The test above only repeats an id the replay already delivered, so nothing covered a repeat that was only ever
+    // live. That case is the common one in production, because a push sink acknowledges after the fold, so the broker
+    // sends the event again whenever a fold throws. Below, A sent twice in a row is folded once. A, B, C, A folds A
+    // twice, because the cache only holds two ids here and B and C pushed A out of it.
+    @Test
+    void a_live_payload_sent_twice_is_folded_once_until_the_cache_forgets_it() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = BlockingHandover.create(
+                delivered::add, payload -> payload, new CatchupThenLiveOptions(2, CatchupThenLiveOptions.DEFAULT_MAX_BUFFERED_EVENTS), NOUN);
+        handover.catchUp(source(List.of(), false));
+
+        handover.accept("A");
+        handover.accept("A");
+        assertThat(delivered).containsExactly("A");
+
+        handover.accept("B");
+        handover.accept("C");
+        handover.accept("A");
+        assertThat(delivered).containsExactly("A", "B", "C", "A");
+    }
+
     @Test
     void exceeding_the_max_buffered_events_cap_while_replaying_fails_loud_with_the_documented_message() {
         List<String> delivered = new ArrayList<>();
@@ -165,6 +186,54 @@ class BlockingHandoverTest {
 
     // --- helpers ---
 
+    @Test
+    void a_stopped_replay_reports_stopped_and_records_no_marker() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of("R1", "R2", "R3"), false);
+        source.stopAfter(2);
+
+        boolean caughtUp = handover.catchUp(source);
+
+        assertThat(caughtUp).isFalse();
+        assertThat(delivered).containsExactly("R1", "R2");
+        // The whole reason a stop is not just an early return: recording completion here would make the next catch-up
+        // skip a history it never finished folding.
+        assertThat(source.markCaughtUpCallCount()).isZero();
+    }
+
+    @Test
+    void a_stopped_replay_leaves_the_handover_usable_rather_than_rejecting_every_later_payload() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+        FakeSource stopped = source(List.of("R1", "R2"), false);
+        stopped.stopAfter(1);
+        handover.catchUp(stopped);
+
+        // A failed catch-up throws from here. A stopped one must not, which is what lets a shared feed keep serving
+        // its other projections.
+        assertThat(catchThrowable(() -> handover.accept("L1"))).isNull();
+        // Dropped rather than buffered, since nothing is coming to drain it.
+        assertThat(delivered).containsExactly("R1");
+    }
+
+    @Test
+    void a_later_catch_up_revives_a_handover_a_previous_one_stopped() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+        FakeSource stopped = source(List.of("R1", "R2"), false);
+        stopped.stopAfter(1);
+        handover.catchUp(stopped);
+
+        FakeSource retried = source(List.of("R1", "R2"), false);
+        boolean caughtUp = handover.catchUp(retried);
+
+        assertThat(caughtUp).isTrue();
+        assertThat(retried.markCaughtUpCallCount()).isEqualTo(1);
+        handover.accept("L1");
+        assertThat(delivered).containsExactly("R1", "R1", "R2", "L1");
+    }
+
     private static BlockingHandover<String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }
@@ -180,6 +249,21 @@ class BlockingHandoverTest {
         private Runnable onMarkCaughtUp;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
+        private int stopAfter = Integer.MAX_VALUE;
+        private int keepReplayingCallCount = 0;
+
+        private void stopAfter(int deliveries) {
+            this.stopAfter = deliveries;
+        }
+
+        @Override
+        public boolean keepReplaying() {
+            return keepReplayingCallCount++ < stopAfter;
+        }
+
+        private int markCaughtUpCallCount() {
+            return markCaughtUpCallCount;
+        }
 
         private FakeSource(List<String> history, boolean alreadyCaughtUp) {
             this.history = history;

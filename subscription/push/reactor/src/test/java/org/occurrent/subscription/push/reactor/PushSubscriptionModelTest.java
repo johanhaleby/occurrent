@@ -38,16 +38,43 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 class PushSubscriptionModelTest {
 
     @Test
-    void routes_a_pushed_event_to_matching_handlers_in_registration_order() {
+    void a_second_consumer_is_refused_and_the_first_still_works() {
+        // PushSubscriptionModel feeds exactly one consumer (ADR 90): a push sink has one broker acknowledgement per
+        // message, so fan-out would let one failing consumer hold up every consumer behind it.
         PushSubscriptionModel model = new PushSubscriptionModel();
-        List<String> order = new ArrayList<>();
-        model.subscribe("first", cloudEvent -> Mono.fromRunnable(() -> order.add("first:" + cloudEvent.getId())));
-        model.subscribe("second", cloudEvent -> Mono.fromRunnable(() -> order.add("second:" + cloudEvent.getId())));
+        List<String> received = new ArrayList<>();
+        model.subscribe("first", cloudEvent -> Mono.fromRunnable(() -> received.add(cloudEvent.getId())));
 
+        Throwable thrown = catchThrowable(() -> model.subscribe("second", cloudEvent -> Mono.empty()));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("first")
+                .hasMessageContaining("second");
+
+        // The refused registration didn't disturb the one already in place.
         StepVerifier.create(model.accept(cloudEvent("1", "NameDefined")))
                 .verifyComplete();
+        assertThat(received).containsExactly("1");
+    }
 
-        assertThat(order).containsExactly("first:1", "second:1");
+    @Test
+    void cancelling_the_sole_subscription_frees_the_sink_for_a_different_id() {
+        // The single-consumer slot counts what is registered now, not whether anything ever was, so cancelling
+        // "cancel-me" must free it for an unrelated id, not just for "cancel-me" again.
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        List<String> cancelledHandler = new ArrayList<>();
+        List<String> newHandler = new ArrayList<>();
+        model.subscribe("cancel-me", cloudEvent -> Mono.fromRunnable(() -> cancelledHandler.add(cloudEvent.getId())));
+
+        model.cancelSubscription("cancel-me");
+        Throwable thrown = catchThrowable(() ->
+                model.subscribe("different-id", cloudEvent -> Mono.fromRunnable(() -> newHandler.add(cloudEvent.getId()))));
+
+        assertThat(thrown).isNull();
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined")))
+                .verifyComplete();
+        assertThat(cancelledHandler).isEmpty();
+        assertThat(newHandler).containsExactly("1");
     }
 
     @Test
