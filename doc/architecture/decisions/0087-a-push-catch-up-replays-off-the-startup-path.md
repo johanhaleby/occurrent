@@ -4,8 +4,8 @@ Date: 2026-08-02
 
 ## Status
 
-Accepted. Blocking stack only. The reactor model and the domain-event feed follow separately, as does
-`@Saga(source = PUSH)` in #349.
+Accepted. Written for the blocking stack; the reactor model and the domain-event feed followed shortly after, see the
+2026-08-02 amendment at the end. `@Saga(source = PUSH)` still follows separately, in #349.
 
 ## Context
 
@@ -103,3 +103,47 @@ overflow degrades to redelivery rather than loss. The dial is
 **Two defects in the template were not copied.** The event-store model never removes an interrupted replay's id from
 `runningCatchupSubscriptions`, so `isRunning(id)` returns true forever afterwards for a subscription that no longer
 exists, and nothing covers it. This model removes it. Whether to fix the original is left open.
+
+## Amendment (2026-08-02): the reactor model and the domain feed catch up in the background too
+
+The decision above holds unchanged. What follows is the other two thirds of it, plus one thing the original got wrong.
+
+**The reactor model's replay was never actually off the calling thread.** The status line said "blocking stack only"
+because the reactor half was unwritten, but the working assumption behind that was that reactor was already
+asynchronous by construction. It was not. `ReactiveHandover.catchUp` subscribes its own pipeline inline, so with a
+synchronous reader the whole replay ran before `subscribe` returned, on the Spring refresh thread. The fix is
+`subscribeOn(Schedulers.boundedElastic())` on that internal subscribe, which moves the replay for both reactor callers
+at once. `boundedElastic` is the only scheduler in main code and the one ADRs 59 and 62 name, and the replay folds
+through blocking bridges anyway. There is no precedent here for `subscribeOn` moving a pipeline's *start* rather than a
+stage of it, only because there is no other pipeline in this codebase that starts itself.
+
+**The reactor model implements `Subscribable, SubscriptionModelLifeCycle`, not `SubscriptionModel`.** The reactor
+`SubscriptionModel` is the bare `Flux`-returning change-stream primitive, which a register-and-wrap model cannot
+honour. The reactor `SubscriptionModelLifeCycle` returns `void` like the blocking one, so the fan-out mirrors the
+blocking model closely. `RegisteringSubscribable`'s life-cycle methods are `final`, so the model delegates to the live
+feed rather than subclassing it. The `DcbSubscriptionModelAdapter` `instanceof` gate that `.context/ORCHESTRATOR.md`
+flagged as a risk here is a non-issue: its delegate is typed as the reactor `SubscriptionModel`, which this model does
+not implement.
+
+**`ReactiveProjectionRunner` gains no `waitUntilStarted` parameter**, unlike the blocking `ProjectionRunner`. It never
+blocks, and the house rule is already written down in `dsl/subscription-dsl/reactor/.../Subscriptions.kt`: reactor
+returns the handle and the caller composes. The Spring registrar gates its own existing `.block()` instead.
+
+**The domain feed's background catch-up is the registrar's, not the feed's.** `DomainEventFeed` gained `stopCatchUp()`
+and no background overload. Stopping is the thing a caller cannot do for itself; backgrounding is not, since a caller
+can already run `catchUpAll()` on a thread it owns. The Spring registrar is that caller, because it is what knows the
+`startupMode`: it runs the catch-up on a virtual thread it owns and stops the feed from `close()`. On reactor it needs
+no thread at all, since subscribing without blocking is enough once the handover schedules itself. ADR 88, which made a
+feed carry exactly one projection, is what makes this well defined: `startupMode` on a domain-feed projection is now
+unambiguously per-projection.
+
+**A background failure needs somewhere to go, and an `ERROR` log is not enough on its own.** Under `BACKGROUND` nobody
+waits, so the failure surfaces from nothing: the context refreshed long ago and the projection is left with an empty
+read model on a healthy-looking application. Both starters now contribute a `BackgroundCatchupFailures` bean, written
+by the annotation processor and injected by the application, the same shape as `ManualStartProjections` and
+`SagaInstancesRegistry`. Deliberately not a Spring `ApplicationEvent`: Occurrent publishes none anywhere, and the only
+hits in the repository are inside `example/`. The log stays as the backstop. On the `PushSubscriptionModel` path the
+registrar joins the subscription on a thread of its own purely to record the failure, because registration has to stay
+on the refresh thread and only the replay may move.
+
+**`DEFAULT` keeps waiting on every one of these paths**, for the reason the original decision gives.
