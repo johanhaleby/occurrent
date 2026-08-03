@@ -90,6 +90,10 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
     // registrations.isEmpty() check so claiming the slot is one atomic step, and cleared on cancel so the id can be
     // re-subscribed (which a failed push catch-up relies on).
     private final AtomicReference<@Nullable String> soleSubscriptionId = new AtomicReference<>();
+    // Held only while subscribe and cancelSubscription rearrange the four collections above, never by route, which
+    // reads a CopyOnWriteArrayList snapshot. Without it a cancel landing between the slot claim and the registration
+    // frees the slot while leaving the handler registered, and a second id could then claim it and fan out.
+    private final Object registrationLock = new Object();
     private volatile boolean running = true;
 
     /**
@@ -115,20 +119,22 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
         Objects.requireNonNull(action, "action cannot be null");
         // Build the matcher before reserving the id, so an unsupported filter does not leave the id permanently taken.
         Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
-        if (!subscriptionIds.add(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
-        }
-        if (consumers == Consumers.ONE && !soleSubscriptionId.compareAndSet(null, subscriptionId)) {
-            // Release the id again: the duplicate-id check above took it, and this registration is not happening.
-            subscriptionIds.remove(subscriptionId);
-            throw new IllegalArgumentException(SingleConsumerMessages.singleConsumerOnly(
-                    getClass().getSimpleName(), "subscription", String.valueOf(soleSubscriptionId.get()), subscriptionId));
-        }
-        registrations.add(new Registration(subscriptionId, matcher, action));
-        // Registering on a stopped model yields a paused subscription, so a caller that stopped the model before
-        // wiring its handlers can resume them one at a time.
-        if (!running) {
-            pausedSubscriptions.add(subscriptionId);
+        synchronized (registrationLock) {
+            if (!subscriptionIds.add(subscriptionId)) {
+                throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
+            }
+            if (consumers == Consumers.ONE && !soleSubscriptionId.compareAndSet(null, subscriptionId)) {
+                // Release the id again: the duplicate-id check above took it, and this registration is not happening.
+                subscriptionIds.remove(subscriptionId);
+                throw new IllegalArgumentException(SingleConsumerMessages.singleConsumerOnly(
+                        getClass().getSimpleName(), "subscription", String.valueOf(soleSubscriptionId.get()), subscriptionId));
+            }
+            registrations.add(new Registration(subscriptionId, matcher, action));
+            // Registering on a stopped model yields a paused subscription, so a caller that stopped the model before
+            // wiring its handlers can resume them one at a time.
+            if (!running) {
+                pausedSubscriptions.add(subscriptionId);
+            }
         }
         return new AlreadyStartedSubscription(subscriptionId);
     }
@@ -136,11 +142,13 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
     @Override
     public final void cancelSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        // Drop the registration before releasing the id, so the id is never free while its handler can still be routed to.
-        registrations.removeIf(registration -> registration.id().equals(subscriptionId));
-        subscriptionIds.remove(subscriptionId);
-        pausedSubscriptions.remove(subscriptionId);
-        soleSubscriptionId.compareAndSet(subscriptionId, null);
+        synchronized (registrationLock) {
+            // Drop the registration before releasing the id, so the id is never free while its handler can still be routed to.
+            registrations.removeIf(registration -> registration.id().equals(subscriptionId));
+            subscriptionIds.remove(subscriptionId);
+            pausedSubscriptions.remove(subscriptionId);
+            soleSubscriptionId.compareAndSet(subscriptionId, null);
+        }
     }
 
     @Override
@@ -207,10 +215,12 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
     @Override
     public final void shutdown() {
         running = false;
-        registrations.clear();
-        subscriptionIds.clear();
-        pausedSubscriptions.clear();
-        soleSubscriptionId.set(null);
+        synchronized (registrationLock) {
+            registrations.clear();
+            subscriptionIds.clear();
+            pausedSubscriptions.clear();
+            soleSubscriptionId.set(null);
+        }
     }
 
     /**
