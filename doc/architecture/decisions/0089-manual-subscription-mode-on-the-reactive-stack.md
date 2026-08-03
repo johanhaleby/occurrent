@@ -1,4 +1,4 @@
-# 88. Manual subscription mode on the reactive stack
+# 89. Manual subscription mode on the reactive stack
 
 Date: 2026-08-02
 

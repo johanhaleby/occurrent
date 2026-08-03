@@ -68,7 +68,7 @@ new condition.
 
 The alternative was a required backfill of every event document. That was rejected as disproportionate: it puts a
 production data rewrite on every user, including those who never query on `time` and would gain nothing. The backfill is
-offered instead of required, in [upgrading to 0.31.1](../../migration/upgrading-to-0.31.1.md), which also records that
+offered instead of required, in [upgrading to 0.32.0](../../migration/upgrading-to-0.32.0.md), which also records that
 the aggregation-pipeline form of it truncates to milliseconds and writes three fractional digits, so anyone needing
 exact matching against pre-upgrade events has to do the rewrite in application code.
 
