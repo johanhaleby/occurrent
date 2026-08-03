@@ -70,15 +70,23 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void multiple_handlers_run_in_registration_order() {
+    void a_second_consumer_is_refused_and_the_first_still_works() {
+        // PushSubscriptionModel feeds exactly one consumer (ADR 88): a push sink has one broker acknowledgement per
+        // message, so fan-out would let one failing consumer hold up every consumer behind it.
         PushSubscriptionModel model = new PushSubscriptionModel();
-        List<String> order = new ArrayList<>();
-        model.subscribe("first", cloudEvent -> order.add("first:" + cloudEvent.getId()));
-        model.subscribe("second", cloudEvent -> order.add("second:" + cloudEvent.getId()));
+        List<String> received = new ArrayList<>();
+        model.subscribe("first", cloudEvent -> received.add(cloudEvent.getId()));
 
+        Throwable thrown = catchThrowable(() -> model.subscribe("second", cloudEvent -> {
+        }));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("first")
+                .hasMessageContaining("second");
+
+        // The refused registration didn't disturb the one already in place.
         model.accept(cloudEvent("1", "NameDefined"));
-
-        assertThat(order).containsExactly("first:1", "second:1");
+        assertThat(received).containsExactly("1");
     }
 
     @Test
@@ -109,15 +117,30 @@ class PushSubscriptionModelTest {
     void a_cancelled_subscription_receives_no_further_events() {
         PushSubscriptionModel model = new PushSubscriptionModel();
         List<String> cancelledHandler = new ArrayList<>();
-        List<String> remainingHandler = new ArrayList<>();
         model.subscribe("cancel-me", cloudEvent -> cancelledHandler.add(cloudEvent.getId()));
-        model.subscribe("keep-me", cloudEvent -> remainingHandler.add(cloudEvent.getId()));
 
         model.cancelSubscription("cancel-me");
         model.accept(cloudEvent("1", "NameDefined"));
 
         assertThat(cancelledHandler).isEmpty();
-        assertThat(remainingHandler).containsExactly("1");
+    }
+
+    @Test
+    void cancelling_the_sole_subscription_frees_the_sink_for_a_different_id() {
+        // The single-consumer slot counts what is registered now, not whether anything ever was, so cancelling
+        // "cancel-me" must free it for an unrelated id, not just for "cancel-me" again.
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        List<String> cancelledHandler = new ArrayList<>();
+        List<String> newHandler = new ArrayList<>();
+        model.subscribe("cancel-me", cloudEvent -> cancelledHandler.add(cloudEvent.getId()));
+
+        model.cancelSubscription("cancel-me");
+        Throwable thrown = catchThrowable(() -> model.subscribe("different-id", cloudEvent -> newHandler.add(cloudEvent.getId())));
+
+        assertThat(thrown).isNull();
+        model.accept(cloudEvent("1", "NameDefined"));
+        assertThat(cancelledHandler).isEmpty();
+        assertThat(newHandler).containsExactly("1");
     }
 
     @Test

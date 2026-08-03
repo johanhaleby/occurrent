@@ -69,17 +69,13 @@ public final class BlockingHandover<T> {
         void markCaughtUp();
 
         /**
-         * Whether the replay should keep going, consulted once per replayed payload before it is folded. Return
-         * {@code false} to stop a replay already in flight, for example because the model was stopped or the whole
-         * thing is shutting down.
+         * Whether the replay should keep going, asked once per payload before it is folded. Return {@code false} to
+         * stop one already in flight, because the model was stopped or is shutting down.
          * <p>
-         * A stop is <strong>not</strong> a failure and the engine keeps the two apart. Stopping unwinds without
-         * draining the live buffer, without going live, and without calling {@link #markCaughtUp()}, so a partial
-         * replay is never recorded as a finished one and the next catch-up replays the whole history again. It also
-         * records no failure, so the handover stays usable rather than rejecting every later payload the way a failed
-         * catch-up does. What it does do is drop live payloads instead of buffering them, since nothing is going to
-         * fold them and a bounded buffer would otherwise fill and overflow. That is the same dropped-not-deferred
-         * contract a stopped subscription model already has, see ADR 85.
+         * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
+         * called, and no failure is recorded, so the next catch-up replays the whole history and the handover stays
+         * usable. Live payloads arriving after a stop are dropped rather than buffered, the same dropped-not-deferred
+         * contract a stopped subscription model has (ADR 85).
          */
         default boolean keepReplaying() {
             return true;

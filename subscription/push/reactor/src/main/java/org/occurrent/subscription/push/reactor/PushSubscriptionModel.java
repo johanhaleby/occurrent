@@ -31,8 +31,13 @@ import reactor.core.publisher.Mono;
  * It exists so a projection can be driven from any transport that already forwards Occurrent cloud events, such as a
  * RabbitMQ or Kafka listener, a Spring application event, or an HTTP endpoint. The application registers handlers
  * through the projection DSL and the listener hands each received event to {@link #accept(CloudEvent)}, which routes it
- * to every handler whose {@link SubscriptionFilter} matches, sequentially. A handler error propagates through the
- * returned {@link Mono}, so the listener can decide whether to acknowledge or redeliver.
+ * to the handler if its {@link SubscriptionFilter} matches. A handler error propagates through the returned
+ * {@link Mono}, so the listener can decide whether to acknowledge or redeliver.
+ * <p>
+ * <strong>One model feeds one subscription</strong>, and a second {@code subscribe} is refused. The acknowledgement is
+ * what forces it: this model has exactly one per received event, so several handlers on it would share the decision to
+ * acknowledge or redeliver, and a handler that keeps failing would hold up every handler behind it. Declare one model
+ * per projection or saga, each fed by its own queue. See ADR 88.
  * <p>
  * Occurrent stays transport-neutral: this model has no dependency on any broker. The pushed events must carry the
  * Occurrent cloud-event extensions the handlers rely on (at minimum {@code streamid} and {@code streamversion}, add
@@ -43,10 +48,10 @@ import reactor.core.publisher.Mono;
 public class PushSubscriptionModel extends RegisteringSubscribable implements Pushable {
 
     /**
-     * Feed a single event to the model, routing it to every matching registered handler, sequentially.
+     * Feed a single event to the model, routing it to the registered handler if its filter matches.
      *
      * @param cloudEvent The event received from the external source.
-     * @return A {@link Mono} that completes when every matching handler has completed.
+     * @return A {@link Mono} that completes when the handler has completed.
      */
     public Mono<Void> accept(CloudEvent cloudEvent) {
         return route(cloudEvent);

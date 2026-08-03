@@ -28,25 +28,30 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.internal.SingleConsumerMessages;
 
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
  * The domain-event twin of {@code PushSubscriptionModel}: a register-only sink the application owns and feeds with
- * <strong>domain events</strong>, fanning each one out to every registered projection, with a per-projection catch-up.
- * It lets one external feed (a RabbitMQ or Kafka listener with its own message converter) drive several
- * projections without any CloudEvent conversion on the live path.
+ * <strong>domain events</strong>, giving one projection a catch-up and then a live feed. It lets an external source
+ * (a RabbitMQ or Kafka listener with its own message converter) drive a projection without any CloudEvent conversion
+ * on the live path.
  * <p>
  * The application declares it as a bean carrying the domain-specific {@code eventId} function (the catch-up de-dup key)
  * plus the CloudEvent-layer collaborators (the store {@link PositionOrderedReader}, the {@link CloudEventConverter} used
- * only to decode replayed history, and an optional {@link CheckpointStorage} catch-up marker), registers projections on
+ * only to decode replayed history, and an optional {@link CheckpointStorage} catch-up marker), registers a projection on
  * it (directly, or through {@code @Projection(source = PUSH)}), and feeds each received domain event to
- * {@link #accept(Object)} from its listener. Each registration is a {@link CatchupProjectionFeed}, so the
- * contract, live-resume owned by the broker, at-least-once idempotent folds, bounded buffering, is per projection.
+ * {@link #accept(Object)} from its listener. The registration is a {@link CatchupProjectionFeed}, which owns the
+ * contract: the broker decides where the live feed resumes, an event can arrive more than once so the fold has to be
+ * safe to repeat, and the buffer holding live events during the replay has a fixed size.
+ * <p>
+ * <strong>One feed feeds one projection</strong>, and a second {@link #register} is refused. The acknowledgement is
+ * what forces it: the listener has exactly one decision per received message, so several projections on one feed would
+ * share it, and a projection that keeps failing would hold up every projection behind it. Declare one feed per
+ * projection, each fed by its own queue. See ADR 88.
  * <p>
  * The {@code occurrent.subscription.catchup-then-live.*} properties do <strong>not</strong> reach this feed. Your
  * application declares this bean, so tune its catch-up by passing {@link CatchupThenLiveOptions} to the constructor.
@@ -59,15 +64,15 @@ public final class DomainEventFeed<E> {
     private final Function<E, String> eventId;
     private final @Nullable CheckpointStorage catchupMarker;
     private final CatchupThenLiveOptions options;
-    private final CopyOnWriteArrayList<CatchupProjectionFeed<E>> feeds = new CopyOnWriteArrayList<>();
-    private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
+    // The one projection registered on this feed, or null while it is free. Cleared by nothing today: a feed has no
+    // unregister, so this is only ever set once in practice, but reading it is what names the collision.
+    private final AtomicReference<@Nullable CatchupProjectionFeed<E>> feed = new AtomicReference<>();
 
     /**
-     * @param reader          The store read used to replay history during each projection's catch-up.
+     * @param reader          The store read used to replay history during the projection's catch-up.
      * @param converter       Decodes replayed CloudEvents to domain events (replay only, never the live path).
-     * @param eventId         Extracts a stable id from a domain event, the replay-to-live de-dup key, shared by every
-     *                        projection on this feed.
-     * @param catchupMarker Records per-projection catch-up completion so a restart skips the replay, or {@code null}
+     * @param eventId         Extracts a stable id from a domain event, the replay-to-live de-dup key.
+     * @param catchupMarker Records catch-up completion so a restart skips the replay, or {@code null}
      *                        to always catch up.
      */
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
@@ -94,7 +99,9 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Register a projection to be fed and caught up by this feed, materializing into {@code repository}.
+     * Register the projection this feed drives, materializing into {@code repository}.
+     *
+     * @throws IllegalArgumentException if a projection is already registered on this feed
      */
     public <S extends @Nullable Object, ID> void register(String id, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         Objects.requireNonNull(projection, "projection cannot be null");
@@ -105,37 +112,37 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Register a projection driving an existing {@link MaterializedView}, replaying stored events matching
-     * {@code replayFilter}.
+     * Register the projection this feed drives, as an existing {@link MaterializedView} replaying stored events
+     * matching {@code replayFilter}.
+     *
+     * @throws IllegalArgumentException if a projection is already registered on this feed
      */
     public void register(String id, MaterializedView<E> view, Filter replayFilter) {
         Objects.requireNonNull(id, "id cannot be null");
-        // Fail fast on the common duplicate-id case before building a feed. registeredIds.add(id) after creation stays
-        // the authoritative, race-safe check: this is only an optimization, not a substitute for it.
-        if (registeredIds.contains(id)) {
-            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
+        // Built before the slot is claimed, so a registration that fails validation (an unpositioned reader, say)
+        // leaves the feed free rather than permanently taken by a projection that never existed.
+        CatchupProjectionFeed<E> registering = CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker, options);
+        if (!feed.compareAndSet(null, registering)) {
+            CatchupProjectionFeed<E> existing = feed.get();
+            throw new IllegalArgumentException(SingleConsumerMessages.singleConsumerOnly(
+                    "DomainEventFeed", "projection", existing == null ? "<unknown>" : existing.id(), id));
         }
-        CatchupProjectionFeed<E> feed = CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker, options);
-        // Reserve the id only once the feed exists, so a failed registration never permanently burns the id.
-        if (!registeredIds.add(id)) {
-            throw new IllegalArgumentException("A projection with id '" + id + "' is already registered on this feed");
-        }
-        feeds.add(feed);
     }
 
     /**
-     * Feed a live domain event to every registered projection, on the calling thread. Call this from the broker
-     * listener, acknowledging the message only once it returns. An exception from any projection propagates.
+     * Feed a live domain event to the registered projection, on the calling thread. Call this from the broker
+     * listener, acknowledging the message only once it returns. An exception from the projection propagates.
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        for (CatchupProjectionFeed<E> feed : feeds) {
-            feed.accept(event);
+        CatchupProjectionFeed<E> registered = feed.get();
+        if (registered != null) {
+            registered.accept(event);
         }
     }
 
     /**
-     * Feed a live domain event to every registered projection together with the {@link EventMetadata} the source knows
+     * Feed a live domain event to the registered projection together with the {@link EventMetadata} the source knows
      * about it, so a projection keyed on the stream id, version or position works on the live path and not only during
      * the catch-up replay. Use this when the broker message carries those values and your listener can read them.
      * Otherwise call {@link #accept(Object)}, which folds with no metadata.
@@ -143,42 +150,59 @@ public final class DomainEventFeed<E> {
     public void accept(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
-        for (CatchupProjectionFeed<E> feed : feeds) {
-            feed.accept(metadata, event);
+        CatchupProjectionFeed<E> registered = feed.get();
+        if (registered != null) {
+            registered.accept(metadata, event);
         }
     }
 
     /**
-     * Run the one-time catch-up of every registered projection (replay history, then go live). Call once, after all
-     * projections are registered and the live feed is wired.
+     * Run the one-time catch-up of the registered projection (replay history, then go live). Call once, after the
+     * projection is registered and the live feed is wired. A no-op when nothing is registered.
      * <p>
-     * A failure here is terminal for the whole feed, so let it reach the caller and do not start the application.
-     * The projection that failed rejects every later event, and because the projections are fed in registration
-     * order, one that failed early blocks the ones behind it. Unlike a subscription model, the feed does not drop the
-     * failed projection: the application asked for it, so running on without it is worse than not running. Fix the
-     * cause and build a new feed.
+     * A failure here is terminal for this feed, so let it reach the caller and do not start the application. The
+     * projection rejects every later event afterwards. Unlike a subscription model, the feed does not drop it: the
+     * application asked for this projection, so running on without it is worse than not running. Fix the cause and
+     * build a new feed.
+     * <p>
+     * Named for when a feed could carry several projections. It carries one, so this and {@link #catchUp(String)} do
+     * the same thing whenever the id matches.
      */
     public void catchUpAll() {
-        for (CatchupProjectionFeed<E> feed : feeds) {
-            feed.catchUp();
+        CatchupProjectionFeed<E> registered = feed.get();
+        if (registered != null) {
+            registered.catchUp();
         }
     }
 
     /**
-     * Run the one-time catch-up of the single projection registered under {@code id}. Use this instead of
-     * {@link #catchUpAll()} when a projection is registered well after the others on this feed already went live, so
-     * that catching it up does not re-run the catch-up of a projection that already ran it.
+     * Run the one-time catch-up of the projection registered under {@code id}. Use this over {@link #catchUpAll()}
+     * when the caller knows which projection it means and wants a mismatch to fail rather than pass silently.
      *
      * @throws IllegalArgumentException if no projection with that id is registered on this feed
      */
     public void catchUp(String id) {
         Objects.requireNonNull(id, "id cannot be null");
-        for (CatchupProjectionFeed<E> feed : feeds) {
-            if (feed.id().equals(id)) {
-                feed.catchUp();
-                return;
-            }
+        CatchupProjectionFeed<E> registered = feed.get();
+        if (registered == null || !registered.id().equals(id)) {
+            throw new IllegalArgumentException("No projection with id '" + id + "' is registered on this feed.");
         }
-        throw new IllegalArgumentException("No projection with id '" + id + "' is registered on this feed.");
+        registered.catchUp();
+    }
+
+    /**
+     * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
+     * a store that is closing with it. The replay notices at its next event and unwinds without writing the
+     * completion marker, so the next start replays the whole history again.
+     * <p>
+     * Stopping is what a caller cannot do for itself. Backgrounding is not, since a caller that wants the replay off
+     * its own thread can run {@link #catchUpAll()} on a thread it owns, which is what the Spring starter does for
+     * {@code startupMode = BACKGROUND}.
+     */
+    public void stopCatchUp() {
+        CatchupProjectionFeed<E> registered = feed.get();
+        if (registered != null) {
+            registered.stopCatchUp();
+        }
     }
 }

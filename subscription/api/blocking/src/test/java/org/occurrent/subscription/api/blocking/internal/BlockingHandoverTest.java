@@ -98,6 +98,27 @@ class BlockingHandoverTest {
         assertThat(delivered).containsExactly("1");
     }
 
+    // The test above only repeats an id the replay already delivered, so nothing covered a repeat that was only ever
+    // live. That case is the common one in production, because a push sink acknowledges after the fold, so the broker
+    // sends the event again whenever a fold throws. Below, A sent twice in a row is folded once. A, B, C, A folds A
+    // twice, because the cache only holds two ids here and B and C pushed A out of it.
+    @Test
+    void a_live_payload_sent_twice_is_folded_once_until_the_cache_forgets_it() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = BlockingHandover.create(
+                delivered::add, payload -> payload, new CatchupThenLiveOptions(2, CatchupThenLiveOptions.DEFAULT_MAX_BUFFERED_EVENTS), NOUN);
+        handover.catchUp(source(List.of(), false));
+
+        handover.accept("A");
+        handover.accept("A");
+        assertThat(delivered).containsExactly("A");
+
+        handover.accept("B");
+        handover.accept("C");
+        handover.accept("A");
+        assertThat(delivered).containsExactly("A", "B", "C", "A");
+    }
+
     @Test
     void exceeding_the_max_buffered_events_cap_while_replaying_fails_loud_with_the_documented_message() {
         List<String> delivered = new ArrayList<>();

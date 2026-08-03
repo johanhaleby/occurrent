@@ -25,6 +25,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.Objects;
 import java.util.Set;
@@ -39,7 +40,8 @@ import java.util.function.Supplier;
  * marker is recorded, then the live feed is delivered. Live payloads arriving during the replay are buffered in a
  * bounded unicast sink, and the replay-to-live overlap is de-duplicated by an id extracted from the payload. Each phase
  * is serialized by its own {@code concatMap} and the phases run one after another, so the de-dup cache is only ever
- * touched by one thread at a time and needs no locking. Extracted from (and mirrors exactly) the reactor projection
+ * touched by one thread at a time. That is ordering, not visibility: an asynchronous fold completes on whichever
+ * thread ran it, so {@code BoundedIdCache} is synchronized and must stay that way. Extracted from (and mirrors exactly) the reactor projection
  * feed and the reactor push subscription model.
  * <p>
  * {@code T} is the payload type, one for both phases. The caller decides what a payload carries, so where a replayed
@@ -57,6 +59,11 @@ import java.util.function.Supplier;
  * folded during the catch-up window, whereas here a live payload's {@code accept} {@link Mono} completes only once
  * its fold has actually run (including payloads buffered during the replay), even though the catch-up-done signal
  * itself already fired. Neither ordering is "fixed" by this extraction. Both are preserved as-is.
+ * <p>
+ * <strong>The replay runs on {@code boundedElastic}, not on the thread that called {@link #catchUp(Source)}.</strong>
+ * This engine subscribes its own pipeline, so a caller that never touches the returned {@link Mono} still gets a
+ * replay, and it gets one off its own thread. Join it through the returned {@code Mono} when the caller does want to
+ * wait.
  */
 @NullMarked
 public final class ReactiveHandover<T> {
@@ -76,16 +83,13 @@ public final class ReactiveHandover<T> {
         Mono<Void> markCaughtUp();
 
         /**
-         * Whether the replay should keep going, consulted once per replayed payload before it is folded. Return
-         * {@code false} to stop a replay already in flight, for example because the model was stopped or the whole
-         * thing is shutting down.
+         * Whether the replay should keep going, asked once per payload before it is folded. Return {@code false} to
+         * stop one already in flight, because the model was stopped or is shutting down.
          * <p>
-         * A stop is <strong>not</strong> a failure and the engine keeps the two apart. Stopping unwinds without
-         * draining the live buffer, without going live, and without calling {@link #markCaughtUp()}, so a partial
-         * replay is never recorded as a finished one and the next catch-up replays the whole history again. It records
-         * no terminal error either, so the handover stays usable rather than failing every later payload the way a
-         * failed catch-up does. Live payloads are dropped instead, their acks completing rather than hanging, which is
-         * the same dropped-not-deferred contract a stopped subscription model already has, see ADR 85.
+         * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
+         * called, and no terminal error is recorded, so the next catch-up replays the whole history and the handover
+         * stays usable. Live payloads arriving after a stop are dropped and their acks complete rather than hang, the
+         * same dropped-not-deferred contract a stopped subscription model has (ADR 85).
          */
         default boolean keepReplaying() {
             return true;
@@ -145,10 +149,16 @@ public final class ReactiveHandover<T> {
                 return;
             }
             pendingLiveAcks.add(ackSink);
-            // Re-check after registering: if the catch-up failed concurrently, fail this ack rather than hang.
+            // Re-check both after registering. A stop or a failure landing between the checks above and this add
+            // would otherwise leave the ack unresolved, because the handler that resolves the pending acks has
+            // already run, and the caller's Mono would never complete.
             failure = terminalError.get();
             if (failure != null) {
                 ackSink.error(failure);
+                return;
+            }
+            if (stopped) {
+                ackSink.success();
                 return;
             }
             String key;
@@ -202,6 +212,10 @@ public final class ReactiveHandover<T> {
                 .then(recordMarker)
                 .doOnSuccess(ignored -> catchupDone.tryEmitValue(true))
                 .thenMany(liveSink.asFlux().concatMap(this::deliver))
+                // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
+                // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated
+                // projection. boundedElastic because the replay folds through blocking bridges.
+                .subscribeOn(Schedulers.boundedElastic())
                 .subscribe(ignored -> {
                 }, error -> {
                     if (error == CatchupStopped.INSTANCE) {
@@ -215,6 +229,10 @@ public final class ReactiveHandover<T> {
                     }
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
                     // Fail their acks and reject later ones, so the caller sees the error instead of hanging.
+                    // Known gap: catchupDone has already emitted by the time the live phase runs, so a failure from
+                    // that phase cannot be reported through it and reaches no caller. This module has no logger to
+                    // fall back on either. Live folds are guarded by onErrorResume, so the reachable triggers are
+                    // narrow, and closing it means moving the completion signal off the marker phase.
                     terminalError.set(error);
                     catchupDone.tryEmitError(error);
                     pendingLiveAcks.forEach(sink -> sink.error(error));
@@ -237,7 +255,7 @@ public final class ReactiveHandover<T> {
     }
 
     // Serialized by concatMap within a phase, and the phases run sequentially, so the de-dup cache is touched by one
-    // thread at a time and needs no synchronization.
+    // thread at a time. Those calls still land on different threads, so the cache does its own synchronization.
     private Mono<Void> deliver(Item item) {
         MonoSink<Void> ack = item.ack();
         if (ack != null) {

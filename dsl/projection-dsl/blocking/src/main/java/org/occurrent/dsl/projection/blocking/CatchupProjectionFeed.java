@@ -79,6 +79,8 @@ public final class CatchupProjectionFeed<E> {
     private final String id;
 
     private final BlockingHandover<Delivered<E>> handover;
+    // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
+    private volatile boolean stopped = false;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -202,17 +204,23 @@ public final class CatchupProjectionFeed<E> {
         }
     }
 
-    /**
-     * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
-     * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,
-     * after wiring the live feed, so events arriving during the replay are captured.
-     */
-    // Package-private: lets DomainEventFeed.catchUp(String) find the one feed matching an id among several registered.
+    // Package-private: lets DomainEventFeed.catchUp(String) check that the id it was given is the one registered.
     String id() {
         return id;
     }
 
+    /**
+     * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
+     * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,
+     * after wiring the live feed, so events arriving during the replay are captured.
+     * <p>
+     * Runs on the calling thread. A caller that wants it off that thread runs it on a thread it owns, and calls
+     * {@link #stopCatchUp()} to bring it back down.
+     */
     public void catchUp() {
+        // Cleared here rather than only in the handover, so a feed stopped once can catch up again instead of
+        // stopping instantly on the first replayed event.
+        stopped = false;
         handover.catchUp(new BlockingHandover.Source<>() {
             @Override
             public boolean isAlreadyCaughtUp() {
@@ -227,10 +235,25 @@ public final class CatchupProjectionFeed<E> {
             }
 
             @Override
+            public boolean keepReplaying() {
+                return !stopped;
+            }
+
+            @Override
             public void markCaughtUp() {
                 CatchupProjectionFeed.this.markCaughtUp();
             }
         });
+    }
+
+    /**
+     * Stop a replay still in flight. It notices at its next event and unwinds without draining the live buffer, going
+     * live, or writing the completion marker, so a partial replay is never recorded as a finished one and the next
+     * {@link #catchUp()} replays the whole history again. A stop is not a failure: the feed stays usable rather than
+     * rejecting every later event.
+     */
+    public void stopCatchUp() {
+        stopped = true;
     }
 
     // A null id would collapse every such event to one de-dup key and silently drop deliveries, so fail loud instead.
