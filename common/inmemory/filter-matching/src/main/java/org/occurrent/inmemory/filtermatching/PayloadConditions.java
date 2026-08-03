@@ -52,10 +52,8 @@ final class PayloadConditions {
      * {@code type = X} and discard an event that matched only on the amount. Matching anything is correct under both
      * {@code AND} and {@code OR}.
      */
+    // The one caller, FilterMatcher.matcherIgnoringPayloadConditions, rejects null before this is reached.
     static Filter assumingPayloadConditionsMatch(Filter filter) {
-        if (filter == null) {
-            throw new IllegalArgumentException(Filter.class.getSimpleName() + " cannot be null");
-        }
         return switch (filter) {
             case SingleConditionFilter scf -> isPayloadCondition(scf) ? new All() : scf;
             case CompositionFilter cf -> {
