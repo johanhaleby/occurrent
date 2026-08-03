@@ -259,6 +259,8 @@ class ProjectionAnnotationRegistrar {
             // This feed bypasses the subscription model bean entirely, so manual mode's own withholding never reaches
             // it. Defer the same call instead, to run once the application starts this projection itself. startupMode
             // is not read here: start(id) hands the caller the Mono, so waiting or not is already their choice.
+            applicationContext.getBean(ManualStartProjections.class).register(id,
+                    () -> projectAgnosticOrStream(runner, id, projection, store, null).waitUntilStarted());
         }
     }
 
