@@ -37,13 +37,45 @@ When your change refines a feature that is itself still unreleased (its entry al
 
 The same release distinction governs whether an API change is safe to make freely. Occurrent is a published library whose external callers cannot be observed from this repository, so do not judge the blast radius of a breaking or shape-changing API change by grepping call sites here (the tests and examples in this repo are not the population of users). Judge it by release status instead. A type or method whose feature still lives under `### Changelog next version` has not shipped, so it can be renamed, reshaped, or removed with no migration path. Once a feature has shipped in a versioned section, assume external callers depend on it and follow the migration conventions: an `org.occurrent.UpgradeToOccurrent_*` OpenRewrite recipe plus an entry under `doc/migration/upgrading-to-*.md`.
 
+## Design intentions
+
+These are the standing intentions behind the design, not conventions you can trade away for convenience. The first is a
+constraint. The rest are how the maintainer wants calls made when there is a choice.
+
+**Isolation is a hard rule: no design may lose events, and no saga, projection or subscription may be blocked by
+another one being faulty.** It applies per consumer, so a shared delivery carrying one acknowledgement for several
+consumers cannot satisfy it whatever else the design has going for it: one consumer that keeps failing holds up the
+acknowledgement, and every consumer behind it either never sees the message or loses it when the broker gives up on
+it. Check a push or fan-out design against this before anything else. It is what decided the one-sink-per-consumer
+topology in ADR 88.
+
+**Aim for the best long-term answer, not the cheapest one that passes.** An easier solution is fine when it yields
+roughly the same result. It is not fine when the gap is isolation or correctness.
+
+**Pre-1.0 means past mistakes get corrected.** While Occurrent is 0.x, APIs and the assumptions under them are still
+allowed to move. A breaking change is acceptable when there is a clear migration path, ideally an
+`org.occurrent.UpgradeToOccurrent_*` OpenRewrite recipe, and it is preferred over carrying a design that is known to be
+wrong into 1.0. Avoid breakage where avoiding it costs nothing, but do not preserve a mistake in order to avoid it.
+The release-status rule in the changelog section says when a change is breaking at all. This says what to do once it
+is.
+
+**Existing structure is not a constraint to design around.** A `final`, a class layout or an interface shape that makes
+the right design awkward is itself a candidate for change. Say what the right shape is, then adjust what is in the way,
+rather than contorting the new code to fit. Single-consumer registration is the worked example: the first attempt added
+an overridable method purely to route around `RegisteringSubscribable.subscribe` being `final`. Questioning the `final`
+instead produced a constructor argument, a better design, and the `final` stayed because it turned out to earn its
+place. Question it first, then keep it if it does.
+
+Together with the library-not-application rule below, these cover the two questions that come up most: who the change
+is for, and what it is allowed to cost.
+
 ## Coding conventions
 
 - Java 21 and Kotlin coexist in most modules.
 - Public APIs are small capability interfaces composed together, not large monoliths.
 - **"Nothing in this repository calls it" is not evidence that nobody needs it.** Occurrent is a published library, so
   its callers are outside this repository, and the tests and examples here are not the population of users. The
-  changelog section below states this for removing or reshaping an API; it applies just as much to *adding* one. An
+  changelog section below states this for removing or reshaping an API, and it applies just as much to *adding* one. An
   overload or accessor that completes an obvious gap in a public type earns its place because a user driving that type
   directly cannot work around its absence, not because something in this tree calls it. `SagaRunner.run` waiting
   unconditionally is the shape of the mistake: no in-repo caller wanted a choice, and a user embedding it had no way to
