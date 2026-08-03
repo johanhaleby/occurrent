@@ -70,6 +70,7 @@ import java.util.stream.Stream;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.occurrent.condition.Condition.eq;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -190,6 +191,41 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
     }
 
     @Test
+    void a_filter_on_a_data_payload_field_is_honoured_during_catchup_and_live() {
+        // The filter MongoDB answers when the store is queried must also be answered when it is subscribed to. Before
+        // ADR 92 this model re-applied the filter in process with a reader-less matcher, so the replay succeeded
+        // server-side and the flux then failed on the first live event, for every store rather than only in-memory
+        // (#499). Both phases are asserted because only the live one used to fail.
+        appendToStream("stream-1", named("keep", "matchHistoric"));
+        appendToStream("stream-1", named("drop", "ignoredHistoric"));
+
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.data("userId", eq("keep")), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("matchHistoric"));
+
+        appendToStream("stream-1", named("keep", "matchLive"));
+        appendToStream("stream-1", named("drop", "ignoredLive"));
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("matchHistoric", "matchLive"));
+    }
+
+    @Test
+    void a_filter_on_a_data_payload_field_is_honoured_when_going_straight_to_live() {
+        // The other formerly refusing site: a start that is not a catch-up position skips the replay entirely, so this
+        // covers the live-only branch rather than the handover one.
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.data("userId", eq("keep")), StartAt.subscriptionModelDefault()), received);
+
+        appendToStream("stream-1", named("keep", "matchLive"));
+        appendToStream("stream-1", named("drop", "ignoredLive"));
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("matchLive"));
+    }
+
+    @Test
     void replays_every_event_with_a_small_window_and_cache_then_goes_live_without_loss() {
         // More matching events than both the window and the handover cache, so the bulk replay pages across many
         // windows and the cache evicts during the replay. The handover must still deliver every event exactly once.
@@ -272,6 +308,11 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
 
     private NameDefined name(String name) {
         return new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), name, name);
+    }
+
+    // Distinct userId and name, so a filter can select on one payload field while the assertion reads the other.
+    private NameDefined named(String userId, String name) {
+        return new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), userId, name);
     }
 
     private void appendToStream(String streamId, DomainEvent event) {

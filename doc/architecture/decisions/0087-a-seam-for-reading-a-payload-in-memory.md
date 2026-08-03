@@ -86,6 +86,12 @@ the store.
 
 ### Wired only where a caller already configures something
 
+> **Superseded in part by [ADR 92](0092-a-subscription-model-owns-its-filter.md) (#499).** This section treated the
+> three remaining refusals as one problem needing one answer. They were two. `ReactorStreamCatchupSubscriptionModel`
+> needed no configuration surface at all, because it was re-applying a filter it had already handed to the wrapped
+> subscription model, which is why its refusal reached every backend rather than only in-memory. It no longer matches
+> in process. `RegisteringSubscribable` does own its matching and takes a reader.
+
 `InMemoryEventStore` and `InMemorySubscriptionModel` take a reader. `SubscriptionFilterMatcher`,
 `RegisteringSubscribable` and `ReactorStreamCatchupSubscriptionModel` keep refusing, because they wrap any store and
 have no configuration surface to hang a reader on. The last of those is worth knowing about: it is not in-memory

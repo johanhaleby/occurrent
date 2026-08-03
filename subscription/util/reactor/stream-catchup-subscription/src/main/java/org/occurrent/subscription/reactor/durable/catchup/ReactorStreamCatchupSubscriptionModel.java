@@ -24,7 +24,6 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.inmemory.filtermatching.FilterMatcher;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StreamSubscriptionFilter;
@@ -47,16 +46,19 @@ import static java.util.Objects.requireNonNull;
  * reactive read model rebuild from the start of the stream sequence and then keep up with new events.
  * <p>
  * This is the stream counterpart of {@code ReactorDcbCatchupSubscriptionModel}. It replays through
- * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)} and matches a stream {@link Filter}
- * in-process, where the DCB model uses a {@code DcbCriteria}. Otherwise the two are the same, because both read the
- * same global {@code position} sequence.
+ * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)} with a stream {@link Filter}, where the DCB
+ * model uses a {@code DcbCriteria}. Otherwise the two are the same, because both read the same global {@code position}
+ * sequence.
+ * <p>
+ * Applying the filter is the wrapped subscription model's job in the live phase and the reader's job in the replay
+ * phase. This model does not re-apply it in process, so a filter the backend can answer but an in-process matcher
+ * cannot, such as {@link Filter#data(String, org.occurrent.condition.Condition)}, works here (ADR 92).
  * <p>
  * This model only ever replays and delivers stream-capability events. On a store that has both the {@code STREAM} and
  * {@code DCB} capabilities enabled at once, that promise is enforced, not merely descriptive: a
  * {@link Filter#capability(EventStoreCapability) STREAM-capability filter} is ANDed into both the position-ordered
- * replay reads and the filter handed to (and matched against) the live subscription, so a DCB-tagged event never
- * reaches a subscriber of this model in either phase (see ADR 50). A caller filter is still honored; the capability
- * guard is composed on top of it.
+ * replay reads and the filter handed to the live subscription, so a DCB-tagged event never reaches a subscriber of this
+ * model in either phase (see ADR 50). A caller filter is still honored; the capability guard is composed on top of it.
  * <p>
  * Only meaningful for a store that writes a {@code position} on stream events. This model cannot check that itself
  * (it depends only on {@link PositionOrderedReader}), so do not wire it up against a store that does not write
@@ -196,23 +198,25 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
         // AND the capability scope onto the caller's filter. For a stream subscription this keeps a DCB-tagged event
-        // out of the replay reads, the live subscription filter, and the in-process live predicate below (see ADR 50).
-        // For a capability-agnostic subscription the scope is null, so the caller's filter is used unchanged and events
-        // of every capability are delivered.
+        // out of the replay reads and the live subscription filter (see ADR 50). For a capability-agnostic subscription
+        // the scope is null, so the caller's filter is used unchanged and events of every capability are delivered.
         Filter filter = withCapabilityScope(callerFilter);
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorStreamCatchupSubscriptionModel.class));
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
-            // Not a catch-up position, so go straight to live. Filter in-process too, so a backend that does not
-            // honor the filter server-side still only delivers matching events, and skip events without a position.
+            // Not a catch-up position, so go straight to live. Applying the filter is the wrapped model's job, which
+            // Subscribable documents as limiting which events are of interest, so it is not re-applied in process here
+            // (ADR 92). What remains is skipping an event without a position, which this model cannot place.
             return subscriptionModel.subscribe(StreamSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
-                    .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter));
+                    .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0);
         }
 
         long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
         CatchupReader reader = new StreamCatchupReader(positionOrderedReader, filter);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
-        Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter);
+        // As above, the live filter belongs to the wrapped model. This predicate only drops an event without a
+        // position, which a position-ordered handover cannot place against the replay window.
+        Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0;
         return pipeline.catchup(subscriptionModel, StreamSubscriptionFilter.filter(filter), livePredicate, startPosition);
     }
 

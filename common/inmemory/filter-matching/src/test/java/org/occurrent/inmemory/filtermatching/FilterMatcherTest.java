@@ -30,9 +30,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.condition.Condition.eq;
 
 /**
- * Covers the two-arg {@code matchesFilter} overload staying exactly as before (three shared subscription call
- * sites rely on it not needing a {@link DataFieldReader}) and the new three-arg overload threading a reader
- * through composition filters.
+ * Covers the two-arg {@code matchesFilter} overload staying exactly as before, and the three-arg overload threading a
+ * {@link DataFieldReader} through composition filters.
+ * <p>
+ * The two-arg overload has no caller left in this repository. Its only ones were the two live predicates in
+ * {@code ReactorStreamCatchupSubscriptionModel}, which stopped re-applying a filter the wrapped subscription model had
+ * already applied (ADR 92). It stays because it ships in 0.31.0 and an outside caller may hold it, so its refusal is
+ * still worth pinning.
  */
 class FilterMatcherTest {
 
