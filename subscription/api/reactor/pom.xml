@@ -34,6 +34,12 @@
             <artifactId>occurrent-subscription-core</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- DataFieldReader appears in this module's own public API, so it is declared rather than inherited. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-common-inmemory-filter-matching</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-api-dcb</artifactId>

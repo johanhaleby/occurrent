@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
 
@@ -95,6 +96,7 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
     // frees the slot while leaving the handler registered, and a second id could then claim it and fan out.
     private final Object registrationLock = new Object();
     private volatile boolean running = true;
+    private final DataFieldReader dataFieldReader;
 
     /**
      * Accepts a single consumer. The default because a sink that fans out cannot keep its consumers isolated from one
@@ -109,7 +111,19 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
      *                  one consumer's failure cannot strand another.
      */
     protected RegisteringSubscribable(Consumers consumers) {
+        this(consumers, DataFieldReader.refusing());
+    }
+
+    /**
+     * @param consumers       How many consumers this subclass accepts. Pass {@link Consumers#MANY} only with a reason
+     *                        why one consumer's failure cannot strand another.
+     * @param dataFieldReader Reads a field out of an event's payload, so a subscription can filter on one. Occurrent
+     *                        ships a Jackson-backed reader in {@code occurrent-common-inmemory-filter-matching-jackson}.
+     *                        {@link DataFieldReader#refusing()} refuses such a filter, which is the default.
+     */
+    protected RegisteringSubscribable(Consumers consumers, DataFieldReader dataFieldReader) {
         this.consumers = Objects.requireNonNull(consumers, "consumers cannot be null");
+        this.dataFieldReader = Objects.requireNonNull(dataFieldReader, DataFieldReader.class.getSimpleName() + " cannot be null");
     }
 
     @Override
@@ -118,7 +132,7 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
         // Build the matcher before reserving the id, so an unsupported filter does not leave the id permanently taken.
-        Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
+        Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter, dataFieldReader);
         synchronized (registrationLock) {
             if (!subscriptionIds.add(subscriptionId)) {
                 throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");

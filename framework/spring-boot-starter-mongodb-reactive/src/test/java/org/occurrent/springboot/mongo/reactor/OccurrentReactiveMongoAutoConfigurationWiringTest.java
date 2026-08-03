@@ -21,6 +21,8 @@ import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
@@ -86,6 +88,37 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         String database = requireNonNull(connectionString.getDatabase());
         databaseFactory = new SimpleReactiveMongoDatabaseFactory(client, database);
         mongoTemplate = new ReactiveMongoTemplate(client, database);
+    }
+
+
+    @Test
+    void a_data_field_reader_is_contributed_when_the_jackson_reader_is_on_the_classpath() {
+        // The Jackson reader is a test dependency of this module, so the conditional bean is active here. An
+        // application opts in the same way, by adding occurrent-common-inmemory-filter-matching-jackson.
+        contextRunner().run(context ->
+                assertThat(context).getBean(DataFieldReader.class).isInstanceOf(JacksonDataFieldReader.class));
+    }
+
+    @Test
+    void an_application_supplied_data_field_reader_wins() {
+        DataFieldReader own = (cloudEvent, path) -> java.util.Optional.empty();
+
+        contextRunner().withBean(DataFieldReader.class, () -> own).run(context ->
+                assertThat(context).getBean(DataFieldReader.class).isSameAs(own));
+    }
+
+
+    @Test
+    void no_data_field_reader_bean_exists_and_the_auto_configuration_still_loads_without_the_jackson_reader() {
+        // The Jackson artifact is optional, so this proves the auto-configuration class loads and the rest of the
+        // context still wires when it is absent, rather than failing on a type it references only inside a bean method.
+        contextRunner()
+                .withClassLoader(new FilteredClassLoader(JacksonDataFieldReader.class))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(DataFieldReader.class);
+                    assertThat(context).hasSingleBean(SynchronousSubscriptionModel.class);
+                });
     }
 
     private ApplicationContextRunner contextRunner() {

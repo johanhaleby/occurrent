@@ -17,6 +17,8 @@
 
 package org.occurrent.springboot.mongo.reactor;
 
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.application.service.spring.reactor.SpringReactiveTransactionExecutor;
 import org.jspecify.annotations.NonNull;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -263,6 +265,19 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     }
 
     /**
+     * A reader for a field inside an event's {@code data} payload, so a subscription can filter on one. Contributed only
+     * when {@code occurrent-common-inmemory-filter-matching-jackson} is on the classpath, which is how an application
+     * asks for this: the reader needs a JSON library, and adding it to every application that never filters on a
+     * payload is a cost with no return (ADR 87). Define your own {@link DataFieldReader} bean to replace it.
+     */
+    @Bean
+    @ConditionalOnMissingBean(DataFieldReader.class)
+    @ConditionalOnClass(name = "org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader")
+    public DataFieldReader occurrentDataFieldReader() {
+        return new JacksonDataFieldReader();
+    }
+
+    /**
      * The register-only reactive subscription model whose handlers the application service composes into its write
      * chain synchronously, before {@code execute} completes (see {@link SynchronousSubscriptionModel}). It is both the
      * registrar the synchronous subscription DSL registers on and the dispatcher the application service dispatches to,
@@ -271,8 +286,8 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(SynchronousSubscriptionModel.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel(OccurrentProperties occurrentProperties) {
-        SynchronousSubscriptionModel synchronousSubscriptionModel = new SynchronousSubscriptionModel();
+    public SynchronousSubscriptionModel occurrentSynchronousSubscriptionModel(OccurrentProperties occurrentProperties, ObjectProvider<DataFieldReader> dataFieldReaderProvider) {
+        SynchronousSubscriptionModel synchronousSubscriptionModel = new SynchronousSubscriptionModel(dataFieldReaderProvider.getIfAvailable(DataFieldReader::refusing));
         // Stopped up front rather than after registration, so a synchronous handler registered under MANUAL is paused
         // from the outset and a write does not run it.
         if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {

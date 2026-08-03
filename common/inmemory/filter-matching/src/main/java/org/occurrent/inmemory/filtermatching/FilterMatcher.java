@@ -57,6 +57,27 @@ public class FilterMatcher {
         };
     }
 
+    /**
+     * A predicate that checks everything in {@code filter} except a condition on a field inside an event's {@code data}
+     * payload, which it treats as already satisfied.
+     * <p>
+     * For a caller re-checking a filter against an event a store has already matched, where re-reading the payload is
+     * not possible without a {@link DataFieldReader} and not necessary either, because the store applied the real
+     * condition to have delivered the event. An attribute or extension is still checked, so a store that honors no
+     * filter at all is still held to the part that can be checked here.
+     * <p>
+     * A predicate rather than a rewritten {@link Filter}, so the widened filter cannot escape and reach a store query,
+     * where it would match more than the filter that was written. The widening also happens once, here, rather than per
+     * event.
+     */
+    public static Predicate<CloudEvent> matcherIgnoringPayloadConditions(Filter filter) {
+        if (filter == null) {
+            throw new IllegalArgumentException(Filter.class.getSimpleName() + " cannot be null");
+        }
+        Filter withoutPayloadConditions = PayloadConditions.assumingPayloadConditionsMatch(filter);
+        return cloudEvent -> matchesFilter(cloudEvent, withoutPayloadConditions);
+    }
+
     private static boolean matchesCapabilityFilter(CloudEvent cloudEvent, CapabilityFilter cpf) {
         // A DCB append always stamps the dcbtags extension on the live CloudEvent; a stream event never carries it.
         boolean isDcbEvent = cloudEvent.getExtension(EventStoreCloudEventExtensions.DCB_TAGS) != null;
