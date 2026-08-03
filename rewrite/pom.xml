@@ -49,6 +49,19 @@
             <groupId>org.openrewrite</groupId>
             <artifactId>rewrite-gradle</artifactId>
         </dependency>
+        <!--
+          Configuration-property recipes for the 0.32.0 occurrent.subscription.enabled migration. Both arrive
+          transitively through rewrite-java anyway, one of them only at runtime scope, so they are declared here to
+          say which dependency the recipes in this module actually use.
+        -->
+        <dependency>
+            <groupId>org.openrewrite</groupId>
+            <artifactId>rewrite-properties</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.openrewrite</groupId>
+            <artifactId>rewrite-yaml</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>
