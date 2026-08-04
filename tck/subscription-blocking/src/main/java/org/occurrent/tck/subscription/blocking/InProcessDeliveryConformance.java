@@ -48,6 +48,13 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
 @Timeout(60)
 public abstract class InProcessDeliveryConformance extends SubscriptionModelSuite {
 
+    /**
+     * Creates a fixture whose model has no subscriptions and calls the handler on the publishing thread. Called before
+     * every test method.
+     */
+    @Override
+    protected abstract SubscriptionModelFixture createFixture();
+
     private static String subscriptionId() {
         return UUID.randomUUID().toString();
     }

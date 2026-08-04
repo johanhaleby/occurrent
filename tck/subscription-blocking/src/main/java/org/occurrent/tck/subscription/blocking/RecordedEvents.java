@@ -58,7 +58,9 @@ public final class RecordedEvents implements Consumer<CloudEvent> {
      */
     public List<CloudEvent> awaitAtLeast(int count, Duration timeout) {
         if (count < 1) {
-            throw new IllegalArgumentException("count must be at least 1, was " + count);
+            throw new IllegalArgumentException("count must be at least 1, was " + count
+                    + ". To assert that nothing arrives, publish a marker afterwards and assert on what came back, "
+                    + "since no wait can prove an absence.");
         }
         requireNonNull(timeout, "timeout cannot be null");
         List<CloudEvent> received = new ArrayList<>();

@@ -89,6 +89,12 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
 public abstract class SubscriptionModelConformance extends SubscriptionModelSuite {
 
     /**
+     * Creates a fixture whose model has no subscriptions. Called before every test method.
+     */
+    @Override
+    protected abstract SubscriptionModelFixture createFixture();
+
+    /**
      * How long a wait for an event that must arrive is given.
      * <p>
      * Ten seconds, and the number is arithmetic rather than taste: the longest test here chains four of these waits, so
@@ -312,10 +318,14 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                 CloudEvent marker = ConformanceEvents.event("3", "MarkerEvent");
                 publish(marker);
                 List<CloudEvent> received = recorded.awaitAtLeast(2, DELIVERY_TIMEOUT);
+                // A subsequence rather than the exact list, because a model resuming from the last event it delivered
+                // rather than from just after it may hand that one over again. Redelivery is not forbidden by this
+                // contract, so asserting the exact list here would reject an at-least-once model over something this
+                // test is not about.
                 assertThat(idsOf(received))
                         .as("this model declares it holds events for a paused subscription, so the held one must "
                                 + "arrive, and before anything published after it")
-                        .containsExactly(whilePaused.getId(), marker.getId());
+                        .containsSubsequence(whilePaused.getId(), marker.getId());
             } else {
                 // Dropped rather than deferred, so resuming must not replay it.
                 assertReceivesOnlyTheMarker(recorded);

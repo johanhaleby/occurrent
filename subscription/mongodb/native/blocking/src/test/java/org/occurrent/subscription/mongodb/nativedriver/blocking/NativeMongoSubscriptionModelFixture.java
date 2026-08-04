@@ -70,8 +70,11 @@ class NativeMongoSubscriptionModelFixture implements SubscriptionModelFixture {
 
     @Override
     public void publish(List<CloudEvent> events) {
-        long expectedVersion = streamVersion.getAndAdd(events.size());
+        // Advanced only once the write has been accepted, so a rejected write does not leave the counter ahead of the
+        // stream and turn the next publish into a version conflict that names the wrong problem.
+        long expectedVersion = streamVersion.get();
         eventStore.write(streamId, expectedVersion, events);
+        streamVersion.addAndGet(events.size());
     }
 
     @Override

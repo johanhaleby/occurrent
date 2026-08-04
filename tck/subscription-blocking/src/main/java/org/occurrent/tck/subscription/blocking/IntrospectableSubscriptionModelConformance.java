@@ -45,6 +45,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Timeout(60)
 public abstract class IntrospectableSubscriptionModelConformance extends SubscriptionModelSuite {
 
+    /**
+     * Creates a fixture whose model has no subscriptions and implements {@link IntrospectableSubscriptionModel}.
+     * Called before every test method.
+     */
+    @Override
+    protected abstract SubscriptionModelFixture createFixture();
+
     @Override
     protected void checkFixtureCanAnswerThisSuite(SubscriptionModelFixture fixture) {
         SubscriptionModel model = fixture.subscriptionModel();
