@@ -274,7 +274,13 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                 .run(context -> {
                     assertThat(context).doesNotHaveBean(ApplicationService.class);
                     assertThat(context).hasSingleBean(DomainEventQueries.class);
-                    assertThat(context).hasSingleBean(SubscriptionModel.class);
+                    // Two beans satisfy SubscriptionModel, because the register-only SynchronousSubscriptionModel
+                    // declares it too. What the old hasSingleBean check was really standing for is that a by-type
+                    // injection point still reaches the asynchronous model, which is what @Primary is there for, so
+                    // assert that directly.
+                    assertThat(context).hasBean("occurrentCompetingDurableSubscriptionModel");
+                    assertThat(context.getBean(SubscriptionModel.class))
+                            .isSameAs(context.getBean("occurrentCompetingDurableSubscriptionModel"));
 
                     // In DCB-only mode the subscription model now wraps a DCB-mode CatchupSubscriptionModel, so a
                     // subscription started at a GlobalCheckpoint can replay history by position.

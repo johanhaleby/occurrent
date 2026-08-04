@@ -31,6 +31,11 @@
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-tck-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>

@@ -48,7 +48,7 @@ import java.util.function.Predicate;
  * interface compatibility but ignored, since "where to start" is meaningless when the subclass decides which events
  * reach {@link #route(CloudEvent)} and when.
  * <p>
- * It does implement {@link SubscriptionModelLifeCycle}, so a stopped model or a paused subscription is skipped by
+ * It is a full {@link SubscriptionModel}, so a stopped model or a paused subscription is skipped by
  * {@link #route(CloudEvent)}. Read that as <i>dropped, not deferred</i>: nothing is holding the events back, so an
  * event fed in while a subscription is paused never reaches that handler, and resuming does not replay it. This is
  * how {@code InMemorySubscriptionModel} already behaves for events fed to it while stopped, and it is what lets a
@@ -65,7 +65,7 @@ import java.util.function.Predicate;
  * {@link Consumers#MANY}. See ADR 90.
  */
 @NullMarked
-public abstract class RegisteringSubscribable implements Subscribable, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel {
+public abstract class RegisteringSubscribable implements SubscriptionModel, IntrospectableSubscriptionModel {
 
     /**
      * How many consumers a subclass accepts, fixed at construction.

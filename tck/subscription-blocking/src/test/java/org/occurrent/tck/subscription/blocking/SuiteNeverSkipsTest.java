@@ -20,24 +20,34 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.platform.engine.TestExecutionResult;
 import org.junit.platform.testkit.engine.EngineTestKit;
 import org.junit.platform.testkit.engine.Events;
+import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass;
 
 /**
- * A TCK that can be satisfied by doing nothing is worse than no TCK, so {@link CheckpointStorageConformance} is run
- * here twice, against a storage that honours none of the contract and against one that honours all of it. The first run
- * must fail every test, the second must pass every test, and neither may skip or abort anything.
+ * A TCK that can be satisfied by doing nothing is worse than no TCK, so every suite in this module is run here against
+ * an implementation that honours none of the contract and against one that honours all of it. The first run must fail
+ * every test, the second must pass every test, and neither may skip or abort anything.
  * <p>
- * The two runs answer different questions and the second one is the reason there are two. A storage that throws from
- * every method dies on the first call in each test, so that run says nothing about code further down a test method: an
- * {@code Assumptions} call placed after the first {@code save} would never be reached and the skipped count would stay
- * zero. Running the whole suite green against a working storage does reach every line, so a skip anywhere in the suite
- * body shows up as a non-zero skipped count here.
+ * The two runs answer different questions and the second one is the reason there are two. An implementation that throws
+ * from every method dies on the first call in each test, so that run says nothing about code further down a test method:
+ * an {@code Assumptions} call placed after the first call would never be reached and the skipped count would stay zero.
+ * Running the whole suite green does reach every line, so a skip anywhere in the suite body shows up here.
+ * <p>
+ * {@link InProcessDeliveryConformance} is the one suite whose failing run uses a <em>working</em> model rather than a
+ * broken one. Its whole subject is that delivery has already happened when publishing returns, so what has to fail it is
+ * a model that delivers asynchronously, which is exactly the regression it exists to catch.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("a conformance suite")
@@ -45,45 +55,93 @@ class SuiteNeverSkipsTest {
 
     @Test
     void fails_every_test_and_skips_none_of_them_against_a_storage_that_honours_nothing() {
-        Events tests = run(HonoursNothingCheckpointStorageConformance.class);
-
-        long started = tests.started().count();
-        assertThat(started)
-                .describedAs("the suite must actually run something, or its verdict is meaningless")
-                .isPositive();
-        assertThat(tests.failed().count())
-                .describedAs("every test must fail against a storage that honours nothing")
-                .isEqualTo(started);
-        assertThat(tests.succeeded().count())
-                .describedAs("nothing may pass against a storage that honours nothing")
-                .isZero();
-        assertSkipsNothing(tests);
+        assertEveryTestFails(HonoursNothingCheckpointStorageConformance.class, "a storage that honours nothing");
     }
 
     @Test
     void passes_every_test_and_skips_none_of_them_against_a_storage_that_honours_everything() {
-        Events tests = run(HonoursEverythingCheckpointStorageConformance.class);
+        assertEveryTestPasses(HonoursEverythingCheckpointStorageConformance.class, "storage");
+    }
+
+    @Test
+    void fails_every_test_and_skips_none_of_them_against_a_subscription_model_that_honours_nothing() {
+        assertEveryTestFails(HonoursNothingSubscriptionModelConformance.class, "a model that honours nothing");
+    }
+
+    @Test
+    void passes_every_test_and_skips_none_of_them_against_a_subscription_model_that_honours_everything() {
+        assertEveryTestPasses(HonoursEverythingSubscriptionModelConformance.class, "subscription model");
+    }
+
+    @Test
+    void the_introspection_suite_fails_every_test_against_a_model_that_honours_nothing() {
+        assertEveryTestFails(HonoursNothingIntrospectionConformance.class, "a model that honours nothing");
+    }
+
+    @Test
+    void the_introspection_suite_passes_every_test_against_a_model_that_honours_everything() {
+        assertEveryTestPasses(HonoursEverythingIntrospectionConformance.class, "subscription model");
+    }
+
+    @Test
+    void the_in_process_suite_fails_every_test_against_a_model_that_delivers_asynchronously() {
+        // The one case where "honours nothing" is the wrong shape. This suite's whole subject is that delivery already
+        // happened when publishing returned, so the model that must fail it is a working asynchronous one rather than a
+        // broken one, and that is exactly the regression the suite exists to catch.
+        assertEveryTestFails(AsynchronousInProcessConformance.class, "a model that delivers asynchronously");
+    }
+
+    private static void assertEveryTestFails(Class<?> suite, String what) {
+        assertOutcome(suite, what, false);
+    }
+
+    private static void assertEveryTestPasses(Class<?> suite, String what) {
+        assertOutcome(suite, what, true);
+    }
+
+    private static void assertOutcome(Class<?> suite, String what, boolean shouldPass) {
+        Events tests = run(suite);
 
         long started = tests.started().count();
         assertThat(started)
                 .describedAs("the suite must actually run something, or its verdict is meaningless")
                 .isPositive();
-        assertThat(tests.succeeded().count())
-                .describedAs("a storage that honours the whole contract must pass the whole suite, so a test that "
-                        + "cannot be satisfied by any implementation is caught here rather than by whoever adds the "
-                        + "next storage")
-                .isEqualTo(started);
-        assertThat(tests.failed().count()).isZero();
-        assertSkipsNothing(tests);
-    }
-
-    private static void assertSkipsNothing(Events tests) {
+        long passed = tests.succeeded().count();
+        long failed = tests.failed().count();
+        if (shouldPass) {
+            assertThat(passed)
+                    .describedAs("a %s that honours the whole contract must pass the whole suite, so a test that cannot "
+                            + "be satisfied by any implementation is caught here rather than by whoever adds the next "
+                            + "one. What failed: %s", what, failureDetail(tests))
+                    .isEqualTo(started);
+            assertThat(failed).isZero();
+        } else {
+            assertThat(failed)
+                    .describedAs("every test must fail against %s", what)
+                    .isEqualTo(started);
+            assertThat(passed)
+                    .describedAs("nothing may pass against %s", what)
+                    .isZero();
+        }
         assertThat(tests.skipped().count())
                 .describedAs("the suite must never skip, which is why it uses no Assumptions")
                 .isZero();
         assertThat(tests.aborted().count())
                 .describedAs("an aborted test is a skip wearing a different hat")
                 .isZero();
+    }
+
+    /**
+     * Names the tests that failed and why. Without this a regression here reports only a count, and the suite it ran is
+     * not the one Surefire reports on, so there is nothing else to read.
+     */
+    private static String failureDetail(Events tests) {
+        return tests.failed().stream()
+                .map(event -> event.getTestDescriptor().getDisplayName() + ": " + event.getPayload(TestExecutionResult.class)
+                        .flatMap(TestExecutionResult::getThrowable)
+                        .map(Throwable::getMessage)
+                        .orElse("no throwable"))
+                .collect(Collectors.joining(" | "));
     }
 
     private static Events run(Class<?> suite) {
@@ -136,6 +194,110 @@ class SuiteNeverSkipsTest {
                     return true;
                 }
             };
+        }
+    }
+
+    static class HonoursNothingSubscriptionModelConformance extends SubscriptionModelConformance {
+
+        @Override
+        protected SubscriptionModelFixture createFixture() {
+            return new NoopSubscriptionModelFixture();
+        }
+    }
+
+    static class HonoursEverythingSubscriptionModelConformance extends SubscriptionModelConformance {
+
+        @Override
+        protected SubscriptionModelFixture createFixture() {
+            return new WorkingSubscriptionModelFixture();
+        }
+    }
+
+    static class HonoursNothingIntrospectionConformance extends IntrospectableSubscriptionModelConformance {
+
+        @Override
+        protected SubscriptionModelFixture createFixture() {
+            return new NoopSubscriptionModelFixture();
+        }
+    }
+
+    static class HonoursEverythingIntrospectionConformance extends IntrospectableSubscriptionModelConformance {
+
+        @Override
+        protected SubscriptionModelFixture createFixture() {
+            return new WorkingSubscriptionModelFixture();
+        }
+    }
+
+    static class AsynchronousInProcessConformance extends InProcessDeliveryConformance {
+
+        @Override
+        protected SubscriptionModelFixture createFixture() {
+            // A delay, so the pool thread cannot deliver before the assertion reads the list. Without it this run
+            // passes every so often by luck, which would make the anti-skip test itself the flaky thing.
+            return new WorkingSubscriptionModelFixture(Duration.ofMillis(200));
+        }
+    }
+
+    private static class NoopSubscriptionModelFixture implements SubscriptionModelFixture {
+
+        @Override
+        public SubscriptionModel subscriptionModel() {
+            return NoopSubscriptionModel.INSTANCE;
+        }
+
+        @Override
+        public void publish(List<CloudEvent> events) {
+            throw new UnsupportedOperationException("NoopSubscriptionModel has nothing to publish to");
+        }
+
+        @Override
+        public boolean deliversEventsPublishedWhilePaused() {
+            // Never reached: every call into the model throws before the suite consults this.
+            return false;
+        }
+
+        @Override
+        public boolean retriesAFailingHandler() {
+            return true;
+        }
+    }
+
+    private static class WorkingSubscriptionModelFixture implements SubscriptionModelFixture {
+
+        private final WorkingSubscriptionModel model;
+
+        WorkingSubscriptionModelFixture() {
+            this(Duration.ZERO);
+        }
+
+        WorkingSubscriptionModelFixture(Duration deliveryDelay) {
+            this.model = new WorkingSubscriptionModel(deliveryDelay);
+        }
+
+        @Override
+        public SubscriptionModel subscriptionModel() {
+            return model;
+        }
+
+        @Override
+        public void publish(List<CloudEvent> events) {
+            model.feed(events);
+        }
+
+        @Override
+        public boolean deliversEventsPublishedWhilePaused() {
+            return false;
+        }
+
+        @Override
+        public boolean retriesAFailingHandler() {
+            return true;
+        }
+
+        @Override
+        public void close() {
+            model.shutdown();
         }
     }
 }

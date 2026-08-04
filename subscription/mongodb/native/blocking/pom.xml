@@ -74,6 +74,12 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-tck-subscription-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-mongodb-native</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
