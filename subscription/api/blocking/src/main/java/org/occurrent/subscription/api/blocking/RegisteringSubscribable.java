@@ -27,8 +27,10 @@ import org.occurrent.subscription.internal.HandlerFailures;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
 
 import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -283,28 +285,31 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
      */
     protected final void routeIsolated(Iterable<CloudEvent> cloudEvents) {
         Objects.requireNonNull(cloudEvents, "cloudEvents cannot be null");
-        // Keyed by the registration rather than by its id, because cancelling frees an id for re-subscription. Keyed
-        // by id, a handler registered under a freed id would inherit the failure of the one that released it.
-        // LinkedHashMap rather than IdentityHashMap so the reported order stays the order the handlers failed in.
-        Map<Registration, RuntimeException> failures = new LinkedHashMap<>();
+        // Which handlers have failed is tracked by identity, not by id and not by Registration equality: cancelling
+        // frees an id for re-subscription, and a handler registered under a freed id must not inherit the failure of
+        // the one that released it. The failures themselves go in a list, so they are reported in the order they
+        // happened.
+        Set<Registration> failed = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<RuntimeException> failures = new ArrayList<>();
         for (CloudEvent cloudEvent : cloudEvents) {
             if (!running) {
                 break;
             }
             for (Registration registration : registrations) {
-                if (failures.containsKey(registration)) {
+                if (failed.contains(registration)) {
                     continue;
                 }
                 if (!pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent)) {
                     try {
                         registration.action().accept(cloudEvent);
                     } catch (RuntimeException e) {
-                        failures.put(registration, e);
+                        failed.add(registration);
+                        failures.add(e);
                     }
                 }
             }
         }
-        HandlerFailures.combined(failures.values()).ifPresent(failure -> {
+        HandlerFailures.combined(failures).ifPresent(failure -> {
             throw failure;
         });
     }

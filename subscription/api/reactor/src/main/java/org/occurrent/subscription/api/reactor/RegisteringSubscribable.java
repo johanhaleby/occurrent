@@ -28,8 +28,10 @@ import org.occurrent.subscription.internal.SingleConsumerMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -279,15 +281,16 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
         Objects.requireNonNull(cloudEvents, "cloudEvents cannot be null");
         return Mono.defer(() -> {
             // Created per subscription rather than per model, and every stage below is sequential through concatMap,
-            // so this needs no synchronisation. Keyed by the registration rather than by its id, because cancelling
-            // frees an id for re-subscription, and keyed by id a handler registered under a freed id would inherit the
-            // failure of the one that released it. LinkedHashMap rather than IdentityHashMap so the reported order
-            // stays the order the handlers failed in.
-            Map<Registration, Throwable> failures = new LinkedHashMap<>();
+            // so these need no synchronisation. Which handlers have failed is tracked by identity, not by id and not by
+            // Registration equality: cancelling frees an id for re-subscription, and a handler registered under a freed
+            // id must not inherit the failure of the one that released it. The failures themselves go in a list, so
+            // they are reported in the order they happened.
+            Set<Registration> failed = Collections.newSetFromMap(new IdentityHashMap<>());
+            List<Throwable> failures = new ArrayList<>();
             return Flux.fromIterable(cloudEvents)
                     .takeWhile(ignored -> running)
                     .concatMap(cloudEvent -> Flux.fromIterable(registrations)
-                            .filter(registration -> !failures.containsKey(registration)
+                            .filter(registration -> !failed.contains(registration)
                                     && !pausedSubscriptions.contains(registration.id())
                                     && registration.matcher().test(cloudEvent))
                             // apply inside the defer, so a handler that throws instead of returning Mono.error becomes
@@ -301,12 +304,13 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
                                         if (error instanceof Error) {
                                             return Mono.error(error);
                                         }
-                                        failures.put(registration, error);
+                                        failed.add(registration);
+                                        failures.add(error);
                                         return Mono.empty();
                                     }))
                             .then())
                     // Deferred so the map is read after the batch has run, not when this chain is assembled.
-                    .then(Mono.defer(() -> HandlerFailures.combined(failures.values())
+                    .then(Mono.defer(() -> HandlerFailures.combined(failures)
                             .map(Mono::<Void>error)
                             .orElseGet(Mono::empty)));
         });
