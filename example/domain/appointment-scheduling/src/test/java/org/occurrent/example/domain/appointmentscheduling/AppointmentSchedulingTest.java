@@ -75,11 +75,8 @@ class AppointmentSchedulingTest {
     private static final URI SOURCE = URI.create("urn:occurrent:domain:appointmentscheduling");
 
     @Container
-    private static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion();
-    }
+    private static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     private MongoClient mongoClient;
     private AppointmentSchedulingService service;

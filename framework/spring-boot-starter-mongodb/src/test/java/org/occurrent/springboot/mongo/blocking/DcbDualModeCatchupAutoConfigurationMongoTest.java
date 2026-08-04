@@ -45,6 +45,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -558,7 +559,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         @Bean
         @ServiceConnection
         MongoDBContainer mongoDbContainer() {
-            return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
         }
     }
 

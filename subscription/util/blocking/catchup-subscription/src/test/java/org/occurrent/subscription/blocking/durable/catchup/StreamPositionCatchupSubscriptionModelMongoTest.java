@@ -43,7 +43,9 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
@@ -92,12 +94,11 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                    .withReplicaSet()
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion()
                     .withReuse(true);
 
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".stream_position_catchup"));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private SpringMongoEventStore eventStore;
     private SpringMongoSubscriptionModel subscriptionModel;

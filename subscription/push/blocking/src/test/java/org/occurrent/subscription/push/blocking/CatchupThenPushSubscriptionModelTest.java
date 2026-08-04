@@ -273,6 +273,51 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(model.isRunning("proj")).isTrue();
         assertThat(model.isRunning()).isTrue();
         assertThat(model.isPaused("proj")).isFalse();
+        assertThat(model.isCatchingUp("proj")).isFalse();
+    }
+
+    /**
+     * The companion to the above, and the reason {@code isCatchingUp} exists at all: a saga gates its timers on being
+     * live, {@code isRunning(id)} is true for the whole replay, so without a separate signal a timeout could fire
+     * against state that is only half folded up.
+     */
+    @Test
+    void a_subscription_reports_catching_up_while_its_replay_is_still_in_flight() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            replayReached.countDown();
+            try {
+                releaseReplay.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        assertThat(replayReached.await(10, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(model.isCatchingUp("proj")).isTrue();
+        // Running throughout, which is exactly why it cannot answer the handover question on its own.
+        assertThat(model.isRunning("proj")).isTrue();
+
+        releaseReplay.countDown();
+        subscription.waitUntilStarted();
+
+        assertThat(model.isCatchingUp("proj")).isFalse();
+    }
+
+    @Test
+    void an_id_the_model_has_never_seen_is_not_catching_up() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        assertThat(model.isCatchingUp("never-subscribed")).isFalse();
     }
 
     @Test

@@ -31,7 +31,7 @@
 
     <packaging>pom</packaging>
     <modules>
-        <module>junit-jupiter</module>
+        <module>junit-jupiter-blocking</module>
         <module>spring-boot</module>
         <module>mongodb</module>
     </modules>

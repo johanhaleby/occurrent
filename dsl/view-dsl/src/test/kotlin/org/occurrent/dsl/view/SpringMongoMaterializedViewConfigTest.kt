@@ -32,7 +32,9 @@ import org.occurrent.dsl.view.SpringMongoViewConfig.Companion.config
 import org.occurrent.dsl.view.testsupport.NameState
 import org.occurrent.dsl.view.testsupport.nameChanged
 import org.occurrent.dsl.view.testsupport.nameDefined
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testing.mongodb.OccurrentMongoFlush
+import org.occurrent.testsupport.mongodb.MongoTestDatabase
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.data.mongodb.core.MongoOperations
@@ -58,7 +60,7 @@ class SpringMongoMaterializedViewConfigTest {
     companion object {
         @JvmStatic
         @Container
-        val mongoDBContainer: MongoDBContainer = MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true)
+        val mongoDBContainer: MongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true)
 
 
         private val nameView: View<NameState?, DomainEvent> = view<NameState?, DomainEvent>(null) { s, e ->
@@ -72,7 +74,7 @@ class SpringMongoMaterializedViewConfigTest {
     val faker = faker { }
 
     @RegisterExtension
-    var flushMongoDBExtension: FlushMongoDBExtension = FlushMongoDBExtension(ConnectionString(mongoDBContainer.replicaSetUrl))
+    var flushMongoDBExtension: OccurrentMongoFlush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer))
 
     lateinit var mongoOperations: MongoOperations
 

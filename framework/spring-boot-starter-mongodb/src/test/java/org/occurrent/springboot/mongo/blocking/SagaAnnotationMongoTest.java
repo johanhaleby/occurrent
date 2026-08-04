@@ -30,6 +30,7 @@ import org.occurrent.application.service.blocking.ApplicationService;
 import org.bson.Document;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.command.CommandDispatcher;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -133,7 +134,7 @@ class SagaAnnotationMongoTest {
         @Bean
         @ServiceConnection
         MongoDBContainer mongoDbContainer() {
-            return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
         }
     }
 

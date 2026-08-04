@@ -31,6 +31,7 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -73,17 +74,11 @@ import static org.awaitility.Awaitility.await;
 class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
     // Booted directly with SpringApplication.run (not @SpringBootTest), so there is no @ServiceConnection to resolve
-    // the container's mapped port automatically. getReplicaSetUrl() reports the replica set member's own configured
-    // port, so the host port must be pinned to match the container's port, same workaround as
-    // OccurrentReactiveMongoAutoConfigurationWiringTest.
+    // the container for the context. The url is passed as a boot argument instead, and getReplicaSetUrl() reports the
+    // mapped host port, so nothing has to be pinned.
     @Container
-    static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
-        mongoDBContainer.withReuse(true);
-        mongoDBContainer.setPortBindings(List.of("27017:27017"));
-    }
+    static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     @Test
     void default_resume_behavior_resumes_from_the_stored_position_after_restart_while_same_as_start_at_replays_from_the_beginning_again() {
@@ -143,7 +138,7 @@ class StreamSubscriptionResumeBehaviorAnnotationMongoTest {
 
     private static String[] bootArgs(String databaseName) {
         return new String[]{
-                "--spring.data.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream",
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName

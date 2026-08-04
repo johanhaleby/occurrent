@@ -33,6 +33,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -65,7 +66,7 @@ class OccurrentMongoFlushTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     private MongoClient mongoClient;
     private MongoDatabase database;

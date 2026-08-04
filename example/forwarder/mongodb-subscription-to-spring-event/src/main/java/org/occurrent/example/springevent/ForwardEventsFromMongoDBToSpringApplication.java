@@ -46,7 +46,7 @@ import java.net.URI;
 @SpringBootApplication
 public class ForwardEventsFromMongoDBToSpringApplication {
 
-    @Value("${spring.data.mongodb.uri}")
+    @Value("${spring.mongodb.uri}")
     private String mongoUri;
 
     @Bean(destroyMethod = "close")

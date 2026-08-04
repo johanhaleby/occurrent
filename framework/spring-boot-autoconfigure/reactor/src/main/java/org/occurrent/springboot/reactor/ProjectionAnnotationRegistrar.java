@@ -145,7 +145,7 @@ class ProjectionAnnotationRegistrar {
         if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
             // The feed bean's type decides the flavor: a PushSubscriptionModel feeds CloudEvents, a DomainEventFeed
             // feeds domain events directly.
-            Object feedBean = SubscriptionAnnotations.resolveFeedBean(applicationContext, annotation.subscriptionModel(), annotation.subscriptionModelName(), id, PushSubscriptionModel.class, DomainEventFeed.class);
+            Object feedBean = SubscriptionAnnotations.resolveFeedBean(applicationContext, "@Projection", annotation.subscriptionModel(), annotation.subscriptionModelName(), id, PushSubscriptionModel.class, DomainEventFeed.class);
             if (feedBean instanceof PushSubscriptionModel pushModel) {
                 registerPushProjection(id, converter, descriptor, synchronous, annotation, pushModel);
             } else if (feedBean instanceof DomainEventFeed<?> domainFeed) {
@@ -259,7 +259,7 @@ class ProjectionAnnotationRegistrar {
             // This feed bypasses the subscription model bean entirely, so manual mode's own withholding never reaches
             // it. Defer the same call instead, to run once the application starts this projection itself. startupMode
             // is not read here: start(id) hands the caller the Mono, so waiting or not is already their choice.
-            applicationContext.getBean(ManualStartProjections.class).register(id,
+            applicationContext.getBean(ManualStartPushSources.class).register(id,
                     () -> projectAgnosticOrStream(runner, id, projection, store, null).waitUntilStarted());
         }
     }
@@ -290,7 +290,7 @@ class ProjectionAnnotationRegistrar {
             // let accept(...) buffer into a bounded buffer rather than fold, and eventually overflow it. Defer both
             // together, so nothing about this projection reaches the feed until the application starts it, and
             // running the deferred work leaves the feed in the same state registering it under auto mode would.
-            applicationContext.getBean(ManualStartProjections.class).register(id, () -> {
+            applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
                 registerOnFeed.run();
                 return feed.catchUp(id);
             });

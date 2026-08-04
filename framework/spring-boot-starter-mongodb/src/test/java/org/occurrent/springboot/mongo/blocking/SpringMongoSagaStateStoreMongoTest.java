@@ -37,6 +37,7 @@ import org.occurrent.dsl.saga.flow.Continuation;
 import org.occurrent.dsl.saga.flow.FlowSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -543,7 +544,7 @@ class SpringMongoSagaStateStoreMongoTest {
         @Bean
         @ServiceConnection
         MongoDBContainer mongoDbContainer() {
-            return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
         }
     }
 

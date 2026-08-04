@@ -29,7 +29,9 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
@@ -39,7 +41,6 @@ import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -59,18 +60,11 @@ class SpringMongoEventStoreDcbTest {
     private static final URI SOURCE = URI.create("urn:test");
 
     @Container
-    private static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                .withReplicaSet();
-        List<String> ports = new ArrayList<>();
-        ports.add("27017:27017");
-        mongoDBContainer.withReuse(true).setPortBindings(ports);
-    }
+    private static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcb"));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private SpringMongoEventStore eventStore;
 

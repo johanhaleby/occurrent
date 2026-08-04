@@ -19,6 +19,7 @@ package org.occurrent.springboot.blocking;
 
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.command.CommandDispatcher;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
@@ -31,8 +32,11 @@ import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
+import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
@@ -46,8 +50,8 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.Set;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -65,7 +69,9 @@ class SagaAnnotationRegistrar {
     private final StartPositionSupport startPositionSupport;
     private final Set<String> registeredIds;
     // Registered sagas own a timer poller each, stop them when the context is destroyed so no poller thread leaks.
-    private final List<SagaSubscription> sagaSubscriptions = new ArrayList<>();
+    // Concurrent because a push saga withheld by manual mode is added when the application starts it, on whichever
+    // thread that is, while close() may be reading the list.
+    private final List<SagaSubscription> sagaSubscriptions = new CopyOnWriteArrayList<>();
 
     SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
         this.applicationContext = applicationContext;
@@ -95,30 +101,66 @@ class SagaAnnotationRegistrar {
         }
         Saga<E, S, C> saga = (Saga<E, S, C>) descriptor;
 
+        boolean push = annotation.source() == org.occurrent.annotation.Source.PUSH;
+        if (push) {
+            rejectStartPositionAttributes(annotation, id);
+        } else if (annotation.catchup() != org.occurrent.annotation.Catchup.FROM_EVENT_STORE) {
+            // Ignoring it would be the expensive kind of silence: someone reaching for catchup=NONE means "don't read
+            // the history", and an event-store saga left on its default start position reads all of it.
+            throw new IllegalArgumentException("@Saga '%s' sets catchup, which only applies to source=PUSH, where it decides whether the saga replays the event store before going live. An event-store saga chooses its history with startAt instead (startAt = NOW to skip it).".formatted(id));
+        }
+
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
-        Subscribable subscribable = applicationContext.getBean(Subscribable.class);
+        Subscribable subscribable = push ? pushFeed(annotation, id) : applicationContext.getBean(Subscribable.class);
         SagaStateStore<S> stateStore = resolveSagaStateStore(annotation, method, id);
         CommandDispatcher<C> commandDispatcher = resolveCommandDispatcher(annotation, id);
-        StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
+        // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
+        // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
+        StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
         SagaRunnerConfig config = SagaRunnerConfig.defaults().withTimerPollInterval(sagaTimerPollInterval());
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
-        SagaRunner<E, C> runner = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
+        SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
         CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
-        if (competingConsumerStrategy != null) {
-            runner = runner.competingConsumerStrategy(competingConsumerStrategy);
-        }
+        // Effectively final, so a withheld push saga can close over it and run the same registration later.
+        final SagaRunner<E, C> runner = competingConsumerStrategy == null ? configured : configured.competingConsumerStrategy(competingConsumerStrategy);
 
         // A saga replaying its history from the beginning defaults to starting in the background, exactly as
         // @Subscription and @Projection do. startupMode was accepted and ignored here until now, so a saga always
-        // held up startup whatever it asked for.
+        // held up startup whatever it asked for. A push saga replays only when it catches up, and then always from the
+        // beginning, so it takes the push decision instead: only an explicit BACKGROUND moves it off the startup path.
         boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
-        boolean waitUntilStarted = SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)
-                && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
+        boolean startsOnItsOwn = SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext);
+        boolean waitUntilStarted = push
+                ? catchesUp(annotation) && SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode())
+                : startsOnItsOwn && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
 
-        startPositionSupport.applyStartupWorkarounds();
+        if (!push) {
+            // The eager-creation workaround is about the framework's own SubscriptionModel template. A push feed is a
+            // bean the application supplies and has already created by the time this runs.
+            startPositionSupport.applyStartupWorkarounds();
+        }
+
+        if (push && !startsOnItsOwn) {
+            // A push feed bypasses the SubscriptionModel bean entirely, so occurrent.subscription.mode=manual never
+            // reaches it and the saga would start issuing commands at boot after being told to wait. Defer the whole
+            // registration instead, exactly as a push projection does, and run it when the application starts this id.
+            //
+            // The observation view is published now rather than with the deferred run, because it reads the state store
+            // and needs no subscription. Withholding it would leave an application that is deciding whether to start
+            // this saga unable to look at the instances it already has, which is the decision manual mode exists for.
+            publishSagaInstances(id, SagaInstances.of(stateStore));
+            applicationContext.getBean(ManualStartPushSources.class).register(id, () ->
+                    sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted)));
+            return;
+        }
+
         SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
-        publishSagaInstances(id, sagaSubscription);
+        publishSagaInstances(id, sagaSubscription.instances());
+    }
+
+    private static boolean catchesUp(org.occurrent.annotation.Saga annotation) {
+        return annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
     }
 
     // A saga must not issue commands while its own event subscription is not running, which is what
@@ -126,10 +168,83 @@ class SagaAnnotationRegistrar {
     // the background is until its replay hands over. A model with no life cycle cannot answer, so those keep firing
     // timers as before.
     private static BooleanSupplier timersEnabledFor(Subscribable subscribable, String subscriptionId) {
+        if (subscribable instanceof CatchupThenPushSubscriptionModel catchupThenPush) {
+            // isRunning(id) is true throughout the replay, so it cannot stand in for the handover here. A timeout that
+            // fires mid-replay decides against state that is only half folded up, which is the one thing a saga
+            // catching up before it goes live is meant to avoid.
+            return () -> catchupThenPush.isRunning(subscriptionId) && !catchupThenPush.isCatchingUp(subscriptionId);
+        }
         if (subscribable instanceof SubscriptionModelLifeCycle lifeCycle) {
             return () -> lifeCycle.isRunning(subscriptionId);
         }
         return () -> true;
+    }
+
+    /**
+     * A push saga takes no start position, whether or not it catches up: a replay always starts at the beginning, and
+     * where the live feed resumes after a restart is the broker's business. {@code startAt},
+     * {@code startAtGlobalPosition} and {@code resumeBehavior} would all do nothing, and rejecting them says so instead
+     * of letting the caller believe otherwise. {@code @Projection(source = PUSH)} rejects the same three, plus the
+     * synchronous mode, which {@code @Saga} does not have.
+     * <p>
+     * {@code startupMode} is the exception, and only under the default {@code catchup}: that replay is real work on the
+     * startup path, so {@code BACKGROUND} has something to move off it. With {@code catchup = NONE} there is no replay
+     * to wait for, so setting it is rejected rather than ignored.
+     */
+    private void rejectStartPositionAttributes(org.occurrent.annotation.Saga annotation, String id) {
+        if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
+                || annotation.resumeBehavior() != org.occurrent.annotation.ResumeBehavior.DEFAULT) {
+            // The startupMode hint only makes sense under the default catchup. With catchup=NONE there is no replay to
+            // move off the startup path, and startupMode is rejected there anyway.
+            String reason = catchesUp(annotation)
+                    ? "It catches up before going live, but always from the beginning, so there is no start position to choose. Use startupMode = BACKGROUND to keep that replay off the startup path"
+                    : "With catchup=NONE it takes live events only, so there is no history to position into";
+            throw new IllegalArgumentException("@Saga '%s' with source=PUSH cannot set startAt, startAtGlobalPosition or resumeBehavior. %s, and where the live feed resumes is the broker's business.".formatted(id, reason));
+        }
+        if (!catchesUp(annotation) && annotation.startupMode() != org.occurrent.annotation.StartupMode.DEFAULT) {
+            throw new IllegalArgumentException("@Saga '%s' combines source=PUSH with catchup=NONE, so it replays nothing and there is no startup work for startupMode to decide about. Remove startupMode, or drop catchup=NONE if you meant the saga to catch up first.".formatted(id));
+        }
+    }
+
+    /**
+     * The resolved push feed, with a one-time catch-up in front of it unless {@code catchup = NONE}, so a saga that has
+     * never run is folded up from the event store before it starts taking live events. With {@code catchup = NONE} the
+     * feed is used bare and no event store is touched, which is the only thing that works when the events come from
+     * another application's broker.
+     * <p>
+     * Only a {@code PushSubscriptionModel} is accepted, unlike {@code @Projection}, which also takes a
+     * {@code DomainEventFeed}. A domain-event feed carries no stream metadata, and without it a saga cannot recognise a
+     * redelivered event, so binding one would quietly cost the saga its redelivery protection.
+     */
+    private Subscribable pushFeed(org.occurrent.annotation.Saga annotation, String id) {
+        Object feedBean = SubscriptionAnnotations.resolveFeedBean(applicationContext, "@Saga", annotation.subscriptionModel(),
+                annotation.subscriptionModelName(), id, PushSubscriptionModel.class);
+        if (!(feedBean instanceof PushSubscriptionModel pushModel)) {
+            throw new IllegalArgumentException("@Saga '%s' with source=PUSH resolved a %s, which is not a PushSubscriptionModel.".formatted(id, feedBean.getClass().getName()));
+        }
+        if (annotation.catchup() == org.occurrent.annotation.Catchup.NONE) {
+            return pushModel;
+        }
+        PositionOrderedReader reader = catchupBean(PositionOrderedReader.class, id);
+        CheckpointStorage catchupMarker = catchupBean(CheckpointStorage.class, id);
+        return new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker,
+                ProjectionAnnotationRegistrar.catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
+    }
+
+    /**
+     * A bean the catch-up replay needs, or a failure that names the way out. An application whose push feed carries
+     * another application's events has no event store to replay and so has neither of these beans, and that is the
+     * application most likely to reach this code, since catching up is the default. A bare
+     * {@code NoSuchBeanDefinitionException} would send it looking for a missing store rather than at
+     * {@code catchup = NONE}.
+     */
+    private <T> T catchupBean(Class<T> type, String id) {
+        T bean = applicationContext.getBeanProvider(type).getIfAvailable();
+        if (bean == null) {
+            throw new IllegalStateException(("@Saga '%s' with source=PUSH catches up from the event store before going live, which needs a %s bean, and there is none. " +
+                    "Set catchup = NONE if the feed carries events this application's event store does not hold, which is the case when another application writes them.").formatted(id, type.getSimpleName()));
+        }
+        return bean;
     }
 
     /**
@@ -141,8 +256,7 @@ class SagaAnnotationRegistrar {
      * kind of context this is, while the singleton needs a {@link ConfigurableApplicationContext}. If that registration
      * cannot happen, the registry still works.
      */
-    private void publishSagaInstances(String id, SagaSubscription sagaSubscription) {
-        SagaInstances instances = sagaSubscription.instances();
+    private void publishSagaInstances(String id, SagaInstances instances) {
         addToSagaInstancesRegistry(id, instances);
         registerSagaInstancesSingleton(id, instances);
     }

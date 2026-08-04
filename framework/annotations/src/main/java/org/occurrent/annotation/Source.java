@@ -18,23 +18,28 @@
 package org.occurrent.annotation;
 
 /**
- * Where a {@link Projection} reads its events from.
+ * Where a {@link Projection} or a {@link Saga} reads its events from.
  */
 public enum Source {
     /**
-     * The default: the projection is fed by the event store's own subscription, through the framework's asynchronous
+     * The default: the events come from the event store's own subscription, through the framework's asynchronous
      * catch-up and durable subscription models. This is transport-neutral, the underlying mechanism is whatever the
      * configured event store provides.
      */
     EVENT_STORE,
     /**
-     * The projection is fed by an external push feed the application owns and feeds (driven by a RabbitMQ, Kafka, or
-     * other listener), selected with {@link Projection#subscriptionModel()} or {@link Projection#subscriptionModelName()}.
-     * The framework gives the projection a replay-then-push catch-up that backfills it from the event store
-     * once before it goes live. The feed bean's type decides how live events are delivered: a {@code PushSubscriptionModel}
-     * delivers <strong>CloudEvents</strong>, while a {@code DomainEventFeed} delivers <strong>domain events</strong>
-     * directly, with no CloudEvent conversion on the live path (a {@code DomainEventFeed} carries the event-id function
-     * used for catch-up de-dup).
+     * The events come from an external push feed the application owns and feeds (driven by a RabbitMQ, Kafka, or other
+     * listener), selected with the annotation's {@code subscriptionModel} or {@code subscriptionModelName}. The
+     * framework puts a replay-then-push catch-up in front of it, which backfills from the event store once before going
+     * live. A {@link Saga} can turn that replay off with {@code catchup = }{@link Catchup#NONE}, for a feed whose
+     * events the local event store does not hold.
+     * <p>
+     * A {@link Projection} accepts two kinds of feed bean, and the type decides how live events are delivered: a
+     * {@code PushSubscriptionModel} delivers <strong>CloudEvents</strong>, while a {@code DomainEventFeed} delivers
+     * <strong>domain events</strong> directly, with no CloudEvent conversion on the live path (a
+     * {@code DomainEventFeed} carries the event-id function used for catch-up de-dup). A {@link Saga} accepts only a
+     * {@code PushSubscriptionModel}, since a domain-event feed carries none of the stream metadata a saga deduplicates
+     * redeliveries with.
      */
     PUSH
 }

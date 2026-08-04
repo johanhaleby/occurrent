@@ -170,8 +170,10 @@ jobs:
           echo "All test modules are covered by a shard."
 
   # Stage 2: run each subtree's tests against the pre-built local repo, one shard per runner
-  # (isolated Docker daemon). Within a shard, modules stay sequential (no -T) so the
-  # fixed-port-27017 MongoDB tests never collide.
+  # (isolated Docker daemon). Within a shard, modules stay sequential (no -T). Nothing pins a host
+  # port any more, but sequential execution is still load-bearing: a MongoDB database belongs to one
+  # container object in one JVM (ADR 97), and two test classes running at once inside a JVM would
+  # need a per-class axis on top of that. Do not read this as licence to add -T.
   #
   # Shard count is pinned at 10 by the concurrency limit, not chosen for tidiness: this account's
   # GitHub plan allows 20 concurrent jobs, and 10 shards x 2 JDKs is exactly 20. An 11th shard buys
@@ -245,7 +247,7 @@ jobs:
           # event store and subscription model, so they need no container and cost almost nothing. `testing/mongodb`
           # is named separately in mongodb-native rather than riding along, because it does start a container. The
           # leaves are listed one by one for that reason, since the bare `testing` prefix would pull it back in here.
-          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter testing/spring-boot" }
+          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter-blocking testing/spring-boot test-support" }
           # example modules run real MongoDB replica-set containers with timing-sensitive
           # Awaitility subscription-catchup tests. A single example shard started 12 containers
           # sequentially on one runner, which tipped those waits over. Split by container load

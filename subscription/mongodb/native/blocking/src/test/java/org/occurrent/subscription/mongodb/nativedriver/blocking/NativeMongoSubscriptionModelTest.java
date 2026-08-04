@@ -41,7 +41,9 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -87,12 +89,12 @@ public class NativeMongoSubscriptionModelTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion()
                     .withReuse(true)
                     .withReplicaSet();
 
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private MongoEventStore mongoEventStore;
     private NativeMongoSubscriptionModel subscriptionModel;

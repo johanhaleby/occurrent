@@ -42,16 +42,17 @@ public class OccurrentBlockingAnnotationConfiguration {
     }
 
     /**
-     * Lets an application start a {@code @Projection(source = PUSH)} that {@code occurrent.subscription.mode=manual}
-     * withheld at boot. Gated on the same property as the annotation post-processor that fills it in, since it has
+     * Lets an application start a {@code @Projection(source = PUSH)} or {@code @Saga(source = PUSH)} that
+     * {@code occurrent.subscription.mode=manual} withheld at boot. Gated on the same property as the annotation
+     * post-processor that fills it in, since it has
      * nothing to hold when annotation processing is off, and it exists under every mode (not only {@code manual}) so
      * an application can inject it without conditioning its own wiring on the mode.
      */
     @Bean
-    @ConditionalOnMissingBean(ManualStartProjections.class)
+    @ConditionalOnMissingBean(ManualStartPushSources.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public ManualStartProjections occurrentManualStartProjections() {
-        return new ManualStartProjections();
+    public ManualStartPushSources occurrentManualStartPushSources() {
+        return new ManualStartPushSources();
     }
 
     /**

@@ -30,6 +30,7 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -131,7 +132,7 @@ class DcbSynchronousSubscriptionContentionMongoTest {
         @Bean
         @ServiceConnection
         MongoDBContainer mongoDbContainer() {
-            return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
         }
     }
 

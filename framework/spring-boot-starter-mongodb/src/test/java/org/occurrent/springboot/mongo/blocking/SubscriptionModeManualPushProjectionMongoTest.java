@@ -30,8 +30,9 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.springboot.blocking.ManualStartProjections;
+import org.occurrent.springboot.blocking.ManualStartPushSources;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -61,7 +62,7 @@ import static org.awaitility.Awaitility.await;
 /**
  * Proves {@code occurrent.subscription.mode=manual} also withholds a {@link Projection @Projection} with
  * {@link Source#PUSH}, which bypasses the {@code SubscriptionModel} bean entirely and so is not withheld by that
- * bean being wrapped. Nothing runs the catch-up replay at boot, and {@link ManualStartProjections#start(String)} is
+ * bean being wrapped. Nothing runs the catch-up replay at boot, and {@link ManualStartPushSources#start(String)} is
  * what runs it, after which the projection also takes live events normally.
  */
 @DisplayName("Subscription mode manual (push-source projection)")
@@ -89,7 +90,7 @@ class SubscriptionModeManualPushProjectionMongoTest {
     @Autowired
     private OrderCountStore orderCountStore;
     @Autowired
-    private ManualStartProjections manualStartProjections;
+    private ManualStartPushSources manualStartProjections;
 
     @Test
     void a_push_source_projection_runs_no_replay_until_started_then_catches_up_and_goes_live() {
@@ -117,7 +118,7 @@ class SubscriptionModeManualPushProjectionMongoTest {
         @Bean
         @ServiceConnection
         MongoDBContainer mongoDbContainer() {
-            return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
         }
     }
 

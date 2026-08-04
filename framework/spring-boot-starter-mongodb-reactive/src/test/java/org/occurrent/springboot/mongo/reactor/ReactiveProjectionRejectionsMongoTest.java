@@ -30,6 +30,7 @@ import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -40,7 +41,6 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -57,17 +57,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ReactiveProjectionRejectionsMongoTest {
 
     @Container
-    static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
-        mongoDBContainer.withReuse(true);
-        mongoDBContainer.setPortBindings(List.of("27017:27017"));
-    }
+    static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     private static String[] bootArgs(String databaseName) {
         return new String[]{
-                "--spring.data.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=dcb",
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName

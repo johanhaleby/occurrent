@@ -7,11 +7,10 @@ occurrent:
     cloud-event-source: urn:occurrent:example:hotel-booking
 
 spring:
-  data:
-    mongodb:
-      # The reactive ReactiveMongoDatabaseFactory autoconfiguration reads spring.data.mongodb.uri.
-      #
-      # DCB appends run in multi-document transactions, which require a replica set (a single-node replica set is fine
-      # for local development). The Testcontainers-based test starts one automatically; for running the app yourself,
-      # point this at a replica set.
-      uri: mongodb://localhost:27017/hotel-booking?replicaSet=rs0
+  mongodb:
+    # The reactive ReactiveMongoDatabaseFactory autoconfiguration reads spring.mongodb.uri.
+    #
+    # DCB appends run in multi-document transactions, which require a replica set (a single-node replica set is fine
+    # for local development). The Testcontainers-based test starts one automatically; for running the app yourself,
+    # point this at a replica set.
+    uri: mongodb://localhost:27017/hotel-booking?replicaSet=rs0

@@ -596,7 +596,7 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
-                <artifactId>occurrent-testing-junit-jupiter</artifactId>
+                <artifactId>occurrent-testing-junit-jupiter-blocking</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

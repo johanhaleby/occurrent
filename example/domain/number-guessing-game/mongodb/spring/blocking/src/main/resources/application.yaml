@@ -8,9 +8,8 @@ spring:
     name: number-guessing-game
   rabbitmq:
     addresses: amqp://localhost
-  data:
-    mongodb:
-      uri: mongodb://localhost/test
+  mongodb:
+    uri: mongodb://localhost/test
 
 server:
   # Enabled graceful shutdown

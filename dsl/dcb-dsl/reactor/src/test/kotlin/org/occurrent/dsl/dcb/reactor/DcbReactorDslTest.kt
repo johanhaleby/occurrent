@@ -51,7 +51,9 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testing.mongodb.OccurrentMongoFlush
+import org.occurrent.testsupport.mongodb.MongoTestDatabase
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory
@@ -319,12 +321,11 @@ class DcbReactorDslTest {
     companion object {
         @Container
         @JvmStatic
-        private val mongoDBContainer: MongoDBContainer = MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet().apply {
+        private val mongoDBContainer: MongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().apply {
             withReuse(true)
-            portBindings = listOf("27017:27017")
         }
     }
 
     @RegisterExtension
-    val flushMongoDBExtension = FlushMongoDBExtension(ConnectionString(mongoDBContainer.replicaSetUrl + ".dcbreactordsl"))
+    val flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer))
 }

@@ -96,7 +96,7 @@ class ProjectionAnnotationRegistrar {
     // Push catch-up models created here, kept so the context can stop their replay threads on the way down.
     private final List<CatchupThenPushSubscriptionModel> pushModels = new ArrayList<>();
     // Catch-ups this registrar started on a thread of its own, plus how to stop each one. Concurrent because under
-    // occurrent.subscription.mode = manual these are added from whichever thread calls ManualStartProjections.start,
+    // occurrent.subscription.mode = manual these are added from whichever thread calls ManualStartPushSources.start,
     // which can run long after refresh and alongside close().
     private final List<BackgroundCatchUp> backgroundCatchUps = new CopyOnWriteArrayList<>();
     // Set by close(). A background catch-up checks it before starting, because stopping a feed only takes effect once
@@ -208,7 +208,7 @@ class ProjectionAnnotationRegistrar {
         if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
             // The feed bean's type decides the flavor: a PushSubscriptionModel feeds CloudEvents, a DomainEventFeed
             // feeds domain events directly.
-            Object feedBean = SubscriptionAnnotations.resolveFeedBean(applicationContext, annotation.subscriptionModel(), annotation.subscriptionModelName(), id, PushSubscriptionModel.class, DomainEventFeed.class);
+            Object feedBean = SubscriptionAnnotations.resolveFeedBean(applicationContext, "@Projection", annotation.subscriptionModel(), annotation.subscriptionModelName(), id, PushSubscriptionModel.class, DomainEventFeed.class);
             if (feedBean instanceof PushSubscriptionModel pushModel) {
                 registerPushProjection(method, annotation, id, converter, descriptor, synchronous, pushModel);
             } else if (feedBean instanceof DomainEventFeed<?> domainFeed) {
@@ -299,9 +299,9 @@ class ProjectionAnnotationRegistrar {
         }
         // This feed bypasses the SubscriptionModel bean entirely, so manual mode's own withholding never reaches it.
         // Defer the same work instead, to run once the application starts this projection itself. It has to be the
-        // same work: ManualStartProjections.start returns void, so the application never sees the handle and could
+        // same work: ManualStartPushSources.start returns void, so the application never sees the handle and could
         // not watch a background replay for itself.
-        applicationContext.getBean(ManualStartProjections.class).register(id, () -> {
+        applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
             Subscription deferred = runner.project(id, projection, materializedView, null, waitUntilStarted);
             if (!waitUntilStarted) {
                 runInBackground("occurrent-push-catchup-watch", id, deferred::waitUntilStarted, () -> {
@@ -344,7 +344,7 @@ class ProjectionAnnotationRegistrar {
             // let accept(...) buffer into a bounded buffer rather than fold, and eventually overflow it. Defer both
             // together, so nothing about this projection reaches the feed until the application starts it, and
             // running the deferred work leaves the feed in the same state registering it under auto mode would.
-            applicationContext.getBean(ManualStartProjections.class).register(id, () -> {
+            applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
                 feed.register(id, materializedView, eventFilter);
                 if (waitUntilStarted) {
                     feed.catchUp(id);

@@ -30,8 +30,9 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.EventStore;
-import org.occurrent.springboot.reactor.ManualStartProjections;
+import org.occurrent.springboot.reactor.ManualStartPushSources;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -63,7 +64,7 @@ import static org.awaitility.Awaitility.await;
  * A reactive {@code @Projection(source = PUSH)} is fed by a {@link PushSubscriptionModel} bean the application
  * supplies, so stopping Occurrent's own subscription model never reaches it. Proves that
  * {@code occurrent.subscription.mode=manual} withholds its catch-up anyway, and that
- * {@link ManualStartProjections#startAll()} runs it.
+ * {@link ManualStartPushSources#startAll()} runs it.
  */
 @DisplayName("Reactive subscription mode manual (push projection)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -91,7 +92,7 @@ class ReactiveSubscriptionModeManualPushProjectionMongoTest {
     @Autowired
     private ViewStateRepository<OrderCount, String> orderCountStore;
     @Autowired
-    private ManualStartProjections manualStartProjections;
+    private ManualStartPushSources manualStartProjections;
 
     @Test
     void a_push_projection_stays_withheld_until_the_application_starts_it() {
@@ -116,7 +117,7 @@ class ReactiveSubscriptionModeManualPushProjectionMongoTest {
         @Bean
         @ServiceConnection
         MongoDBContainer mongoDbContainer() {
-            return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
         }
     }
 

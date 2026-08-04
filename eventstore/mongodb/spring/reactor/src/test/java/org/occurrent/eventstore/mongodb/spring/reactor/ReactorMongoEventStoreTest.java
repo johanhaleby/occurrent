@@ -34,7 +34,9 @@ import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.reactor.EventStream;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -76,22 +78,14 @@ import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_33
 public class ReactorMongoEventStoreTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer;
+    private static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
     private static final URI NAME_SOURCE = URI.create("http://name");
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                .withReplicaSet();
-        List<String> ports = new ArrayList<>();
-        ports.add("27017:27017");
-        mongoDBContainer.withReuse(true);
-        mongoDBContainer.setPortBindings(ports);
-    }
 
     private ReactorMongoEventStore eventStore;
 
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate mongoTemplate;
     private ConnectionString connectionString;

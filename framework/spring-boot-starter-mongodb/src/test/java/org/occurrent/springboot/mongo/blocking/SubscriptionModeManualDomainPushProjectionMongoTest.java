@@ -32,8 +32,9 @@ import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
-import org.occurrent.springboot.blocking.ManualStartProjections;
+import org.occurrent.springboot.blocking.ManualStartPushSources;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -65,7 +66,7 @@ import static org.awaitility.Awaitility.await;
  * {@link Source#PUSH} fed by a {@link DomainEventFeed}, which bypasses the {@code SubscriptionModel} bean entirely
  * and so is not withheld by that bean being wrapped. Neither {@code register} nor the catch-up runs at boot: a live
  * event fed to the feed before starting is silently dropped rather than buffered, because nothing is registered on
- * the feed yet to buffer it. {@link ManualStartProjections#start(String)} is what registers the projection and runs
+ * the feed yet to buffer it. {@link ManualStartPushSources#start(String)} is what registers the projection and runs
  * its catch-up, after which the feed works exactly as it would have under {@code auto}.
  */
 @DisplayName("Subscription mode manual (domain-push-source projection)")
@@ -91,7 +92,7 @@ class SubscriptionModeManualDomainPushProjectionMongoTest {
     @Autowired
     private OrderCountStore orderCountStore;
     @Autowired
-    private ManualStartProjections manualStartProjections;
+    private ManualStartPushSources manualStartProjections;
 
     @Test
     void a_domain_push_source_projection_is_not_registered_until_started_then_catches_up_and_goes_live() {
@@ -123,7 +124,7 @@ class SubscriptionModeManualDomainPushProjectionMongoTest {
         @Bean
         @ServiceConnection
         MongoDBContainer mongoDbContainer() {
-            return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
         }
     }
 

@@ -39,6 +39,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -53,7 +54,6 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -68,15 +68,8 @@ import static org.mockito.Mockito.mock;
 class OccurrentReactiveMongoAutoConfigurationWiringTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
-        List<String> ports = new ArrayList<>();
-        ports.add("27017:27017");
-        mongoDBContainer.withReuse(true);
-        mongoDBContainer.setPortBindings(ports);
-    }
+    private static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     private static ReactiveMongoTemplate mongoTemplate;
     private static ReactiveMongoDatabaseFactory databaseFactory;
