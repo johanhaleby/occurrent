@@ -210,15 +210,36 @@ public abstract class CheckpointStorageConformance {
         }
 
         @Test
+        void a_checkpoint_of_one_type_can_be_overwritten_by_a_checkpoint_of_another() {
+            for (Checkpoint checkpoint : checkpointsToRoundTrip()) {
+                String id = subscriptionId();
+                checkpointStorage().save(id, checkpoint);
+
+                checkpointStorage().save(id, new StringBasedCheckpoint("replaced-a-" + checkpoint.getClass().getSimpleName()));
+
+                assertThat(requireNonNull(checkpointStorage().read(id)).asString())
+                        .as("saving over a %s must replace it rather than leave part of it behind. A storage that "
+                                + "encodes different checkpoint types into different fields has to clear the old field, "
+                                + "or a subscription resumes from the position it had two saves ago",
+                                checkpoint.getClass().getSimpleName())
+                        .isEqualTo("replaced-a-" + checkpoint.getClass().getSimpleName());
+            }
+        }
+
+        @Test
         void gives_back_the_checkpoint_it_saved_so_a_caller_can_chain() {
             Checkpoint checkpoint = new StringBasedCheckpoint("chained");
 
             Checkpoint returned = checkpointStorage().save(subscriptionId(), checkpoint);
 
-            assertThat(returned.asString())
-                    .as("save returns the checkpoint for chaining, which is what lets a caller write "
+            // The same instance, not an equal one. A storage that hands back a StringBasedCheckpoint carrying the same
+            // value would pass an asString() check while quietly changing what the caller chains into: StartAt on the
+            // MongoDB path branches on the checkpoint's type first and only parses the string if it recognises neither
+            // of its own two types.
+            assertThat(returned)
+                    .as("save returns the checkpoint it was given, which is what lets a caller write "
                             + "StartAt.checkpoint(storage.save(id, checkpoint))")
-                    .isEqualTo(checkpoint.asString());
+                    .isSameAs(checkpoint);
         }
 
         @Test
@@ -263,9 +284,15 @@ public abstract class CheckpointStorageConformance {
                 String id = subscriptionId();
                 checkpointStorage().save(id, checkpoint);
 
+                // Both are asserted against true rather than against each other. Comparing the two answers alone would
+                // hold for a storage that saves nothing, since a missing checkpoint makes exists false and read null,
+                // and those agree.
                 assertThat(checkpointStorage().exists(id))
+                        .as("a saved %s must exist", checkpoint.getClass().getSimpleName())
+                        .isTrue();
+                assertThat(checkpointStorage().read(id))
                         .as("exists and read must not disagree, for %s", checkpoint.getClass().getSimpleName())
-                        .isEqualTo(checkpointStorage().read(id) != null);
+                        .isNotNull();
             }
         }
     }

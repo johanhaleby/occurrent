@@ -41,6 +41,9 @@ import java.util.List;
 @Testcontainers
 class SpringRedisCheckpointStorageConformanceTest extends CheckpointStorageConformance {
 
+    // Deliberately not withReuse(true), unlike the MongoDB containers elsewhere in this repository. The fixture flushes
+    // the whole Redis database before every test, so sharing this container with another test class would clear that
+    // class's keys underneath it.
     @Container
     private static final GenericContainer<?> redisContainer =
             new GenericContainer<>("redis:5.0.3-alpine").withExposedPorts(6379);

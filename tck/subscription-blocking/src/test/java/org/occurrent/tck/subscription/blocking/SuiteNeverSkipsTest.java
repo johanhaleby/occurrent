@@ -23,19 +23,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.platform.testkit.engine.EngineTestKit;
 import org.junit.platform.testkit.engine.Events;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass;
 
 /**
- * A TCK that can be satisfied by doing nothing is worse than no TCK, so this runs
- * {@link CheckpointStorageConformance} against a storage that honours none of the contract and asserts that the suite
- * notices. Every test must fail, none may pass, and none may be skipped or aborted.
+ * A TCK that can be satisfied by doing nothing is worse than no TCK, so {@link CheckpointStorageConformance} is run
+ * here twice, against a storage that honours none of the contract and against one that honours all of it. The first run
+ * must fail every test, the second must pass every test, and neither may skip or abort anything.
  * <p>
- * The last part is the one worth having. The suite is written without {@code Assumptions} on purpose, so that an
- * unsupported behaviour fails loudly instead of vanishing from the report, and this is the only check that the rule is
- * being followed rather than merely intended. If somebody later reaches for an assumption, the skipped count stops
- * being zero and this test says so.
+ * The two runs answer different questions and the second one is the reason there are two. A storage that throws from
+ * every method dies on the first call in each test, so that run says nothing about code further down a test method: an
+ * {@code Assumptions} call placed after the first {@code save} would never be reached and the skipped count would stay
+ * zero. Running the whole suite green against a working storage does reach every line, so a skip anywhere in the suite
+ * body shows up as a non-zero skipped count here.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("a conformance suite")
@@ -43,14 +45,7 @@ class SuiteNeverSkipsTest {
 
     @Test
     void fails_every_test_and_skips_none_of_them_against_a_storage_that_honours_nothing() {
-        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingCheckpointStorageConformance.class);
-    }
-
-    private static void assertSuiteFailsEveryTestAndSkipsNone(Class<?> suite) {
-        Events tests = EngineTestKit.engine("junit-jupiter")
-                .selectors(selectClass(suite))
-                .execute()
-                .testEvents();
+        Events tests = run(HonoursNothingCheckpointStorageConformance.class);
 
         long started = tests.started().count();
         assertThat(started)
@@ -62,6 +57,27 @@ class SuiteNeverSkipsTest {
         assertThat(tests.succeeded().count())
                 .describedAs("nothing may pass against a storage that honours nothing")
                 .isZero();
+        assertSkipsNothing(tests);
+    }
+
+    @Test
+    void passes_every_test_and_skips_none_of_them_against_a_storage_that_honours_everything() {
+        Events tests = run(HonoursEverythingCheckpointStorageConformance.class);
+
+        long started = tests.started().count();
+        assertThat(started)
+                .describedAs("the suite must actually run something, or its verdict is meaningless")
+                .isPositive();
+        assertThat(tests.succeeded().count())
+                .describedAs("a storage that honours the whole contract must pass the whole suite, so a test that "
+                        + "cannot be satisfied by any implementation is caught here rather than by whoever adds the "
+                        + "next storage")
+                .isEqualTo(started);
+        assertThat(tests.failed().count()).isZero();
+        assertSkipsNothing(tests);
+    }
+
+    private static void assertSkipsNothing(Events tests) {
         assertThat(tests.skipped().count())
                 .describedAs("the suite must never skip, which is why it uses no Assumptions")
                 .isZero();
@@ -70,21 +86,53 @@ class SuiteNeverSkipsTest {
                 .isZero();
     }
 
-    // Not named *Test, so Surefire does not pick it up as a test of its own. It exists only for the run above to
-    // select, and it is expected to fail every assertion it makes.
+    private static Events run(Class<?> suite) {
+        return EngineTestKit.engine("junit-jupiter")
+                .selectors(selectClass(suite))
+                .execute()
+                .testEvents();
+    }
+
+    // Neither of these is named *Test, so Surefire does not pick them up as tests of their own. They exist only for the
+    // runs above to select.
+
     static class HonoursNothingCheckpointStorageConformance extends CheckpointStorageConformance {
 
         @Override
         protected CheckpointStorageFixture createFixture() {
             return new CheckpointStorageFixture() {
                 @Override
-                public org.occurrent.subscription.api.blocking.CheckpointStorage checkpointStorage() {
+                public CheckpointStorage checkpointStorage() {
                     return NoopCheckpointStorage.INSTANCE;
                 }
 
                 @Override
                 public boolean preservesCheckpointType(Checkpoint checkpoint) {
                     // Never reached: every call into the storage throws before the suite consults this.
+                    return true;
+                }
+            };
+        }
+    }
+
+    static class HonoursEverythingCheckpointStorageConformance extends CheckpointStorageConformance {
+
+        @Override
+        protected CheckpointStorageFixture createFixture() {
+            return new CheckpointStorageFixture() {
+
+                private final CheckpointStorage storage = new WorkingCheckpointStorage();
+
+                @Override
+                public CheckpointStorage checkpointStorage() {
+                    return storage;
+                }
+
+                /**
+                 * A map hands back the checkpoint it was given, so every type survives.
+                 */
+                @Override
+                public boolean preservesCheckpointType(Checkpoint checkpoint) {
                     return true;
                 }
             };

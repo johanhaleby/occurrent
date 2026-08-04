@@ -118,12 +118,18 @@ issues under #396.
 ## Consequences
 
 The four anti-silent-skip rules from ADR 77 carry over unchanged, and each leaf needs its own `SuiteNeverSkipsTest`
-because one leaf's version cannot see a suite in another module. The reactor leaf's version has to run the anti-skip
+because one leaf's version cannot see a suite in another module.
+
+**A leaf's `SuiteNeverSkipsTest` runs the suite twice, and the second run is the one that earns the no-skipping claim.**
+Against an implementation that throws from every method, each test dies on its first call, so an `Assumptions` call
+placed anywhere after that is never reached and the skipped count stays zero whether or not the rule was followed.
+Running the suite green against a working implementation reaches every line, so a skip anywhere in the suite body shows
+up. The event-store leaves have only the failing run today, which is a smaller guarantee than their javadoc claims. The reactor leaf's version has to run the anti-skip
 case *through the bridge*, not only against a blocking model: this bridge carries a lifecycle and hands events to a
 consumer on some thread, so the risk that the bridge rather than the model becomes the thing under test is real, and a
 bridge that swallows a failure or never delivers is exactly what a reactive model honouring nothing would expose.
 
-What has landed so far, and what it found: `CheckpointStorageConformance` holds 14 assertions, and all four blocking
+What has landed so far, and what it found: `CheckpointStorageConformance` holds 15 assertions, and all four blocking
 storages passed on first run. That is the outcome to expect from a phase writing down what the storages already agreed
 on. The one disagreement is the type-preservation one, which is now declared and asserted in both directions rather
 than being folklore about which storage rebuilds what. The four private in-memory copies are gone. The three remaining
