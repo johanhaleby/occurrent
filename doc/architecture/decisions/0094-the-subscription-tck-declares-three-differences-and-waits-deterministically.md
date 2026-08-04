@@ -6,10 +6,11 @@ Date: 2026-08-04
 
 Accepted. #395, TCK phases 6 to 8.
 
-The checkpoint-storage contract and the module it lives in have landed. The subscription-model contract, the
+The checkpoint-storage contract, the subscription-model contract and the module they live in have landed. The
 competing-consumer contract and the reactor leaf are being built to the decisions below, so those parts record intent
 rather than something already proved by code. Where writing one of them shows a decision here to be wrong, amend this
-ADR rather than quietly diverging from it.
+ADR rather than quietly diverging from it. That has already happened once: writing the subscription-model suite added two
+fixture declarations, rejected a third, and turned up a contract gap, all marked as amendments below.
 
 ## Context
 
@@ -104,11 +105,66 @@ the one `EventStoreFixture.timePrecision()` sits on: declare what cannot be aske
 precedent and a declaration can go stale. The suite pins that a model answering null cannot sit behind catch-up, which
 is the contract #395 calls easy to miss and expensive to get wrong.
 
+**Amended while phase 6 PR 2 was written: two more differences turned out to need declaring, both found by running the
+suite rather than by reading the interfaces.**
+
+- **Whether a failing handler is retried or the exception reaches whoever published the event.** The three models that
+  deliver asynchronously wrap the handler in a `RetryStrategy`, and the two that deliver on the publishing thread let the
+  exception through, which `RegisteringSubscribable` documents as "A handler exception propagates to the caller". Both
+  answers cost something: a retrying model owes a later call to the handler, a propagating one owes the exception out of
+  the publish call. A consequence worth stating, because it is a trap: the suite must never install a handler that throws
+  forever, since `RetryStrategy` defaults to an infinite number of attempts and the test would wait out its whole timeout
+  instead of failing with a reason.
+- **Whether the model accepts more than one subscription.** `PushSubscriptionModel` refuses a second one, per ADR 90, and
+  nothing reports that: `Consumers` has no accessor, and finding out by subscribing twice leaves the model in whichever
+  state the attempt produced. A model answering `false` owes the refusal, one answering `true` owes two subscriptions
+  that receive independently.
+
+**And one candidate declaration was rejected, which is worth recording because it looked obviously right.** Synchronous
+delivery is not declared. A `deliversSynchronously()` flag cannot be held to anything on its `false` branch: "the handler
+had not run when publishing returned" is untrue even for a model that queues, whose consumer thread may legitimately have
+got there first, so the only honest `false`-branch assertion is "the handler eventually runs", which every other test
+already makes. A declaration free on one branch is a switch for disabling the only test of the property, and it would sit
+in the file belonging to whoever changed the model. So the in-process contract is its own suite,
+`InProcessDeliveryConformance`, that only the in-process models extend, and declining is the visible absence ADR 77 rule
+(d) already relies on. It carries no `instanceof` guard either: guarding on `RegisteringSubscribable` would shut out an
+out-of-tree model that satisfies the contract, and the first assertion fails against an asynchronous model anyway.
+
+**`RegisteringSubscribable` becomes a `SubscriptionModel`.** `SynchronousSubscriptionModel` and `PushSubscriptionModel`
+had every member `SubscriptionModel` requires and did not declare it, with no ADR recording a reason. The suite would
+otherwise have had to be typed on `Subscribable` and `SubscriptionModelLifeCycle` separately and hand every out-of-tree
+implementer that asymmetry. Adding it is one token, declares no new members, and nothing in main sources tests for the
+interface, so no behaviour changes. Two wrappers gain a capability as a side effect, and both are sound:
+`ManualStartSubscriptionModel.stoppedByDefault` and `StreamSubscriptionModel.from` now accept the two register-only
+models, which already support registering while stopped and already accept a `StreamSubscriptionFilter`. Same reasoning as
+giving reactor `IntrospectableSubscriptionModel` above, and the same clause of AGENTS.md.
+
+**Only introspection is a per-model capability of the base contract.** Five interfaces looked like capabilities and one
+is. `IntrospectableSubscriptionModel` gets its own suite, worth having because both MongoDB models implement
+`subscriptionIds()` and neither had a test for it. `DelegatingSubscriptionModel` and `ManualStartSubscriptionModel` wrap
+another model rather than being something a model has, so they are phase 8. `StreamSubscriptionModel` and
+`DcbSubscriptionModel` are one shared adapter reached through `from(SubscriptionModel)`, so a suite per model would test
+the same code five times. There is no capability enum: `EventStoreCapability` exists because a store's capabilities are
+construction-time config with nothing on the API reporting them back, and here the interface is the declaration.
+
+**At-least-once delivery and resuming after a restart are not this contract's promises.** Both need a checkpoint that
+survives the restart, which belongs to the models that wrap one, and the register-only models make `shutdown()`
+deliberately irreversible. They move to phase 8. Keeping them in the base suite would have needed a durability
+declaration, which is the shape #470 deleted.
+
 **An in-memory `CheckpointStorage` gets published, in the module that already has one of everything else.** Four
 independent private copies in test classes were the demand signal, and the in-memory stack already ships an event store
 and a subscription model. It goes in `subscription/inmemory` rather than a new leaf: that artifact is already published
 and already depends on `occurrent-subscription-api-blocking`, so this costs no new artifact, no BOM entry and no
 `<excludeArtifacts>` change. A new leaf would have bought nothing but the publishing checklist.
+
+**A third contract gap, found by the suite failing.** `SubscriptionModelLifeCycle.resumeSubscription` promises a stopped
+model's subscription comes back "on its own without starting the rest", and three implementations set the model-wide
+running flag instead. Writing the suite showed why, and it is not carelessness: after `stop()`, a resumed subscription
+cannot deliver unless either resuming clears the model-wide flag or delivery consults only the per-subscription one. The
+javadoc's promise forces one of the two and says which of them it means nowhere. So the suite asserts the outcome nobody
+disputes, that the resumed subscription delivers again, and asserts nothing about the flag. The choice is a child issue
+under #396.
 
 **Two contract gaps become issues rather than loosened assertions.** `unregisterCompetingConsumer` and
 `releaseCompetingConsumer` carry byte-identical javadoc, so a suite cannot assert the difference between them. Reactor

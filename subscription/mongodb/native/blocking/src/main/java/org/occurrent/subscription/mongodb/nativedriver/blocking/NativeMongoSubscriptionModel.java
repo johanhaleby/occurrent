@@ -194,10 +194,16 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
 
+        // Built here rather than on the dispatcher thread, so a filter this model cannot apply is refused to the caller
+        // instead of failing where nobody is listening. It used to be built inside the Runnable below, which left the
+        // caller holding a subscription that never delivered while the retry wrapper re-threw the same
+        // IllegalArgumentException forever. SpringMongoSubscriptionModel always refused it here.
+        List<Bson> pipeline = createPipeline(timeRepresentation, filter);
+
         CountDownLatch subscriptionStartedLatch = new CountDownLatch(1);
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
 
-        Runnable internalSubscription = () -> newInternalSubscription(subscriptionId, filter, currentStartAt, action, subscriptionStartedLatch);
+        Runnable internalSubscription = () -> newInternalSubscription(subscriptionId, pipeline, filter, currentStartAt, action, subscriptionStartedLatch);
 
         if (shutdown || cloudEventDispatcher.isShutdown() || cloudEventDispatcher.isTerminated()) {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
@@ -215,10 +221,9 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     // gap-free from there instead of the original StartAt.
     // The try block spans opening the cursor too: a change-stream error (history lost, failover) can surface
     // there just as well as while iterating.
-    private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
+    private void newInternalSubscription(String subscriptionId, List<Bson> pipeline, SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
         InternalSubscription internalSubscription = null;
         try {
-            List<Bson> pipeline = createPipeline(timeRepresentation, filter);
             ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
             if (batchSize != null) {
                 changeStreamDocuments = changeStreamDocuments.batchSize(batchSize);
@@ -230,7 +235,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, currentStartAt.get().get(subscriptionModelContext), subscriptionModelContext);
             MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
 
-            internalSubscription = new InternalSubscription(cursor, currentStartAt, action, filter, subscriptionStartedLatch);
+            internalSubscription = new InternalSubscription(cursor, currentStartAt, action, filter, pipeline, subscriptionStartedLatch);
 
             if (running) {
                 runningSubscriptions.put(subscriptionId, internalSubscription);
@@ -415,8 +420,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         CountDownLatch startedLatch = new CountDownLatch(1);
         // Reuses the same currentStartAt reference so a resume continues from the last change-stream document
         // read before the subscription was paused, not the original StartAt.
-        Runnable newSubscription = () -> newInternalSubscription(subscriptionId, internalSubscription.filter,
-                internalSubscription.currentStartAt, internalSubscription.action, startedLatch);
+        Runnable newSubscription = () -> newInternalSubscription(subscriptionId, internalSubscription.pipeline,
+                internalSubscription.filter, internalSubscription.currentStartAt, internalSubscription.action, startedLatch);
         startSubscription(newSubscription);
 
         return new NativeMongoSubscription(subscriptionId, startedLatch);
@@ -444,6 +449,9 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
 
     private static class InternalSubscription {
         private final SubscriptionFilter filter;
+        // Kept so a resume reuses the pipeline built when subscribing, rather than deriving the same one again from the
+        // same filter.
+        private final List<Bson> pipeline;
         final CountDownLatch startedLatch;
         final CountDownLatch stoppedLatch;
         final MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
@@ -451,8 +459,9 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         final Consumer<CloudEvent> action;
         private final AtomicBoolean intentionallyClosed = new AtomicBoolean(false);
 
-        private InternalSubscription(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, SubscriptionFilter filter, CountDownLatch startedLatch) {
+        private InternalSubscription(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, SubscriptionFilter filter, List<Bson> pipeline, CountDownLatch startedLatch) {
             this.filter = filter;
+            this.pipeline = pipeline;
             this.startedLatch = startedLatch;
             this.cursor = cursor;
             this.currentStartAt = currentStartAt;
