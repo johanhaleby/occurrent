@@ -24,7 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
-import org.occurrent.testing.junit.OccurrentSubscriptionsExtension;
+import org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
