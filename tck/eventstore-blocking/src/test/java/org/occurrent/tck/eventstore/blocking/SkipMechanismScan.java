@@ -45,7 +45,7 @@ import java.util.stream.Stream;
  * for the reason {@code WorkingCheckpointStorage} records for its own copy over in the subscription leaf: a test-sources
  * class in one module is invisible from another, and both ways out cost more than the copy does. Publishing this from
  * {@code tck/common} would add public API that only this build wants, and a {@code test-jar} would add build machinery
- * to share sixty lines.
+ * to share one helper class.
  */
 final class SkipMechanismScan {
 
