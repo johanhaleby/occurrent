@@ -40,15 +40,14 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -313,28 +312,4 @@ class DcbCatchupSubscriptionModelTest {
         }
     }
 
-    private static final class InMemoryCheckpointStorage implements CheckpointStorage {
-        private final ConcurrentMap<String, Checkpoint> positions = new ConcurrentHashMap<>();
-
-        @Override
-        public Checkpoint read(String subscriptionId) {
-            return positions.get(subscriptionId);
-        }
-
-        @Override
-        public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
-            positions.put(subscriptionId, checkpoint);
-            return checkpoint;
-        }
-
-        @Override
-        public void delete(String subscriptionId) {
-            positions.remove(subscriptionId);
-        }
-
-        @Override
-        public boolean exists(String subscriptionId) {
-            return positions.containsKey(subscriptionId);
-        }
-    }
 }

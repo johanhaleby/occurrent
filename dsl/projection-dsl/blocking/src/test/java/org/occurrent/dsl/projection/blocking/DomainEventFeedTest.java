@@ -32,8 +32,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
-import org.occurrent.subscription.Checkpoint;
-import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
 import java.util.HashMap;
@@ -323,31 +322,6 @@ class DomainEventFeedTest {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
-        }
-    }
-
-    private static final class InMemoryCheckpointStorage implements CheckpointStorage {
-        private final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
-
-        @Override
-        public Checkpoint read(String subscriptionId) {
-            return checkpoints.get(subscriptionId);
-        }
-
-        @Override
-        public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
-            checkpoints.put(subscriptionId, checkpoint);
-            return checkpoint;
-        }
-
-        @Override
-        public void delete(String subscriptionId) {
-            checkpoints.remove(subscriptionId);
-        }
-
-        @Override
-        public boolean exists(String subscriptionId) {
-            return checkpoints.containsKey(subscriptionId);
         }
     }
 
