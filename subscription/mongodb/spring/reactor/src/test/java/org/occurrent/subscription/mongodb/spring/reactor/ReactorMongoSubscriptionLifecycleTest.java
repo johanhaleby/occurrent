@@ -24,6 +24,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -52,6 +53,7 @@ import reactor.test.StepVerifier;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -331,6 +333,79 @@ public class ReactorMongoSubscriptionLifecycleTest {
                 .expectNoEvent(Duration.ofMillis(500))
                 .thenCancel()
                 .verify(Duration.ofSeconds(5));
+    }
+
+    /**
+     * The subscription ids this model reports. It keeps running and paused subscriptions in two separate maps, so the
+     * answer is their union, and a subscription registered while the model was stopped is only in the paused one.
+     */
+    @Nested
+    class ListingItsSubscriptions {
+
+        @Test
+        void knows_nothing_before_anything_subscribes() {
+            assertThat(subscriptionModel.subscriptionIds()).isEmpty();
+        }
+
+        @Test
+        void knows_a_running_subscription() {
+            subscriptionModel.subscribe("someSubscription", __ -> Mono.empty());
+
+            assertThat(subscriptionModel.isRunning("someSubscription")).isTrue();
+            assertThat(subscriptionModel.subscriptionIds()).containsExactly("someSubscription");
+        }
+
+        @Test
+        void knows_a_paused_subscription_too() {
+            subscriptionModel.subscribe("someSubscription", __ -> Mono.empty());
+
+            subscriptionModel.pauseSubscription("someSubscription");
+
+            assertThat(subscriptionModel.isPaused("someSubscription")).isTrue();
+            assertThat(subscriptionModel.subscriptionIds()).containsExactly("someSubscription");
+        }
+
+        @Test
+        void knows_a_subscription_registered_while_the_model_was_stopped() {
+            subscriptionModel.stop();
+
+            subscriptionModel.subscribe("someSubscription", __ -> Mono.empty());
+
+            // Registering on a stopped model records it as paused, so a model answering from the running map alone
+            // would report nothing for a subscription that exists and will deliver once started.
+            assertThat(subscriptionModel.isPaused("someSubscription")).isTrue();
+            assertThat(subscriptionModel.subscriptionIds()).containsExactly("someSubscription");
+        }
+
+        @Test
+        void forgets_a_cancelled_subscription() {
+            subscriptionModel.subscribe("someSubscription", __ -> Mono.empty());
+
+            subscriptionModel.cancelSubscription("someSubscription");
+
+            assertThat(subscriptionModel.subscriptionIds()).isEmpty();
+        }
+
+        @Test
+        void knows_running_and_paused_subscriptions_together() {
+            subscriptionModel.subscribe("running", __ -> Mono.empty());
+            subscriptionModel.subscribe("paused", __ -> Mono.empty());
+
+            subscriptionModel.pauseSubscription("paused");
+
+            assertThat(subscriptionModel.subscriptionIds()).containsExactlyInAnyOrder("running", "paused");
+        }
+
+        @Test
+        void answers_a_copy_rather_than_the_maps_it_keeps() {
+            subscriptionModel.subscribe("first", __ -> Mono.empty());
+            Set<String> ids = subscriptionModel.subscriptionIds();
+
+            subscriptionModel.subscribe("second", __ -> Mono.empty());
+
+            assertThat(ids).containsExactly("first");
+            assertThat(subscriptionModel.subscriptionIds()).containsExactlyInAnyOrder("first", "second");
+        }
     }
 
     private Flux<CloudEvent> serialize(DomainEvent e) {

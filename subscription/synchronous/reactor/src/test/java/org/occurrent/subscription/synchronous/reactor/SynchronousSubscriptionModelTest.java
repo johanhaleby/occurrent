@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
@@ -31,6 +32,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -374,6 +376,84 @@ class SynchronousSubscriptionModelTest {
 
         // The single-argument overload is unchanged, so anything driving the model directly behaves as it always did.
         assertThat(handled).isEmpty();
+    }
+
+    /**
+     * Covers {@code RegisteringSubscribable.subscriptionIds()}, which is final on the base, so the reactive push model
+     * answers from the same code. The synchronous model is the one used here because it accepts several subscriptions
+     * and the push model accepts one.
+     */
+    @Nested
+    @DisplayNameGeneration(ReplaceUnderscores.class)
+    class ListingItsSubscriptions {
+
+        @Test
+        void knows_nothing_before_anything_subscribes() {
+            SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+
+            assertThat(model.subscriptionIds()).isEmpty();
+        }
+
+        @Test
+        void knows_a_running_subscription() {
+            SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+            model.subscribe("someSubscription", __ -> Mono.empty());
+
+            assertThat(model.subscriptionIds()).containsExactly("someSubscription");
+        }
+
+        @Test
+        void knows_a_paused_subscription_too() {
+            SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+            model.subscribe("someSubscription", __ -> Mono.empty());
+
+            model.pauseSubscription("someSubscription");
+
+            assertThat(model.isPaused("someSubscription")).isTrue();
+            assertThat(model.subscriptionIds()).containsExactly("someSubscription");
+        }
+
+        @Test
+        void forgets_a_cancelled_subscription() {
+            SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+            model.subscribe("someSubscription", __ -> Mono.empty());
+
+            model.cancelSubscription("someSubscription");
+
+            assertThat(model.subscriptionIds()).isEmpty();
+        }
+
+        @Test
+        void knows_every_subscription_when_it_accepts_several() {
+            SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+            model.subscribe("first", __ -> Mono.empty());
+            model.subscribe("second", __ -> Mono.empty());
+            model.subscribe("third", __ -> Mono.empty());
+
+            assertThat(model.subscriptionIds()).containsExactlyInAnyOrder("first", "second", "third");
+        }
+
+        @Test
+        void knows_nothing_after_shutdown() {
+            SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+            model.subscribe("someSubscription", __ -> Mono.empty());
+
+            model.shutdown();
+
+            assertThat(model.subscriptionIds()).isEmpty();
+        }
+
+        @Test
+        void answers_a_copy_rather_than_the_set_it_keeps() {
+            SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+            model.subscribe("first", __ -> Mono.empty());
+            Set<String> ids = model.subscriptionIds();
+
+            model.subscribe("second", __ -> Mono.empty());
+
+            assertThat(ids).containsExactly("first");
+            assertThat(model.subscriptionIds()).containsExactlyInAnyOrder("first", "second");
+        }
     }
 
     private static CloudEvent cloudEvent(String id, String type) {

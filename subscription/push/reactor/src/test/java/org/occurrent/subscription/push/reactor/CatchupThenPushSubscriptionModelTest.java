@@ -39,8 +39,10 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -281,6 +283,36 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> new CatchupThenPushSubscriptionModel(reader, feed, null));
 
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("writesPosition");
+    }
+
+    @Test
+    void knows_a_subscription_that_is_still_replaying() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        AtomicReference<CatchupThenPushSubscriptionModel> subject = new AtomicReference<>();
+        List<Set<String>> seenDuringReplay = new CopyOnWriteArrayList<>();
+        // Read from inside the replay, which is the only moment the answer could come from the replay bookkeeping rather
+        // than from the live feed.
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created"))
+                .doOnNext(__ -> seenDuringReplay.add(subject.get().subscriptionIds())), 1);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        subject.set(model);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block();
+
+        assertThat(seenDuringReplay).containsExactly(Set.of("proj"));
+        assertThat(model.subscriptionIds()).containsExactly("proj");
+    }
+
+    @Test
+    void forgets_a_cancelled_subscription() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block();
+
+        model.cancelSubscription("proj");
+
+        assertThat(model.subscriptionIds()).isEmpty();
     }
 
     // --- helpers ---

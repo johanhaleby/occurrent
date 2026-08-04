@@ -24,6 +24,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
@@ -38,10 +39,13 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
 import java.util.ArrayList;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpointOrThrowIAE;
@@ -64,7 +68,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * {@link ReactorDurableSubscriptionModelConfig}.
  */
 @NullMarked
-public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
+public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
 
     private final CheckpointAwareSubscriptionModel subscription;
@@ -320,6 +324,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     @Override
     public boolean isPaused(String subscriptionId) {
         return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    /**
+     * Synchronized because a subscription moves between the two maps in two steps, so an unsynchronized reader can
+     * land between them and miss an id that exists. It also keeps a caller from seeing the ids of a model that
+     * {@link #shutdown()} has already flagged as shut down but not yet cleared.
+     */
+    @Override
+    public synchronized Set<String> subscriptionIds() {
+        return Stream.concat(runningSubscriptions.keySet().stream(), pausedSubscriptions.keySet().stream())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private static final class InternalSubscription {
