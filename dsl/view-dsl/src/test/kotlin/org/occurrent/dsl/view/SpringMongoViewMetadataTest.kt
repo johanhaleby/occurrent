@@ -32,7 +32,8 @@ import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.view.testsupport.nameChanged
 import org.occurrent.dsl.view.testsupport.nameDefined
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testing.mongodb.OccurrentMongoFlush
+import org.occurrent.testsupport.mongodb.MongoTestDatabase
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.data.annotation.Id
 import org.springframework.data.mongodb.core.MongoOperations
@@ -129,7 +130,7 @@ class SpringMongoViewMetadataTest {
     }
 
     @RegisterExtension
-    val flushMongoDBExtension: FlushMongoDBExtension = FlushMongoDBExtension(ConnectionString(mongoDBContainer.getReplicaSetUrl("stream-keyed-events")))
+    val flushMongoDBExtension: OccurrentMongoFlush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer, "stream-keyed-events"))
 
     lateinit var mongoOperations: MongoOperations
 

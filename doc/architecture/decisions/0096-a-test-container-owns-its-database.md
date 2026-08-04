@@ -1,4 +1,4 @@
-# 94. A test container owns its database
+# 96. A test container owns its database
 
 Date: 2026-08-04
 
@@ -18,8 +18,7 @@ new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl
 means database `test`, collection `events`. All 110 classes shared one database and separated themselves by 26 distinct
 collection names. Nothing in the repository ever named a database.
 
-`FlushMongoDBExtension` drops the whole database before each test. Within one Maven run that is fine, because the classes
-take turns. It stops being fine the moment two runs overlap on one machine, which happens whenever a second agent
+The flush between tests emptied that whole database. Within one Maven run that is fine, because the classes take turns. It stops being fine the moment two runs overlap on one machine, which happens whenever a second agent
 session or a second terminal builds at the same time: both attach to the same reused container, both flush, and each one
 deletes data the other just committed. 69 of the classes also pinned the host port to `27017:27017`, which guaranteed
 they would find each other, and one class had already been moved to `27018` to buy itself some parallelism.
@@ -108,6 +107,32 @@ worked not because classes shared a server but because they take turns. So this 
 container per class, and the ~400MB-per-worktree objection to a reuse label was about a cost the tree was already
 paying.
 
+### The flush comes from the published module
+
+`test-support`'s `FlushMongoDBExtension` is deleted and all 90 call sites move to `OccurrentMongoFlush` from
+`occurrent-testing-mongodb` (ADR 95). Doing it in this change rather than after it is the cheaper order: 77 of those 90
+lines carried the connection string and the flush construction on the same statement, so a separate pass would have
+conflicted with this one on every single one of them.
+
+It is not a like-for-like replacement, in two ways that matter.
+
+It empties collections instead of dropping the database, which is the point of publishing it: dropping invalidates a live
+change stream and destroys the event store's unique indexes, and a Spring context cached across test classes never
+rebuilds them. Four tests genuinely need the dropping form, because they assert that a collection or an index does *not*
+exist and emptying cannot express absence: `MongoEventStoreCapabilityTest`, `MongoEventStorePositionTest`, the two Spring
+twins of those, and `ReactorMongoEventStorePositionTest`. The last one is worth naming because it phrases the assertion
+as "no index satisfies this" rather than `doesNotContain`, so a grep for the obvious shape misses it and only running the
+suite finds it.
+
+It takes a `MongoDatabase` rather than a `ConnectionString`, deliberately, since a connection string is what let a test
+name a collection where it meant to name a database. `MongoTestDatabase` in `test-support` is the bridge, and it keeps one
+client per server for the JVM instead of the one per `beforeEach` that the deleted extension opened and closed.
+
+The deleted extension also caught `Throwable`, retried ten times, and then returned as though it had worked, printing a
+line to stdout. A flush that failed left the previous test's data in place and failed nothing, which is the same symptom
+as the store losing a write. The published one throws, so that hazard leaves with the class rather than needing its own
+fix.
+
 ### Cleanup does not ask whether another run is alive
 
 At the first container start in a JVM, every database whose name begins with `oc<ourPid>_` is dropped. Nothing inspects
@@ -132,9 +157,9 @@ probe pointed at the scoped database would drop the run's data from the second c
   `SpringMongoEventStoreDcbConcurrencyTest` uses it for.
 - A local `mongod` on 27017 no longer blocks the suite, and a contributor without Testcontainers reuse enabled can run
   two builds at once.
-- `FlushMongoDBExtension` drops a database only this container owns, which is the precondition #483 named before it can
-  consider publishing that extension. Its drop is now strictly narrower than before, so it can no longer invalidate a
-  concurrent run's change streams.
+- The flush reaches a database only this container owns, which is the precondition #483 named before a published flush
+  could be considered. It is also narrower in a second way now, since the published one empties rather than drops, so it
+  can no longer invalidate a change stream at all, concurrent or not.
 - An IDE run no longer builds the image `mongo:null`. Surefire is what supplies `test.mongo.version`, and
   `withDefaultVersion()` falls back to the version the build filters into `occurrent-test-support.properties`.
 - The design assumes test classes do not run concurrently inside one JVM. Nothing enables that today: there is no

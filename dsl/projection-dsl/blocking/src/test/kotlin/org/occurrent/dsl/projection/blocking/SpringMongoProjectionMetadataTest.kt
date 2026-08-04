@@ -36,7 +36,8 @@ import org.occurrent.dsl.projection.singletonProjection
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testing.mongodb.OccurrentMongoFlush
+import org.occurrent.testsupport.mongodb.MongoTestDatabase
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.data.annotation.Id
 import org.springframework.data.mongodb.core.MongoOperations
@@ -66,7 +67,7 @@ data class NameCount(@Id val key: String, val count: Int)
 class SpringMongoProjectionMetadataTest {
 
     @RegisterExtension
-    val flushMongoDBExtension: FlushMongoDBExtension = FlushMongoDBExtension(ConnectionString(mongoDBContainer.getReplicaSetUrl("spring-mongo-projection-metadata-test")))
+    val flushMongoDBExtension: OccurrentMongoFlush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer, "spring-mongo-projection-metadata-test"))
 
     companion object {
         @Suppress("unused")

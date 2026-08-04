@@ -12,7 +12,7 @@
 #      filtered into occurrent-test-support.properties.
 #
 # Both are what issue #505 fixed, and both are the kind of thing that grows back one test class at a
-# time: the pattern reached 171 files by being copied from the neighbouring test. See ADR 94.
+# time: the pattern reached 171 files by being copied from the neighbouring test. See ADR 96.
 #
 # Scoped to **/src/test/** on purpose. That exempts test-support/src/main, where the one legitimate
 # read of test.mongo.version lives, and it keeps the check off production sources that have no

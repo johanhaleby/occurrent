@@ -33,7 +33,8 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -64,7 +65,7 @@ class MongoEventStorePositionTest {
             ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".position"));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.droppingTheDatabaseIn(MongoTestDatabase.of(mongoDBContainer));
 
     private MongoClient mongoClient;
     private String databaseName;

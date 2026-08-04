@@ -46,7 +46,8 @@ import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.time.TimeConversion;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -103,7 +104,7 @@ public class SpringMongoSubscriptionModelTest {
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private SpringMongoEventStore mongoEventStore;
     private SpringMongoSubscriptionModel subscriptionModel;

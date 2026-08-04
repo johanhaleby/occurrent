@@ -32,7 +32,8 @@ import org.occurrent.dsl.view.SpringMongoViewConfig.Companion.config
 import org.occurrent.dsl.view.testsupport.NameState
 import org.occurrent.dsl.view.testsupport.nameChanged
 import org.occurrent.dsl.view.testsupport.nameDefined
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testing.mongodb.OccurrentMongoFlush
+import org.occurrent.testsupport.mongodb.MongoTestDatabase
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.dao.OptimisticLockingFailureException
@@ -73,7 +74,7 @@ class SpringMongoMaterializedViewConfigTest {
     val faker = faker { }
 
     @RegisterExtension
-    var flushMongoDBExtension: FlushMongoDBExtension = FlushMongoDBExtension(ConnectionString(mongoDBContainer.replicaSetUrl))
+    var flushMongoDBExtension: OccurrentMongoFlush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer))
 
     lateinit var mongoOperations: MongoOperations
 

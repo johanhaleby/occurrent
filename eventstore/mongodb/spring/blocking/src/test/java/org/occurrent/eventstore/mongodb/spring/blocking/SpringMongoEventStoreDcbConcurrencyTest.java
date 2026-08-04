@@ -34,7 +34,8 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
@@ -78,7 +79,7 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
  * Adversarial concurrency tests for the DCB write path (ADR 0021).
  * <p>
  * Each scenario drives real threads to a barrier so appends race in earnest.
- * We repeat each scenario many times (fresh data per iteration via FlushMongoDBExtension
+ * We repeat each scenario many times (fresh data per iteration via the flush
  * is not practical per-iteration here; instead we use unique per-iteration tags/types so
  * each iteration is logically isolated on a fresh empty boundary).
  * <p>
@@ -114,8 +115,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
             .withReuse(true);
 
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(
-            new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcb_concurrency"));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private SpringMongoEventStore eventStore;
     private MongoTemplate mongoTemplate;

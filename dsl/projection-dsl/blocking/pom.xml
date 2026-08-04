@@ -128,6 +128,12 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-testing-mongodb</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <!-- Real MongoDB for the Spring Mongo projection extensions tests. kotlin-reflect is what Spring Data needs to
              map a Kotlin data class as a persistent entity, the same reason dsl/view-dsl declares it. -->
         <dependency>

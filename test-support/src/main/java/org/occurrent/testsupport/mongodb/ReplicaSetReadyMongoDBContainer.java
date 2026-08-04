@@ -52,10 +52,10 @@ import java.util.function.Predicate;
  * <p>
  * <h2>Isolation</h2>
  * {@link MongoDBContainer#getReplicaSetUrl()} names the database {@code test}, so every test that used it
- * shared one database. Since {@link FlushMongoDBExtension} drops the whole database before each test, two
- * overlapping Maven runs on one machine deleted each other's data, and the symptom read exactly like the
- * event store losing a committed write. This container prefixes every database name with a scope that is
- * unique to one container object in one JVM, so a flush can only ever reach data this container owns:
+ * shared one database. Since a flush between tests empties that whole database, two overlapping Maven runs on
+ * one machine deleted each other's data, and the symptom read exactly like the event store losing a committed
+ * write. This container prefixes every database name with a scope that is unique to one container object in
+ * one JVM, so a flush can only ever reach data this container owns:
  * <ul>
  *     <li>the OS process id separates two concurrent runs, since they are distinct live processes, and</li>
  *     <li>a counter separates container objects inside one JVM, which in practice means one database per

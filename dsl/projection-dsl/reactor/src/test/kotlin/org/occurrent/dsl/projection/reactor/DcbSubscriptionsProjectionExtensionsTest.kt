@@ -44,7 +44,8 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testing.mongodb.OccurrentMongoFlush
+import org.occurrent.testsupport.mongodb.MongoTestDatabase
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate
@@ -76,7 +77,7 @@ class DcbSubscriptionsProjectionExtensionsTest {
     }
 
     @RegisterExtension
-    val flush = FlushMongoDBExtension(ConnectionString(mongoDBContainer.getReplicaSetUrl("projectiondcbextensions")))
+    val flush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer, "projectiondcbextensions"))
 
     private lateinit var eventStore: ReactorMongoEventStore
     private lateinit var subscriptionModel: ReactorMongoSubscriptionModel
