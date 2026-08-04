@@ -32,7 +32,7 @@ import org.occurrent.dsl.projection.reactor.DomainEventFeed;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
-import org.occurrent.springboot.reactor.ManualStartProjections;
+import org.occurrent.springboot.reactor.ManualStartPushSources;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -91,7 +91,7 @@ class ReactiveSubscriptionModeManualDomainPushProjectionMongoTest {
     @Autowired
     private ViewStateRepository<OrderCount, String> orderCountStore;
     @Autowired
-    private ManualStartProjections manualStartProjections;
+    private ManualStartPushSources manualStartProjections;
 
     @Test
     void a_domain_push_projection_reaches_the_feed_only_once_the_application_starts_it() {

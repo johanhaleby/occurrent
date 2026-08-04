@@ -34,7 +34,7 @@ import java.util.Optional;
  * backstop for an application that injects nothing.
  * <p>
  * Written by the annotation processor and read by the application, the same shape as the blocking starter's
- * {@code ManualStartProjections}. Inject it and check it from a health indicator or a readiness probe. It only ever
+ * {@code ManualStartPushSources}. Inject it and check it from a health indicator or a readiness probe. It only ever
  * holds ids that were started in the background, so an empty result means either that every background catch-up is
  * still running or succeeded, or that there were none: it is not by itself a statement that a projection is caught up.
  * <p>

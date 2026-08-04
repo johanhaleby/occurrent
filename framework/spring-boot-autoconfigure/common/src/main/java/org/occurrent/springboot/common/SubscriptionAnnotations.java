@@ -44,6 +44,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 import static org.occurrent.filter.Filter.CompositionOperator.OR;
 
@@ -291,18 +292,23 @@ public final class SubscriptionAnnotations {
      * and error messages live in one place and cannot drift. The caller branches on the returned bean's runtime type.
      *
      * @param applicationContext    the Spring context to resolve beans from
+     * @param annotationName        the annotation the message should name, for example {@code "@Projection"}
      * @param subscriptionModelType the annotation's {@code subscriptionModel} type, or {@code Void.class} if unset
      * @param subscriptionModelName the annotation's {@code subscriptionModelName}, or blank if unset
-     * @param id                    the projection id, for error messages
-     * @param candidateTypes        the allowed feed bean types (the stack's PushSubscriptionModel and DomainEventFeed)
+     * @param id                    the projection or saga id, for error messages
+     * @param candidateTypes        the allowed feed bean types, which the messages are worded from, so an annotation
+     *                              accepting one kind of feed does not offer the reader a second one it will reject
      * @return the resolved feed bean
      */
-    public static Object resolveFeedBean(ApplicationContext applicationContext, Class<?> subscriptionModelType,
+    public static Object resolveFeedBean(ApplicationContext applicationContext, String annotationName, Class<?> subscriptionModelType,
                                          String subscriptionModelName, String id, Class<?>... candidateTypes) {
         boolean byType = subscriptionModelType != Void.class;
         boolean byName = !subscriptionModelName.isBlank();
+        // Two forms, because "found no a PushSubscriptionModel bean" is not a sentence.
+        String acceptedTypes = Arrays.stream(candidateTypes).map(Class::getSimpleName).collect(Collectors.joining(" or "));
+        String acceptedWithArticles = Arrays.stream(candidateTypes).map(Class::getSimpleName).collect(Collectors.joining(" or a ", "a ", ""));
         if (byType && Arrays.stream(candidateTypes).noneMatch(candidate -> candidate.isAssignableFrom(subscriptionModelType))) {
-            throw new IllegalArgumentException("@Projection '%s' subscriptionModel type %s must be a PushSubscriptionModel or a DomainEventFeed for source=PUSH.".formatted(id, subscriptionModelType.getName()));
+            throw new IllegalArgumentException("%s '%s' subscriptionModel type %s must be %s for source=PUSH.".formatted(annotationName, id, subscriptionModelType.getName(), acceptedWithArticles));
         }
         try {
             if (byName) {
@@ -316,14 +322,14 @@ public final class SubscriptionAnnotations {
                 Collections.addAll(names, applicationContext.getBeanNamesForType(candidateType));
             }
             if (names.isEmpty()) {
-                throw new IllegalStateException("@Projection '%s' with source=PUSH found no PushSubscriptionModel or DomainEventFeed bean. Declare one, or name it with subscriptionModelName.".formatted(id));
+                throw new IllegalStateException("%s '%s' with source=PUSH found no %s bean. Declare one, or name it with subscriptionModelName.".formatted(annotationName, id, acceptedTypes));
             }
             if (names.size() > 1) {
-                throw new IllegalStateException("@Projection '%s' with source=PUSH found several push feed beans (%s). Pick one with subscriptionModel or subscriptionModelName.".formatted(id, String.join(", ", names)));
+                throw new IllegalStateException("%s '%s' with source=PUSH found several push feed beans (%s). Pick one with subscriptionModel or subscriptionModelName.".formatted(annotationName, id, String.join(", ", names)));
             }
             return applicationContext.getBean(names.get(0));
         } catch (BeansException e) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH could not resolve a push feed bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(id, byType ? subscriptionModelType.getName() : "unset", subscriptionModelName, e.getMessage()), e);
+            throw new IllegalArgumentException("%s '%s' with source=PUSH could not resolve a push feed bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(annotationName, id, byType ? subscriptionModelType.getName() : "unset", subscriptionModelName, e.getMessage()), e);
         }
     }
 

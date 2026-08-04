@@ -48,10 +48,10 @@ public class OccurrentReactiveAnnotationConfiguration {
      * an application can inject it without conditioning its own wiring on the mode.
      */
     @Bean
-    @ConditionalOnMissingBean(ManualStartProjections.class)
+    @ConditionalOnMissingBean(ManualStartPushSources.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public ManualStartProjections occurrentManualStartProjections() {
-        return new ManualStartProjections();
+    public ManualStartPushSources occurrentManualStartPushSources() {
+        return new ManualStartPushSources();
     }
 
     /**

@@ -25,25 +25,30 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * Holds the startup work a {@code @Projection(source = PUSH)} would otherwise have run at boot, withheld because
- * {@code occurrent.subscription.mode} is {@code manual}. Such a projection is fed by a
- * {@code PushSubscriptionModel} or {@code DomainEventFeed} bean the application supplies, not by the framework's own
- * {@code SubscriptionModel}, so the withholding that mode applies to that bean never reaches it. This registry is
- * what withholds it instead: inject it and bring one projection up with {@link #start(String)}, or every withheld one
- * with {@link #startAll()}, once the application is ready to run them.
+ * Holds the startup work a {@code source = PUSH} registration would otherwise have run at boot, withheld because
+ * {@code occurrent.subscription.mode} is {@code manual}. That covers a {@code @Projection(source = PUSH)} and a
+ * {@code @Saga(source = PUSH)} alike: both are fed by a {@code PushSubscriptionModel} or {@code DomainEventFeed} bean
+ * the application supplies, not by the framework's own {@code SubscriptionModel}, so the withholding that mode applies
+ * to that bean never reaches them. This registry is what withholds them instead: inject it and bring one up with
+ * {@link #start(String)}, or every withheld one with {@link #startAll()}, once the application is ready to run them.
+ * <p>
+ * One registry rather than one per annotation, because the reason a registration lands here is the push feed and not
+ * what is on the other end of it, and because an application bringing its push sources up behind a leader election
+ * wants one {@link #startAll()} rather than one per kind. Ids are unique across both, since a {@code @Projection} and a
+ * {@code @Saga} already cannot share a subscription id.
  * <p>
  * Starting an id a second time, or one that was never withheld (for example because {@code occurrent.subscription.mode}
- * is {@code auto} and the projection already ran at boot), is a no-op rather than an error, so a caller does not need
- * to track what it already started.
+ * is {@code auto} and it already ran at boot), is a no-op rather than an error, so a caller does not need to track what
+ * it already started.
  */
 @NullMarked
-public final class ManualStartProjections {
+public final class ManualStartPushSources {
 
     private final Map<String, Runnable> pending = new LinkedHashMap<>();
 
     /**
      * Record the startup work for {@code id}, to run once {@link #start(String)} or {@link #startAll()} is called.
-     * Called by the annotation processor while registering a withheld projection, not normally by application code.
+     * Called by the annotation processor while registering a withheld push source, not normally by application code.
      *
      * @throws IllegalArgumentException if {@code id} is already registered
      */
@@ -52,15 +57,15 @@ public final class ManualStartProjections {
         Objects.requireNonNull(startup, "startup cannot be null");
         synchronized (pending) {
             if (pending.containsKey(id)) {
-                throw new IllegalArgumentException("A projection with id '" + id + "' is already registered for manual start.");
+                throw new IllegalArgumentException("A push source with id '" + id + "' is already registered for manual start.");
             }
             pending.put(id, startup);
         }
     }
 
     /**
-     * Start the projection registered under {@code id}. Does nothing if it was already started, or if no projection
-     * is withheld under that id.
+     * Start the push source registered under {@code id}. Does nothing if it was already started, or if nothing is
+     * withheld under that id.
      */
     public void start(String id) {
         Objects.requireNonNull(id, "id cannot be null");
@@ -68,7 +73,7 @@ public final class ManualStartProjections {
     }
 
     /**
-     * Start every projection still withheld, in the order each was registered.
+     * Start every push source still withheld, in the order each was registered.
      *
      * @return the ids this call started, in that order, empty if none were withheld. An id another caller claimed
      * first is left out, so the list says what happened rather than what was pending when the call began
