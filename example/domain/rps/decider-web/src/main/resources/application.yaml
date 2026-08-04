@@ -2,7 +2,7 @@
 spring:
   mongodb:
     representation:
-      uuid: standard # So that Spring MongoDB stores UUID's as strings
+      uuid: standard # So that Spring MongoDB stores UUIDs as strings
   threads:
     virtual:
       enabled: true
