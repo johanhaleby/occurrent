@@ -16,9 +16,11 @@
 
 package org.occurrent.testing.junit;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
@@ -41,6 +43,8 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     private final SubscriptionModelLifeCycle subscriptionModel;
     private final Set<String> alwaysStartIds = new LinkedHashSet<>();
     private final Set<String> knownIds = new LinkedHashSet<>();
+    private @Nullable Runnable clearState;
+    private @Nullable CheckpointStorage checkpointStorage;
 
     private OccurrentSubscriptionsExtension(SubscriptionModelLifeCycle subscriptionModel) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel must not be null");
@@ -73,12 +77,58 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
         return this;
     }
 
+    /**
+     * Clear whatever a test must not inherit, after every subscription is stopped and before any
+     * {@link #alwaysStart(String...)} subscription is resumed. A database flush goes here, so no test has to pin
+     * extension order with {@code @Order}, which is the only way to express it otherwise.
+     *
+     * @param clearState run once before each test, must not be {@code null}
+     * @return this extension, so the call can be chained
+     */
+    public OccurrentSubscriptionsExtension clearingStateWith(Runnable clearState) {
+        this.clearState = Objects.requireNonNull(clearState, "clearState must not be null");
+        return this;
+    }
+
+    /**
+     * Delete every known subscription's checkpoint before each test, so a subscription never resumes from where an
+     * earlier test left it and receives events that test wrote.
+     * <p>
+     * Clearing the events alone does not achieve this. A stored checkpoint is what decides where a resumed subscription
+     * starts, so it has to go too, and it is not necessarily stored next to the events: a MongoDB event store keeping
+     * its checkpoints in Redis is an ordinary setup.
+     *
+     * @param checkpointStorage the storage holding the checkpoints, must not be {@code null}
+     * @return this extension, so the call can be chained
+     */
+    public OccurrentSubscriptionsExtension clearingCheckpoints(CheckpointStorage checkpointStorage) {
+        this.checkpointStorage = Objects.requireNonNull(checkpointStorage, "checkpointStorage must not be null");
+        return this;
+    }
+
     @Override
     public void beforeEach(ExtensionContext context) {
         subscriptionModel.stop();
+        // State first, then checkpoints, so a flush that recreates the checkpoint collection cannot leave one behind.
+        if (clearState != null) {
+            clearState.run();
+        }
+        if (checkpointStorage != null) {
+            deleteCheckpoints(checkpointStorage);
+        }
         for (String subscriptionId : alwaysStartIds) {
             resumeAndWait(subscriptionId);
         }
+    }
+
+    private void deleteCheckpoints(CheckpointStorage storage) {
+        Set<String> ids = modelSubscriptionIds().orElse(knownIds);
+        if (ids.isEmpty()) {
+            throw new IllegalStateException("Cannot clear checkpoints because there are no subscription ids to clear "
+                    + "them for. " + describeAvailableIds() + " Name the subscriptions with alwaysStart(String...), or "
+                    + "use a model implementing " + IntrospectableSubscriptionModel.class.getSimpleName() + ".");
+        }
+        ids.forEach(storage::delete);
     }
 
     @Override

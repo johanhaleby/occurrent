@@ -231,7 +231,7 @@ jobs:
           - { name: subscription-mongodb-spring, paths: "subscription/mongodb/spring application" }
           - { name: eventstore-spring,           paths: "eventstore/mongodb/spring" }
           # Everything that talks to MongoDB through the driver rather than through Spring.
-          - { name: mongodb-native,              paths: "eventstore/mongodb/native subscription/mongodb/native eventstore/api eventstore/mongodb/common subscription/mongodb/common" }
+          - { name: mongodb-native,              paths: "eventstore/mongodb/native subscription/mongodb/native eventstore/api eventstore/mongodb/common subscription/mongodb/common testing/mongodb" }
           # Listed per module, not as the framework aggregator, because the blocking starter is the
           # single most expensive module in the build. It shares the shard with framework/annotations and
           # the framework/spring-boot-autoconfigure aggregate (common, blocking, reactor), both cheap
@@ -241,9 +241,11 @@ jobs:
           # misc is the deliberate junk drawer: whatever is too small to shard on its own. The
           # reactive Spring Boot starter is here because the blocking one nearly fills a shard by
           # itself, so the two cannot share.
-          # `tck` and `testing` lodge here: their own tests run against the in-memory event store and subscription
-          # model, so they need no container and cost almost nothing.
-          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing" }
+          # `tck` and the two store-neutral `testing` leaves lodge here: their own tests run against the in-memory
+          # event store and subscription model, so they need no container and cost almost nothing. `testing/mongodb`
+          # is named separately in mongodb-native rather than riding along, because it does start a container. The
+          # leaves are listed one by one for that reason, since the bare `testing` prefix would pull it back in here.
+          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter testing/spring-boot" }
           # example modules run real MongoDB replica-set containers with timing-sensitive
           # Awaitility subscription-catchup tests. A single example shard started 12 containers
           # sequentially on one runner, which tipped those waits over. Split by container load

@@ -23,6 +23,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
@@ -274,6 +276,111 @@ class OccurrentSubscriptionsExtensionTest {
 
         @Override
         public void cancelSubscription(String subscriptionId) {
+        }
+    }
+
+    @Test
+    void clear_state_runs_after_every_subscription_is_stopped_and_before_any_is_resumed() {
+        CopyOnWriteArrayList<String> order = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe("orders", event -> {
+        });
+        SubscriptionModelLifeCycle recordingModel = recording(subscriptionModel, order);
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(recordingModel)
+                .clearingStateWith(() -> order.add("clearState"))
+                .alwaysStart("orders");
+        runBeforeEach(extension);
+
+        assertThat(order)
+                .as("a flush that ran before the stop would be undone by it, and one that ran after the resume would "
+                        + "delete what the resumed subscription is about to read")
+                .containsExactly("stop", "clearState", "resume:orders");
+    }
+
+    @Test
+    void checkpoints_are_deleted_for_every_id_the_model_reports() {
+        subscriptionModel.subscribe("orders", event -> {
+        });
+        subscriptionModel.subscribe("invoices", event -> {
+        });
+        CopyOnWriteArrayList<String> deleted = new CopyOnWriteArrayList<>();
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel)
+                .clearingCheckpoints(new RecordingCheckpointStorage(deleted));
+        runBeforeEach(extension);
+
+        assertThat(deleted).containsExactlyInAnyOrder("orders", "invoices");
+    }
+
+    @Test
+    void checkpoints_are_deleted_before_a_subscription_is_resumed() {
+        CopyOnWriteArrayList<String> order = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe("orders", event -> {
+        });
+        SubscriptionModelLifeCycle recordingModel = recording(subscriptionModel, order);
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(recordingModel)
+                .clearingCheckpoints(new RecordingCheckpointStorage(order, "delete:"))
+                .alwaysStart("orders");
+        runBeforeEach(extension);
+
+        assertThat(order)
+                .as("a checkpoint deleted after the resume would be the one the subscription just stored")
+                .containsExactly("stop", "delete:orders", "resume:orders");
+    }
+
+    @Test
+    void clearing_checkpoints_fails_loudly_when_there_are_no_ids_to_clear_them_for() {
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel)
+                .clearingCheckpoints(new RecordingCheckpointStorage(new CopyOnWriteArrayList<>()));
+
+        assertThatThrownBy(() -> runBeforeEach(extension))
+                .isExactlyInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no subscription ids");
+    }
+
+    // Records the life-cycle calls in order while delegating to the real model, so the assertions above are about
+    // ordering rather than about what a stub happens to allow.
+    private static SubscriptionModelLifeCycle recording(SubscriptionModelLifeCycle delegate, List<String> order) {
+        return (SubscriptionModelLifeCycle) Proxy.newProxyInstance(
+                OccurrentSubscriptionsExtensionTest.class.getClassLoader(),
+                new Class<?>[]{SubscriptionModelLifeCycle.class},
+                (proxy, method, args) -> {
+                    if ("stop".equals(method.getName()) && args == null) {
+                        order.add("stop");
+                    } else if ("resumeSubscription".equals(method.getName())) {
+                        order.add("resume:" + args[0]);
+                    }
+                    return method.invoke(delegate, args);
+                });
+    }
+
+    // CheckpointStorage has four methods, so this cannot be a lambda. Only delete is exercised here, and the rest
+    // throw rather than returning a default, so a future change that starts calling them says so.
+    private record RecordingCheckpointStorage(List<String> deleted, String prefix) implements CheckpointStorage {
+
+        RecordingCheckpointStorage(List<String> deleted) {
+            this(deleted, "");
+        }
+
+        @Override
+        public Checkpoint read(String subscriptionId) {
+            throw new UnsupportedOperationException("read");
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+            throw new UnsupportedOperationException("save");
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            deleted.add(prefix + subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            throw new UnsupportedOperationException("exists");
         }
     }
 
