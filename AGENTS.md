@@ -50,6 +50,14 @@ The claim is a lease, not a deed. Release it when the work is done or abandoned:
 
 The check applies to any GitHub task you act on, including issues the user names directly. Claiming is cheap and a duplicated implementation is not.
 
+Three things this protocol has already been caught out by:
+
+**Re-check the claim immediately before your first edit, not only when you start.** A claim check is a point-in-time read, and a long planning pass easily outlives the window in which somebody else claims the issue, so a check that was honestly clean at the start can be wrong by the time you act on it. A session planning #395 read #394 as unclaimed and another session claimed it three minutes later.
+
+**Absence of a branch is not absence of work.** `git ls-tree` and `git branch --contains` only see committed files, so a session with uncommitted work is invisible to every local check. Never conclude an issue is free because nothing in the tree mentions it.
+
+**Picking up one phase of a multi-phase issue means checking the sibling phases too.** The phases live in one list in `.context/ORCHESTRATOR.md` but are tracked as separate issues, and the collision lands on what two phases share rather than inside either one. #394's phase 5 and #395's phase 7 both need the same reactive-only contract shape.
+
 ## Architecture Decision Records
 
 ADRs live in `doc/architecture/decisions/`, **not** `doc/adr/`. Filenames are `NNNN-kebab-case-title.md`, numbered sequentially from the highest existing number. Write one for architectural decisions, not for minor implementation details.
@@ -63,6 +71,18 @@ Unreleased changes go under the existing `### Changelog next version` heading, n
 When your change refines a feature that is itself still unreleased (its entry already lives under `### Changelog next version`), do not add a separate entry describing the refinement as a change. The release notes describe what ships, not how it was built, so a reader upgrading from the last release should see one coherent entry per feature, not its development history. Fold the final behavior into that feature's existing entry, or drop it if it is purely internal. For example, if flow sagas are new this release, describe the bounded received-event window inside the saga entry rather than adding "the flow saga log is now bounded" as its own change. Words like "now", "hardened", "restored", or "instead of" in an entry for a feature that never shipped are the tell that it should be folded in. This rule is only about refinements to still-unreleased features. A change to behavior that shipped in a previous release is a real change and gets its own entry as usual.
 
 The same release distinction governs whether an API change is safe to make freely. Occurrent is a published library whose external callers cannot be observed from this repository, so do not judge the blast radius of a breaking or shape-changing API change by grepping call sites here (the tests and examples in this repo are not the population of users). Judge it by release status instead. A type or method whose feature still lives under `### Changelog next version` has not shipped, so it can be renamed, reshaped, or removed with no migration path. Once a feature has shipped in a versioned section, assume external callers depend on it and follow the migration conventions: an `org.occurrent.UpgradeToOccurrent_*` OpenRewrite recipe plus an entry under `doc/migration/upgrading-to-*.md`.
+
+## Documentation site
+
+The user-facing documentation is not in this repository. It lives in a separate Jekyll site, `occurrent-org.github.io`, checked out at `/Users/johan/devtools/java/projects/occurrent-org.github.io`. `changelog.md` here is the release note, not the documentation.
+
+A change that affects what a user can do needs both: the changelog entry in this repository, and in the docs repository the reference documentation in `pages/docs/docs.md` plus, when the change is worth announcing, a post under `_posts/news`.
+
+How docs branches work there, and why it matters:
+
+- **One branch per feature, named `docs/<feature>`, and never push to `main`.** `main` documents the API that has shipped, so a branch documenting an unreleased feature is held until the matching library release goes out. `_config.yml` carries `occurrentversion`, which is what makes `main` a statement about a released version rather than about the current code.
+- **Several such branches are usually held at once.** They all touch `pages/docs/docs.md`, so what looks like a one-line fix is really one commit per held branch. Before editing, `git grep -l <what-you-are-changing> <branch> -- pages/docs/docs.md` over every branch, because a regex sweep undercounts.
+- Being a separate repository means the docs never appear in this repository's diff, which is exactly how they get forgotten. Treat them as part of the change, not as follow-up.
 
 ## Design intentions
 
