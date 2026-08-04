@@ -172,7 +172,7 @@ jobs:
   # Stage 2: run each subtree's tests against the pre-built local repo, one shard per runner
   # (isolated Docker daemon). Within a shard, modules stay sequential (no -T). Nothing pins a host
   # port any more, but sequential execution is still load-bearing: a MongoDB database belongs to one
-  # container object in one JVM (ADR 96), and two test classes running at once inside a JVM would
+  # container object in one JVM (ADR 97), and two test classes running at once inside a JVM would
   # need a per-class axis on top of that. Do not read this as licence to add -T.
   #
   # Shard count is pinned at 10 by the concurrency limit, not chosen for tidiness: this account's
