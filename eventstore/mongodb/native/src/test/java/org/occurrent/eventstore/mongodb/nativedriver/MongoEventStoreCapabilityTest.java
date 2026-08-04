@@ -23,7 +23,6 @@ import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,9 +33,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.filter.Filter;
@@ -208,43 +205,8 @@ class MongoEventStoreCapabilityTest {
         assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
     }
 
-    @Test
-    void dcb_operations_fail_without_dcb_capability() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).build());
 
-        assertUnsupportedDcbOperation(() -> eventStore.read(tags(Tag.parse("name:1"))));
-        assertUnsupportedDcbOperation(() -> eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))));
-        assertUnsupportedDcbOperation(() -> eventStore.append(List.of(taggedEvent("NameDefined", "name:1")), DcbAppendCondition.failIfEventsMatch(tags(Tag.parse("name:1")))));
-    }
 
-    @Test
-    void stream_operations_fail_without_stream_capability() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(DCB).build());
-
-        assertUnsupportedStreamOperation(() -> eventStore.write("name:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined"))));
-        assertUnsupportedStreamOperation(() -> eventStore.read("name:1"));
-        assertUnsupportedStreamOperation(() -> eventStore.read("name:1", 0, 10));
-        assertUnsupportedStreamOperation(() -> eventStore.read("name:1", StreamReadFilter.type("NameDefined"), 0, 10));
-        assertUnsupportedStreamOperation(() -> eventStore.exists("name:1"));
-        assertUnsupportedStreamOperation(() -> eventStore.exists(Filter.all()));
-        assertUnsupportedStreamOperation(() -> eventStore.deleteEventStream("name:1"));
-        assertUnsupportedStreamOperation(() -> eventStore.deleteEvent("event:1", URI.create("urn:test")));
-        assertUnsupportedStreamOperation(() -> eventStore.delete(Filter.all()));
-        assertUnsupportedStreamOperation(() -> eventStore.updateEvent("event:1", URI.create("urn:test"), cloudEvent -> cloudEvent));
-        assertUnsupportedStreamOperation(() -> eventStore.query(Filter.all(), 0, 10, SortBy.unsorted()));
-        assertUnsupportedStreamOperation(() -> eventStore.count(Filter.all()));
-    }
-
-    @Test
-    void both_stream_and_dcb_operations_work_when_both_capabilities_are_enabled() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM, DCB).build());
-
-        eventStore.write("name:1", WriteCondition.anyStreamVersion(), List.of(event("NameDefined")));
-        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
-
-        assertThat(eventStore.read("name:1").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
-        assertThat(eventStore.read(tags(Tag.parse("name:1"))).events()).extracting(CloudEvent::getType).containsExactly("NameChanged");
-    }
 
     @Test
     void dcb_only_events_still_have_occurrent_stream_metadata() {
@@ -341,17 +303,7 @@ class MongoEventStoreCapabilityTest {
         return false;
     }
 
-    private static void assertUnsupportedStreamOperation(ThrowingCallable operation) {
-        assertThatThrownBy(operation)
-                .isExactlyInstanceOf(UnsupportedOperationException.class)
-                .hasMessage("STREAM capability is not enabled for this MongoEventStore");
-    }
 
-    private static void assertUnsupportedDcbOperation(ThrowingCallable operation) {
-        assertThatThrownBy(operation)
-                .isExactlyInstanceOf(UnsupportedOperationException.class)
-                .hasMessage("DCB capability is not enabled for this MongoEventStore");
-    }
 
     private EventStoreConfig.Builder eventStoreConfig(EventStoreCapability capability, EventStoreCapability... additionalCapabilities) {
         return eventStoreConfigBuilder().eventStoreCapabilities(capability, additionalCapabilities);

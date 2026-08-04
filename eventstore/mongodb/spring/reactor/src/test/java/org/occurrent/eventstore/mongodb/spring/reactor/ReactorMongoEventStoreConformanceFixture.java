@@ -29,7 +29,9 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.DcbAppendConditionModel;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutDcb;
 import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutStream;
 import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -140,6 +142,33 @@ class ReactorMongoEventStoreConformanceFixture implements EventStoreFixture {
                 .build();
         BlockingEventStoreOverReactive withoutPosition = BlockingEventStoreOverReactive.of(new ReactorMongoEventStore(mongoTemplate, eventStoreConfig));
         return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
+    }
+
+    @Override
+    public Optional<StoreWithoutDcb> storeWithoutDcb() {
+        BlockingEventStoreOverReactive withoutDcb = restrictedTo("events-stream-only", EventStoreCapability.STREAM);
+        return Optional.of(new StoreWithoutDcb(withoutDcb, withoutDcb));
+    }
+
+    @Override
+    public Optional<StoreWithoutStream> storeWithoutStream() {
+        BlockingEventStoreOverReactive withoutStream = restrictedTo("events-dcb-only", EventStoreCapability.DCB);
+        return Optional.of(new StoreWithoutStream(withoutStream, withoutStream, withoutStream, withoutStream, withoutStream));
+    }
+
+    /**
+     * A store on its own collection, so the capability it was denied cannot be answered from events the main store
+     * wrote. The reactive store answers a denied call with {@code Mono.error}, which the bridge turns into the throw
+     * the guard suite asserts.
+     */
+    private BlockingEventStoreOverReactive restrictedTo(String collection, EventStoreCapability capability) {
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
+                .eventStoreCollectionName(collection)
+                .transactionConfig(transactionManager)
+                .timeRepresentation(timeRepresentation)
+                .eventStoreCapabilities(capability)
+                .build();
+        return BlockingEventStoreOverReactive.of(new ReactorMongoEventStore(mongoTemplate, eventStoreConfig));
     }
 
     @Override
