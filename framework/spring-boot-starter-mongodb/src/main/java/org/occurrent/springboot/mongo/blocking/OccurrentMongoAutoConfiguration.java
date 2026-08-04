@@ -62,6 +62,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
+import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -197,9 +198,14 @@ public class OccurrentMongoAutoConfiguration<E> {
     // Named rather than inferred because under SubscriptionMode.MANUAL the bean is a wrapper, and the @PreDestroy on
     // CompetingConsumerSubscriptionModel only counts while that class is the bean class. Closing the context has to
     // reach it, or the Mongo listener container and the lease refresh thread outlive the application.
+    //
+    // The register-only models are ignored when deciding whether the application brought its own. They are
+    // SubscriptionModels, but they have no start position, no checkpoint and no catch-up, so one of them standing in
+    // for this bean would silently take away every asynchronous subscription. A user declaring their own
+    // SynchronousSubscriptionModel, which the @ConditionalOnMissingBean further down invites, must still get this one.
     @Bean(destroyMethod = "shutdown")
     @Primary
-    @ConditionalOnMissingBean(SubscriptionModel.class)
+    @ConditionalOnMissingBean(value = SubscriptionModel.class, ignored = RegisteringSubscribable.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, CheckpointStorage storage,
                                                                         OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore, Environment environment) {

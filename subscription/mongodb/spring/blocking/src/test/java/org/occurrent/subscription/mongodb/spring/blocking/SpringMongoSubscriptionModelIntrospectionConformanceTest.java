@@ -22,12 +22,19 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
 
+@Testcontainers
 class SpringMongoSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionModelConformance {
 
     private static final String DATABASE = "springsubscriptionintrospectionconformance";
 
+    @Container
+    private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     // One client and one template for the class, since standing a client up means server discovery. What has to be
     // fresh per test is the event collection, which the fixture takes care of.
@@ -36,7 +43,7 @@ class SpringMongoSubscriptionModelIntrospectionConformanceTest extends Introspec
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(SharedMongoDBContainer.replicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
         mongoTemplate = new MongoTemplate(mongoClient, DATABASE);
     }
 

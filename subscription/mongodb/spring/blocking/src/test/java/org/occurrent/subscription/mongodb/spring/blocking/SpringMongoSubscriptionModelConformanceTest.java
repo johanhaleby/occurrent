@@ -22,16 +22,26 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
 
 /**
  * Not the in-process suite: {@link SpringMongoSubscriptionModel} watches a MongoDB change stream, which is
  * asynchronous by nature, so only the store-backed conformance suite applies here.
  */
+@Testcontainers
 class SpringMongoSubscriptionModelConformanceTest extends SubscriptionModelConformance {
 
     private static final String DATABASE = "springsubscriptionconformance";
 
+    // Per class and extension-managed, rather than one container shared across this module's test classes. A container
+    // started from a static initializer leaves SpringMongoSubscriptionModelTest unable to start its own, so all 26 of
+    // its tests fail on a container that never came up.
+    @Container
+    private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     // One client and one template for the class, since standing a client up means server discovery. What has to be
     // fresh per test is the event collection, which the fixture takes care of.
@@ -40,7 +50,7 @@ class SpringMongoSubscriptionModelConformanceTest extends SubscriptionModelConfo
 
     @BeforeAll
     static void connect() {
-        mongoClient = MongoClients.create(SharedMongoDBContainer.replicaSetUrl(DATABASE));
+        mongoClient = MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
         mongoTemplate = new MongoTemplate(mongoClient, DATABASE);
     }
 

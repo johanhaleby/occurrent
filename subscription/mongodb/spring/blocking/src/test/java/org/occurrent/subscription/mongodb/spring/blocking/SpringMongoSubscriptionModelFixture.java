@@ -78,21 +78,14 @@ class SpringMongoSubscriptionModelFixture implements SubscriptionModelFixture {
     }
 
     /**
-     * Measured, not assumed, and the answer is the opposite of the native driver's model.
-     * <p>
-     * {@code resumeSubscription} rebuilds the change-stream request from the {@code StartAt} the subscription was
-     * created with, and for {@code subscriptionModelDefault()} that resolves to the present all over again, so the
-     * resumed stream starts after anything written while the subscription was paused. The comment on
-     * {@code requestOptionsFunction} in {@link SpringMongoSubscriptionModel#subscribe} shows the choice is deliberate:
-     * recomputing is what stops a subscription started at {@code now()} from replaying history on resume.
-     * <p>
-     * {@code NativeMongoSubscriptionModel} deliberately chose the other side, tracking the last change-stream document
-     * it read so a resume continues gap-free. Two deliberate opposite choices mean the contract does not say which is
-     * right, which is why this is declared here and filed under #396 rather than quietly fixed to match one of them.
+     * This model records the change-stream position it has read to and resumes from there, so an event written while a
+     * subscription was paused arrives once it resumes. It did not always: it used to rebuild the request from the
+     * {@code StartAt} the subscription was created with, which for the default resolves to the present all over again
+     * and skipped the paused window entirely. The native driver's model always did this correctly, and the conformance
+     * suite is what made the difference visible.
      */
-    @Override
     public boolean deliversEventsPublishedWhilePaused() {
-        return false;
+        return true;
     }
 
     /**
