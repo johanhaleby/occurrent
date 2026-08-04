@@ -144,13 +144,17 @@ public @interface Saga {
      * {@code PushSubscriptionModel} is accepted, since a {@code DomainEventFeed} carries no stream metadata and a saga
      * needs it, see below.
      * <p>
-     * A push saga catches up before it goes live: the framework puts a replay in front of the feed, folds the saga up
-     * from the event store, and then hands over to the live feed. Set {@link #catchup()} to {@link Catchup#NONE} to
+     * A push saga catches up before it goes live: the framework puts a replay in front of the feed, works through the
+     * event store's history, and then hands over to the live feed. Set {@link #catchup()} to {@link Catchup#NONE} to
      * skip the replay and take live events only, which is what a saga fed by another application's broker needs, since
-     * the local event store holds none of those events. Neither choice takes a start position, so {@link #startAt()},
-     * {@link #startAtGlobalPosition()}, {@link #resumeBehavior()} and {@link #startupMode()} are rejected rather than
-     * silently ignored: the replay always starts at the beginning, and where the live feed resumes after a restart is
-     * the broker's business, not Occurrent's.
+     * the local event store holds none of those events.
+     * <p>
+     * Neither choice takes a start position, so {@link #startAt()}, {@link #startAtGlobalPosition()} and
+     * {@link #resumeBehavior()} are rejected rather than silently ignored. The replay always starts at the beginning,
+     * and where the live feed resumes after a restart is the broker's business, not Occurrent's.
+     * {@link #startupMode()} is the exception, and applies under the default {@link Catchup#FROM_EVENT_STORE}, where
+     * {@link StartupMode#BACKGROUND} keeps the replay off the startup path. It is rejected with {@link Catchup#NONE},
+     * where there is no replay to wait for.
      * <p>
      * <strong>Forward the Occurrent CloudEvent extensions from your listener.</strong> A saga recognises a redelivered
      * event by its {@code streamid} together with its {@code streamversion}, or by its {@code position}. Push delivery

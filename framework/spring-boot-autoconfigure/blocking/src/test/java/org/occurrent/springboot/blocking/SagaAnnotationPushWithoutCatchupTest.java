@@ -127,7 +127,10 @@ class SagaAnnotationPushWithoutCatchupTest {
                     assertThat(context).hasFailed();
                     assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
                             .hasMessageContaining("cannot set startAt, startAtGlobalPosition or resumeBehavior")
-                            .hasMessageContaining("With catchup=NONE it takes live events only");
+                            .hasMessageContaining("With catchup=NONE it takes live events only")
+                            // The startupMode advice belongs to the catching-up saga only. There is no replay here to
+                            // move off the startup path, and startupMode is rejected in this mode anyway.
+                            .hasMessageNotContaining("startupMode = BACKGROUND");
                 });
     }
 

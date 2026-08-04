@@ -194,10 +194,12 @@ class SagaAnnotationRegistrar {
     private void rejectStartPositionAttributes(org.occurrent.annotation.Saga annotation, String id) {
         if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
                 || annotation.resumeBehavior() != org.occurrent.annotation.ResumeBehavior.DEFAULT) {
+            // The startupMode hint only makes sense under the default catchup. With catchup=NONE there is no replay to
+            // move off the startup path, and startupMode is rejected there anyway.
             String reason = catchesUp(annotation)
-                    ? "It catches up before going live, but always from the beginning, so there is no start position to choose"
+                    ? "It catches up before going live, but always from the beginning, so there is no start position to choose. Use startupMode = BACKGROUND to keep that replay off the startup path"
                     : "With catchup=NONE it takes live events only, so there is no history to position into";
-            throw new IllegalArgumentException("@Saga '%s' with source=PUSH cannot set startAt, startAtGlobalPosition or resumeBehavior. %s, and where the live feed resumes is the broker's business. Use startupMode = BACKGROUND to keep the catch-up replay off the startup path.".formatted(id, reason));
+            throw new IllegalArgumentException("@Saga '%s' with source=PUSH cannot set startAt, startAtGlobalPosition or resumeBehavior. %s, and where the live feed resumes is the broker's business.".formatted(id, reason));
         }
         if (!catchesUp(annotation) && annotation.startupMode() != org.occurrent.annotation.StartupMode.DEFAULT) {
             throw new IllegalArgumentException("@Saga '%s' combines source=PUSH with catchup=NONE, so it replays nothing and there is no startup work for startupMode to decide about. Remove startupMode, or drop catchup=NONE if you meant the saga to catch up first.".formatted(id));
