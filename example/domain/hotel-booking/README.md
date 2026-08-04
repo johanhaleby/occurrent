@@ -35,4 +35,4 @@ WebFlux cancels the underlying DCB subscription automatically when the client di
 
 ## Running
 
-DCB uses MongoDB transactions, so it needs a replica set (a single-node one is fine). The test uses Testcontainers and needs no setup. To run the app yourself, point `spring.data.mongodb.uri` at a replica set, or start `TestBootstrap.main` which boots a Testcontainers replica set for you.
+DCB uses MongoDB transactions, so it needs a replica set (a single-node one is fine). The test uses Testcontainers and needs no setup. To run the app yourself, point `spring.mongodb.uri` at a replica set, or start `TestBootstrap.main` which boots a Testcontainers replica set for you.
