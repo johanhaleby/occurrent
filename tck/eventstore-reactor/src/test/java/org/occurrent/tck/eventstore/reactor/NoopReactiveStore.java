@@ -117,8 +117,13 @@ final class NoopReactiveStore implements EventStore, EventStoreQueries, EventSto
         return notImplemented();
     }
 
+    /**
+     * The one member here that is not a publisher, so it throws where the rest hand back an error. Nothing in
+     * {@link ReactiveEventStoreConformance} asks yet, and answering {@code false} would be a way for the first test
+     * that does ask to pass against a store honouring nothing. The blocking {@code NoopStore} throws here too.
+     */
     @Override
     public boolean writesPosition() {
-        return false;
+        throw new UnsupportedOperationException("NoopReactiveStore implements nothing on purpose");
     }
 }

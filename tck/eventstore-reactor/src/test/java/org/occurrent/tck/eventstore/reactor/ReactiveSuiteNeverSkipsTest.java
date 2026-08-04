@@ -27,13 +27,24 @@ import org.occurrent.eventstore.api.reactor.EventStoreOperations;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 
+import java.util.List;
+import java.util.SortedMap;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass;
 
 /**
  * The reactive leaf's half of the never-skip rule, which the blocking leaf's {@code SuiteNeverSkipsTest} enforces for
  * every suite over there. Without this, {@link ReactiveEventStoreConformance} would be the one suite in the TCK where
- * somebody could reach for an {@code Assumption} and nothing would notice.
+ * somebody could reach for an {@code Assumption} and nothing would notice. The blocking suites this leaf reaches
+ * through {@link BlockingEventStoreOverReactive} are covered by the blocking leaf, which compiles them.
+ * <p>
+ * Two checks, for the same reason the blocking leaf has two. Running the suite against {@link NoopReactiveStore}
+ * establishes that it has tests and that they fail when nothing is honoured, but every test ends at its first call into
+ * the store, so an assumption placed after that is never reached and the skipped count stays zero either way.
+ * {@link SkipMechanismScan} is what earns the no-skipping claim: it reads the class files this module compiles and
+ * fails if any of them so much as references {@code Assumptions}, {@code TestAbortedException}, {@code @Disabled} or a
+ * {@code @DisabledIf} condition, over every line of the suite rather than the lines one fixture reaches.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("the reactive conformance suite")
@@ -62,6 +73,33 @@ class ReactiveSuiteNeverSkipsTest {
         assertThat(tests.aborted().count())
                 .describedAs("an aborted test is a skip wearing a different hat")
                 .isZero();
+    }
+
+    @Test
+    void names_nothing_that_could_skip_a_test_in_the_suite_it_compiles() {
+        assertThat(SkipMechanismScan.classesScannedAlongside(ReactiveEventStoreConformance.class))
+                .describedAs("the scan must reach the suite, or a clean verdict means only that it looked nowhere")
+                .contains(ReactiveEventStoreConformance.class.getName(), BlockingEventStoreOverReactive.class.getName());
+
+        SortedMap<String, List<String>> offenders = SkipMechanismScan.of(ReactiveEventStoreConformance.class);
+
+        assertThat(offenders)
+                .describedAs("a skipped test vanishes from the report, so a store that does not honour a contract ends "
+                        + "up looking like one that does. Where stores legitimately differ the fixture declares the "
+                        + "difference and the suite asserts both answers, which is why nothing here may skip")
+                .isEmpty();
+    }
+
+    @Test
+    void would_notice_something_that_could_skip_a_test_if_one_appeared() {
+        SortedMap<String, List<String>> offenders = SkipMechanismScan.of(SkipsOnPurpose.class);
+
+        assertThat(offenders)
+                .describedAs("a scan that cannot find the one class written to be found would pass a suite full of "
+                        + "assumptions just as quietly as it passes a clean one")
+                .containsKey(SkipsOnPurpose.class.getName());
+        assertThat(offenders.get(SkipsOnPurpose.class.getName()))
+                .contains("org/junit/jupiter/api/Assumptions");
     }
 
     /**
