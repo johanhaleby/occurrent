@@ -130,15 +130,38 @@ between handlers, never within one handler's own event order.
 ### How the regime reaches the model
 
 `TransactionExecutor` and `ReactiveTransactionExecutor` gained `isTransactional()`, and the application service passes
-the answer to a new `dispatch(List, boolean)` overload. The overload is a `default` that delegates to the existing
-single-argument form, so nothing that implements the dispatcher today has to change, and driving the model directly
-through `dispatch(List)` keeps its old fail-fast behaviour.
+the answer to `dispatch(List, boolean)` on the two dispatcher interfaces.
 
-**`isTransactional()` defaults to `false`,** for the same reason `Consumers.ONE` is the default in ADR 90: the safe
-answer is the default and opting out is explicit. The three implementations Occurrent ships override it to `true`. A
-third-party executor that opens a transaction and forgets to override gets isolation where fail-fast was wanted, which
-costs handler work inside a transaction that is rolling back regardless. The other default would silently strand
-siblings, so this errs toward wasted work rather than toward loss.
+**That two-argument method is the interface's only dispatch method, and the one-argument `dispatch(List)` was removed
+from both interfaces.** The first attempt added the second form as a `default` delegating to the first, so no existing
+implementation had to change. That was the wrong call, and it was reversed before release. A dispatcher owns its own
+handler loop, so a silent default means a third-party dispatcher keeps stranding handlers with nothing to tell its
+author, and Occurrent cannot fix that from the outside. Deleting the one-argument form turns a silent wrong answer into
+a compile error whose migration is to add the parameter and decide what it means, which is exactly the attention the
+default fails to ask for. The alternative was not free either, since it kept a permanent two-method interface plus a
+warning paragraph in each javadoc, the changelog and the migration guide. Pre-1.0, a break with a one-line migration
+beats carrying a known-wrong shape into 1.0.
+
+The models keep a one-argument `dispatch(List)` as a class method, which is what a test or an in-memory write listener
+drives, and it stops at the first failure as it always did. Only the interfaces lost it.
+
+**`isTransactional()` is answered for the moment of the call, not fixed per executor.** The application service asks
+during dispatch, which runs inside `inTransaction`, so an implementation can read the live state. The two Spring
+executors do: the blocking one returns `TransactionSynchronizationManager.isActualTransactionActive()` and the reactive
+one reads the same thing out of the subscriber context. Both accept a caller-configured `TransactionTemplate` or
+`TransactionalOperator`, so a fixed `true` would lie under `PROPAGATION_NOT_SUPPORTED` or `PROPAGATION_NEVER` and bring
+back the stranding this amendment removes. `NativeMongoTransactionExecutor` does answer a fixed `true`, correctly: it
+always opens or joins a session transaction and has no propagation setting that could turn that off.
+
+On the reactive stack `isTransactional()` returns `Mono<Boolean>` rather than a `boolean`, because there the transaction
+lives in the subscriber context and only a reactive answer can reach it. The asymmetry with the blocking `boolean` is
+the platform's rather than a choice.
+
+**Both defaults still mean "no transaction",** `false` and `Mono.just(false)`, for the same reason `Consumers.ONE` is
+the default in ADR 90: the safe answer is the default and opting out is explicit. An executor that opens a transaction
+and does not override gets isolation where fail-fast was wanted, which costs handler work inside a transaction that is
+rolling back regardless. The other default would silently strand siblings, so this errs toward wasted work rather than
+toward loss.
 
 ### Consequences
 

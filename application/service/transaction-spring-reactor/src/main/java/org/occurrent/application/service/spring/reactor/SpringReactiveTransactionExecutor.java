@@ -22,6 +22,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.ReactiveTransactionManager;
 import org.springframework.transaction.reactive.TransactionContextManager;
+import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
@@ -148,9 +149,23 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
                         : transaction.retryWhen(conflictRetry));
     }
 
+    /**
+     * Reads the live transaction state rather than emitting {@code true} unconditionally, because a caller-supplied
+     * {@link TransactionalOperator} can be configured not to open one at all, for example with
+     * {@code PROPAGATION_NOT_SUPPORTED} or {@code PROPAGATION_NEVER}. Claiming a transaction that does not exist would
+     * make a synchronous dispatch stop at the first handler failure with nothing rolling back, stranding the handlers
+     * behind it.
+     */
     @Override
-    public boolean isTransactional() {
-        return true;
+    public Mono<Boolean> isTransactional() {
+        return TransactionSynchronizationManager.forCurrentTransaction()
+                .map(TransactionSynchronizationManager::isActualTransactionActive)
+                // Absent context means no transaction. Matched by simple name for the same reason as in inTransaction:
+                // Spring keeps the type private, and swallowing every error would report "no transaction" for a genuine
+                // failure.
+                .onErrorResume(throwable -> "NoTransactionInContextException".equals(throwable.getClass().getSimpleName())
+                        ? Mono.just(false)
+                        : Mono.error(throwable));
     }
 
     @Override

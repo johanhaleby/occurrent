@@ -136,7 +136,7 @@ class GenericApplicationServiceSynchronousSubscriptionsTest {
         private boolean hasSubscriptions = true;
 
         @Override
-        public void dispatch(List<CloudEvent> writtenCloudEvents) {
+        public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
             dispatched.addAll(writtenCloudEvents);
         }
 
@@ -146,17 +146,8 @@ class GenericApplicationServiceSynchronousSubscriptionsTest {
         }
     }
 
-    /**
-     * Overrides the two-argument overload, unlike {@link RecordingDispatcher}, which is left implementing only the
-     * single-argument one so the default keeps being exercised.
-     */
     private static final class RegimeRecordingDispatcher implements SynchronousEventDispatcher {
         private @Nullable Boolean toldTransactional;
-
-        @Override
-        public void dispatch(List<CloudEvent> writtenCloudEvents) {
-            throw new AssertionError("The application service must call the overload that carries the transaction regime");
-        }
 
         @Override
         public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {

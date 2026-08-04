@@ -142,9 +142,16 @@ public class SpringTransactionExecutor implements TransactionExecutor {
         return conflictRetry.execute(() -> transactionTemplate.execute(status -> action.get()));
     }
 
+    /**
+     * Reads the live transaction state rather than answering {@code true} unconditionally, because a caller-supplied
+     * {@link TransactionTemplate} can be configured not to open one at all, for example with
+     * {@code PROPAGATION_NOT_SUPPORTED} or {@code PROPAGATION_NEVER}. Claiming a transaction that does not exist would
+     * make a synchronous dispatch stop at the first handler failure with nothing rolling back, stranding the handlers
+     * behind it.
+     */
     @Override
     public boolean isTransactional() {
-        return true;
+        return TransactionSynchronizationManager.isActualTransactionActive();
     }
 
     @Override

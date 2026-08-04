@@ -65,7 +65,16 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
         super(Consumers.MANY, dataFieldReader);
     }
 
-    @Override
+    /**
+     * Dispatch the supplied cloud events to every matching registered handler, sequentially, stopping at the first
+     * handler that errors.
+     * <p>
+     * For a dispatch that knows whether a transaction is in force, use {@link #dispatch(List, boolean)}, which is what
+     * the reactive application service calls. This form is for driving the model directly, for example from a test.
+     *
+     * @param writtenCloudEvents The newly written cloud events.
+     * @return A {@link Mono} that completes when dispatch is done.
+     */
     public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents) {
         return route(writtenCloudEvents);
     }

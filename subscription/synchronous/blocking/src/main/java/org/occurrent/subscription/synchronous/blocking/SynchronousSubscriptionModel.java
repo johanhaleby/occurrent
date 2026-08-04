@@ -66,12 +66,15 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     }
 
     /**
-     * Dispatch the supplied cloud events to every matching registered handler, synchronously, on the calling
-     * thread, in registration order. Called by the application service with the events it just wrote.
+     * Dispatch the supplied cloud events to every matching registered handler, synchronously, on the calling thread, in
+     * registration order, stopping at the first handler that throws.
+     * <p>
+     * For a dispatch that knows whether a transaction is in force, use {@link #dispatch(List, boolean)}, which is what
+     * the application service calls. This form is for driving the model directly, for example from a test or from an
+     * in-memory event-store write listener.
      *
      * @param writtenCloudEvents The newly written cloud events.
      */
-    @Override
     public void dispatch(List<CloudEvent> writtenCloudEvents) {
         route(writtenCloudEvents);
     }

@@ -36,34 +36,19 @@ import java.util.List;
 public interface SynchronousEventDispatcher {
 
     /**
-     * Dispatch the just-written cloud events to every matching synchronous subscription, synchronously, on the
-     * calling thread. A handler exception propagates to the caller.
-     *
-     * @param writtenCloudEvents The cloud events written by the current command, enriched with stream metadata.
-     */
-    void dispatch(List<CloudEvent> writtenCloudEvents);
-
-    /**
-     * Dispatch as {@link #dispatch(List)} does, told whether the write and the handlers are running inside a
-     * transaction. This is the overload the application service calls.
+     * Dispatch the just-written cloud events to every matching synchronous subscription, synchronously, on the calling
+     * thread. A handler exception reaches the caller.
      * <p>
-     * When {@code transactional} is {@code true} a handler failure rolls the write back, so stopping at the first one
-     * loses nothing. When it is {@code false} the write has already committed, so every handler should be given the
-     * event and the failures reported together, because a synchronous subscription has no replay and a handler skipped
-     * because a sibling threw would never see that event.
-     * <p>
-     * <strong>Override this if you fan out to several handlers.</strong> The default ignores the flag and delegates to
-     * {@link #dispatch(List)}, so an implementation that does not override it keeps stopping at the first failure even
-     * when there is no transaction to roll the write back. That is source-compatible but it is the behaviour the
-     * 2026-08-04 amendment to ADR 57 exists to correct, and Occurrent cannot correct it on your behalf, since your
-     * implementation owns the dispatch loop.
+     * {@code transactional} says whether the caller opened a transaction around the write and this dispatch, which
+     * decides what a handler failure costs the handlers behind it. When it is {@code true} the failure rolls the write
+     * back, so nothing is folded by anyone and stopping at the first one loses nothing. When it is {@code false} the
+     * write has already committed, so give every handler the event and report the failures together: a synchronous
+     * subscription has no replay, and a handler skipped because a sibling threw would never see that event.
      *
      * @param writtenCloudEvents The cloud events written by the current command, enriched with stream metadata.
      * @param transactional      Whether the caller wrapped this dispatch in a transaction.
      */
-    default void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
-        dispatch(writtenCloudEvents);
-    }
+    void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional);
 
     /**
      * @return {@code true} if at least one synchronous subscription is registered. When {@code false} the
