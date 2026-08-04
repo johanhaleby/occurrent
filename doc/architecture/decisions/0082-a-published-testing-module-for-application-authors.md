@@ -57,7 +57,7 @@ it.** The layout is two leaves under a flat `testing/` aggregator, matching the 
 | `testing/junit-jupiter` | `occurrent-testing-junit-jupiter` | JUnit Jupiter, `occurrent-subscription-api-blocking` |
 | `testing/spring-boot` | `occurrent-testing-spring-boot` | the above, plus Spring |
 
-The first leaf was renamed to `testing/junit-jupiter-blocking` and `occurrent-testing-junit-jupiter-blocking` before 0.32.0 shipped, once a reactive twin was confirmed, so the pair carries the explicit stack suffix every other paired leaf in the repository uses (#529, #530). The table records the layout as decided here, and nothing else about it changed.
+The first leaf was renamed to `testing/junit-jupiter-blocking` and `occurrent-testing-junit-jupiter-blocking` while it was still unreleased, once a reactive twin was confirmed, so the pair carries the explicit stack suffix every other paired leaf in the repository uses (#529, #530). The table above is left as decided here, since it records the layout this ADR chose, while prose elsewhere that describes what the module does now uses the current name.
 
 The ordering constraint is the load-bearing part, not the file layout. Occurrent ships small composable
 libraries and assumes Spring nowhere else, so its test tooling must not either. Concretely: anything
@@ -93,7 +93,7 @@ change, and pinned by the subscription conformance suite when #395 lands.
 
 **Await conventions stay with the TCK, and this module does not grow a second copy.** ADR 77 put
 `Conformance.await()` in `occurrent-tck-subscription-blocking` specifically to keep Awaitility off an
-event-store implementer's compile path. `occurrent-testing-junit-jupiter` does not need it: `start(id)`
+event-store implementer's compile path. `occurrent-testing-junit-jupiter-blocking` does not need it: `start(id)`
 waits through `Subscription.waitUntilStarted()`, which is what makes forgetting the wait impossible
 rather than merely discouraged, and ADR 78's `InMemorySubscriptionModel.waitUntilAllEventsProcessed()`
 covers drain for the in-memory case. If the testing module ever does need a general await convention, the

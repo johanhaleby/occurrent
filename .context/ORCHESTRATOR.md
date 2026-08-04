@@ -206,7 +206,7 @@ Still owed on docs `main` from the 0.31.0 release: a `dcb-patterns` row in the E
 
 ### The testing modules (ADR 0082, shipped 2026-07-30)
 
-`occurrent-testing-junit-jupiter-blocking` plus `occurrent-testing-spring-boot` ship the deny-by-default subscription pattern: `stop()` in `beforeEach` and `afterEach`, each test opting in with `resumeSubscription(id).waitUntilStarted()`. The pattern came from the Parkster push-notification service, not from this repo, and nothing here used it before.
+`occurrent-testing-junit-jupiter-blocking` plus `occurrent-testing-spring-boot` provide the deny-by-default subscription pattern: `stop()` in `beforeEach` and `afterEach`, each test opting in with `resumeSubscription(id).waitUntilStarted()`. The pattern came from the Parkster push-notification service, not from this repo, and nothing here used it before.
 
 Decisions a later session must not silently reopen:
 
