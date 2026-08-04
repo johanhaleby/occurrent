@@ -51,6 +51,8 @@ class ReactorMongoEventStoreReactiveConformanceTest extends ReactiveEventStoreCo
 
     @Override
     protected ReactiveEventStoreFixture createFixture() {
+        // The database here is "test" and the collection "events". Appending ".events" to the replica-set URL does
+        // not change the database, because MongoDB forbids a dot in a database name, so only getCollection() sees it.
         return new ReactorMongoReactiveConformanceFixture(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
     }
 }
