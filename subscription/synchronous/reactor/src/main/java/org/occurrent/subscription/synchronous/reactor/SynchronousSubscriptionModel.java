@@ -33,10 +33,11 @@ import java.util.List;
  * change stream.
  * <p>
  * Driven by the reactive application service: after a successful write it hands the just-written cloud events to
- * {@link #dispatch(List)}, which routes each event to the registered handlers whose {@link SubscriptionFilter}
- * matches, invoking them in registration order and sequentially (the next handler does not start until the previous
- * one's {@link Mono} completes). A handler error reaches the caller, so under a reactive transaction it rolls the write
- * back. Whether it also stops the handlers behind it depends on the transaction, see {@link #dispatch(List, boolean)}.
+ * {@link #dispatch(List, boolean)}, which routes each event to the registered handlers whose
+ * {@link SubscriptionFilter} matches, invoking them in registration order and sequentially (the next handler does not
+ * start until the previous one's {@link Mono} completes). A handler error reaches the caller, so under a reactive
+ * transaction it rolls the write back. Whether it also stops the handlers behind it depends on the transaction, which
+ * is what that second argument carries.
  * <p>
  * The register-and-route machinery lives in {@link RegisteringSubscribable}. This model adds the application-service
  * dispatch entry point. For an externally driven push feed (RabbitMQ, Kafka, ...) use {@code PushSubscriptionModel}.
@@ -47,7 +48,7 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     /**
      * Several handlers, unlike the push models, which take one each. Fan-out is safe here because there is no broker
      * and no acknowledgement to share: the events arrive from the write that just produced them, and a handler error
-     * reaches the writer. Under a reactive transaction the write rolls back, so nothing is folded by anyone. Without
+     * reaches the writer. Under a reactive transaction the write rolls back, so no handler's work survives. Without
      * one, {@link #dispatch(List, boolean)} offers every handler the event and reports the failures together, so a
      * failing handler cannot strand the handlers behind it. See ADR 90 for the isolation argument that makes the push
      * sinks single-consumer, and its ADR 57 follow-up for the no-transaction case here.

@@ -41,7 +41,7 @@ public interface SynchronousEventDispatcher {
      * <p>
      * {@code transactional} says whether the caller opened a transaction around the write and this dispatch, which
      * decides what a handler failure costs the handlers behind it. When it is {@code true} the failure rolls the write
-     * back, so nothing is folded by anyone and stopping at the first one loses nothing. When it is {@code false} the
+     * back, so no handler's work survives and stopping at the first one loses nothing. When it is {@code false} the
      * write has already committed, so give every handler the event and report the failures together: a synchronous
      * subscription has no replay, and a handler skipped because a sibling threw would never see that event.
      *

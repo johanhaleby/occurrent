@@ -31,10 +31,12 @@ import java.util.function.Consumer;
  * the thread that supplies the events, rather than asynchronously off a change stream.
  * <p>
  * It exists to be driven by the application service: after a successful write, the application service hands
- * the just-written cloud events to {@link #accept(List)}, which routes each event to the registered handlers
- * whose {@link SubscriptionFilter} matches, invoking them in registration order on the calling thread. A
+ * the just-written cloud events to {@link #dispatch(List, boolean)}, which routes each event to the registered
+ * handlers whose {@link SubscriptionFilter} matches, invoking them in registration order on the calling thread. A
  * handler exception reaches the caller (so, under a transaction, it rolls the write back). Whether it also stops the
- * handlers behind it depends on the transaction, see {@link #dispatch(List, boolean)}.
+ * handlers behind it depends on the transaction, which is what that second argument carries.
+ * {@link #accept(List)} routes the same way for callers driving the model directly, and always offers the event to
+ * every handler rather than stopping at the first failure, because nothing rolls back on that path.
  * <p>
  * Unlike the asynchronous {@code SubscriptionModel}s, this model has no lifecycle, start position, checkpoint,
  * catch-up, or replay: it only ever reacts to events fed to it here and now. The register-and-route machinery
@@ -47,7 +49,7 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     /**
      * Several handlers, unlike the push models, which take one each. Fan-out is safe here because there is no broker
      * and no acknowledgement to share: the events arrive from the write that just produced them, and a handler
-     * exception reaches the writer. Under a transaction the write rolls back, so nothing is folded by anyone. Without
+     * exception reaches the writer. Under a transaction the write rolls back, so no handler's work survives. Without
      * one, {@link #dispatch(List, boolean)} offers every handler the event and reports the failures together, so a
      * failing handler cannot strand the handlers behind it. See ADR 90 for the isolation argument that makes the push
      * sinks single-consumer, and its ADR 57 follow-up for the no-transaction case here.
@@ -106,7 +108,7 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
      * <p>
      * Handlers are isolated from each other here, because nothing on this path opens a transaction: the write has
      * already happened by the time a listener is called, so a handler that threw could otherwise leave the handlers
-     * behind it never folding that event.
+     * behind it never receiving that event at all.
      */
     @Override
     public void accept(List<CloudEvent> cloudEvents) {

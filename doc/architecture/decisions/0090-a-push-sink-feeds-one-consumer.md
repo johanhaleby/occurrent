@@ -56,7 +56,7 @@ one queue per projection or saga, is now the only one it can have.
 **Isolation is the default, and fan-out is what a subclass opts into.** `RegisteringSubscribable` has four subclasses:
 the two push models and the two synchronous ones. Only the synchronous ones may fan out, because they are the
 write-path dispatcher: no broker, no acknowledgement, no redelivery, so a handler failure fails the write rather than
-stranding a sibling, and under a transaction nothing is folded by anyone. (Only under a transaction, which the amendment
+stranding a sibling, and under a transaction no handler's work survives. (Only under a transaction, which the amendment
 to ADR 57 recorded on 2026-08-04 corrects. Without one the handlers are isolated from each other instead, and the
 paragraph near the end of this ADR that left this open now points at it.) So the base takes one consumer by default and
 the synchronous models declare `Consumers.MANY` with the reason written at the declaration. Not the other way round.

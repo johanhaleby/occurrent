@@ -79,8 +79,8 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
         ONE,
         /**
          * Several consumers, each receiving every matching event. Safe only where a failure cannot strand a sibling.
-         * The synchronous models qualify two ways: inside a transaction a handler failure fails the write, so nothing
-         * is folded by anyone, and outside one {@link #routeIsolated(Iterable)} gives every handler the event anyway.
+         * The synchronous models qualify two ways: inside a transaction a handler failure fails the write, so no handler's
+         * work survives, and outside one {@link #routeIsolated(Iterable)} gives every handler the event anyway.
          */
         MANY
     }

@@ -97,8 +97,8 @@ The consequence above says that without a transaction "a handler that throws aft
 trade. It says nothing about the handlers registered after it, and that turned out to be the part that mattered.
 
 `RegisteringSubscribable.route(Iterable)` looped the handlers unguarded, so the first exception ended the loop. Under a
-transaction that is harmless, because the write rolls back and nobody folded anything. Without one the write has already
-committed by the time handlers run, so the handlers behind the failure never folded that event and never would: a
+transaction that is harmless, because the write rolls back and no handler's work survives. Without one the write has already
+committed by the time handlers run, so the handlers behind the failure never received that event and never would: a
 synchronous subscription has no replay and no redelivery. A handler that did nothing wrong silently lost an event
 because a sibling failed.
 
@@ -123,8 +123,8 @@ rethrown exactly as it was, so a caller catching a specific type is unaffected, 
 Several are reported as the first with the rest attached through `Throwable.addSuppressed`, so no new exception type
 enters the public API.
 
-**A handler that failed is skipped for the rest of that batch.** Handing it the following events would fold them onto
-state that never saw the event it failed on, which corrupts the read model rather than salvaging it. Isolation is
+**A handler that failed is skipped for the rest of that batch.** Handing it the following events would update its read model from them
+without the one it failed on, which corrupts the read model rather than salvaging it. Isolation is
 between handlers, never within one handler's own event order.
 
 ### How the regime reaches the model
@@ -167,7 +167,7 @@ toward loss.
 
 - **No handler is left missing an event that was committed,** which is the half of the isolation rule in `AGENTS.md`
   this closes. Read the rule's "blocked by another one being faulty" clause carefully here: under a transaction a
-  handler behind a failure is still skipped, and that is not a gap, because the write it would have folded is rolled
+  handler behind a failure is still skipped, and that is not a gap, because the write it would have reacted to is rolled
   back and there is nothing left to miss. Without a transaction, where the write stands, every handler now gets the
   event. So the push sinks and the synchronous models get two different answers, because a broker message carries one
   acknowledgement and a committed write carries none.
