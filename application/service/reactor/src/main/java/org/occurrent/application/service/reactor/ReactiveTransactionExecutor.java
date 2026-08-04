@@ -50,6 +50,27 @@ public interface ReactiveTransactionExecutor {
     <T> Mono<T> inTransaction(Supplier<Mono<T>> action);
 
     /**
+     * Whether a transaction is in force right now. A synchronous subscription reads this to decide what happens to the
+     * handlers behind one that errors: inside a transaction dispatch stops at the first failure, outside one every
+     * handler is offered the event and the failures are reported together.
+     * <p>
+     * <strong>Answer for the moment of subscription, not for the executor as a whole.</strong> The application service
+     * asks during dispatch, which runs inside {@link #inTransaction(Supplier)}, so an implementation whose transaction
+     * depends on how it was configured or on what the caller already opened should read the live state.
+     * A {@link Mono} rather than a plain {@code boolean} because on this stack the transaction lives in the subscriber
+     * context, which only a reactive answer can reach. {@code SpringReactiveTransactionExecutor} answers from that
+     * context for exactly that reason.
+     * <p>
+     * The default emits {@code false}, so an implementation that does not override it gets the isolating behaviour,
+     * which cannot lose a reaction. See the 2026-08-04 amendment to ADR 57.
+     *
+     * @return A {@link Mono} emitting {@code true} if a transaction is active around the subscriber.
+     */
+    default Mono<Boolean> isTransactional() {
+        return Mono.just(false);
+    }
+
+    /**
      * A pass-through executor that runs the action with no transaction, deferring the supplier so it re-runs on
      * each subscription (and therefore on each retry).
      *

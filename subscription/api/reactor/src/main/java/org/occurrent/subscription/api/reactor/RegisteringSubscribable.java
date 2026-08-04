@@ -23,10 +23,15 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
+import org.occurrent.subscription.internal.HandlerFailures;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -71,9 +76,9 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
          */
         ONE,
         /**
-         * Several consumers, each receiving every matching event. Safe only where a failure cannot strand a sibling:
-         * the synchronous models qualify because there is no broker and no acknowledgement, so a handler failure
-         * fails the write itself.
+         * Several consumers, each receiving every matching event. Safe only where a failure cannot strand a sibling.
+         * The synchronous models qualify two ways: inside a transaction a handler failure fails the write, so no handler's
+         * work survives, and outside one {@link #routeIsolated(Iterable)} gives every handler the event anyway.
          */
         MANY
     }
@@ -255,6 +260,61 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
                     .filter(registration -> !pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent))
                     .concatMap(registration -> registration.action().apply(cloudEvent))
                     .then();
+        });
+    }
+
+    /**
+     * Route every event to every matching handler, like {@link #route(Iterable)}, except that one handler erroring does
+     * not stop the others. Each error is collected and the returned {@link Mono} errors once the whole batch has been
+     * offered.
+     * <p>
+     * A handler that errors is skipped for the rest of this batch, so isolation is between handlers and never within
+     * one handler's own event order. One error is emitted exactly as it was, several as the first with the rest in
+     * {@link Throwable#addSuppressed(Throwable)}.
+     * <p>
+     * See the 2026-08-04 amendment to ADR 57 for why a dispatch without a transaction works this way.
+     *
+     * @param cloudEvents The events to dispatch.
+     * @return A {@link Mono} that completes when every handler has been offered every event, or errors if any failed.
+     */
+    protected final Mono<Void> routeIsolated(Iterable<CloudEvent> cloudEvents) {
+        Objects.requireNonNull(cloudEvents, "cloudEvents cannot be null");
+        return Mono.defer(() -> {
+            // Created per subscription rather than per model, and every stage below is sequential through concatMap,
+            // so these need no synchronisation. Which handlers have failed is tracked by identity, not by id and not by
+            // Registration equality: cancelling frees an id for re-subscription, and a handler registered under a freed
+            // id must not inherit the failure of the one that released it. The failures themselves go in a list, so
+            // they are reported in the order they happened.
+            Set<Registration> failed = Collections.newSetFromMap(new IdentityHashMap<>());
+            List<Throwable> failures = new ArrayList<>();
+            return Flux.fromIterable(cloudEvents)
+                    .takeWhile(ignored -> running)
+                    .concatMap(cloudEvent -> Flux.fromIterable(registrations)
+                            .filter(registration -> !failed.contains(registration)
+                                    && !pausedSubscriptions.contains(registration.id()))
+                            // The matcher and the apply both go inside the defer. Outside it, a throw happens while
+                            // concatMap is invoking the mapper, which terminates the whole batch and records nothing,
+                            // and a filter on a payload field does throw from the matcher when the model was given no
+                            // DataFieldReader.
+                            .concatMap(registration -> Mono.defer(() -> registration.matcher().test(cloudEvent)
+                                            ? registration.action().apply(cloudEvent)
+                                            : Mono.<Void>empty())
+                                    .onErrorResume(error -> {
+                                        // An Error is not a recoverable situation, so it keeps going the way it does on
+                                        // the blocking stack. A checked exception is an ordinary handler failure and is
+                                        // collected, which only this stack can see, since a Consumer cannot throw one.
+                                        if (error instanceof Error) {
+                                            return Mono.error(error);
+                                        }
+                                        failed.add(registration);
+                                        failures.add(error);
+                                        return Mono.empty();
+                                    }))
+                            .then())
+                    // Deferred so the failures are read after the batch has run, not when this chain is assembled.
+                    .then(Mono.defer(() -> HandlerFailures.combined(failures)
+                            .map(Mono::<Void>error)
+                            .orElseGet(Mono::empty)));
         });
     }
 

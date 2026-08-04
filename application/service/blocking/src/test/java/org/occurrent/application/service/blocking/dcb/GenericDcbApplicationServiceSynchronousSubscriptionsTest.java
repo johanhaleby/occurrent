@@ -93,7 +93,7 @@ class GenericDcbApplicationServiceSynchronousSubscriptionsTest {
         private final List<CloudEvent> dispatched = new ArrayList<>();
 
         @Override
-        public void dispatch(List<CloudEvent> writtenCloudEvents) {
+        public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
             dispatched.addAll(writtenCloudEvents);
         }
 

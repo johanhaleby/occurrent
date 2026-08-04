@@ -24,7 +24,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
+import org.occurrent.application.service.blocking.TransactionExecutor;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.DomainEventConverter;
 import org.occurrent.domain.Name;
@@ -34,6 +36,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -92,18 +95,68 @@ class GenericApplicationServiceSynchronousSubscriptionsTest {
         assertThat(dispatcher.dispatched).isEmpty();
     }
 
+    @Test
+    void tells_the_dispatcher_there_is_no_transaction_when_the_default_executor_is_used() {
+        RegimeRecordingDispatcher dispatcher = new RegimeRecordingDispatcher();
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(dispatcher)
+                .build();
+
+        applicationService.execute(UUID.randomUUID().toString(), events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
+
+        // The default is TransactionExecutor.noTransaction(), so handlers must be isolated from each other.
+        assertThat(dispatcher.toldTransactional).isFalse();
+    }
+
+    @Test
+    void tells_the_dispatcher_there_is_a_transaction_when_the_executor_says_so() {
+        RegimeRecordingDispatcher dispatcher = new RegimeRecordingDispatcher();
+        var applicationService = GenericApplicationService.builder(eventStore, cloudEventConverter)
+                .synchronousSubscriptions(dispatcher)
+                .transactionExecutor(new TransactionExecutor() {
+                    @Override
+                    public <T> T inTransaction(Supplier<T> action) {
+                        return action.get();
+                    }
+
+                    @Override
+                    public boolean isTransactional() {
+                        return true;
+                    }
+                })
+                .build();
+
+        applicationService.execute(UUID.randomUUID().toString(), events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"));
+
+        assertThat(dispatcher.toldTransactional).isTrue();
+    }
+
     private static final class RecordingDispatcher implements SynchronousEventDispatcher {
         private final List<CloudEvent> dispatched = new ArrayList<>();
         private boolean hasSubscriptions = true;
 
         @Override
-        public void dispatch(List<CloudEvent> writtenCloudEvents) {
+        public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
             dispatched.addAll(writtenCloudEvents);
         }
 
         @Override
         public boolean hasSubscriptions() {
             return hasSubscriptions;
+        }
+    }
+
+    private static final class RegimeRecordingDispatcher implements SynchronousEventDispatcher {
+        private @Nullable Boolean toldTransactional;
+
+        @Override
+        public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+            toldTransactional = transactional;
+        }
+
+        @Override
+        public boolean hasSubscriptions() {
+            return true;
         }
     }
 }
