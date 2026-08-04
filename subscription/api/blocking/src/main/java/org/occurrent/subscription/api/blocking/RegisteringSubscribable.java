@@ -296,16 +296,18 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
                 break;
             }
             for (Registration registration : registrations) {
-                if (failed.contains(registration)) {
+                if (failed.contains(registration) || pausedSubscriptions.contains(registration.id())) {
                     continue;
                 }
-                if (!pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent)) {
-                    try {
+                // The matcher is inside the try, not just the action: a filter on a payload field throws from here when
+                // the model was given no DataFieldReader, and one subscription's filter must not cost the others theirs.
+                try {
+                    if (registration.matcher().test(cloudEvent)) {
                         registration.action().accept(cloudEvent);
-                    } catch (RuntimeException e) {
-                        failed.add(registration);
-                        failures.add(e);
                     }
+                } catch (RuntimeException e) {
+                    failed.add(registration);
+                    failures.add(e);
                 }
             }
         }

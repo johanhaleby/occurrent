@@ -291,12 +291,14 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
                     .takeWhile(ignored -> running)
                     .concatMap(cloudEvent -> Flux.fromIterable(registrations)
                             .filter(registration -> !failed.contains(registration)
-                                    && !pausedSubscriptions.contains(registration.id())
-                                    && registration.matcher().test(cloudEvent))
-                            // apply inside the defer, so a handler that throws instead of returning Mono.error becomes
-                            // an error signal this can catch. Called outside it, the throw happens while concatMap is
-                            // invoking the mapper, which terminates the whole batch and records nothing.
-                            .concatMap(registration -> Mono.defer(() -> registration.action().apply(cloudEvent))
+                                    && !pausedSubscriptions.contains(registration.id()))
+                            // The matcher and the apply both go inside the defer. Outside it, a throw happens while
+                            // concatMap is invoking the mapper, which terminates the whole batch and records nothing,
+                            // and a filter on a payload field does throw from the matcher when the model was given no
+                            // DataFieldReader.
+                            .concatMap(registration -> Mono.defer(() -> registration.matcher().test(cloudEvent)
+                                            ? registration.action().apply(cloudEvent)
+                                            : Mono.<Void>empty())
                                     .onErrorResume(error -> {
                                         // An Error is not a recoverable situation, so it keeps going the way it does on
                                         // the blocking stack. A checked exception is an ordinary handler failure and is

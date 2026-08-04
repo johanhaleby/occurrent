@@ -21,6 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import reactor.core.publisher.Mono;
@@ -285,6 +286,22 @@ class SynchronousSubscriptionModelTest {
 
         // Only this stack can produce one, since a Consumer cannot throw a checked exception.
         assertThat(folded).containsExactly("second");
+    }
+
+    @Test
+    void without_a_transaction_a_filter_that_cannot_be_answered_only_costs_its_own_subscription() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        // No DataFieldReader was supplied, so this filter throws when it is evaluated rather than when it is registered.
+        model.subscribe("payload-filtered", StreamSubscriptionFilter.filter(Filter.data("amount", Condition.eq(42))),
+                cloudEvent -> Mono.fromRunnable(() -> folded.add("payload-filtered")));
+        model.subscribe("plain", cloudEvent -> Mono.fromRunnable(() -> folded.add("plain")));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
+                .verifyErrorSatisfies(error -> assertThat(error).isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("cannot query the data field"));
+
+        assertThat(folded).containsExactly("plain");
     }
 
     @Test
