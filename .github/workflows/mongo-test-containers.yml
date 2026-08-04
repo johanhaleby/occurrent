@@ -1,0 +1,34 @@
+name: MongoDB test containers
+
+# Separate workflow rather than a job in maven.yml, for the same reason as ci-runnable-tests.yml and
+# adr-numbering.yml: maven.yml triggers with paths-ignore '**/*.md', so a change to only the test
+# sources or to this guard would not reliably run it. Its own paths mean it always runs on the
+# changes it exists to check.
+
+on:
+  pull_request:
+    paths:
+      - '**/src/test/**'
+      - '.github/scripts/check-mongo-test-containers.sh'
+      - '.github/workflows/mongo-test-containers.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '**/src/test/**'
+      - '.github/scripts/check-mongo-test-containers.sh'
+      - '.github/workflows/mongo-test-containers.yml'
+
+concurrency:
+  group: mongo-test-containers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mongo-test-containers:
+    name: mongo test containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No test pins a host port or builds the Mongo image name by hand
+        run: bash .github/scripts/check-mongo-test-containers.sh

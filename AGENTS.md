@@ -122,10 +122,12 @@ is for, and what it is allowed to cost.
 ## Testing
 
 - JUnit 5 plus AssertJ is the dominant style. jqwik covers a small set of property tests. Awaitility backs async, subscription, and deadline assertions.
-- Docker and Testcontainers-backed tests are common, mainly MongoDB and Redis. Some tests bind MongoDB to host port `27017`, which can collide with a locally running MongoDB or a concurrent test run.
+- Docker and Testcontainers-backed tests are common, mainly MongoDB and Redis. Nothing binds a fixed host port any more, so a locally running MongoDB and a concurrent test run are both harmless (ADR 94).
 - On a macOS Docker runtime such as Colima, Mongo Testcontainers can intermittently fail with `MongoSocketOpenException` or "Prematurely reached end of stream" right after container start. Retry once before concluding a test is broken.
-- `MongoDBContainer.getReplicaSetUrl()` (no argument) always targets the `test` database. Use `getReplicaSetUrl(String databaseName)` for isolation, and do not string-concat a suffix onto the URL, because MongoDB forbids dots in database names, so the name silently stays `test` and causes cross-test collisions.
-- Restart-pattern tests that boot a fresh context with `SpringApplication.run(...)` rather than `@SpringBootTest` get no `@ServiceConnection`, so pass `--spring.data.mongodb.uri=...` in the args. Those tests pin host port `27017` with `.withReuse(true)`, which is reliable here.
+- Get a MongoDB container from `ReplicaSetReadyMongoDBContainer.withDefaultVersion()`, never `new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))`. Surefire is what supplies that property, so building the name by hand gives an IDE run the image `mongo:null`. A CI guard fails either mistake.
+- That container scopes every database name to itself, so `getReplicaSetUrl()` returns a database no other test class and no concurrent run can reach, and appending a collection to it (`getReplicaSetUrl() + ".events"`) is the supported way to name one. Passing an explicit `getReplicaSetUrl(String databaseName)` is scoped too, so a literal name is safe.
+- The Mongo url property is `spring.mongodb.uri`. Spring Boot 4.1 deprecates `spring.data.mongodb.uri` at error level, so the old name is not bound at all and a config that still uses it silently falls back to `mongodb://localhost:27017/test`. That was invisible while the containers pinned 27017.
+- Restart-pattern tests that boot a fresh context with `SpringApplication.run(...)` rather than `@SpringBootTest` get no `@ServiceConnection`, so pass `--spring.mongodb.uri=...` in the args, built from `getReplicaSetUrl(...)`. A test whose application reads that url from configuration instead needs `@DynamicPropertySource`, since the container's port is not known until it starts.
 - There is no Failsafe split. Unit and integration-style tests both run under Surefire.
 
 ## Build and verification
