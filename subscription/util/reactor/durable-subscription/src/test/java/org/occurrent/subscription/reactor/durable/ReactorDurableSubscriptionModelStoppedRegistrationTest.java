@@ -16,23 +16,13 @@
 
 package org.occurrent.subscription.reactor.durable;
 
-import io.cloudevents.CloudEvent;
-import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import reactor.core.publisher.Flux;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import reactor.core.publisher.Mono;
 
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -70,7 +60,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.stop();
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
-        delegate.globalCheckpoint = new StringCheckpoint("much-later");
+        delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
@@ -81,7 +71,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     void a_subscription_that_already_has_a_stored_position_keeps_it() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
-        storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("from-a-previous-run"));
+        storage.checkpoints.put(SUBSCRIPTION_ID, new StringBasedCheckpoint("from-a-previous-run"));
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
 
@@ -102,7 +92,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         delegate.failGlobalCheckpoint = false;
-        delegate.globalCheckpoint = new StringCheckpoint("read-again-at-start");
+        delegate.globalCheckpoint = new StringBasedCheckpoint("read-again-at-start");
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("read-again-at-start");
@@ -163,55 +153,4 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         return ((StartAt.StartAtCheckpoint) delegate.startedAt.getFirst()).checkpoint.asString();
     }
 
-    private record StringCheckpoint(String value) implements Checkpoint {
-        @Override
-        public String asString() {
-            return value;
-        }
-    }
-
-    // Records what start position it is asked to read from, and hands back no events, since these tests are about the
-    // position rather than delivery.
-    private static final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel {
-        final List<StartAt> startedAt = new CopyOnWriteArrayList<>();
-        Checkpoint globalCheckpoint;
-        boolean failGlobalCheckpoint = false;
-
-        private RecordingSubscriptionModel(String initialGlobalCheckpoint) {
-            this.globalCheckpoint = new StringCheckpoint(initialGlobalCheckpoint);
-        }
-
-        @Override
-        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
-            startedAt.add(startAt);
-            return Flux.never();
-        }
-
-        @Override
-        public Mono<Checkpoint> globalCheckpoint() {
-            return failGlobalCheckpoint
-                    ? Mono.error(new IllegalStateException("Cannot read the position right now"))
-                    : Mono.just(globalCheckpoint);
-        }
-    }
-
-    private static final class InMemoryCheckpointStorage implements CheckpointStorage {
-        final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
-
-        @Override
-        public Mono<Checkpoint> read(String subscriptionId) {
-            return Mono.justOrEmpty(checkpoints.get(subscriptionId));
-        }
-
-        @Override
-        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
-            checkpoints.put(subscriptionId, checkpoint);
-            return Mono.just(checkpoint);
-        }
-
-        @Override
-        public Mono<Void> delete(String subscriptionId) {
-            return Mono.fromRunnable(() -> checkpoints.remove(subscriptionId));
-        }
-    }
 }

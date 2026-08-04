@@ -63,7 +63,7 @@ import java.util.function.Predicate;
  * {@link Consumers#MANY}. See ADR 90.
  */
 @NullMarked
-public abstract class RegisteringSubscribable implements Subscribable, SubscriptionModelLifeCycle {
+public abstract class RegisteringSubscribable implements Subscribable, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel {
 
     /**
      * How many consumers a subclass accepts, fixed at construction.
@@ -240,6 +240,11 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
      */
     public final boolean hasSubscriptions() {
         return !registrations.isEmpty();
+    }
+
+    @Override
+    public final Set<String> subscriptionIds() {
+        return Set.copyOf(subscriptionIds);
     }
 
     /**

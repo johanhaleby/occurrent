@@ -30,6 +30,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
@@ -52,11 +53,14 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
 
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalCheckpointErrorMessage;
@@ -79,7 +83,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * {@link Flux} primitive.
  */
 @NullMarked
-public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
+public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
 
     private final ReactiveMongoOperations mongo;
@@ -358,6 +362,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     @Override
     public boolean isPaused(String subscriptionId) {
         return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    @Override
+    public Set<String> subscriptionIds() {
+        return Stream.concat(runningSubscriptions.keySet().stream(), pausedSubscriptions.keySet().stream())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private static final class InternalSubscription {

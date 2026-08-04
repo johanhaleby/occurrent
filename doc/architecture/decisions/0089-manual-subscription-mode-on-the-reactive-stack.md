@@ -69,6 +69,28 @@ ids, and `occurrent-testing-junit-jupiter` depends only on the blocking subscrip
 application under `manual` resumes subscriptions by id. Worth stating rather than leaving someone to
 discover it.
 
+> **Amended for 0.32.0, under #395.** The reactor `IntrospectableSubscriptionModel` now exists, so the
+> premise above no longer holds and the reactive twin of the testing module (#530) is unblocked. Two
+> decisions in it are worth recording here rather than rediscovering.
+>
+> `subscriptionIds()` returns a plain `Set<String>` rather than a `Mono`, because it is answered from a
+> registry the model already holds. Every method on the reactive `SubscriptionModelLifeCycle` returns a
+> plain value for the same reason.
+>
+> It has no `of(..)` unwrapping helper, unlike the blocking twin, because that one walks a
+> `DelegatingSubscriptionModel` chain and the reactive stack has no such interface: the chain is composed
+> through constructors, as this ADR already describes. A caller reaches the interface with `instanceof` on
+> the subscription model itself. That is also why the reactive twin can offer `startAll()` while the model
+> has none: enumerating ids and starting them is the extension's job, not the model's.
+>
+> **What that does not reach, on either stack.** The subscription DSL wrappers (`Subscriptions`,
+> `StreamSubscriptions`, `DcbSubscriptions`) hold their model in a private field and expose no accessor, and
+> `DcbSubscriptionModelAdapter` forwards lifecycle calls without forwarding introspection. So a caller who
+> injects only a DSL wrapper cannot reach the ids through it, and `of(..)` would not have helped: the
+> blocking adapter is not a `DelegatingSubscriptionModel` either, so the blocking helper cannot unwrap it
+> today. Inject the subscription model bean when you need the ids. Making the wrappers forward is a separate
+> change on both stacks, and nothing needs it yet.
+
 **Sagas need nothing.** `@Saga` is blocking only, so the timer gating ADR 86 added has no reactive twin to
 keep in step.
 
