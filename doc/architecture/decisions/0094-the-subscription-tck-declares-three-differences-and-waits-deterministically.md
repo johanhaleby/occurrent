@@ -120,8 +120,21 @@ the one `EventStoreFixture.timePrecision()` sits on: declare what cannot be aske
   refusals get asserted rather than rediscovered.
 
 `globalCheckpoint()` is asked rather than declared, because `PositionOrderedReader.writesPosition()` set that
-precedent and a declaration can go stale. The suite pins that a model answering null cannot sit behind catch-up, which
-is the contract #395 calls easy to miss and expensive to get wrong.
+precedent and a declaration can go stale. The contract is the one #395 calls easy to miss and expensive to get wrong.
+
+**Amended when that suite was actually written: half of what this paragraph promised cannot be asserted from the TCK.**
+It said the suite would show that a model answering null cannot sit behind catch-up. Driving catch-up needs a
+`CatchupSubscriptionModel`, which lives in a wrapper module, and the TCK leaf depends on `occurrent-subscription-api-blocking`
+and nothing else on purpose. Reaching for the wrapper to assert the refusal would put a wrapper dependency into the
+contract module for every implementor, which is a worse trade than moving the assertion. So it moves to the wrapper
+suites, which have the catch-up models in scope anyway.
+
+What `CheckpointAwareSubscriptionModelConformance` does assert is the half that matters most and was never checked:
+a position read before a write, used as `StartAt.checkpoint(..)`, yields a subscription that receives that write. That
+is exactly the handover a catch-up subscription performs at the end of its replay, and a model failing it loses every
+event written while history replayed. Also that asking twice does not consume the position, since catch-up reads it per
+subscription rather than per model. The null answer is asserted as what it honestly means, that the model is still a
+working live model but cannot seed a handover.
 
 **Amended while phase 6 PR 2 was written: two more differences turned out to need declaring, both found by running the
 suite rather than by reading the interfaces.**

@@ -91,6 +91,16 @@ class SuiteNeverSkipsTest {
     }
 
     @Test
+    void the_checkpoint_suite_fails_every_test_against_a_model_that_honours_nothing() {
+        assertEveryTestFails(HonoursNothingCheckpointAwareConformance.class, "a model that honours nothing");
+    }
+
+    @Test
+    void the_checkpoint_suite_passes_every_test_against_a_model_that_honours_everything() {
+        assertEveryTestPasses(HonoursEverythingCheckpointAwareConformance.class, "subscription model");
+    }
+
+    @Test
     void the_in_process_suite_fails_every_test_against_a_model_that_delivers_asynchronously() {
         // The one case where "honours nothing" is the wrong shape. This suite's whole subject is that delivery already
         // happened when publishing returned, so the model that must fail it is a working asynchronous one rather than a
@@ -104,6 +114,7 @@ class SuiteNeverSkipsTest {
                 .describedAs("the scan must reach the suites, or a clean verdict means only that it looked nowhere")
                 .contains(CheckpointStorageConformance.class.getName(), SubscriptionModelConformance.class.getName(),
                         IntrospectableSubscriptionModelConformance.class.getName(),
+                        CheckpointAwareSubscriptionModelConformance.class.getName(),
                         InProcessDeliveryConformance.class.getName());
 
         SortedMap<String, List<String>> offenders = SkipMechanismScan.of(SubscriptionModelConformance.class);
@@ -259,6 +270,22 @@ class SuiteNeverSkipsTest {
     }
 
     static class HonoursEverythingIntrospectionConformance extends IntrospectableSubscriptionModelConformance {
+
+        @Override
+        protected SubscriptionModelFixture createFixture() {
+            return new WorkingSubscriptionModelFixture();
+        }
+    }
+
+    static class HonoursNothingCheckpointAwareConformance extends CheckpointAwareSubscriptionModelConformance {
+
+        @Override
+        protected SubscriptionModelFixture createFixture() {
+            return new NoopSubscriptionModelFixture();
+        }
+    }
+
+    static class HonoursEverythingCheckpointAwareConformance extends CheckpointAwareSubscriptionModelConformance {
 
         @Override
         protected SubscriptionModelFixture createFixture() {

@@ -21,6 +21,9 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -47,7 +50,7 @@ import java.util.function.Predicate;
  * exercises those two branches of the fixture's declarations. The opposite branches are exercised by Occurrent's own
  * models.
  */
-class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel {
+class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, CheckpointAwareSubscriptionModel {
 
     private final Map<String, Registration> registrations = new ConcurrentHashMap<>();
     private final Set<String> paused = ConcurrentHashMap.newKeySet();
@@ -68,6 +71,17 @@ class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubsc
      */
     WorkingSubscriptionModel(Duration deliveryDelay) {
         this.deliveryDelay = deliveryDelay;
+    }
+
+    /**
+     * This model has no history, so every start position means the same thing as starting live, and {@code subscribe}
+     * ignores {@link StartAt} accordingly. That is why a fixed checkpoint is an honest answer here rather than a stub:
+     * a write after the subscription starts arrives either way, which is the property the suite asserts. Do not read
+     * this as a model with real position semantics.
+     */
+    @Override
+    public Checkpoint globalCheckpoint() {
+        return new StringBasedCheckpoint("working-model-has-no-history");
     }
 
     @Override
