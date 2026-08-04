@@ -160,7 +160,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                 // A successful append is assigned a contiguous global-position block, so re-read exactly that block to
                 // get the events enriched with their positions, then dispatch inside the transaction.
                 return eventStore.read(DcbCriteria.all(), DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition()))
-                        .flatMap(enrichedStream -> synchronousEventDispatcher.dispatch(enrichedStream.events()).thenReturn(result));
+                        .flatMap(enrichedStream -> synchronousEventDispatcher.dispatch(enrichedStream.events(), transactionExecutor.isTransactional()).thenReturn(result));
             });
         });
         // Enter the transaction executor only when synchronous dispatch must commit atomically with the append.

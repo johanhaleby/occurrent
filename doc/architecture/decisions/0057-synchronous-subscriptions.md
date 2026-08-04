@@ -89,3 +89,69 @@ annotation processor to invoke the handler through its Spring proxy rather than 
 - **No free lunch.** Enabling synchronous subscriptions adds one read per event-producing write, to recover the
   global position for handler metadata, paid only while at least one synchronous subscription is registered.
 - **Cross-datastore handlers are never atomic** with the event write (no distributed transaction).
+
+## Amendment (2026-08-04): without a transaction, a failing handler does not strand its siblings
+
+The consequence above says that without a transaction "a handler that throws after the committed write surfaces as an
+`execute` failure even though the events persist." That is true of the *throwing* handler and it remains the deliberate
+trade. It says nothing about the handlers registered after it, and that turned out to be the part that mattered.
+
+`RegisteringSubscribable.route(Iterable)` looped the handlers unguarded, so the first exception ended the loop. Under a
+transaction that is harmless, because the write rolls back and nobody folded anything. Without one the write has already
+committed by the time handlers run, so the handlers behind the failure never folded that event and never would: a
+synchronous subscription has no replay and no redelivery. A handler that did nothing wrong silently lost an event
+because a sibling failed.
+
+[ADR 90](0090-a-push-sink-feeds-one-consumer.md) made both push sinks single-consumer for exactly this coupling and
+deliberately left the synchronous models fanning out, on the argument that a handler failure here fails the write
+instead of stranding a sibling. **That argument holds only where a transaction is present, which is not the default.**
+`GenericApplicationService` and `GenericDcbApplicationService` both default to `TransactionExecutor.noTransaction()`.
+The Spring starter is the opposite: it auto-configures a `SpringTransactionExecutor` whenever the event store is
+enabled, so a Spring Boot application is atomic unless it replaces that bean. So the hole was real, and narrower than
+"synchronous subscriptions are broken".
+
+### Decision
+
+Dispatch behaves differently in the two regimes, and the application service tells the model which one it is in.
+
+**Inside a transaction, dispatch still stops at the first failure.** The write is about to roll back, so the handlers
+behind it would only do work that is discarded, and a synchronous handler can have effects outside the datastore that no
+rollback undoes. Nothing is lost by stopping, so nothing changes here.
+
+**Outside a transaction, every handler is offered every event and the failures are reported afterwards.** One failure is
+rethrown exactly as it was, so a caller catching a specific type is unaffected, which is the overwhelmingly common case.
+Several are reported as the first with the rest attached through `Throwable.addSuppressed`, so no new exception type
+enters the public API.
+
+**A handler that failed is skipped for the rest of that batch.** Handing it the following events would fold them onto
+state that never saw the event it failed on, which corrupts the read model rather than salvaging it. Isolation is
+between handlers, never within one handler's own event order.
+
+### How the regime reaches the model
+
+`TransactionExecutor` and `ReactiveTransactionExecutor` gained `isTransactional()`, and the application service passes
+the answer to a new `dispatch(List, boolean)` overload. The overload is a `default` that delegates to the existing
+single-argument form, so nothing that implements the dispatcher today has to change, and driving the model directly
+through `dispatch(List)` keeps its old fail-fast behaviour.
+
+**`isTransactional()` defaults to `false`,** for the same reason `Consumers.ONE` is the default in ADR 90: the safe
+answer is the default and opting out is explicit. The three implementations Occurrent ships override it to `true`. A
+third-party executor that opens a transaction and forgets to override gets isolation where fail-fast was wanted, which
+costs handler work inside a transaction that is rolling back regardless. The other default would silently strand
+siblings, so this errs toward wasted work rather than toward loss.
+
+### Consequences
+
+- **No handler is left missing an event that was committed,** which is the half of the isolation rule in `AGENTS.md`
+  this closes. Read the rule's "blocked by another one being faulty" clause carefully here: under a transaction a
+  handler behind a failure is still skipped, and that is not a gap, because the write it would have folded is rolled
+  back and there is nothing left to miss. Without a transaction, where the write stands, every handler now gets the
+  event. So the push sinks and the synchronous models get two different answers, because a broker message carries one
+  acknowledgement and a committed write carries none.
+- **A best-effort synchronous subscription can now report more than one failure at once.** A caller that inspected only
+  the thrown exception still sees the first one unchanged and has to read `getSuppressed()` to see the rest.
+- **Handler order across a batch is unchanged.** Events are still offered outermost and handlers innermost, in
+  registration order, so a healthy handler sees exactly the sequence it saw before.
+- **Fan-out on a synchronous model stays supported.** This was deliberately not solved by refusing several handlers the
+  way the push sinks do. Unlike a broker queue there is no per-consumer transport to migrate to, so refusing would break
+  working applications with nowhere to go.

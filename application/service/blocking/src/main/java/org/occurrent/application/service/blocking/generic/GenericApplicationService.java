@@ -151,7 +151,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                     // (stream version and global position), then dispatch on this thread, inside the transaction.
                     int newEventCount = newEvents.size();
                     List<CloudEvent> writtenEnriched = eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newEventCount).events().toList();
-                    synchronousEventDispatcher.dispatch(writtenEnriched);
+                    synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
                 }
 
                 return new Tuple<>(writeResult, newDomainEvents);

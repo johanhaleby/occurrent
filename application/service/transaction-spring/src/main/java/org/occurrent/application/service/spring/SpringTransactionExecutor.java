@@ -143,6 +143,11 @@ public class SpringTransactionExecutor implements TransactionExecutor {
     }
 
     @Override
+    public boolean isTransactional() {
+        return true;
+    }
+
+    @Override
     public String toString() {
         return "SpringTransactionExecutor{transactionTemplate=" + transactionTemplate + ", conflictRetry=" + conflictRetry + "}";
     }

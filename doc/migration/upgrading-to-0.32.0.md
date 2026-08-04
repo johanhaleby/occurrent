@@ -5,9 +5,10 @@ compile time: a push sink now feeds exactly one projection or saga, so an applic
 refuses to start. If you use a push source, read
 [section 3](#3-a-push-sink-feeds-exactly-one-projection-or-saga) first.
 
-Three things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+Four things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
-`TimeRepresentation.RFC_3339_STRING`, and a push sink feeds one consumer.
+`TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, and a synchronous subscription no longer stops at
+the first failing handler.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -225,3 +226,50 @@ a consumer group per projection, or something else is your broker's vocabulary r
 
 If you drive the sinks yourself rather than through `@Projection`, the same applies: construct one per consumer and
 call `accept(...)` on each from your listener.
+
+## 4. A synchronous subscription no longer stops at the first failing handler
+
+Only relevant if you register more than one synchronous subscription and you do **not** run them in a transaction. If
+you use the Spring Boot starter without replacing its `TransactionExecutor` bean, nothing here changes for you.
+
+Handlers used to run in registration order until one threw, and that exception ended the dispatch. With a transaction
+that is harmless, because the write rolls back and no handler keeps a fold of an event that no longer exists. Without
+one the write has already committed by the time handlers run, so the handlers behind the failure never folded that
+event, and a synchronous subscription has no replay to catch them up. They never would.
+[ADR 57](../architecture/decisions/0057-synchronous-subscriptions.md) has the reasoning, in the amendment at the end.
+
+There is no recipe, because nothing here is a rename a recipe could apply.
+
+### What changes
+
+Every handler is now offered every event, and the failures are reported once the batch has been dispatched:
+
+- **One handler failed.** Identical to before. That exception reaches you exactly as it was.
+- **Several handlers failed.** The first one reaches you, and the rest arrive in its `getSuppressed()`. If you log or
+  match on the exception from `execute`, read `getSuppressed()` too, or you will see only the first failure.
+- **A handler that failed is skipped for the rest of that write's events.** Handing it the later events would fold them
+  onto state that never saw the one it failed on.
+- **An `Error` still stops the dispatch,** rather than being collected like an exception.
+
+### If you would rather keep the old behaviour
+
+Wire a transaction. That was always the way to make synchronous handlers atomic with the write, and it now also selects
+the stop-at-the-first-failure dispatch:
+
+```java
+GenericApplicationService.builder(eventStore, cloudEventConverter)
+        .synchronousSubscriptions(synchronousSubscriptionModel)
+        .transactionExecutor(new SpringTransactionExecutor(transactionManager))
+        .build();
+```
+
+### If you implement the dispatcher yourself
+
+`SynchronousEventDispatcher` and `ReactiveSynchronousEventDispatcher` gained a `dispatch(List, boolean)` overload, where
+the boolean says whether the caller opened a transaction. It has a default that delegates to the existing
+`dispatch(List)`, so your implementation still compiles and still behaves as it did. Override it to isolate your own
+handlers, since your implementation is the one running them and Occurrent cannot do it for you.
+
+Likewise, if you implement `TransactionExecutor` or `ReactiveTransactionExecutor` and you do open a transaction,
+override the new `isTransactional()` to return `true`. It defaults to `false`, which selects the isolating dispatch,
+because that is the answer that cannot lose a reaction if you forget.

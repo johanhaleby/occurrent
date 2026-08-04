@@ -56,7 +56,9 @@ one queue per projection or saga, is now the only one it can have.
 **Isolation is the default, and fan-out is what a subclass opts into.** `RegisteringSubscribable` has four subclasses:
 the two push models and the two synchronous ones. Only the synchronous ones may fan out, because they are the
 write-path dispatcher: no broker, no acknowledgement, no redelivery, so a handler failure fails the write rather than
-stranding a sibling, and under a transaction nothing is folded by anyone. So the base takes one consumer by default and
+stranding a sibling, and under a transaction nothing is folded by anyone. (Only under a transaction, which the amendment
+to ADR 57 recorded on 2026-08-04 corrects. Without one the handlers are isolated from each other instead, and the
+paragraph near the end of this ADR that left this open now points at it.) So the base takes one consumer by default and
 the synchronous models declare `Consumers.MANY` with the reason written at the declaration. Not the other way round.
 Under the isolation rule the dangerous configuration is the one that has to announce itself, and a fifth subclass added
 later then gets the safe behaviour without anyone remembering to ask for it.
@@ -101,6 +103,12 @@ blocks the ones registered after it. Under a transaction that is arguably correc
 nothing is lost. But `TransactionExecutor` defaults to `noTransaction()`, and then the event is written while the
 projections behind the faulty one never fold it, which is loss by the definition above. Checking that against the rule
 on its own terms is ADR 57 territory and is filed separately rather than bundled here.
+
+> **Settled on 2026-08-04.** The premise held: the programmatic application services do default to `noTransaction()`,
+> though the Spring starter is transactional by default, so the hole was real and narrower than it looks above. The
+> answer was to isolate the handlers rather than to refuse fan-out, since unlike a broker queue there is no
+> per-consumer transport to move to. See the amendment at the end of
+> [ADR 57](0057-synchronous-subscriptions.md).
 
 **Live redelivery de-dup is now documented.** It was real, it is what makes a transient failure recoverable, and it
 was mentioned in no ADR and covered by no test for the case where an event is sent twice live and never replayed.

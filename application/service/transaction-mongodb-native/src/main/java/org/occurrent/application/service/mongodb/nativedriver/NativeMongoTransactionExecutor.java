@@ -92,6 +92,11 @@ public class NativeMongoTransactionExecutor implements TransactionExecutor {
     }
 
     @Override
+    public boolean isTransactional() {
+        return true;
+    }
+
+    @Override
     public String toString() {
         return NativeMongoTransactionExecutor.class.getSimpleName() + "{transactionOptions=" + transactionOptions + "}";
     }

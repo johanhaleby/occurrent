@@ -50,6 +50,21 @@ public interface ReactiveTransactionExecutor {
     <T> Mono<T> inTransaction(Supplier<Mono<T>> action);
 
     /**
+     * Whether {@link #inTransaction(Supplier)} actually opens a transaction. A synchronous subscription reads this to
+     * decide what happens to the handlers behind one that errors: inside a transaction dispatch stops at the first
+     * failure, outside one every handler is offered the event and the failures are reported together.
+     * <p>
+     * <strong>Override this and return {@code true} if you open a transaction.</strong> The default is {@code false},
+     * so an implementation that does not override it gets the isolating behaviour, which cannot lose a reaction. See
+     * the 2026-08-04 amendment to ADR 57.
+     *
+     * @return {@code true} if this executor runs the action inside a transaction.
+     */
+    default boolean isTransactional() {
+        return false;
+    }
+
+    /**
      * A pass-through executor that runs the action with no transaction, deferring the supplier so it re-runs on
      * each subscription (and therefore on each retry).
      *

@@ -141,7 +141,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
                                 // the store (stream version and global position), then dispatch inside the transaction.
                                 return eventStore.read(streamId, Math.toIntExact(writeResult.oldStreamVersion()), newCloudEvents.size())
                                         .flatMap(enrichedStream -> enrichedStream.events().collectList())
-                                        .flatMap(enriched -> synchronousEventDispatcher.dispatch(enriched).thenReturn(result));
+                                        .flatMap(enriched -> synchronousEventDispatcher.dispatch(enriched, transactionExecutor.isTransactional()).thenReturn(result));
                             });
                 }));
         Mono<Result<E>> readDecideWrite = (dispatchSynchronously ? transactionExecutor.inTransaction(readDecideWriteUnit) : Mono.defer(readDecideWriteUnit)).retryWhen(retry);

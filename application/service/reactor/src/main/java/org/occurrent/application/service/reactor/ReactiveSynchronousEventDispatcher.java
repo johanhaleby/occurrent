@@ -42,6 +42,29 @@ public interface ReactiveSynchronousEventDispatcher {
     Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents);
 
     /**
+     * Dispatch as {@link #dispatch(List)} does, told whether the write and the handlers are running inside a
+     * transaction. This is the overload the reactive application service calls.
+     * <p>
+     * When {@code transactional} is {@code true} a handler failure rolls the write back, so stopping at the first one
+     * loses nothing. When it is {@code false} the write has already committed, so every handler should be given the
+     * event and the failures reported together, because a synchronous subscription has no replay and a handler skipped
+     * because a sibling errored would never see that event.
+     * <p>
+     * <strong>Override this if you fan out to several handlers.</strong> The default ignores the flag and delegates to
+     * {@link #dispatch(List)}, so an implementation that does not override it keeps stopping at the first failure even
+     * when there is no transaction to roll the write back. That is source-compatible but it is the behaviour the
+     * 2026-08-04 amendment to ADR 57 exists to correct, and Occurrent cannot correct it on your behalf, since your
+     * implementation owns the dispatch loop.
+     *
+     * @param writtenCloudEvents The cloud events written by the current command, enriched with stream metadata.
+     * @param transactional      Whether the caller wrapped this dispatch in a transaction.
+     * @return A {@link Mono} that completes when dispatch is done.
+     */
+    default Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+        return dispatch(writtenCloudEvents);
+    }
+
+    /**
      * @return {@code true} if at least one synchronous subscription is registered. When {@code false} the reactive
      * application service does no synchronous-dispatch work at all for a write.
      */

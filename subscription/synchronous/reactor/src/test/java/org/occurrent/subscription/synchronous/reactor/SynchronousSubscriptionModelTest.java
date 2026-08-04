@@ -159,6 +159,206 @@ class SynchronousSubscriptionModelTest {
         assertThat(received).isEmpty();
     }
 
+    @Test
+    void without_a_transaction_an_erroring_handler_does_not_stop_the_handlers_behind_it() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("first", cloudEvent -> Mono.fromRunnable(() -> folded.add("first")));
+        model.subscribe("second", cloudEvent -> Mono.error(new IllegalStateException("handler failed")));
+        model.subscribe("third", cloudEvent -> Mono.fromRunnable(() -> folded.add("third")));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
+                // A single failure is emitted exactly as it was, so a caller matching on a type still sees it.
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(IllegalStateException.class).hasMessage("handler failed");
+                    assertThat(error.getSuppressed()).isEmpty();
+                });
+
+        assertThat(folded).containsExactly("first", "third");
+    }
+
+    @Test
+    void without_a_transaction_several_failures_are_reported_together() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("first", cloudEvent -> Mono.error(new IllegalStateException("first failed")));
+        model.subscribe("second", cloudEvent -> Mono.fromRunnable(() -> folded.add("second")));
+        model.subscribe("third", cloudEvent -> Mono.error(new UnsupportedOperationException("third failed")));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(IllegalStateException.class).hasMessage("first failed");
+                    assertThat(error.getSuppressed()).hasSize(1);
+                    assertThat(error.getSuppressed()[0]).isInstanceOf(UnsupportedOperationException.class).hasMessage("third failed");
+                });
+
+        assertThat(folded).containsExactly("second");
+    }
+
+    @Test
+    void inside_a_transaction_an_erroring_handler_stops_the_handlers_behind_it() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("first", cloudEvent -> Mono.fromRunnable(() -> folded.add("first")));
+        model.subscribe("second", cloudEvent -> Mono.error(new IllegalStateException("handler failed")));
+        model.subscribe("third", cloudEvent -> Mono.fromRunnable(() -> folded.add("third")));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), true))
+                .verifyErrorMessage("handler failed");
+
+        // The write is about to roll back, so running the handlers behind the failure would only do discarded work.
+        assertThat(folded).containsExactly("first");
+    }
+
+    @Test
+    void a_single_erroring_handler_reaches_the_caller_either_way() {
+        List.of(true, false).forEach(transactional -> {
+            SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+            model.subscribe("only", cloudEvent -> Mono.error(new IllegalStateException("handler failed")));
+
+            StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), transactional))
+                    .verifyErrorSatisfies(error -> {
+                        assertThat(error).as("transactional=%s", transactional)
+                                .isInstanceOf(IllegalStateException.class).hasMessage("handler failed");
+                        assertThat(error.getSuppressed()).as("transactional=%s", transactional).isEmpty();
+                    });
+        });
+    }
+
+    @Test
+    void without_a_transaction_a_handler_that_failed_is_skipped_for_the_rest_of_the_batch() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("failing", cloudEvent -> Mono.fromRunnable(() -> folded.add("failing:" + cloudEvent.getId()))
+                .then(Mono.error(new IllegalStateException("handler failed"))));
+        model.subscribe("healthy", cloudEvent -> Mono.fromRunnable(() -> folded.add("healthy:" + cloudEvent.getId())));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined"), cloudEvent("2", "NameWasChanged")), false))
+                .verifyErrorMessage("handler failed");
+
+        // Event 2 would be folded onto state that never saw event 1, so the failing handler does not get it. The
+        // healthy one is unaffected and receives both.
+        assertThat(folded).containsExactly("failing:1", "healthy:1", "healthy:2");
+    }
+
+    @Test
+    void without_a_transaction_a_handler_that_throws_instead_of_returning_an_error_is_still_isolated() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("first", cloudEvent -> Mono.fromRunnable(() -> folded.add("first")));
+        // Throws while building the Mono rather than returning Mono.error, which is what eager validation in a handler
+        // looks like.
+        model.subscribe("second", cloudEvent -> {
+            throw new IllegalStateException("handler failed");
+        });
+        model.subscribe("third", cloudEvent -> Mono.fromRunnable(() -> folded.add("third")));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
+                .verifyErrorMessage("handler failed");
+
+        assertThat(folded).containsExactly("first", "third");
+    }
+
+    @Test
+    void without_a_transaction_a_handler_error_that_is_not_an_exception_stops_the_batch() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("first", cloudEvent -> Mono.error(new AssertionError("not recoverable")));
+        model.subscribe("second", cloudEvent -> Mono.fromRunnable(() -> folded.add("second")));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
+                .verifyErrorSatisfies(error -> assertThat(error).isInstanceOf(AssertionError.class).hasMessage("not recoverable"));
+
+        // Matches the blocking stack, where only a RuntimeException is collected and an Error keeps propagating.
+        assertThat(folded).isEmpty();
+    }
+
+    @Test
+    void without_a_transaction_a_checked_exception_from_a_handler_is_collected_like_any_other_failure() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("first", cloudEvent -> Mono.error(new java.io.IOException("io failed")));
+        model.subscribe("second", cloudEvent -> Mono.fromRunnable(() -> folded.add("second")));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
+                .verifyErrorSatisfies(error -> assertThat(error).isInstanceOf(java.io.IOException.class).hasMessage("io failed"));
+
+        // Only this stack can produce one, since a Consumer cannot throw a checked exception.
+        assertThat(folded).containsExactly("second");
+    }
+
+    @Test
+    void without_a_transaction_two_handlers_failing_with_one_shared_exception_report_that_exception() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        RuntimeException shared = new IllegalStateException("shared failure");
+        model.subscribe("first", cloudEvent -> Mono.error(shared));
+        model.subscribe("second", cloudEvent -> Mono.error(shared));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
+                // Attaching the instance to itself would raise "Self-suppression not permitted" and hide both failures.
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).isSameAs(shared);
+                    assertThat(error.getSuppressed()).isEmpty();
+                });
+    }
+
+    @Test
+    void without_a_transaction_each_subscription_of_the_returned_mono_starts_from_a_clean_slate() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("failing", cloudEvent -> Mono.error(new IllegalStateException("handler failed")));
+        model.subscribe("healthy", cloudEvent -> Mono.fromRunnable(() -> folded.add("healthy")));
+
+        Mono<Void> dispatch = model.dispatch(List.of(cloudEvent("1", "NameDefined")), false);
+        StepVerifier.create(dispatch).verifyErrorMessage("handler failed");
+        StepVerifier.create(dispatch).verifyErrorMessage("handler failed");
+
+        // The failure record is built per subscription, so the second run offers the failing handler the event again
+        // rather than treating it as already broken, and reports the same error instead of completing empty.
+        assertThat(folded).containsExactly("healthy", "healthy");
+    }
+
+    @Test
+    void without_a_transaction_a_paused_subscription_is_still_skipped() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("quiet", cloudEvent -> Mono.fromRunnable(() -> folded.add("quiet")));
+        model.subscribe("loud", cloudEvent -> Mono.fromRunnable(() -> folded.add("loud")));
+        model.pauseSubscription("quiet");
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
+                .verifyComplete();
+
+        assertThat(folded).containsExactly("loud");
+    }
+
+    @Test
+    void without_a_transaction_a_stopped_model_dispatches_to_nobody() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("sub", cloudEvent -> Mono.fromRunnable(() -> folded.add("sub")));
+        model.stop();
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
+                .verifyComplete();
+
+        assertThat(folded).isEmpty();
+    }
+
+    @Test
+    void dispatch_without_the_transaction_argument_keeps_stopping_at_the_first_failure() {
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        List<String> folded = new ArrayList<>();
+        model.subscribe("first", cloudEvent -> Mono.error(new IllegalStateException("handler failed")));
+        model.subscribe("second", cloudEvent -> Mono.fromRunnable(() -> folded.add("second")));
+
+        StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined"))))
+                .verifyErrorMessage("handler failed");
+
+        // The single-argument overload is unchanged, so anything driving the model directly behaves as it always did.
+        assertThat(folded).isEmpty();
+    }
+
     private static CloudEvent cloudEvent(String id, String type) {
         return CloudEventBuilder.v1()
                 .withId(id)

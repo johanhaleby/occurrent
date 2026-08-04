@@ -35,7 +35,8 @@ import java.util.List;
  * Driven by the reactive application service: after a successful write it hands the just-written cloud events to
  * {@link #dispatch(List)}, which routes each event to the registered handlers whose {@link SubscriptionFilter}
  * matches, invoking them in registration order and sequentially (the next handler does not start until the previous
- * one's {@link Mono} completes). A handler error propagates, so under a reactive transaction it rolls the write back.
+ * one's {@link Mono} completes). A handler error reaches the caller, so under a reactive transaction it rolls the write
+ * back. Whether it also stops the handlers behind it depends on the transaction, see {@link #dispatch(List, boolean)}.
  * <p>
  * The register-and-route machinery lives in {@link RegisteringSubscribable}. This model adds the application-service
  * dispatch entry point. For an externally driven push feed (RabbitMQ, Kafka, ...) use {@code PushSubscriptionModel}.
@@ -46,9 +47,10 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     /**
      * Several handlers, unlike the push models, which take one each. Fan-out is safe here because there is no broker
      * and no acknowledgement to share: the events arrive from the write that just produced them, and a handler error
-     * propagates to the writer rather than stranding the handlers behind it. Under a reactive transaction the write
-     * rolls back, so nothing is folded by anyone. See ADR 90 for the isolation argument that makes the push sinks
-     * single-consumer, and the follow-up it leaves open for the no-transaction case here.
+     * reaches the writer. Under a reactive transaction the write rolls back, so nothing is folded by anyone. Without
+     * one, {@link #dispatch(List, boolean)} offers every handler the event and reports the failures together, so a
+     * failing handler cannot strand the handlers behind it. See ADR 90 for the isolation argument that makes the push
+     * sinks single-consumer, and its ADR 57 follow-up for the no-transaction case here.
      */
     public SynchronousSubscriptionModel() {
         super(Consumers.MANY);
@@ -66,5 +68,23 @@ public class SynchronousSubscriptionModel extends RegisteringSubscribable implem
     @Override
     public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents) {
         return route(writtenCloudEvents);
+    }
+
+    /**
+     * Dispatch as {@link #dispatch(List)} does, told whether the caller wrapped this in a reactive transaction.
+     * <p>
+     * Inside a transaction the first handler error stops dispatch, because the write is about to roll back and the
+     * handlers behind it would only be doing work that is discarded, possibly with effects outside the datastore.
+     * Outside one the write has already committed, so every handler is offered every event and the failures are
+     * reported afterwards. That is the difference this argument exists for: a handler skipped because a sibling errored
+     * would never see the event again, since this model has no replay. See the ADR 57 amendment.
+     *
+     * @param writtenCloudEvents The newly written cloud events.
+     * @param transactional      Whether the write and these handlers are running inside a transaction.
+     * @return A {@link Mono} that completes when dispatch is done.
+     */
+    @Override
+    public Mono<Void> dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+        return transactional ? route(writtenCloudEvents) : routeIsolated(writtenCloudEvents);
     }
 }

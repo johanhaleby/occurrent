@@ -149,6 +149,11 @@ public class SpringReactiveTransactionExecutor implements ReactiveTransactionExe
     }
 
     @Override
+    public boolean isTransactional() {
+        return true;
+    }
+
+    @Override
     public String toString() {
         return "SpringReactiveTransactionExecutor{transactionalOperator=" + transactionalOperator + ", conflictRetry=" + conflictRetry + "}";
     }
