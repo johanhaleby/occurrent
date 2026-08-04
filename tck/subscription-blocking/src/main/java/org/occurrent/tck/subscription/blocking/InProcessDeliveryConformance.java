@@ -23,8 +23,10 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.tck.ConformanceEvents;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -55,14 +57,30 @@ public abstract class InProcessDeliveryConformance extends SubscriptionModelSuit
     @Override
     protected abstract SubscriptionModelFixture createFixture();
 
+    private static final Duration START_TIMEOUT = Duration.ofSeconds(10);
+
     private static String subscriptionId() {
         return UUID.randomUUID().toString();
+    }
+
+    /**
+     * Waits for the subscription to report itself started before anything is published.
+     * <p>
+     * Delivering on the publishing thread does not by itself mean {@code subscribe} has finished registering by the time
+     * it returns, so a model that needs the barrier would otherwise fail here for a reason that has nothing to do with
+     * in-process delivery. Occurrent's own two models are started when {@code subscribe} returns, so this waits for
+     * something already true of them and costs them nothing.
+     */
+    private static void awaitStarted(Subscription subscription) {
+        assertThat(subscription.waitUntilStarted(START_TIMEOUT))
+                .as("the subscription did not start within " + START_TIMEOUT)
+                .isTrue();
     }
 
     @Test
     void the_handler_has_already_run_when_publishing_returns() {
         List<String> received = new ArrayList<>();
-        fixture().subscriptionModel().subscribe(subscriptionId(), cloudEvent -> received.add(cloudEvent.getId()));
+        awaitStarted(fixture().subscriptionModel().subscribe(subscriptionId(), cloudEvent -> received.add(cloudEvent.getId())));
         CloudEvent event = ConformanceEvents.event("1", "NameDefined");
 
         fixture().publish(List.of(event));
@@ -78,7 +96,7 @@ public abstract class InProcessDeliveryConformance extends SubscriptionModelSuit
     void the_handler_runs_on_the_publishing_thread() {
         List<Thread> handlerThreads = new ArrayList<>();
         Thread publishingThread = Thread.currentThread();
-        fixture().subscriptionModel().subscribe(subscriptionId(), cloudEvent -> handlerThreads.add(Thread.currentThread()));
+        awaitStarted(fixture().subscriptionModel().subscribe(subscriptionId(), cloudEvent -> handlerThreads.add(Thread.currentThread())));
 
         fixture().publish(List.of(ConformanceEvents.event("1", "NameDefined")));
 
@@ -96,8 +114,8 @@ public abstract class InProcessDeliveryConformance extends SubscriptionModelSuit
             return;
         }
         List<String> calls = new ArrayList<>();
-        fixture().subscriptionModel().subscribe("first", cloudEvent -> calls.add("first:" + cloudEvent.getId()));
-        fixture().subscriptionModel().subscribe("second", cloudEvent -> calls.add("second:" + cloudEvent.getId()));
+        awaitStarted(fixture().subscriptionModel().subscribe("first", cloudEvent -> calls.add("first:" + cloudEvent.getId())));
+        awaitStarted(fixture().subscriptionModel().subscribe("second", cloudEvent -> calls.add("second:" + cloudEvent.getId())));
 
         fixture().publish(List.of(ConformanceEvents.event("1", "NameDefined")));
 
@@ -109,7 +127,7 @@ public abstract class InProcessDeliveryConformance extends SubscriptionModelSuit
     @Test
     void every_event_in_one_publish_reaches_the_handler_in_order() {
         List<CloudEvent> received = new ArrayList<>();
-        fixture().subscriptionModel().subscribe(subscriptionId(), received::add);
+        awaitStarted(fixture().subscriptionModel().subscribe(subscriptionId(), received::add));
         CloudEvent first = ConformanceEvents.event("1", "NameDefined");
         CloudEvent second = ConformanceEvents.event("2", "NameWasChanged");
 

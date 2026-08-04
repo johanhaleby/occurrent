@@ -27,6 +27,7 @@ import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.data.mongodb.core.query.Query;
 
 import java.util.List;
 import java.util.UUID;
@@ -49,11 +50,14 @@ class SpringMongoSubscriptionModelFixture implements SubscriptionModelFixture {
 
     private final EventStore eventStore;
     private final SpringMongoSubscriptionModel subscriptionModel;
+    private final MongoTemplate mongoTemplate;
+    private final String eventCollectionName;
 
     SpringMongoSubscriptionModelFixture(MongoClient mongoClient, MongoTemplate mongoTemplate, String databaseName) {
         // A collection of its own per test, rather than a shared one, so the change stream this test watches never
         // sees another test's writes and cleanup never has to drop it.
-        String eventCollectionName = "events-" + UUID.randomUUID();
+        this.mongoTemplate = mongoTemplate;
+        this.eventCollectionName = "events-" + UUID.randomUUID();
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, databaseName));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
@@ -100,5 +104,8 @@ class SpringMongoSubscriptionModelFixture implements SubscriptionModelFixture {
     @Override
     public void close() {
         subscriptionModel.shutdown();
+        // Delete documents rather than dropping the collection: dropping kills a live change stream, and shutdown()
+        // above has only just asked this model's own stream to close.
+        mongoTemplate.remove(new Query(), eventCollectionName);
     }
 }
