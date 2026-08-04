@@ -17,7 +17,7 @@
 package org.occurrent.testing.springboot;
 
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
-import org.occurrent.testing.junit.OccurrentSubscriptionsExtension;
+import org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

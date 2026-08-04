@@ -24,28 +24,28 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>occurrent-testing-spring-boot</artifactId>
+    <artifactId>occurrent-testing-junit-jupiter-blocking</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-testing-junit-jupiter-blocking</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-context</artifactId>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
         </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib</artifactId>
             <optional>true</optional>
         </dependency>
 
@@ -58,13 +58,14 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-inmemory</artifactId>
+            <artifactId>occurrent-subscription-synchronous-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-test</artifactId>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -78,4 +79,27 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jetbrains.dokka</groupId>
+                        <artifactId>dokka-maven-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

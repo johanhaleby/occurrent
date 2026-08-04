@@ -57,6 +57,8 @@ it.** The layout is two leaves under a flat `testing/` aggregator, matching the 
 | `testing/junit-jupiter` | `occurrent-testing-junit-jupiter` | JUnit Jupiter, `occurrent-subscription-api-blocking` |
 | `testing/spring-boot` | `occurrent-testing-spring-boot` | the above, plus Spring |
 
+The first leaf was renamed to `testing/junit-jupiter-blocking` and `occurrent-testing-junit-jupiter-blocking` before 0.32.0 shipped, once a reactive twin was confirmed, so the pair carries the explicit stack suffix every other paired leaf in the repository uses (#529, #530). The table records the layout as decided here, and nothing else about it changed.
+
 The ordering constraint is the load-bearing part, not the file layout. Occurrent ships small composable
 libraries and assumes Spring nowhere else, so its test tooling must not either. Concretely: anything
 `occurrent-testing-spring-boot` does has to be expressible against the neutral module, and the neutral

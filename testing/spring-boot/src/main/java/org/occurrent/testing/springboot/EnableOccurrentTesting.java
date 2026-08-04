@@ -26,7 +26,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Put this on a test class to get an {@link org.occurrent.testing.junit.OccurrentSubscriptionsExtension} bean wired to
+ * Put this on a test class to get an {@link org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension} bean wired to
  * the application context's subscription model, then autowire it:
  *
  * <pre>{@code
@@ -52,7 +52,7 @@ import java.lang.annotation.Target;
  * and catch-up it actually uses.
  * <p>
  * Everything this adds is available without Spring by constructing the extension directly, see
- * {@link org.occurrent.testing.junit.OccurrentSubscriptionsExtension#stoppedByDefault}.
+ * {@link org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension#stoppedByDefault}.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)

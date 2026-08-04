@@ -30,7 +30,7 @@ import java.util.Set;
 /**
  * Empties a MongoDB database between tests by deleting documents, leaving the collections and their indexes in place.
  * <p>
- * Compose it with {@code OccurrentSubscriptionsExtension} from {@code occurrent-testing-junit-jupiter}, which runs it
+ * Compose it with {@code OccurrentSubscriptionsExtension} from {@code occurrent-testing-junit-jupiter-blocking}, which runs it
  * after stopping every subscription and before resuming any, so nothing has to pin extension order:
  * <pre>{@code
  * @RegisterExtension
