@@ -311,7 +311,7 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
                                         return Mono.empty();
                                     }))
                             .then())
-                    // Deferred so the map is read after the batch has run, not when this chain is assembled.
+                    // Deferred so the failures are read after the batch has run, not when this chain is assembled.
                     .then(Mono.defer(() -> HandlerFailures.combined(failures)
                             .map(Mono::<Void>error)
                             .orElseGet(Mono::empty)));
