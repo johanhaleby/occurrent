@@ -49,8 +49,9 @@ import java.util.stream.Stream;
  *     <li>It lets the guard tests build a fixture without also building a working store, since those tests never get
  *     as far as calling one.</li>
  *     <li>Run a suite against it and every single test must fail. Nothing may pass, and nothing may be skipped. That
- *     is what {@code SuiteNeverSkipsTest} asserts, and it is the only mechanical check that the suites really do
- *     refuse to skip rather than relying on nobody reaching for {@code Assumptions}.</li>
+ *     is what {@code SuiteNeverSkipsTest} asserts, and it is how a suite is shown to assert something rather than
+ *     nothing. It is not what shows the suites refuse to skip: every test dies on its first call here, so nothing
+ *     further down the method is reached. {@code SkipMechanismScan} covers that half.</li>
  * </ul>
  */
 final class NoopStore

@@ -120,14 +120,38 @@ issues under #396.
 The four anti-silent-skip rules from ADR 77 carry over unchanged, and each leaf needs its own `SuiteNeverSkipsTest`
 because one leaf's version cannot see a suite in another module.
 
-**A leaf's `SuiteNeverSkipsTest` runs the suite twice, and the second run is the one that earns the no-skipping claim.**
-Against an implementation that throws from every method, each test dies on its first call, so an `Assumptions` call
-placed anywhere after that is never reached and the skipped count stays zero whether or not the rule was followed.
-Running the suite green against a working implementation reaches every line, so a skip anywhere in the suite body shows
-up. The event-store leaves have only the failing run today, which is a smaller guarantee than their javadoc claims. The reactor leaf's version has to run the anti-skip
-case *through the bridge*, not only against a blocking model: this bridge carries a lifecycle and hands events to a
-consumer on some thread, so the risk that the bridge rather than the model becomes the thing under test is real, and a
-bridge that swallows a failure or never delivers is exactly what a reactive model honouring nothing would expose.
+**A run against an implementation that honours nothing does not earn the no-skipping claim, and a leaf needs a second
+mechanism that does.** Against an implementation that throws from every method, each test dies on its first call, so an
+`Assumptions` call placed anywhere after that is never reached and the skipped count stays zero whether or not the rule
+was followed. Which second mechanism depends on what a working implementation costs in that leaf.
+
+*Where one is cheap, run the suite green against it.* That is the subscription leaf: `WorkingCheckpointStorage` is nine
+lines of `HashMap`, and a green run reaches every line of the suite body, so a skip anywhere in it shows up. The reactor
+leaf's version has to run the anti-skip case *through the bridge*, not only against a blocking model: this bridge
+carries a lifecycle and hands events to a consumer on some thread, so the risk that the bridge rather than the model
+becomes the thing under test is real, and a bridge that swallows a failure or never delivers is exactly what a reactive
+model honouring nothing would expose.
+
+*Where one is not, scan the compiled suites for a reference to anything that can skip.* That is both event-store
+leaves, and the arithmetic is what decides it. `InMemoryEventStore` is 778 lines and cannot be depended on, because
+`eventstore/inmemory` already test-depends on `occurrent-tck-eventstore-blocking` and Maven's reactor cycle check
+ignores scope; no reactive in-memory event store exists at all, and `ReactiveEventStoreConformance`'s laziness tests
+rule out a `Mono.just(blockingCall())` wrapper over a blocking one. So a green run costs on the order of a thousand
+lines of store logic copied into test sources, drifting from the published stores it copies, where the subscription
+leaf's copy cost nine. Worse, it would still be partial: a green run only reaches the lines one fixture's declarations
+reach, and `EventStoreQueriesConformance`, `EventStoreTimePrecisionConformance` and `DcbEventStoreConformance` all
+branch on declarations, so an assumption inside an unvisited branch survives it. `SkipMechanismScan` reads the class
+files a leaf compiles and fails on a reference to `Assumptions`, `TestAbortedException`, `@Disabled` or a
+`@DisabledIf` condition. It works on bytes because comments do not survive compilation, so the javadoc discussing the
+ban cannot trip it, and it covers every line of every suite in the module rather than the ones an enumeration
+remembers. That includes the three the blocking leaf's failing runs never selected, and anything added later. The check
+is a copy per leaf, for the reason `WorkingCheckpointStorage` already records for its own copy: a test-sources class in
+one module is invisible from another.
+
+The two mechanisms answer different questions and neither subsumes the other. A green run also proves the suite is
+satisfiable at all, which a scan cannot; a scan proves the ban over the whole suite, which a green run cannot. Where
+both are affordable, have both. Nothing here licenses dropping the failing run: that is what shows a suite asserts
+something rather than nothing.
 
 What has landed so far, and what it found: `CheckpointStorageConformance` holds 15 assertions, and all four blocking
 storages passed on first run. That is the outcome to expect from a phase writing down what the storages already agreed

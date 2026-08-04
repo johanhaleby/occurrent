@@ -30,25 +30,37 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 
+import java.util.List;
 import java.util.Set;
+import java.util.SortedMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass;
 
 /**
- * A TCK that can be satisfied by doing nothing is worse than no TCK, so this runs {@link StreamEventStoreConformance},
- * {@link StreamConcurrencyConformance}, {@link StreamPositionConformance}, {@link StreamPositionDisabledConformance},
- * {@link DcbEventStoreConformance}, {@link DcbStreamInteropConformance} and {@link CapabilityGuardConformance} against
- * a store that honours none of the contract and asserts that the suite notices. Every test must fail, none may pass,
- * and none may be skipped or aborted.
+ * A TCK that can be satisfied by doing nothing is worse than no TCK, and the suites here are written without
+ * {@code Assumptions} on purpose so that an unsupported behaviour fails loudly instead of vanishing from the report.
+ * Two different checks keep that true, because neither is enough alone.
  * <p>
- * The last part is the one worth having. The suites are written without {@code Assumptions} on purpose, so that an
- * unsupported behaviour fails loudly instead of vanishing from the report, and this is the only check that the rule is
- * actually being followed rather than merely intended. If somebody later reaches for an assumption, the skipped count
- * stops being zero and this test says so. {@link StreamPositionDisabledConformance} additionally guards a second way
- * to skip: {@link EventStoreFixture#storeWithoutPosition()} answering {@link java.util.Optional#empty()}, which is
- * a legitimate answer for a fixture to give but must still fail the suite rather than pass it, and
+ * <strong>Running a suite against a store that honours nothing.</strong> {@link StreamEventStoreConformance},
+ * {@link StreamConcurrencyConformance}, {@link StreamPositionConformance}, {@link StreamPositionDisabledConformance},
+ * {@link DcbEventStoreConformance}, {@link DcbStreamInteropConformance}, {@link DcbConcurrencyConformance} and
+ * {@link CapabilityGuardConformance} are each run against {@link NoopStore} and must notice: every test fails, none
+ * passes, none is skipped or aborted. That establishes each suite has tests and that they really do assert something.
+ * It does not establish the no-skipping rule, because every test dies on its first call into the store, so an
+ * assumption placed anywhere after that is never reached and the skipped count stays zero either way.
+ * {@link StreamPositionDisabledConformance} does earn something the others do not here: a second way to skip is
+ * {@link EventStoreFixture#storeWithoutPosition()} answering {@link java.util.Optional#empty()}, which is a legitimate
+ * answer for a fixture to give but must still fail the suite rather than pass it, and
  * {@link CapabilityGuardConformance} covers the same shape for its two restricted-store accessors.
+ * <p>
+ * <strong>Scanning the compiled suites for anything that can skip.</strong> This is what earns the no-skipping claim.
+ * {@link SkipMechanismScan} reads the class files this module compiles and fails if any of them so much as references
+ * {@code Assumptions}, {@code TestAbortedException}, {@code @Disabled} or a {@code @DisabledIf} condition. It covers
+ * every line of every suite rather than the lines one fixture's declarations reach, and it covers every suite in the
+ * module rather than the ones listed above: {@link EventStoreQueriesConformance},
+ * {@link EventStoreOperationsConformance} and {@link EventStoreTimePrecisionConformance} have no run of their own here
+ * and rest on the scan alone, as does any suite added later.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("a conformance suite")
@@ -92,6 +104,35 @@ class SuiteNeverSkipsTest {
     @Test
     void the_capability_guard_suite_fails_every_test_and_skips_none_of_them_against_a_fixture_that_declines_it() {
         assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingCapabilityGuardConformance.class);
+    }
+
+    @Test
+    void names_nothing_that_could_skip_a_test_in_any_suite_it_compiles() {
+        assertThat(SkipMechanismScan.classesScannedAlongside(EventStoreConformance.class))
+                .describedAs("the scan must reach the suites, or a clean verdict means only that it looked nowhere")
+                .contains(EventStoreConformance.class.getName(), StreamEventStoreConformance.class.getName(),
+                        EventStoreQueriesConformance.class.getName(), EventStoreOperationsConformance.class.getName(),
+                        EventStoreTimePrecisionConformance.class.getName());
+
+        SortedMap<String, List<String>> offenders = SkipMechanismScan.of(EventStoreConformance.class);
+
+        assertThat(offenders)
+                .describedAs("a skipped test vanishes from the report, so a store that does not honour a contract ends "
+                        + "up looking like one that does. Where stores legitimately differ the fixture declares the "
+                        + "difference and the suite asserts both answers, which is why nothing here may skip")
+                .isEmpty();
+    }
+
+    @Test
+    void would_notice_something_that_could_skip_a_test_if_one_appeared() {
+        SortedMap<String, List<String>> offenders = SkipMechanismScan.of(SkipsOnPurpose.class);
+
+        assertThat(offenders)
+                .describedAs("a scan that cannot find the one class written to be found would pass a suite full of "
+                        + "assumptions just as quietly as it passes a clean one")
+                .containsKey(SkipsOnPurpose.class.getName());
+        assertThat(offenders.get(SkipsOnPurpose.class.getName()))
+                .contains("org/junit/jupiter/api/Assumptions");
     }
 
     private static void assertSuiteFailsEveryTestAndSkipsNone(Class<?> suite) {
