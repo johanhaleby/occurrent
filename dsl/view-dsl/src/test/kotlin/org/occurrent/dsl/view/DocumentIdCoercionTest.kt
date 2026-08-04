@@ -25,6 +25,7 @@ import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
 import org.junit.jupiter.api.Test
 import org.occurrent.dsl.view.internal.requireMatchingDocumentId
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.data.annotation.Id
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.MongoTemplate
@@ -57,7 +58,7 @@ class DocumentIdCoercionTest {
         @Suppress("unused")
         @Container
         val mongoDBContainer: MongoDBContainer =
-            MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true)
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true)
     }
 
     private fun mongoOperations(): MongoOperations {

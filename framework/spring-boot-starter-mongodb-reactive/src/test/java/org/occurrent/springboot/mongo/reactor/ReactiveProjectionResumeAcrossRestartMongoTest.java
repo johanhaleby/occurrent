@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -78,13 +79,8 @@ class ReactiveProjectionResumeAcrossRestartMongoTest {
     private static final ConcurrentHashMap<String, CountState> STORE = new ConcurrentHashMap<>();
 
     @Container
-    static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
-        mongoDBContainer.withReuse(true);
-        mongoDBContainer.setPortBindings(List.of("27017:27017"));
-    }
+    static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     @Test
     void default_resume_folds_each_event_once_across_a_restart() {
@@ -115,7 +111,7 @@ class ReactiveProjectionResumeAcrossRestartMongoTest {
 
     private static String[] bootArgs(String databaseName) {
         return new String[]{
-                "--spring.data.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=dcb",
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName

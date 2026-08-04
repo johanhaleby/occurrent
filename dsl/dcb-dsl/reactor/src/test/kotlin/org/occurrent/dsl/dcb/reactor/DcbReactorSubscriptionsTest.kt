@@ -43,13 +43,14 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testing.mongodb.OccurrentMongoFlush
+import org.occurrent.testsupport.mongodb.MongoTestDatabase
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import org.testcontainers.mongodb.MongoDBContainer
 import reactor.core.Disposable
 import java.net.URI
 import java.time.LocalDateTime
@@ -69,7 +70,7 @@ class DcbReactorSubscriptionsTest {
     private val disposables = CopyOnWriteArrayList<Disposable>()
 
     @RegisterExtension
-    val flush = FlushMongoDBExtension(ConnectionString(mongoDBContainer.replicaSetUrl + ".dcbreactorsub"))
+    val flush = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer))
 
     @BeforeEach
     fun create_instances() {
@@ -135,8 +136,7 @@ class DcbReactorSubscriptionsTest {
     companion object {
         @Container
         @JvmStatic
-        val mongoDBContainer = MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-            .withReplicaSet()
+        val mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion()
             .withReuse(true)
     }
 }

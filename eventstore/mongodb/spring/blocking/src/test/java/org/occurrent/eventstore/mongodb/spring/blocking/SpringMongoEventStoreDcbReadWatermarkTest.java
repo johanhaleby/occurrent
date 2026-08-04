@@ -33,7 +33,9 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
@@ -86,11 +88,10 @@ class SpringMongoEventStoreDcbReadWatermarkTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion();
 
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(
-            new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcb_read_watermark"));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     @Test
     void conditional_append_detects_an_event_reserved_before_but_committed_after_the_read() throws Exception {

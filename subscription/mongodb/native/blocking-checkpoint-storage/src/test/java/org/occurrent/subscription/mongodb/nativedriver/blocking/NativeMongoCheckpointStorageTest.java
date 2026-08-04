@@ -44,7 +44,9 @@ import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -89,8 +91,7 @@ public class NativeMongoCheckpointStorageTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                    .withReplicaSet()
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion()
                     .withReuse(true);
     private static final String TIMESTAMP_TOKEN_COLLECTION = "subscriptions";
     private static final String ID_FIELD = "_id";
@@ -98,7 +99,7 @@ public class NativeMongoCheckpointStorageTest {
     private static final String LEGACY_CHECKPOINT_FIELD = "subscriptionPosition";
 
     @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private EventStore mongoEventStore;
     private DurableSubscriptionModel subscriptionModel;
