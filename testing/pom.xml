@@ -33,6 +33,7 @@
     <modules>
         <module>junit-jupiter</module>
         <module>spring-boot</module>
+        <module>mongodb</module>
     </modules>
 
 </project>
