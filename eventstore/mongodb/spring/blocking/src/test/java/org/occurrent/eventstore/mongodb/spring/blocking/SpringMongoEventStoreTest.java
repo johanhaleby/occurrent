@@ -224,7 +224,6 @@ public class SpringMongoEventStoreTest {
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
             }
 
-            @Disabled
             @Test
             void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range_when_rfc_3339() {
                 // Given
