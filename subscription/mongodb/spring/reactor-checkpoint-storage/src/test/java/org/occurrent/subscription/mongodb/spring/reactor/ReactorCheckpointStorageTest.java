@@ -36,6 +36,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
@@ -75,8 +76,7 @@ public class ReactorCheckpointStorageTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                    .withReplicaSet()
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion()
                     .withReuse(true);
     private static final String RESUME_TOKEN_COLLECTION = "ack";
     private static final String ID_FIELD = "_id";

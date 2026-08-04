@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -101,16 +102,16 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     // to 20 times inside a single future.
     private static final long FUTURE_TIMEOUT_SECONDS = 30;
 
+    // The label is what gives this class a MongoDB of its own: Testcontainers derives its reuse key from the whole
+    // container definition, so a label nothing else sets means nothing else shares the server. That matters here and
+    // nowhere else, because this suite drives 50 concurrent transactions per iteration and takes most of its
+    // class-level @Timeout to do it, so a neighbouring suite's load on the same mongod is enough to tip it over. A
+    // database of its own, which every test now gets, keeps the data apart but not the CPU. This replaces the
+    // 27018:27017 binding that used to buy the same isolation by pinning a second host port.
     @Container
-    private static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                .withReplicaSet();
-        List<String> ports = new ArrayList<>();
-        ports.add("27018:27017");   // distinct port from the DCB functional test to allow parallel suite runs
-        mongoDBContainer.withReuse(true).setPortBindings(ports);
-    }
+    private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion()
+            .withLabel("org.occurrent.test.dedicated-server", "spring-blocking-dcb-concurrency")
+            .withReuse(true);
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(

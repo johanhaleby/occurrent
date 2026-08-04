@@ -52,6 +52,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -95,7 +96,7 @@ public class NativeMongoSubscriptionModelResilienceTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion()
                     .withReuse(true)
                     .withReplicaSet();
 

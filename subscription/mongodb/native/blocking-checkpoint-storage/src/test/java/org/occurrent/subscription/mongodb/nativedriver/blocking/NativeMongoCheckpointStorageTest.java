@@ -45,6 +45,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -89,8 +90,7 @@ public class NativeMongoCheckpointStorageTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                    .withReplicaSet()
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion()
                     .withReuse(true);
     private static final String TIMESTAMP_TOKEN_COLLECTION = "subscriptions";
     private static final String ID_FIELD = "_id";

@@ -26,6 +26,7 @@ import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompet
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -59,8 +60,7 @@ class CompetingConsumerSubscriptionModelTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                    .withReplicaSet()
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion()
                     .withReuse(true);
 
     @RegisterExtension

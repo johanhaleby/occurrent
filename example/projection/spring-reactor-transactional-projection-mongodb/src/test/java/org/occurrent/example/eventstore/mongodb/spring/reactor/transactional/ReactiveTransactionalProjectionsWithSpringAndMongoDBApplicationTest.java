@@ -19,10 +19,13 @@ package org.occurrent.example.eventstore.mongodb.spring.reactor.transactional;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import static org.mockito.Mockito.mock;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.reactor.EventStream;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -32,8 +35,6 @@ import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
@@ -48,13 +49,15 @@ import static org.mockito.BDDMockito.given;
 public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer;
+    private static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
-        List<String> ports = new ArrayList<>();
-        ports.add("27017:27017");
-        mongoDBContainer.withReuse(true).setPortBindings(ports);
+    // This application reads its url from configuration rather than from the container, so the container's mapped port
+    // has to be published as a property. A literal localhost:27017 in application.yaml would tie the test to a fixed
+    // host port, which is what stopped two runs from coexisting.
+    @DynamicPropertySource
+    static void mongoDbUri(DynamicPropertyRegistry registry) {
+        registry.add("spring.mongodb.uri", mongoDBContainer::getReplicaSetUrl);
     }
 
     @BeforeAll

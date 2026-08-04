@@ -68,6 +68,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -97,8 +98,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 public class SpringMongoSubscriptionModelTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-            .withReplicaSet()
+    private static final MongoDBContainer mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion()
             .withReuse(true);
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 

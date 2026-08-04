@@ -40,12 +40,12 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import org.testcontainers.mongodb.MongoDBContainer
 import java.net.URI
 import java.time.LocalDateTime
 import java.util.Date
@@ -62,7 +62,7 @@ class ReactorDcbProjectionTest {
     companion object {
         @Container
         @JvmStatic
-        private val mongoDBContainer = MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet().withReuse(true)
+        private val mongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true)
     }
 
     @RegisterExtension

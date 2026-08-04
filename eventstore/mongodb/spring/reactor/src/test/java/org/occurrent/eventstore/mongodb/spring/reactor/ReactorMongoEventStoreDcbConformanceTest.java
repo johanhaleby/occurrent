@@ -22,12 +22,11 @@ import org.occurrent.tck.eventstore.blocking.DcbEventStoreConformance;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.tck.eventstore.reactor.BlockingEventStoreOverReactive;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Runs the blocking DCB suite against the reactive store through {@link BlockingEventStoreOverReactive}, so the
@@ -37,16 +36,8 @@ import java.util.List;
 class ReactorMongoEventStoreDcbConformanceTest extends DcbEventStoreConformance {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                .withReplicaSet();
-        List<String> ports = new ArrayList<>();
-        ports.add("27017:27017");
-        mongoDBContainer.withReuse(true);
-        mongoDBContainer.setPortBindings(ports);
-    }
+    private static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     /**
      * Empties the database before each test, which is how the fixture can promise the suite a store with no events in

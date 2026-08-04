@@ -27,6 +27,7 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -67,13 +68,8 @@ import static org.awaitility.Awaitility.await;
 class ProjectionAnnotationDurableResumeMongoTest {
 
     @Container
-    static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
-        mongoDBContainer.withReuse(true);
-        mongoDBContainer.setPortBindings(List.of("27017:27017"));
-    }
+    static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     @Test
     void resumes_from_the_stored_checkpoint_and_processes_only_events_that_arrived_while_down() {
@@ -118,7 +114,7 @@ class ProjectionAnnotationDurableResumeMongoTest {
 
     private static String[] bootArgs(String databaseName) {
         return new String[]{
-                "--spring.data.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream",
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName

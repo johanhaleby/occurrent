@@ -33,6 +33,7 @@ import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.view.testsupport.nameChanged
 import org.occurrent.dsl.view.testsupport.nameDefined
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.data.annotation.Id
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.MongoTemplate
@@ -106,7 +107,7 @@ class SpringMongoViewMetadataTest {
     companion object {
         @Suppress("unused")
         @Container
-        val mongoDBContainer: MongoDBContainer = MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true)
+        val mongoDBContainer: MongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true)
 
         // Keyed and folded purely from the metadata, so only the metadata-aware materialized(...) overload can drive it.
         private val streamKeyedView: View<StreamKeyedNameState?, DomainEvent> = view<StreamKeyedNameState?, DomainEvent>(null) { s, m, e ->

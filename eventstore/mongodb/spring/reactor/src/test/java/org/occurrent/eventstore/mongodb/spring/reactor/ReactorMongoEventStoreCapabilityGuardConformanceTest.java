@@ -21,26 +21,17 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.tck.eventstore.blocking.CapabilityGuardConformance;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
-
-import java.util.ArrayList;
-import java.util.List;
 
 @Testcontainers
 class ReactorMongoEventStoreCapabilityGuardConformanceTest extends CapabilityGuardConformance {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                .withReplicaSet();
-        List<String> ports = new ArrayList<>();
-        ports.add("27017:27017");
-        mongoDBContainer.withReuse(true).setPortBindings(ports);
-    }
+    private static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     /**
      * Empties the database before each test, which is how the fixture can promise the suite a store with no events in

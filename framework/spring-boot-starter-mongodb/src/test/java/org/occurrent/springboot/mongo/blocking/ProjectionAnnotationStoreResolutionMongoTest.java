@@ -29,6 +29,7 @@ import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -59,9 +60,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Timeout(120)
 class ProjectionAnnotationStoreResolutionMongoTest {
 
-    // Each launched context gets its own dynamic-port MongoDB container through a @ServiceConnection bean, so no fixed
-    // host port is bound. @ServiceConnection resolves the mapped port and replica set for the context, which a hand-built
-    // getReplicaSetUrl() cannot do because it reports the replica set member's own localhost:27017 address.
+    // Each launched context gets its own MongoDB container through a @ServiceConnection bean, which resolves the mapped
+    // port for that context.
     private static ConfigurableApplicationContext run(Class<?> application, String databaseName) {
         return SpringApplication.run(new Class<?>[]{application, MongoContainerConfiguration.class}, bootArgs(databaseName));
     }
@@ -79,7 +79,7 @@ class ProjectionAnnotationStoreResolutionMongoTest {
         @Bean
         @ServiceConnection
         MongoDBContainer mongoDbContainer() {
-            return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
+            return ReplicaSetReadyMongoDBContainer.withDefaultVersion();
         }
     }
 

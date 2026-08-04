@@ -37,6 +37,7 @@ import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.data.annotation.Id
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.MongoTemplate
@@ -70,7 +71,7 @@ class SpringMongoProjectionMetadataTest {
     companion object {
         @Suppress("unused")
         @Container
-        val mongoDBContainer: MongoDBContainer = MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true)
+        val mongoDBContainer: MongoDBContainer = ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true)
     }
 
     private fun mongoOperations(): MongoOperations {

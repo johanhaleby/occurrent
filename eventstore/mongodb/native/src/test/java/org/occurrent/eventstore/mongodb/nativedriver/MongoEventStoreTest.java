@@ -38,6 +38,7 @@ import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -71,15 +72,8 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 class MongoEventStoreTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
-                .withReplicaSet();
-        List<String> ports = new ArrayList<>();
-        ports.add("27017:27017");
-        mongoDBContainer.withReuse(true).setPortBindings(ports);
-    }
+    private static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     private static final URI NAME_SOURCE = URI.create("http://name");
     private MongoEventStore eventStore;
@@ -194,7 +188,7 @@ class MongoEventStoreTest {
         assertAll(
                 () -> assertThat(duplicateCloudEventException.getId()).isEqualTo(nameWasChanged1.eventId()),
                 () -> assertThat(duplicateCloudEventException.getSource()).isEqualTo(NAME_SOURCE),
-                () -> assertThat(duplicateCloudEventException.getDetails()).endsWith("Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate key error collection: test.events index: id_1_source_1 dup key: { id: \"" + nameWasChanged1.eventId() + "\", source: \"http://name\" }', details={}}]."),
+                () -> assertThat(duplicateCloudEventException.getDetails()).endsWith("Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate key error collection: " + eventsNamespace() + " index: id_1_source_1 dup key: { id: \"" + nameWasChanged1.eventId() + "\", source: \"http://name\" }', details={}}]."),
                 () -> assertThat(throwable).hasMessageNotContaining("unknown"),
                 () -> assertThat(eventStream.version()).isEqualTo(2),
                 () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
@@ -204,8 +198,7 @@ class MongoEventStoreTest {
     @Test
     void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_with_manual_unique_index() {
         LocalDateTime now = LocalDateTime.now();
-        String databaseName = new ConnectionString(mongoDBContainer.getReplicaSetUrl()).getDatabase();
-        MongoCollection<Document> collection = mongoClient.getDatabase(Objects.requireNonNull(databaseName)).getCollection("events");
+        MongoCollection<Document> collection = mongoClient.getDatabase(databaseName()).getCollection("events");
         String index = collection.createIndex(Indexes.ascending("type"), new IndexOptions().unique(true));
 
         try {
@@ -222,7 +215,7 @@ class MongoEventStoreTest {
             assertAll(
                     () -> assertThat(duplicateCloudEventException.getId()).isNull(),
                     () -> assertThat(duplicateCloudEventException.getSource()).isNull(),
-                    () -> assertThat(duplicateCloudEventException.getDetails()).endsWith("Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate key error collection: test.events index: type_1 dup key: { type: \"NameWasChanged\" }', details={}}]."),
+                    () -> assertThat(duplicateCloudEventException.getDetails()).endsWith("Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate key error collection: " + eventsNamespace() + " index: type_1 dup key: { type: \"NameWasChanged\" }', details={}}]."),
                     () -> assertThat(eventStore.count()).isZero()
             );
         } finally {
@@ -371,6 +364,15 @@ class MongoEventStoreTest {
         } catch (JsonProcessingException jsonProcessingException) {
             throw new RuntimeException(jsonProcessingException);
         }
+    }
+
+    private static String databaseName() {
+        return Objects.requireNonNull(new ConnectionString(mongoDBContainer.getReplicaSetUrl()).getDatabase());
+    }
+
+    // The database is private to this container, so an error message quoting the namespace cannot be a literal.
+    private static String eventsNamespace() {
+        return databaseName() + ".events";
     }
 
     private MongoEventStore newMongoEventStore(TimeRepresentation timeRepresentation) {

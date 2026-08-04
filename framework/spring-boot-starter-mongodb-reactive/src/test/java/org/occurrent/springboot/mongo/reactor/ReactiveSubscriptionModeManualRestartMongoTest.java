@@ -29,6 +29,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -75,15 +76,8 @@ class ReactiveSubscriptionModeManualRestartMongoTest {
     private static final CopyOnWriteArrayList<TestEvent> SECOND_BOOT_RECEIVED = new CopyOnWriteArrayList<>();
 
     @Container
-    static final MongoDBContainer mongoDBContainer;
-
-    static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReplicaSet();
-        mongoDBContainer.withReuse(true);
-        // Pinned because the replica set advertises its own address, so the driver leaves the mapped port as soon as
-        // it discovers the set. The other restart tests in this module pin it for the same reason.
-        mongoDBContainer.setPortBindings(List.of("27017:27017"));
-    }
+    static final MongoDBContainer mongoDBContainer =
+            ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     @Test
     void a_stored_checkpoint_does_not_let_a_manual_subscription_replay_before_it_is_resumed() {
@@ -131,7 +125,7 @@ class ReactiveSubscriptionModeManualRestartMongoTest {
 
     private static String[] bootArgs(String mode) {
         return new String[]{
-                "--spring.data.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("reactive-subscription-mode-manual-restart"),
+                "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl("reactive-subscription-mode-manual-restart"),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream",
                 "--occurrent.subscription.mode=" + mode,
