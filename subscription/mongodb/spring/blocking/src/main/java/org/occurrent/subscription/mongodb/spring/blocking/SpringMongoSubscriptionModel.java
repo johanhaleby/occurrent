@@ -174,12 +174,6 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
         logDebug("Subscribing ({})", subscriptionId);
 
-        // Where this subscription has read to, updated for every change-stream document rather than only the ones that
-        // deserialize, so a resume continues from the document after the last one seen. Recomputing the original
-        // StartAt instead would resume at the present and never deliver anything written while the subscription was
-        // paused, which is a loss the caller cannot see.
-        AtomicReference<@Nullable StartAt> positionRead = new AtomicReference<>();
-
         // Wraps ChangeStreamRequestOptions creation in a supplier so it's recomputed on pause/resume, not just
         // once at subscribe time. Without this, a subscription started with StartAt.now() would resume from
         // the _initial_ now() position instead of the resume-time position, replaying historic events.
@@ -205,7 +199,6 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             }
 
             BsonDocument resumeToken = raw.getResumeToken();
-            positionRead.set(StartAt.checkpoint(new MongoResumeTokenCheckpoint(resumeToken)));
             MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                     .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(resumeToken)))
                     .ifPresentOrElse(executeWithRetry(action, __ -> !shutdown, retryStrategy), () -> {
@@ -220,9 +213,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         SpringMongoSubscription springMongoSubscription = new SpringMongoSubscription(subscriptionId, subscription);
         logDebug("MessageListenerContainer running (subscriptionId={}): {}", subscriptionId, messageListenerContainer.isRunning());
         if (messageListenerContainer.isRunning()) {
-            runningSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestBuilder, positionRead));
+            runningSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestBuilder));
         } else {
-            pausedSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestBuilder, positionRead));
+            pausedSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestBuilder));
         }
         return springMongoSubscription;
     }
@@ -302,13 +295,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             messageListenerContainer.start();
         }
 
-        // Resume from where this subscription had read to, so anything written while it was paused is delivered rather
-        // than skipped. A subscription that never received a document has nothing to resume from and starts as before.
-        StartAt positionRead = internalSubscription.positionRead().get();
-        ChangeStreamRequest<Document> request = positionRead == null
-                ? internalSubscription.newChangeStreamRequest()
-                : internalSubscription.newChangeStreamRequest(positionRead);
-        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, request, null);
+        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, internalSubscription.newChangeStreamRequest(), null);
         InternalSubscription newInternalSubscription = internalSubscription.copy(newSubscription);
         runningSubscriptions.put(subscriptionId, newInternalSubscription);
         logDebug("Subscription {} resumed", subscriptionId);
@@ -508,11 +495,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     // Holds both the spring subscription and the change stream request so a subscription can be paused (by
     // removing it) and resumed (by starting a new one).
-    private record InternalSubscription(SpringMongoSubscription occurrentSubscription, Function<@Nullable StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder,
-                                        AtomicReference<@Nullable StartAt> positionRead) {
+    private record InternalSubscription(SpringMongoSubscription occurrentSubscription, Function<@Nullable StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
 
         InternalSubscription copy(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
-            return new InternalSubscription(new SpringMongoSubscription(occurrentSubscription.id(), springSubscription), changeStreamRequestBuilder, positionRead);
+            return new InternalSubscription(new SpringMongoSubscription(occurrentSubscription.id(), springSubscription), changeStreamRequestBuilder);
         }
 
         ChangeStreamRequest<Document> newChangeStreamRequest() {

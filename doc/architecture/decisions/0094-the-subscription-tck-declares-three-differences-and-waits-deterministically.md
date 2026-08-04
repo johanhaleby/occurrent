@@ -100,13 +100,21 @@ the one `EventStoreFixture.timePrecision()` sits on: declare what cannot be aske
 - **What `pause` means.** The register-only models implement the full lifecycle but drop rather than defer, per ADR 85.
   A suite asserting redelivery after resume would fail them correctly and uselessly. The fixture declares which, and
   the suite asserts the documented outcome either way: a deferring model redelivers, a dropping model does not.
-  **The axis is whether the model has a position to resume from at all**, not whether two models happen to differ. A
-  model reading a log or a change stream can resume where it left off and owes the paused window. A model that dispatches
-  as events arrive has nowhere to hold them and owes nothing. Reading it any more loosely than that turns the declaration
-  into somewhere to park a bug, which is what happened first time round: the two MongoDB models disagreed, this ADR
-  called it an intended difference on the strength of a code comment in each, and the comment on the Spring side was
-  actually about avoiding replay rather than about the paused window. Losing those events was a side effect nobody chose.
-  It is fixed rather than declared, and the review that caught it is the reason.
+  The primary axis is whether the model has a position to resume from at all: a model that dispatches as events arrive
+  has nowhere to hold them and owes nothing, while a model reading a log or a change stream could resume where it left
+  off. **The two MongoDB models sit on the same side of that axis and still answer differently, and the reason is a
+  genuine open question rather than a bug on one side.** That took two attempts to establish. This ADR first called it an
+  intended difference on the strength of a code comment in each model, which was too weak a reason, since the Spring
+  comment is about avoiding replay and not about the paused window. It was then treated as a plain bug in the Spring
+  model and fixed there, and the fix made
+  `CompetingConsumerSubscriptionModelTest.pausing_and_resuming_both_competing_subscription_models_several_times`
+  deliver `1, 2, 3, 4, 5, 4, 5`. That is the cost nobody had measured: a competing consumer is paused precisely because
+  another consumer holds the lease, that consumer has already delivered the events in the gap, and a gap-free resume
+  hands them over again. Resuming at the present loses the paused window, resuming from the position read duplicates
+  under competing consumers, and a model cannot see whether a competing-consumer wrapper sits above it. So both branches
+  stay asserted and #522 owns the choice, with the duplicate delivery recorded there as evidence.
+  **The lesson to carry: a declaration must not park a bug, and reaching for the word bug before measuring what the fix
+  costs is the other way to get this wrong.**
 - **Which `StartAt` variants a model accepts.** A sealed set of four, asserted as delivery for the accepted ones and
   refusal for the rest. This is phase 8's declared restriction mechanism, and it is where the per-wrapper deliberate
   refusals get asserted rather than rediscovered.
