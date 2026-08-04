@@ -35,6 +35,7 @@
         <module>common</module>
         <module>eventstore-blocking</module>
         <module>eventstore-reactor</module>
+        <module>subscription-blocking</module>
     </modules>
 
 </project>

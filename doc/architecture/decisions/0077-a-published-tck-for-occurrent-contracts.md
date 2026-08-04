@@ -161,10 +161,17 @@ suite that runs against all of them.
 greppable and deliberate act, rather than something a test run can decide quietly on its own.
 
 **One async waiting convention, owned by the subscription TCK rather than `occurrent-tck-common`.**
-There is no such convention today: 260 `await()` call sites across 27 files, per-file constants,
-`atMost` values of 1, 2, 4, 5, 10 and 30 seconds, three files each declaring their own `AT_MOST`
-constant, and three places using a bare `Thread.sleep(200)` with a comment apologizing for it. The
-subscription TCK ships `Conformance.await()`, a configured Awaitility factory, and
+ADR 94 supersedes this paragraph in part: the factory below still ships, but as the fallback rather
+than the default, behind a deterministic start position and a start barrier. The reason is
+correctness rather than tidiness, and ADR 78 had already recorded it.
+
+There is no such convention today. Across the `subscription/` modules: 202 `await()` call sites in 30
+files, 47 of them with no `atMost` and so inheriting Awaitility's 10 second default, `atMost` values
+of 1, 2, 4, 5, 10 and 40 seconds, four files each declaring their own `AT_MOST` constant, and three
+places using a bare `Thread.sleep(200)` with a comment apologizing for it. (Re-measured while phase 6
+was written, and scoped explicitly this time. The counts this ADR first carried, 260 sites across 27
+files with a 1 to 30 second spread and three constants, had drifted.) The subscription TCK ships
+`Conformance.await()`, a configured Awaitility factory, and
 `awaitNothing()` for the must-not-arrive case that today is spelled out by hand as
 `await().during(ofMillis(200)).atMost(ofSeconds(2))`, plus a fixture-supplied multiplier so a slow
 subscription model can widen the budget without inventing its own constant. Ownership sits with
