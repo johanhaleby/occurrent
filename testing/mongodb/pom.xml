@@ -32,8 +32,8 @@
         <!--
           Deliberately no Occurrent module and no Testcontainers on the compile path. Not an Occurrent module because
           this artifact is a test dependency of the MongoDB event store and subscription modules, so a compile
-          dependency on one of them would be a reactor cycle. Not Testcontainers because the extension takes a
-          ConnectionString and builds its own client, so it does not care where the database came from.
+          dependency on one of them would be a reactor cycle. Not Testcontainers because the caller hands over a
+          MongoDatabase, so this artifact does not care where the database came from or who started it.
         -->
         <dependency>
             <groupId>org.mongodb</groupId>

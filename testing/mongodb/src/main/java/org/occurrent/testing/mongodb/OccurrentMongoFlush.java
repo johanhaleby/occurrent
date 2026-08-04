@@ -67,11 +67,13 @@ public final class OccurrentMongoFlush implements Runnable, BeforeEachCallback {
     private static final String COLLECTION_TYPE = "collection";
 
     private final MongoDatabase database;
+    private final boolean dropDatabase;
     private final List<String> only;
     private final Set<String> except = new LinkedHashSet<>();
 
-    private OccurrentMongoFlush(MongoDatabase database, List<String> only) {
+    private OccurrentMongoFlush(MongoDatabase database, boolean dropDatabase, List<String> only) {
         this.database = Objects.requireNonNull(database, "database must not be null");
+        this.dropDatabase = dropDatabase;
         this.only = only;
     }
 
@@ -82,7 +84,7 @@ public final class OccurrentMongoFlush implements Runnable, BeforeEachCallback {
      * @return a new flush
      */
     public static OccurrentMongoFlush everyCollectionIn(MongoDatabase database) {
-        return new OccurrentMongoFlush(database, List.of());
+        return new OccurrentMongoFlush(database, false, List.of());
     }
 
     /**
@@ -105,7 +107,22 @@ public final class OccurrentMongoFlush implements Runnable, BeforeEachCallback {
         for (String collectionName : collectionNames) {
             Objects.requireNonNull(collectionName, "collectionNames must not contain null");
         }
-        return new OccurrentMongoFlush(database, List.of(collectionNames));
+        return new OccurrentMongoFlush(database, false, List.of(collectionNames));
+    }
+
+    /**
+     * Drops the whole database, collections and indexes included, rather than emptying it.
+     * <p>
+     * This is the one thing emptying cannot express, so it exists for a test asserting that a collection or an index
+     * does <em>not</em> exist. Everywhere else prefer {@link #everyCollectionIn(MongoDatabase)}, because dropping
+     * invalidates a live change stream and destroys the event store's unique indexes, both described above. It is safe
+     * only when no subscription is open across the flush.
+     *
+     * @param database the database to drop, must not be {@code null}
+     * @return a new flush
+     */
+    public static OccurrentMongoFlush droppingTheDatabaseIn(MongoDatabase database) {
+        return new OccurrentMongoFlush(database, true, List.of());
     }
 
     /**
@@ -131,8 +148,12 @@ public final class OccurrentMongoFlush implements Runnable, BeforeEachCallback {
     @Override
     public void run() {
         try {
-            for (String collection : collectionsToEmpty()) {
-                database.getCollection(collection).deleteMany(EVERYTHING);
+            if (dropDatabase) {
+                database.drop();
+            } else {
+                for (String collection : collectionsToEmpty()) {
+                    database.getCollection(collection).deleteMany(EVERYTHING);
+                }
             }
         } catch (RuntimeException e) {
             throw new IllegalStateException("Could not empty the MongoDB database '" + database.getName()

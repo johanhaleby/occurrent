@@ -144,6 +144,24 @@ class OccurrentMongoFlushTest {
     }
 
     @Test
+    void dropping_removes_the_collection_and_its_indexes_which_is_what_emptying_cannot_do() {
+        MongoCollection<Document> events = database.getCollection(EVENTS);
+        events.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")),
+                new IndexOptions().unique(true));
+        events.insertOne(new Document("id", "1").append("source", "urn:test"));
+
+        OccurrentMongoFlush.droppingTheDatabaseIn(database).run();
+
+        assertThat(collectionNames())
+                .as("a test asserting a collection is absent needs the collection gone, which is the only reason this "
+                        + "strategy is published")
+                .doesNotContain(EVENTS);
+        assertThat(indexNames(database.getCollection(EVENTS)))
+                .as("and the indexes with it, which is exactly why it is not the default")
+                .doesNotContain("id_1_source_1");
+    }
+
+    @Test
     void every_collection_is_emptied_including_the_ones_a_hand_written_list_forgets() {
         List<String> collections = List.of(EVENTS, "events_position", "events_dcb_checkpoints", "subscriptions",
                 "competing-consumer-locks", "an-application-collection");
@@ -237,6 +255,12 @@ class OccurrentMongoFlushTest {
             }
         }
         throw new AssertionError("Nothing arrived on the change stream within " + TIMEOUT);
+    }
+
+    private List<String> collectionNames() {
+        List<String> names = new ArrayList<>();
+        database.listCollectionNames().forEach(names::add);
+        return names;
     }
 
     private static List<String> indexNames(MongoCollection<Document> collection) {
