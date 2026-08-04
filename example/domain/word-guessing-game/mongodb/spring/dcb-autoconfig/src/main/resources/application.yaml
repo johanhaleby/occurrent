@@ -1,10 +1,10 @@
 spring:
   application:
     name: word-guessing-game-dcb-autoconfig
-  data:
-    mongodb:
-      uri: mongodb://localhost:27017/word-guessing-game-dcb-autoconfig
-      uuid-representation: standard
+  mongodb:
+    uri: mongodb://localhost:27017/word-guessing-game-dcb-autoconfig
+    representation:
+      uuid: standard
   lifecycle:
     timeout-per-shutdown-phase: 30s
   threads:

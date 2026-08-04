@@ -20,4 +20,4 @@ A classic aggregate owns a single entity, so holding both rules at once usually 
 
 ## Running
 
-DCB uses MongoDB transactions, so it needs a replica set (a single-node one is fine). The test uses Testcontainers and needs no setup. To run the app yourself, point `spring.data.mongodb.uri` at a replica set.
+DCB uses MongoDB transactions, so it needs a replica set (a single-node one is fine). The test uses Testcontainers and needs no setup. To run the app yourself, point `spring.mongodb.uri` at a replica set.
