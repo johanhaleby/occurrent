@@ -30,6 +30,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.SortedMap;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,6 +49,12 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
  * {@link InProcessDeliveryConformance} is the one suite whose failing run uses a <em>working</em> model rather than a
  * broken one. Its whole subject is that delivery has already happened when publishing returns, so what has to fail it is
  * a model that delivers asynchronously, which is exactly the regression it exists to catch.
+ * <p>
+ * <strong>Scanning the compiled suites for anything that can skip.</strong> This is what earns the no-skipping claim.
+ * {@link SkipMechanismScan} reads the class files this module compiles and fails if any of them so much as references
+ * {@code Assumptions}, {@code TestAbortedException}, {@code @Disabled} or a {@code @DisabledIf} condition. It covers
+ * every line of every suite rather than the lines one fixture's declarations reach, and it covers every suite in the
+ * module rather than the ones listed above, including any added later.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("a conformance suite")
@@ -84,11 +91,52 @@ class SuiteNeverSkipsTest {
     }
 
     @Test
+    void the_checkpoint_suite_fails_every_test_against_a_model_that_honours_nothing() {
+        assertEveryTestFails(HonoursNothingCheckpointAwareConformance.class, "a model that honours nothing");
+    }
+
+    @Test
+    void the_checkpoint_suite_passes_every_test_against_a_model_that_honours_everything() {
+        assertEveryTestPasses(HonoursEverythingCheckpointAwareConformance.class, "subscription model");
+    }
+
+    @Test
     void the_in_process_suite_fails_every_test_against_a_model_that_delivers_asynchronously() {
         // The one case where "honours nothing" is the wrong shape. This suite's whole subject is that delivery already
         // happened when publishing returned, so the model that must fail it is a working asynchronous one rather than a
         // broken one, and that is exactly the regression the suite exists to catch.
         assertEveryTestFails(AsynchronousInProcessConformance.class, "a model that delivers asynchronously");
+    }
+
+    @Test
+    void names_nothing_that_could_skip_a_test_in_any_suite_it_compiles() {
+        assertThat(SkipMechanismScan.classesScannedAlongside(SubscriptionModelConformance.class))
+                .describedAs("the scan must reach the suites, or a clean verdict means only that it looked nowhere")
+                .contains(CheckpointStorageConformance.class.getName(), SubscriptionModelConformance.class.getName(),
+                        IntrospectableSubscriptionModelConformance.class.getName(),
+                        CheckpointAwareSubscriptionModelConformance.class.getName(),
+                        InProcessDeliveryConformance.class.getName());
+
+        SortedMap<String, List<String>> offenders = SkipMechanismScan.of(SubscriptionModelConformance.class);
+
+        assertThat(offenders)
+                .describedAs("a skipped test vanishes from the report, so an implementation that does not honour a "
+                        + "contract ends up looking like one that does. Where implementations legitimately differ the "
+                        + "fixture declares the difference and the suite asserts both answers, which is why nothing "
+                        + "here may skip")
+                .isEmpty();
+    }
+
+    @Test
+    void would_notice_something_that_could_skip_a_test_if_one_appeared() {
+        SortedMap<String, List<String>> offenders = SkipMechanismScan.of(SkipsOnPurpose.class);
+
+        assertThat(offenders)
+                .describedAs("a scan that cannot find the one class written to be found would pass a suite full of "
+                        + "assumptions just as quietly as it passes a clean one")
+                .containsKey(SkipsOnPurpose.class.getName());
+        assertThat(offenders.get(SkipsOnPurpose.class.getName()))
+                .contains("org/junit/jupiter/api/Assumptions");
     }
 
     private static void assertEveryTestFails(Class<?> suite, String what) {
@@ -222,6 +270,22 @@ class SuiteNeverSkipsTest {
     }
 
     static class HonoursEverythingIntrospectionConformance extends IntrospectableSubscriptionModelConformance {
+
+        @Override
+        protected SubscriptionModelFixture createFixture() {
+            return new WorkingSubscriptionModelFixture();
+        }
+    }
+
+    static class HonoursNothingCheckpointAwareConformance extends CheckpointAwareSubscriptionModelConformance {
+
+        @Override
+        protected SubscriptionModelFixture createFixture() {
+            return new NoopSubscriptionModelFixture();
+        }
+    }
+
+    static class HonoursEverythingCheckpointAwareConformance extends CheckpointAwareSubscriptionModelConformance {
 
         @Override
         protected SubscriptionModelFixture createFixture() {
