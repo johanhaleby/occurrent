@@ -53,6 +53,26 @@ public interface TransactionExecutor {
     <T> T inTransaction(Supplier<T> action);
 
     /**
+     * Whether a transaction is in force right now. A synchronous subscription reads this to decide what happens to the
+     * handlers behind one that throws: inside a transaction dispatch stops at the first failure, outside one every
+     * handler is offered the event and the failures are reported together.
+     * <p>
+     * <strong>Answer for the moment of the call, not for the executor as a whole.</strong> The application service asks
+     * during dispatch, which runs inside {@link #inTransaction(Supplier)}, so an implementation whose transaction
+     * depends on how it was configured or on what the caller already opened should read the live state rather than
+     * return a fixed value. {@code SpringTransactionExecutor} answers from
+     * {@code TransactionSynchronizationManager.isActualTransactionActive()} for exactly that reason.
+     * <p>
+     * The default is {@code false}, so an implementation that does not override it gets the isolating behaviour, which
+     * cannot lose a reaction. See the 2026-08-04 amendment to ADR 57.
+     *
+     * @return {@code true} if a transaction is active around the caller.
+     */
+    default boolean isTransactional() {
+        return false;
+    }
+
+    /**
      * A pass-through executor that runs the action with no transaction. This is the default used by the
      * application service and yields best-effort synchronous subscriptions (see the interface documentation).
      *

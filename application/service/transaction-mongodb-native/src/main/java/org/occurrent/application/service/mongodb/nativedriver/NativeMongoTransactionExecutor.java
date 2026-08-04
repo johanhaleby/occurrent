@@ -91,6 +91,16 @@ public class NativeMongoTransactionExecutor implements TransactionExecutor {
         }
     }
 
+    /**
+     * Always true, unlike the Spring executors, which read the live state. This one either opens a session transaction
+     * or joins the one already bound to the thread, and it takes no propagation setting that could turn that off, so
+     * there is no configuration in which it runs the action without a transaction.
+     */
+    @Override
+    public boolean isTransactional() {
+        return true;
+    }
+
     @Override
     public String toString() {
         return NativeMongoTransactionExecutor.class.getSimpleName() + "{transactionOptions=" + transactionOptions + "}";

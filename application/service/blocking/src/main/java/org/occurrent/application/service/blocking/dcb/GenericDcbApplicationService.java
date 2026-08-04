@@ -160,7 +160,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
                     // to get the events enriched with their positions, then dispatch on this thread, inside the transaction.
                     List<CloudEvent> writtenEnriched = eventStore.read(DcbCriteria.all(),
                             DcbReadOptions.between(appendResult.firstSequencePosition() - 1, appendResult.lastSequencePosition())).events();
-                    synchronousEventDispatcher.dispatch(writtenEnriched);
+                    synchronousEventDispatcher.dispatch(writtenEnriched, transactionExecutor.isTransactional());
                 }
 
                 return new Tuple<>(Optional.of(appendResult), newDomainEvents);

@@ -1,13 +1,19 @@
 # Upgrading to Occurrent 0.32.0
 
-Nothing you compile against moved, and no type or method was renamed. One thing does break, at startup rather than at
-compile time: a push sink now feeds exactly one projection or saga, so an application that shared one between several
+Two things break, and only if you use the features they belong to.
+
+**At compile time**, if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher` yourself, one
+method gained a parameter. Almost nobody does, since the model Occurrent ships implements it for you. Read
+[section 4](#4-a-synchronous-subscription-no-longer-stops-at-the-first-failing-handler).
+
+**At startup**, a push sink now feeds exactly one projection or saga, so an application that shared one between several
 refuses to start. If you use a push source, read
 [section 3](#3-a-push-sink-feeds-exactly-one-projection-or-saga) first.
 
-Three things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
-MongoDB event stores changed how they persist the CloudEvent `time` attribute under
-`TimeRepresentation.RFC_3339_STRING`, and a push sink feeds one consumer.
+Nothing was renamed, so nothing else you compile against moved. Four things are worth reading. One configuration
+property is deprecated and has a recipe that rewrites it for you, the MongoDB event stores changed how they persist the
+CloudEvent `time` attribute under `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, and a
+synchronous subscription no longer stops at the first failing handler.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -225,3 +231,81 @@ a consumer group per projection, or something else is your broker's vocabulary r
 
 If you drive the sinks yourself rather than through `@Projection`, the same applies: construct one per consumer and
 call `accept(...)` on each from your listener.
+
+## 4. A synchronous subscription no longer stops at the first failing handler
+
+Only relevant if you register more than one synchronous subscription and you do **not** run them in a transaction. If
+you use the Spring Boot starter without replacing its `TransactionExecutor` bean, nothing here changes for you.
+
+Handlers used to run in registration order until one threw, and that exception ended the dispatch. With a transaction
+that is harmless, because the write rolls back, so no handler is left having acted on an event that no longer exists.
+Without one the write has already committed by the time handlers run, so the handlers behind the failure never received
+that event, and a synchronous subscription has no replay to catch them up. They never would.
+[ADR 57](../architecture/decisions/0057-synchronous-subscriptions.md) has the reasoning, in the amendment at the end.
+
+There is no recipe, because nothing here is a rename a recipe could apply.
+
+### What changes
+
+Every handler is now offered every event, and the failures are reported once the batch has been dispatched:
+
+- **One handler failed.** Identical to before. That exception reaches you exactly as it was.
+- **Several handlers failed.** The first one reaches you, and the rest arrive in its `getSuppressed()`. If you log or
+  match on the exception from `execute`, read `getSuppressed()` too, or you will see only the first failure.
+- **A handler that failed is skipped for the rest of that write's events.** Handing it the later events would update its
+  read model from them without the one it failed on, leaving a gap in the middle rather than at the end.
+- **An `Error` still stops the dispatch,** rather than being collected like an exception.
+
+### If you would rather keep the old behaviour
+
+Wire a transaction. That was always the way to make synchronous handlers atomic with the write, and it now also selects
+the stop-at-the-first-failure dispatch:
+
+```java
+GenericApplicationService.builder(eventStore, cloudEventConverter)
+        .synchronousSubscriptions(synchronousSubscriptionModel)
+        .transactionExecutor(new SpringTransactionExecutor(transactionManager))
+        .build();
+```
+
+### If you implement the dispatcher yourself, this one does not compile
+
+**`SynchronousEventDispatcher.dispatch(List)` and `ReactiveSynchronousEventDispatcher.dispatch(List)` are gone,
+replaced by `dispatch(List, boolean transactional)`.** This is the only source break in 0.32.0, and it is deliberate:
+your implementation owns the handler loop, so if the flag were optional you would keep stranding handlers with nothing
+to tell you. A compile error asks the question instead.
+
+The migration is to add the parameter and act on it:
+
+```java
+@Override
+public void dispatch(List<CloudEvent> writtenCloudEvents, boolean transactional) {
+    for (CloudEvent cloudEvent : writtenCloudEvents) {
+        if (transactional) {
+            // A failure rolls the write back, so stopping here loses nothing.
+            handlers.forEach(handler -> handler.accept(cloudEvent));
+        } else {
+            // The write has committed, so give every handler the event and report the failures afterwards.
+            isolate(handlers, handler -> handler.accept(cloudEvent));
+        }
+    }
+}
+```
+
+If you would rather keep exactly your old behaviour for now, ignore the parameter. That compiles and behaves as before,
+and it is a choice you have made rather than one made for you.
+
+`SynchronousSubscriptionModel` keeps a one-argument `dispatch(List)` of its own, so code driving the model directly, for
+example a test or an in-memory write listener, is unaffected.
+
+### If you implement a transaction executor yourself
+
+`TransactionExecutor` gained `isTransactional()`, and `ReactiveTransactionExecutor` gained `isTransactional()` returning
+`Mono<Boolean>`. Both default to reporting no transaction, which selects the isolating dispatch, because that is the
+answer that cannot lose a reaction if you forget. Override it if you open one.
+
+**Answer for the moment of the call, not for your executor as a whole.** The application service asks during dispatch,
+which runs inside your `inTransaction`, so if whether you open a transaction depends on configuration or on what the
+caller already opened, read the live state. That is what the two Spring executors Occurrent ships now do, since a
+`TransactionTemplate` configured with `PROPAGATION_NOT_SUPPORTED` or `PROPAGATION_NEVER` opens nothing and a fixed
+`true` would be a lie that costs the handlers behind a failure their event.

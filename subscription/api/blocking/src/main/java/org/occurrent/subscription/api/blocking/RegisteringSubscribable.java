@@ -23,9 +23,14 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
+import org.occurrent.subscription.internal.HandlerFailures;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -73,9 +78,9 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
          */
         ONE,
         /**
-         * Several consumers, each receiving every matching event. Safe only where a failure cannot strand a sibling:
-         * the synchronous models qualify because there is no broker and no acknowledgement, so a handler failure
-         * fails the write itself.
+         * Several consumers, each receiving every matching event. Safe only where a failure cannot strand a sibling.
+         * The synchronous models qualify two ways: inside a transaction a handler failure fails the write, so no handler's
+         * work survives, and outside one {@link #routeIsolated(Iterable)} gives every handler the event anyway.
          */
         MANY
     }
@@ -263,6 +268,52 @@ public abstract class RegisteringSubscribable implements Subscribable, Subscript
                 registration.action().accept(cloudEvent);
             }
         }
+    }
+
+    /**
+     * Route every event to every matching handler, like {@link #route(Iterable)}, except that one handler throwing does
+     * not stop the others. Each failure is collected and rethrown once the whole batch has been offered.
+     * <p>
+     * A handler that throws is skipped for the rest of this batch, so isolation is between handlers and never within
+     * one handler's own event order. One failure is rethrown exactly as it was, several as the first with the rest in
+     * {@link Throwable#addSuppressed(Throwable)}. Only a {@link RuntimeException} is caught, which is all a
+     * {@link Consumer} can throw, so an {@link Error} still propagates immediately.
+     * <p>
+     * See the 2026-08-04 amendment to ADR 57 for why a dispatch without a transaction works this way.
+     *
+     * @param cloudEvents The events to dispatch.
+     */
+    protected final void routeIsolated(Iterable<CloudEvent> cloudEvents) {
+        Objects.requireNonNull(cloudEvents, "cloudEvents cannot be null");
+        // Which handlers have failed is tracked by identity, not by id and not by Registration equality: cancelling
+        // frees an id for re-subscription, and a handler registered under a freed id must not inherit the failure of
+        // the one that released it. The failures themselves go in a list, so they are reported in the order they
+        // happened.
+        Set<Registration> failed = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<RuntimeException> failures = new ArrayList<>();
+        for (CloudEvent cloudEvent : cloudEvents) {
+            if (!running) {
+                break;
+            }
+            for (Registration registration : registrations) {
+                if (failed.contains(registration) || pausedSubscriptions.contains(registration.id())) {
+                    continue;
+                }
+                // The matcher is inside the try, not just the action: a filter on a payload field throws from here when
+                // the model was given no DataFieldReader, and one subscription's filter must not cost the others theirs.
+                try {
+                    if (registration.matcher().test(cloudEvent)) {
+                        registration.action().accept(cloudEvent);
+                    }
+                } catch (RuntimeException e) {
+                    failed.add(registration);
+                    failures.add(e);
+                }
+            }
+        }
+        HandlerFailures.combined(failures).ifPresent(failure -> {
+            throw failure;
+        });
     }
 
     /**
