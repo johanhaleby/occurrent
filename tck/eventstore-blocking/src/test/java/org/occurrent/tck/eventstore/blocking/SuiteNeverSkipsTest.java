@@ -38,15 +38,17 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
 /**
  * A TCK that can be satisfied by doing nothing is worse than no TCK, so this runs {@link StreamEventStoreConformance},
  * {@link StreamConcurrencyConformance}, {@link StreamPositionConformance}, {@link StreamPositionDisabledConformance},
- * {@link DcbEventStoreConformance} and {@link DcbStreamInteropConformance} against a store that honours none of the
- * contract and asserts that the suite notices. Every test must fail, none may pass, and none may be skipped or aborted.
+ * {@link DcbEventStoreConformance}, {@link DcbStreamInteropConformance} and {@link CapabilityGuardConformance} against
+ * a store that honours none of the contract and asserts that the suite notices. Every test must fail, none may pass,
+ * and none may be skipped or aborted.
  * <p>
  * The last part is the one worth having. The suites are written without {@code Assumptions} on purpose, so that an
  * unsupported behaviour fails loudly instead of vanishing from the report, and this is the only check that the rule is
  * actually being followed rather than merely intended. If somebody later reaches for an assumption, the skipped count
  * stops being zero and this test says so. {@link StreamPositionDisabledConformance} additionally guards a second way
  * to skip: {@link EventStoreFixture#storeWithoutPosition()} answering {@link java.util.Optional#empty()}, which is
- * a legitimate answer for a fixture to give but must still fail the suite rather than pass it.
+ * a legitimate answer for a fixture to give but must still fail the suite rather than pass it, and
+ * {@link CapabilityGuardConformance} covers the same shape for its two restricted-store accessors.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("a conformance suite")
@@ -85,6 +87,11 @@ class SuiteNeverSkipsTest {
     @Test
     void the_dcb_concurrency_suite_fails_every_test_and_skips_none_of_them_against_a_store_that_honours_nothing() {
         assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingDcbConcurrencyConformance.class);
+    }
+
+    @Test
+    void the_capability_guard_suite_fails_every_test_and_skips_none_of_them_against_a_fixture_that_declines_it() {
+        assertSuiteFailsEveryTestAndSkipsNone(HonoursNothingCapabilityGuardConformance.class);
     }
 
     private static void assertSuiteFailsEveryTestAndSkipsNone(Class<?> suite) {
@@ -362,6 +369,63 @@ class SuiteNeverSkipsTest {
                 public DcbAppendConditionModel appendConditionModel() {
                     return DcbAppendConditionModel.EXACT_CRITERIA;
                 }
+            };
+        }
+    }
+
+    /**
+     * As {@link HonoursNothingConformance}, but for {@link CapabilityGuardConformance}. This fixture leaves
+     * {@link EventStoreFixture#storeWithoutDcb()} and {@link EventStoreFixture#storeWithoutStream()} at their defaults,
+     * i.e. it declines to build a store restricted to one capability, which is the second way this suite could quietly
+     * pass. Every test must fail from that declined answer rather than skip, the same rule
+     * {@link HonoursNothingPositionDisabledConformance} covers for the position-disabled suite.
+     */
+    static class HonoursNothingCapabilityGuardConformance extends CapabilityGuardConformance {
+
+        @Override
+        protected EventStoreFixture createFixture() {
+            return new EventStoreFixture() {
+                @Override
+                public Set<EventStoreCapability> capabilities() {
+                    return Set.of(EventStoreCapability.STREAM, EventStoreCapability.DCB);
+                }
+
+                @Override
+                public EventStore eventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreQueries queries() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public EventStoreOperations operations() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public ReadEventStreamWithFilter filteredReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public PositionOrderedReader positionOrderedReader() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbEventStore dcbEventStore() {
+                    return NoopStore.INSTANCE;
+                }
+
+                @Override
+                public DcbAppendConditionModel appendConditionModel() {
+                    return DcbAppendConditionModel.EXACT_CRITERIA;
+                }
+
+                // storeWithoutDcb() and storeWithoutStream() deliberately left at their defaults: Optional.empty()
             };
         }
     }

@@ -29,7 +29,9 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.DcbAppendConditionModel;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutDcb;
 import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutStream;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
@@ -139,6 +141,32 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
                 .build();
         SpringMongoEventStore withoutPosition = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
         return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
+    }
+
+    @Override
+    public Optional<StoreWithoutDcb> storeWithoutDcb() {
+        SpringMongoEventStore withoutDcb = restrictedTo("events-stream-only", EventStoreCapability.STREAM);
+        return Optional.of(new StoreWithoutDcb(withoutDcb, withoutDcb));
+    }
+
+    @Override
+    public Optional<StoreWithoutStream> storeWithoutStream() {
+        SpringMongoEventStore withoutStream = restrictedTo("events-dcb-only", EventStoreCapability.DCB);
+        return Optional.of(new StoreWithoutStream(withoutStream, withoutStream, withoutStream, withoutStream, withoutStream));
+    }
+
+    /**
+     * A store on its own collection, so the capability it was denied cannot be answered from events the main store
+     * wrote.
+     */
+    private SpringMongoEventStore restrictedTo(String collection, EventStoreCapability capability) {
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
+                .eventStoreCollectionName(collection)
+                .transactionConfig(transactionManager)
+                .timeRepresentation(timeRepresentation)
+                .eventStoreCapabilities(capability)
+                .build();
+        return new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
     }
 
     @Override

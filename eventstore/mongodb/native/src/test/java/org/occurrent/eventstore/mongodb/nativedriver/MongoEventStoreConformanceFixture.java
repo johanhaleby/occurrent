@@ -29,7 +29,9 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.tck.eventstore.blocking.DcbAppendConditionModel;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutDcb;
 import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
+import org.occurrent.tck.eventstore.blocking.StoreWithoutStream;
 
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
@@ -125,6 +127,30 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
                 .build();
         MongoEventStore withoutPosition = new MongoEventStore(mongoClient, database, "events-without-position", config);
         return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
+    }
+
+    @Override
+    public Optional<StoreWithoutDcb> storeWithoutDcb() {
+        MongoEventStore withoutDcb = restrictedTo("events-stream-only", EventStoreCapability.STREAM);
+        return Optional.of(new StoreWithoutDcb(withoutDcb, withoutDcb));
+    }
+
+    @Override
+    public Optional<StoreWithoutStream> storeWithoutStream() {
+        MongoEventStore withoutStream = restrictedTo("events-dcb-only", EventStoreCapability.DCB);
+        return Optional.of(new StoreWithoutStream(withoutStream, withoutStream, withoutStream, withoutStream, withoutStream));
+    }
+
+    /**
+     * A store on its own collection, so the capability it was denied cannot be answered from events the main store
+     * wrote.
+     */
+    private MongoEventStore restrictedTo(String collection, EventStoreCapability capability) {
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .timeRepresentation(timeRepresentation)
+                .eventStoreCapabilities(capability)
+                .build();
+        return new MongoEventStore(mongoClient, database, collection, config);
     }
 
     @Override

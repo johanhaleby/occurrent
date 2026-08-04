@@ -209,6 +209,28 @@ public interface EventStoreFixture {
     }
 
     /**
+     * A store built with {@link EventStoreCapability#STREAM} alone. Defaults to empty, meaning this implementation
+     * cannot build a store that leaves DCB out.
+     * <p>
+     * Supplying one opts the implementation into {@link CapabilityGuardConformance}, which asserts that every DCB call
+     * on it refuses while its stream capability still works.
+     */
+    default Optional<StoreWithoutDcb> storeWithoutDcb() {
+        return Optional.empty();
+    }
+
+    /**
+     * A store built with {@link EventStoreCapability#DCB} alone. Defaults to empty, meaning this implementation cannot
+     * build a store that leaves STREAM out.
+     * <p>
+     * Supplying one opts the implementation into {@link CapabilityGuardConformance}, which asserts that every stream
+     * call on it refuses while its DCB capability still works.
+     */
+    default Optional<StoreWithoutStream> storeWithoutStream() {
+        return Optional.empty();
+    }
+
+    /**
      * Releases whatever the fixture holds. Called after every test method, including a failing one.
      */
     default void close() {
