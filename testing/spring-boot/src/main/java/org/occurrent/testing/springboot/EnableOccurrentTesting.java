@@ -56,8 +56,8 @@ import java.lang.annotation.Target;
  * stack, {@link org.occurrent.testing.junit.reactor.OccurrentSubscriptionsExtension#stoppedByDefault}.
  * <p>
  * A reactive application gets an {@code org.occurrent.testing.junit.reactor.OccurrentSubscriptionsExtension} bean
- * instead, autowired the same way, once {@code occurrent-testing-junit-jupiter-reactor} is a test dependency. Adding
- * that artifact rather than the blocking one, or both for an application that runs both stacks, is the opt-in;
+ * instead, which is autowired the same way, once {@code occurrent-testing-junit-jupiter-reactor} is a test dependency.
+ * Adding that artifact rather than the blocking one, or both for an application that runs both stacks, is the opt-in.
  * {@link OccurrentTestingImportSelector} decides which configuration this annotation imports by checking the
  * classpath. Whichever context is present, every {@code SubscriptionModelLifeCycle} bean in it is stopped, because a
  * Spring context can hold more than one life-cycle bearing model, for example a durable model and a

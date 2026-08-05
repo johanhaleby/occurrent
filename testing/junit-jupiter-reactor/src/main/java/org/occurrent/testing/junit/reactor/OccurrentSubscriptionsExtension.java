@@ -25,6 +25,7 @@ import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -44,16 +45,21 @@ import java.util.TreeSet;
  * <strong>Two differences from the blocking twin, both forced by the reactive types.</strong> Resuming a subscription
  * waits on {@link Subscription#waitUntilStarted()}, and clearing a checkpoint waits on
  * {@link CheckpointStorage#delete(String)}, both of which return a {@code Mono} rather than blocking the calling
- * thread. A JUnit {@code beforeEach} is synchronous, so this extension blocks on them itself rather than asking every
- * test to. And there is no reactive {@code DelegatingSubscriptionModel} to unwrap, so introspection is a plain
- * {@code instanceof} check on the model handed in, through {@link IntrospectableSubscriptionModel}, rather than the
- * recursive {@code of(..)} the blocking side has.
+ * thread. A JUnit {@code beforeEach} is synchronous, so this extension blocks on them itself, bounded to 10 seconds
+ * rather than waiting forever, instead of asking every test to. And there is no reactive
+ * {@code DelegatingSubscriptionModel} to unwrap, so introspection is a plain {@code instanceof} check on the model
+ * handed in, through {@link IntrospectableSubscriptionModel}, rather than the recursive {@code of(..)} the blocking
+ * side has.
  * <p>
  * Accepts more than one subscription model, because a reactive Spring context typically has two life-cycle bearing
  * ones, the durable model and a {@code SynchronousSubscriptionModel}. Every model given is stopped and resumed the
- * same way; a subscription id is looked for across all of them.
+ * same way, and a subscription id is looked for across all of them.
  */
 public final class OccurrentSubscriptionsExtension implements BeforeEachCallback, AfterEachCallback {
+
+    // Every block() in this class is bounded by this, matching the rest of the reactor stack's tests, so a hung
+    // checkpoint storage or a subscription that never starts fails the test rather than hanging the run.
+    private static final Duration WAIT_TIMEOUT = Duration.ofSeconds(10);
 
     private final List<SubscriptionModelLifeCycle> subscriptionModels;
     private final Set<String> alwaysStartIds = new LinkedHashSet<>();
@@ -173,7 +179,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
                     + "use a model implementing " + IntrospectableSubscriptionModel.class.getSimpleName() + ".");
         }
         // Sequential rather than fanned out, since this runs once per test and a flush is not a race to win.
-        ids.forEach(id -> storage.delete(id).block());
+        ids.forEach(id -> storage.delete(id).block(WAIT_TIMEOUT));
     }
 
     @Override
@@ -218,7 +224,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
             try {
                 Subscription subscription = model.resumeSubscription(subscriptionId);
                 knownIds.add(subscriptionId);
-                subscription.waitUntilStarted().block();
+                subscription.waitUntilStarted().block(WAIT_TIMEOUT);
                 return subscription;
             } catch (IllegalArgumentException e) {
                 failures.add(e);

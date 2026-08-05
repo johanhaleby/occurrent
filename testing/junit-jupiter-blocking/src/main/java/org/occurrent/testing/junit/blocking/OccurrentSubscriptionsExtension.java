@@ -41,8 +41,8 @@ import java.util.TreeSet;
  * class started would otherwise still be running for the next.
  * <p>
  * Accepts more than one subscription model, because a Spring context can have two life-cycle bearing ones, for example
- * a durable model and a {@code SynchronousSubscriptionModel}. Every model given is stopped and resumed the same way; a
- * subscription id is looked for across all of them.
+ * a durable model and a {@code SynchronousSubscriptionModel}. Every model given is stopped and resumed the same way,
+ * and a subscription id is looked for across all of them.
  */
 public final class OccurrentSubscriptionsExtension implements BeforeEachCallback, AfterEachCallback {
 

@@ -29,7 +29,7 @@ import java.util.List;
  * one using both stacks at once without failing to start on the stack it does not use.
  * <p>
  * Neither {@code occurrent-testing-junit-jupiter-blocking} nor {@code occurrent-testing-junit-jupiter-reactor} is a
- * required dependency of this module; adding one, or both, is how an application opts into that stack's wiring. That
+ * required dependency of this module. Adding one, or both, is how an application opts into that stack's wiring. That
  * is the same classpath-probing pattern the starters use for an optional artifact (ADR 87, ADR 95), done here with a
  * plain {@link ImportSelector} because this module has no autoconfiguration machinery to build a
  * {@code @ConditionalOnClass} on top of.
