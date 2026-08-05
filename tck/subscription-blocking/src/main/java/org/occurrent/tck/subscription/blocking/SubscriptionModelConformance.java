@@ -35,9 +35,11 @@ import org.occurrent.tck.ConformanceEvents;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
@@ -79,7 +81,8 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  *     <li><strong>That {@code start()} is idempotent.</strong> One model refuses a second {@code start()} and the rest
  *     accept it, and nothing says which is right.</li>
  *     <li><strong>At-least-once delivery, and resuming after a restart.</strong> Neither is a promise of this contract:
- *     both need a checkpoint that survives the restart, which belongs to the models that wrap one.</li>
+ *     both need durable state that survives the model, which only some models have. {@link RestartConformance} covers
+ *     them, and a model that cannot be rebuilt over the state it left behind declines it by not extending it.</li>
  * </ul>
  */
 @NullMarked
@@ -93,6 +96,20 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
      */
     @Override
     protected abstract SubscriptionModelFixture createFixture();
+
+    @Override
+    protected void checkFixtureCanAnswerThisSuite(SubscriptionModelFixture fixture) {
+        Set<StartAtVariant> accepted = requireNonNull(fixture.acceptedStartAtVariants(),
+                fixture.getClass().getName() + " returned null from acceptedStartAtVariants()");
+        if (accepted.isEmpty()) {
+            throw new IllegalStateException(fixture.getClass().getName() + " accepts no StartAt variant at all, so "
+                    + "nothing can subscribe to this model. Every model accepts at least "
+                    + StartAtVariant.SUBSCRIPTION_MODEL_DEFAULT + ", which is what the no-argument subscribe overloads "
+                    + "pass.");
+        }
+        requireNonNull(fixture.aCheckpointToStartFrom(),
+                fixture.getClass().getName() + " returned null from aCheckpointToStartFrom()");
+    }
 
     /**
      * How long a wait for an event that must arrive is given.
@@ -221,6 +238,81 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                     .as("a filter a model cannot apply must be refused, since accepting it and ignoring it would "
                             + "deliver events the caller asked not to receive")
                     .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("the start position")
+    class TheStartPosition {
+
+        @Test
+        void delivers_from_the_start_positions_it_accepts_and_refuses_the_rest() {
+            // Every one of the four is asked about on every model, so a variant left out of the declaration is a claim
+            // the model has to live up to rather than a way of not being asked. Sealed at four by StartAt itself.
+            for (StartAtVariant variant : StartAtVariant.values()) {
+                if (fixture().acceptedStartAtVariants().contains(variant)) {
+                    assertDeliversStartingFrom(variant);
+                } else {
+                    assertRefuses(variant);
+                }
+            }
+        }
+
+        private void assertDeliversStartingFrom(StartAtVariant variant) {
+            String id = subscriptionId();
+            RecordedEvents recorded = new RecordedEvents();
+            // Read per variant rather than once for the loop. Hoisting it out looks like an easy saving, since only one
+            // variant carries a position, but it leaves the position behind: by the time CHECKPOINT ran, the earlier
+            // variants had published events of their own, so a change-stream model started at that stale position
+            // replayed them and the wait below was satisfied by a replayed event instead of this variant's own.
+            Subscription subscription = subscriptionModel()
+                    .subscribe(id, null, variant.startAt(fixture().aCheckpointToStartFrom()), recorded);
+            assertThat(subscription.waitUntilStarted(DELIVERY_TIMEOUT))
+                    .as("this model declares it accepts %s, so a subscription starting there must report started", variant)
+                    .isTrue();
+            CloudEvent event = ConformanceEvents.event(UUID.randomUUID().toString(), "NameDefined");
+
+            publish(event);
+
+            // Waits for this event rather than for a count. A start position is allowed to be one a model replays from,
+            // so the first thing to arrive is not necessarily the thing this assertion is about, and a count-wait would
+            // read the list while it was still filling.
+            List<CloudEvent> received = recorded.awaitUntil(
+                    events -> idsOf(events).contains(event.getId()), DELIVERY_TIMEOUT);
+            assertThat(idsOf(received))
+                    .as("this model declares it accepts %s, and an accepted start position owes a working "
+                            + "subscription. Accepting one and then delivering nothing is the failure this catches: it "
+                            + "leaves a caller holding a subscription that never says anything is wrong", variant)
+                    .contains(event.getId());
+            // Freed before the next variant, so a model that feeds one subscription at a time gets to answer for all
+            // four rather than refusing the second for a reason this test is not about.
+            subscriptionModel().cancelSubscription(id);
+        }
+
+        private void assertRefuses(StartAtVariant variant) {
+            assertThatThrownBy(() -> subscriptionModel()
+                    .subscribe(subscriptionId(), null, variant.startAt(fixture().aCheckpointToStartFrom()), new RecordedEvents()))
+                    .as("this model declares it does not accept %s, and a start position it cannot honour has to be "
+                            + "refused rather than quietly ignored, which would start the subscription somewhere the "
+                            + "caller did not ask for", variant)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void replays_history_to_a_new_subscription_or_starts_where_it_was_told_as_the_fixture_declares() {
+            CloudEvent beforeAnythingSubscribed = ConformanceEvents.event("1", "NameDefined");
+            publish(beforeAnythingSubscribed);
+
+            RecordedEvents recorded = subscribeAndWait(subscriptionId());
+
+            if (fixture().replaysHistoryToANewSubscription()) {
+                assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+                        .as("this model declares it replays its history to a subscription id it has not seen before, "
+                                + "so an event published before that subscription existed still has to arrive")
+                        .contains(beforeAnythingSubscribed.getId());
+            } else {
+                assertReceivesOnlyTheMarker(recorded);
+            }
         }
     }
 
@@ -450,7 +542,18 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             RecordedEvents afterCancel = subscribeAndWait(subscriptionId());
             CloudEvent afterCancelEvent = ConformanceEvents.event("2", "NameWasChanged");
             publish(afterCancelEvent);
-            assertThat(idsOf(afterCancel.awaitAtLeast(1, DELIVERY_TIMEOUT))).containsExactly(afterCancelEvent.getId());
+            if (fixture().replaysHistoryToANewSubscription()) {
+                // A replaying model hands this subscription the earlier event before the new one. That is more than
+                // the other branch asserts rather than less: the replay has to arrive, and in order.
+                List<CloudEvent> received = afterCancel.awaitUntil(
+                        events -> idsOf(events).contains(afterCancelEvent.getId()), DELIVERY_TIMEOUT);
+                assertThat(idsOf(received))
+                        .as("this model replays to a new subscription, so the second one owes the earlier event and "
+                                + "then the new one")
+                        .containsSubsequence(beforeCancel.getId(), afterCancelEvent.getId());
+            } else {
+                assertThat(idsOf(afterCancel.awaitAtLeast(1, DELIVERY_TIMEOUT))).containsExactly(afterCancelEvent.getId());
+            }
             assertThat(recorded.soFar())
                     .as("a cancelled subscription receives nothing further")
                     .isEmpty();

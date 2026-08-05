@@ -104,6 +104,46 @@ class StreamSubscriptionModelTest {
                 .untilAsserted(() -> assertThat(received).extracting(CloudEvent::getId).containsExactly(first.getId()));
     }
 
+    /**
+     * The half the two typed facades genuinely share, and the only half: {@code AbstractDelegatingSubscriptionModelAdapter}
+     * forwards the whole life cycle, while {@code StreamSubscriptionModelAdapter} and {@code DcbSubscriptionModelAdapter}
+     * translate {@code subscribe} separately, the DCB one additionally re-filtering what it delivers. So this is
+     * asserted once, here, rather than a second time through the DCB facade where it would be the same code again.
+     * ADR 94 originally read the two as one shared adapter throughout, which is why neither had been covered.
+     */
+    @Test
+    void the_life_cycle_is_forwarded_to_the_delegate() {
+        CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
+        streamSubscriptionModel.subscribe("sub", Filter.type("OrderPlaced"), StartAt.now(), received::add)
+                .waitUntilStarted();
+
+        assertThat(streamSubscriptionModel.isRunning()).isTrue();
+        assertThat(streamSubscriptionModel.isRunning("sub")).isTrue();
+        assertThat(delegate.isRunning("sub"))
+                .as("the facade holds no state of its own, so what it reports has to be what the delegate reports")
+                .isTrue();
+
+        streamSubscriptionModel.pauseSubscription("sub");
+
+        assertThat(streamSubscriptionModel.isPaused("sub")).isTrue();
+        assertThat(delegate.isPaused("sub")).isTrue();
+
+        streamSubscriptionModel.resumeSubscription("sub").waitUntilStarted();
+        CloudEvent afterResume = event("OrderPlaced");
+        delegate.accept(List.of(afterResume));
+
+        await().untilAsserted(() ->
+                assertThat(received).extracting(CloudEvent::getId).containsExactly(afterResume.getId()));
+
+        streamSubscriptionModel.stop();
+
+        assertThat(streamSubscriptionModel.isRunning())
+                .as("stopping through the facade has to stop the model underneath it, or a caller holding only the "
+                        + "facade cannot shut anything down")
+                .isFalse();
+        assertThat(delegate.isRunning()).isFalse();
+    }
+
     private static CloudEvent event(String type) {
         return CloudEventBuilder.v1()
                 .withId(UUID.randomUUID().toString())

@@ -66,6 +66,33 @@ class PushSubscriptionModelTest {
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("handler failed");
     }
 
+    /**
+     * {@code RegisteringSubscribable.shutdown()} is final and documents itself as not reversible: the ids are released
+     * and the handlers are gone, so a shut-down model delivers nothing even after {@code start(..)}. Nothing held it to
+     * that, and it is the reason the register-only models decline the TCK's {@code RestartConformance}: there is no
+     * durable state for a rebuilt model to pick up, and no way for an event to wait while nothing is running. So the
+     * refusal is asserted here rather than left as a sentence in a javadoc.
+     */
+    @Test
+    void a_shut_down_model_stays_shut_down_even_after_being_started_again() {
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        List<String> received = new ArrayList<>();
+        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
+        model.accept(cloudEvent("1", "NameDefined"));
+        assertThat(received).containsExactly("1");
+
+        model.shutdown();
+        model.start(true);
+
+        model.accept(cloudEvent("2", "NameWasChanged"));
+        assertThat(received)
+                .as("shutdown dropped the registration, so starting the model again brings back nothing to deliver to")
+                .containsExactly("1");
+        assertThat(model.subscriptionIds())
+                .as("and the id is gone rather than held by a handler that no longer exists")
+                .isEmpty();
+    }
+
     @Test
     void registering_the_same_subscription_id_twice_is_rejected() {
         PushSubscriptionModel model = new PushSubscriptionModel();

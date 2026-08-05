@@ -17,6 +17,8 @@
 package org.occurrent.subscription.synchronous.reactor;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.occurrent.tck.subscription.reactor.BlockingSubscriptionOverReactive;
@@ -59,5 +61,14 @@ class SynchronousSubscriptionModelFixture implements SubscriptionModelFixture {
     @Override
     public boolean retriesAFailingHandler() {
         return false;
+    }
+
+    /**
+     * This model has no notion of a start position at all, it just dispatches to whatever is registered, so any
+     * checkpoint is equally honest here. {@code GlobalCheckpoint.of(0)} is the obvious nothing.
+     */
+    @Override
+    public Checkpoint aCheckpointToStartFrom() {
+        return GlobalCheckpoint.of(0);
     }
 }

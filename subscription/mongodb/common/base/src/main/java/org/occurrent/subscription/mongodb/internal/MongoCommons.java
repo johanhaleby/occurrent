@@ -89,6 +89,35 @@ public class MongoCommons {
         return checkpointDocument.get(OPERATION_TIME, BsonTimestamp.class);
     }
 
+    /**
+     * Runs everything {@link #applyStartPosition(Object, BiFunction, BiFunction, StartAt, SubscriptionModelContext)}
+     * does to work out a start position, and throws whatever that would have thrown, without applying the result to
+     * anything.
+     * <p>
+     * It exists so a subscription model can refuse a start position it cannot make sense of from {@code subscribe},
+     * rather than from a background thread or a deferred pipeline where nobody is listening and a retry re-throws it
+     * forever. A {@link Checkpoint} is only a string on the way back out of storage, and a caller may write one by
+     * hand, so a value this cannot parse is reachable through published API rather than hypothetical.
+     * <p>
+     * A dynamic {@link StartAt} is a no-op here, and that rule lives in this method rather than in a condition each
+     * caller has to remember: resolving one means calling the caller's own function, the model calls it again when it
+     * actually subscribes, and calling an arbitrary caller's function twice to validate it is worse than not checking
+     * it. Leaving that to the call sites made it a precondition two models had to keep honouring, and a third would
+     * have had to rediscover.
+     */
+    public static void checkStartPosition(@Nullable StartAt startAt, SubscriptionModelContext ctx) {
+        if (startAt == null || startAt.isDynamic()) {
+            return;
+        }
+        applyStartPosition(NOTHING, (nothing, resumeToken) -> nothing, (nothing, operationTime) -> nothing, startAt, ctx);
+    }
+
+    /**
+     * Stands in for the object a start position would be applied to, so {@link #checkStartPosition} can reuse the
+     * whole of {@code applyStartPosition} rather than growing a second copy of its parsing that could drift from it.
+     */
+    private static final Object NOTHING = new Object();
+
     public static <T> T applyStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, @Nullable StartAt startAt, SubscriptionModelContext ctx) {
         StartAt startAtValue = startAt == null ? null : startAt.get(ctx);
         if (startAtValue == null || startAtValue.isNow() || startAtValue.isDefault()) {

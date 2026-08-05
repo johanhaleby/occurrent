@@ -365,6 +365,97 @@ the blocking `DurableSubscriptionModel` does, so it inherits neither retry nor s
 cannot pass those assertions by any focused change. Whether it gains its own retry policy or is reshaped to delegate
 like its blocking twin is a design decision recorded as its own issue, not something a fixture flag may paper over.
 
+**Amended when phase 8 was built, which is where this ADR's `StartAt` paragraph finally got implemented, and it needed
+a second declaration beside it.**
+
+The mechanism is the one this ADR described: `StartAtVariant`, a TCK enum with one constant per permitted
+implementation of the sealed `StartAt`, and `SubscriptionModelFixture.acceptedStartAtVariants()`. Every accepted
+variant owes a subscription that receives what is published after it, every variant left out owes an
+`IllegalArgumentException` from `subscribe`, and one test walks all four on every model so a variant left out is a
+claim rather than an excuse. The enum exists instead of a set of `StartAt` instances because a declaration has to name
+the variants a model refuses, and a refused variant has no instance a fixture would want to build. It cannot fall
+behind `StartAt` without the compiler saying so.
+
+Two models refuse something, and only one of them was known in advance. `CatchupThenPushSubscriptionModel` accepts the
+default and nothing else, on both stacks, which is the refusal this mechanism was designed around. The other was found
+by running the suite: `InMemorySubscriptionModel` refuses a checkpoint, since it keeps no history and would otherwise
+accept a position it could only ignore. That is worth recording as evidence rather than as trivia. A declaration whose
+non-default branch has one implementation is one bad refactor away from being untested, and this one has two.
+
+**The `StartAt` declaration alone did not unblock the wiring phase 7 held back, and finding that out is the part worth
+writing down.** The phase-7 amendment above says `CatchupThenPushSubscriptionModel`'s general conformance waits for
+this mechanism. It does, but not only for it. Refusing three variants says nothing about what the fourth one does, and
+what fails that model is the suite's assumption that a subscription id it has not seen before starts at the present:
+`a_cancelled_subscription_stops_receiving` creates a second subscription after events exist, and this model replays
+them. So a second declaration ships beside the first,
+`SubscriptionModelFixture.replaysHistoryToANewSubscription()`. It is not a flag holding a bug, and both branches cost
+something: `false` owes a new subscription that does *not* receive what was published before it existed, which every
+change-stream and in-process model now proves, and `true` owes exactly the opposite plus, in the cancellation test, the
+replay arriving *before* the live event. The `true` branch therefore asserts more than the `false` branch it replaces
+rather than less. Both stacks are wired, and the blocking one is this model's first conformance coverage of any kind.
+
+**At-least-once and resuming after a restart became their own suite, `RestartConformance`, rather than the declaration
+on the base fixture the plan of record proposed.** The reason is the one this ADR already used to reject
+`deliversSynchronously()`. A model whose events arrive by being handed to it cannot be rebuilt over durable state it
+does not have, and cannot be handed an event while it is down, so a base-fixture declaration would have a branch that
+asserts nothing at all for the in-process and register-only models, and a declaration that is free on one branch is a
+switch for turning off the only test of a property. Declining by not extending the suite is the visible absence rule
+(d) already relies on. A model that *can* answer still declares which way it goes, through
+`RestartableSubscriptionModelFixture.resumesAfterARestart()`, because that is a real difference between two models with
+identical durable state underneath them: a change-stream model reads from wherever the server is now, and the same model
+wrapped in one that keeps a checkpoint reads from where the checkpoint says. That declaration has two assertable
+branches and both run. Delivery here is at-least-once and the suite says so: a model resuming from the last position it
+stored rather than from just after it redelivers that event, so the assertions are about what must arrive and never
+about what must not repeat.
+
+**The assertion this ADR moved out of phase 6 has landed, and where it landed says something about what it could
+assert.** It is `StreamCatchupSubscriptionModelTest.a_model_that_reports_no_checkpoint_cannot_sit_behind_catchup`, in
+the wrapper module, driving a real `StreamCatchupSubscriptionModel` over a model whose `globalCheckpoint()` answers
+null. The production code already refused, loudly, in `AbstractCatchupSubscriptionModel.captureLiveResumeCheckpoint`;
+what was missing was anything holding it to that. The shape the test had to take is the interesting part.
+`CatchupSubscription.waitUntilStarted` catches whatever the replay threw, logs it at WARN and answers `false`, so the
+observable contract is that the caller is told the subscription did not start and that nothing was replayed, with the
+reason reachable through the replay's own `Future`. All three are asserted, because the failure worth preventing is the
+quiet one: a handover falling back to "now" would deliver the history, never go live, and leave a read model looking up
+to date while it stopped moving.
+
+**`MongoCommons.applyStartPosition` was the other half of #524, and it was still lazy.** #524 hoisted the *filter*
+check into `subscribe` on `NativeMongoSubscriptionModel` and phase 7 did the same on `ReactorMongoSubscriptionModel`,
+and both left the start position where it was, the native one on its dispatcher thread and the reactor one inside a
+`Flux.defer`. Reachability was listed as unverified and is now verified, in both directions. The
+`IllegalArgumentException("Unrecognized StartAt implementation")` in that method is dead code through published API:
+`StartAt` is sealed to four types and `Dynamic.get` recursively unwraps, so nothing a caller can build reaches it. What
+*is* reachable is the parsing underneath, because `StringBasedCheckpoint` has a public constructor taking any string
+and a storage hands checkpoints back as strings, so a value containing `resumeToken` or `operationTime` in the wrong
+shape throws from inside the deferred work. Both models then retry it forever, `waitUntilStarted()` never answers and
+`isRunning(id)` keeps saying yes. So it is fixed the same way the filter was, through a new
+`MongoCommons.checkStartPosition` that runs the whole resolution and discards the result rather than growing a second
+copy of the parsing that could drift. `SpringMongoSubscriptionModel` needed nothing: it was always eager, by
+construction rather than by decision. **A dynamic position is deliberately left lazy on both.** Resolving one means
+calling the caller's own function, the model calls it again when it subscribes for real, and calling an arbitrary
+caller's function twice to validate it is a worse trade than the narrower check.
+
+**One wiring is held back, for the reason phase 7 held one back, and the suite was not touched to avoid it.**
+`CompetingConsumerSubscriptionModel` fails two assertions of the general suite that every other model passes: it accepts
+a subscription id already in use, and it accepts a pause of a subscription that is not running. Its introspection
+wiring ships and its general-conformance wiring waits, recorded as #553 under #396. The second of the two looks like a
+plain omission, but the first is a real contract question rather than an obvious bug, which is exactly why it goes to
+an issue instead of being fixed in passing: sharing one subscription id across competing consumers is the whole point
+of the pattern, so the contract has to say whether "one id means one subscription" is a statement about a model
+instance or about the id everywhere, and the suite currently assumes the former. Weakening the assertion so the model
+passes was never an option: four models honour it today, and the one test of the property would have been turned off
+for all of them to accommodate the fifth.
+
+**And a claim in this ADR was wrong, so it is corrected here rather than left to rot.** Above, under what is a
+per-model capability, it says `StreamSubscriptionModel` and `DcbSubscriptionModel` "are one shared adapter reached
+through `from(SubscriptionModel)`, so a suite per model would test the same code five times". What they share is
+`AbstractDelegatingSubscriptionModelAdapter`, which forwards the life cycle and nothing else.
+`StreamSubscriptionModelAdapter` and `DcbSubscriptionModelAdapter` translate `subscribe` separately, and the DCB one
+additionally re-filters what it delivers so a catch-up replay stays inside the subscription's own criteria. Neither is
+a `SubscriptionModel` (one takes a `Filter`, the other a `DcbCriteria` and a `DcbStartAt`), so no suite here applies to
+either of them, and what phase 8 does instead follows the corrected reading exactly: the forwarding is asserted once,
+since it really is one piece of code, and the per-facade `subscribe` translation stays covered per facade.
+
 The question this ADR left to phase 7 is answered: the reactor in-memory checkpoint storage is published. It lives at
 `org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage` in the already-shipped
 `occurrent-subscription-inmemory` artifact, beside its blocking twin, with `occurrent-subscription-api-reactor` as an

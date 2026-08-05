@@ -36,6 +36,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * {@link #append(List)} does not forward to a live feed itself: the two are separate objects on the constructor of
  * {@link CatchupThenPushSubscriptionModel}, so a fixture using this reader calls both, matching what
  * {@code InMemoryEventStore(feed::accept)} does in one call on the blocking side.
+ * <p>
+ * An event's position is its one-based place in the append order, which is all a double needs and is what makes the
+ * {@link PositionRange} bounds mean something. Two things this gets right on purpose, because getting them wrong makes
+ * the reader answer more than it was asked and hides a regression rather than causing one. It honours the range with
+ * the same bounds the real stores use, exclusive at the bottom and inclusive at the top, so a model that started
+ * narrowing its replay window would be caught here rather than silently over-reading. And the snapshot is taken when
+ * something subscribes rather than when the {@code Flux} is assembled, which is the contract ADR 93 holds every
+ * published reactive publisher to: assembling early would hide a model that built its replay before registering on the
+ * live feed, which is exactly the ordering the catch-up handover depends on.
  */
 final class InMemoryReactivePositionOrderedReader implements PositionOrderedReader {
 
@@ -47,12 +56,25 @@ final class InMemoryReactivePositionOrderedReader implements PositionOrderedRead
 
     @Override
     public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-        return Flux.fromIterable(List.copyOf(events)).filter(cloudEvent -> FilterMatcher.matchesFilter(cloudEvent, filter));
+        return Flux.defer(() -> {
+            List<CloudEvent> snapshot = List.copyOf(events);
+            long upperBound = range.upToPosition().orElse((long) snapshot.size());
+            long lowerBound = range.afterPosition().orElse(0L);
+            return Flux.fromIterable(snapshot)
+                    .index((zeroBasedIndex, cloudEvent) -> new PositionedEvent(zeroBasedIndex + 1, cloudEvent))
+                    .filter(positioned -> positioned.position() > lowerBound && positioned.position() <= Math.min(upperBound, snapshot.size()))
+                    .map(PositionedEvent::cloudEvent)
+                    .filter(cloudEvent -> FilterMatcher.matchesFilter(cloudEvent, filter));
+        });
+    }
+
+    private record PositionedEvent(long position, CloudEvent cloudEvent) {
     }
 
     @Override
     public Mono<Long> currentPosition() {
-        return Mono.just((long) events.size());
+        // The high-watermark, which for a log whose positions are its indices is the number of events in it.
+        return Mono.defer(() -> Mono.just((long) events.size()));
     }
 
     @Override

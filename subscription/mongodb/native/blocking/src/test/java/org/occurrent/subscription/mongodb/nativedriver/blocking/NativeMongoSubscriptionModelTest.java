@@ -26,6 +26,7 @@ import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.bson.json.JsonParseException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.condition.Condition;
@@ -38,7 +39,9 @@ import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -137,6 +140,28 @@ public class NativeMongoSubscriptionModelTest {
 
         // Then
         assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
+    }
+
+    @Test
+    void blocking_native_mongodb_subscription_refuses_a_start_position_it_cannot_parse_from_subscribe_itself() {
+        // Given: a checkpoint whose string form contains "resumeToken" (steering MongoCommons.applyStartPosition
+        // into its legacy string-parsing branch) but isn't valid BSON, so parsing it fails. Before subscribe made
+        // this eager check, the same failure only happened later, inside newInternalSubscription on the
+        // dispatcher thread: the retry wrapper around that thread caught it and re-threw it forever, so
+        // waitUntilStarted() never returned and the caller was left holding a subscription that looked
+        // registered but never delivered a single event.
+        String subscriptionId = UUID.randomUUID().toString();
+        StartAt unparsableStartAt = StartAt.checkpoint(new StringBasedCheckpoint("not-a-valid-resumeToken-document"));
+
+        // When
+        Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, unparsableStartAt, __ -> System.out.println("hello")));
+
+        // Then: refused synchronously by subscribe() itself, and nothing is left registered under the id
+        assertThat(throwable).isExactlyInstanceOf(JsonParseException.class);
+        assertAll(
+                () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
+                () -> assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId)
+        );
     }
 
     @Test

@@ -42,6 +42,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -53,6 +54,7 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 /**
@@ -159,6 +161,46 @@ class StreamCatchupSubscriptionModelTest {
         await().untilAsserted(() -> assertThat(received).containsExactly(live));
     }
 
+    /**
+     * The assertion ADR 94 promised the TCK would make and could not: the subscription-model TCK depends on
+     * {@code occurrent-subscription-api-blocking} and nothing else on purpose, and driving this needs a catch-up model,
+     * which lives here. {@code CheckpointAwareSubscriptionModel.globalCheckpoint()} documents null as an unresolvable
+     * problem, and this is what that costs: such a model is still a working live model, but it cannot sit behind
+     * catch-up, because the handover at the end of a replay has no position to start live delivery from.
+     * <p>
+     * What must never happen is the quiet version, where the handover falls back to "now" and every event committed
+     * while history replayed is dropped with nothing said. The positive control is
+     * {@link #replays_historic_events_by_position_when_the_store_writes_position()}, which is this test with a model
+     * that answers.
+     */
+    @Test
+    void a_model_that_reports_no_checkpoint_cannot_sit_behind_catchup() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        write(eventStore, nameDefined("event1"));
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        CheckpointAwareSubscriptionModel reportsNoCheckpoint = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, null);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(reportsNoCheckpoint, eventStore, new CatchupSubscriptionModelConfig(100));
+
+        Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+
+        // Five seconds is a bound on a replay that fails on its first call into the model, not a wait for anything, so
+        // it is only ever paid in full by a test that was going to fail anyway.
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("the caller has to be told the subscription did not start, since a catch-up that cannot hand over "
+                        + "has no live delivery to fall back to")
+                .isFalse();
+        assertThat(received)
+                .as("and nothing may be replayed, because delivering the history and then silently never going live is "
+                        + "worse than refusing: the read model would look up to date and stop moving")
+                .isEmpty();
+        assertThatThrownBy(() -> ((CatchupSubscription) started).delegatedSubscription().get())
+                .as("the reason has to reach whoever reads the log, or an operator sees a subscription that simply "
+                        + "never started")
+                .hasRootCauseInstanceOf(IllegalStateException.class)
+                .rootCause()
+                .hasMessageContaining("no resume token");
+    }
+
     @Test
     void catchup_is_marked_running_before_the_virtual_thread_starts() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
@@ -223,9 +265,20 @@ class StreamCatchupSubscriptionModelTest {
      */
     private static final class CheckpointAwareInMemorySubscriptionModel implements CheckpointAwareSubscriptionModel {
         private final InMemorySubscriptionModel delegate;
+        private final @Nullable Checkpoint checkpoint;
 
         private CheckpointAwareInMemorySubscriptionModel(InMemorySubscriptionModel delegate) {
+            this(delegate, new StringBasedCheckpoint("in-memory-global-position"));
+        }
+
+        /**
+         * @param checkpoint What {@link #globalCheckpoint()} answers. Null is a documented answer on the real
+         *                   interface, meaning the model cannot report where the feed is, so it is a state a test has
+         *                   to be able to put a model in.
+         */
+        private CheckpointAwareInMemorySubscriptionModel(InMemorySubscriptionModel delegate, @Nullable Checkpoint checkpoint) {
             this.delegate = delegate;
+            this.checkpoint = checkpoint;
         }
 
         @Override
@@ -237,7 +290,7 @@ class StreamCatchupSubscriptionModelTest {
 
         @Override
         public @Nullable Checkpoint globalCheckpoint() {
-            return new StringBasedCheckpoint("in-memory-global-position");
+            return checkpoint;
         }
 
         @Override

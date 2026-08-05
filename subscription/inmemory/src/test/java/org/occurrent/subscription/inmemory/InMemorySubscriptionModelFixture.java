@@ -17,10 +17,14 @@
 package org.occurrent.subscription.inmemory;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.tck.subscription.blocking.StartAtVariant;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Shared by {@link InMemorySubscriptionModelConformanceTest} and
@@ -57,6 +61,26 @@ class InMemorySubscriptionModelFixture implements SubscriptionModelFixture {
     @Override
     public boolean retriesAFailingHandler() {
         return true;
+    }
+
+    /**
+     * Only reached for the refusal below, since {@code CHECKPOINT} is not an accepted variant here, and this model
+     * rejects the variant rather than looking at the value.
+     */
+    @Override
+    public Checkpoint aCheckpointToStartFrom() {
+        return GlobalCheckpoint.of(0);
+    }
+
+    /**
+     * Everything but a checkpoint. This model keeps no history, so there is no position to seek to, and rather than
+     * accept a checkpoint and start live anyway it says so: {@code subscribe} refuses anything that does not resolve to
+     * {@code now} or {@code default}. A dynamic position is accepted when it resolves to one of those two, which is
+     * what the suite hands it, and refused on the same terms as a literal checkpoint when it resolves to one.
+     */
+    @Override
+    public Set<StartAtVariant> acceptedStartAtVariants() {
+        return Set.of(StartAtVariant.NOW, StartAtVariant.SUBSCRIPTION_MODEL_DEFAULT, StartAtVariant.DYNAMIC);
     }
 
     @Override

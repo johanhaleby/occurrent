@@ -25,6 +25,7 @@ import org.junit.platform.testkit.engine.EngineTestKit;
 import org.junit.platform.testkit.engine.Events;
 import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -120,6 +121,24 @@ class SuiteNeverSkipsTest {
     }
 
     @Test
+    void the_restart_suite_fails_every_test_against_a_model_that_honours_nothing() {
+        assertEveryTestFails(HonoursNothingRestartConformance.class, "a model that honours nothing");
+    }
+
+    @Test
+    void the_restart_suite_passes_every_test_against_a_model_that_resumes() {
+        assertEveryTestPasses(ResumingRestartConformance.class, "subscription model");
+    }
+
+    @Test
+    void the_restart_suite_passes_every_test_against_a_model_that_starts_at_the_present() {
+        // The other branch of the same declaration. Both are run here rather than left to Occurrent's own models,
+        // because a suite whose second branch is only ever exercised elsewhere is a suite nothing in this module can
+        // prove is satisfiable.
+        assertEveryTestPasses(StartingAtThePresentRestartConformance.class, "subscription model");
+    }
+
+    @Test
     void names_nothing_that_could_skip_a_test_in_any_suite_it_compiles() {
         assertThat(SkipMechanismScan.classesScannedAlongside(SubscriptionModelConformance.class))
                 .describedAs("the scan must reach the suites, or a clean verdict means only that it looked nowhere")
@@ -127,7 +146,8 @@ class SuiteNeverSkipsTest {
                         IntrospectableSubscriptionModelConformance.class.getName(),
                         CheckpointAwareSubscriptionModelConformance.class.getName(),
                         CompetingConsumerStrategyConformance.class.getName(),
-                        InProcessDeliveryConformance.class.getName());
+                        InProcessDeliveryConformance.class.getName(),
+                        RestartConformance.class.getName());
 
         SortedMap<String, List<String>> offenders = SkipMechanismScan.of(SubscriptionModelConformance.class);
 
@@ -375,6 +395,30 @@ class SuiteNeverSkipsTest {
         }
     }
 
+    static class HonoursNothingRestartConformance extends RestartConformance {
+
+        @Override
+        protected RestartableSubscriptionModelFixture createFixture() {
+            return new NoopRestartableSubscriptionModelFixture();
+        }
+    }
+
+    static class ResumingRestartConformance extends RestartConformance {
+
+        @Override
+        protected RestartableSubscriptionModelFixture createFixture() {
+            return new WorkingRestartableSubscriptionModelFixture(true);
+        }
+    }
+
+    static class StartingAtThePresentRestartConformance extends RestartConformance {
+
+        @Override
+        protected RestartableSubscriptionModelFixture createFixture() {
+            return new WorkingRestartableSubscriptionModelFixture(false);
+        }
+    }
+
     private static class NoopSubscriptionModelFixture implements SubscriptionModelFixture {
 
         @Override
@@ -395,6 +439,27 @@ class SuiteNeverSkipsTest {
 
         @Override
         public boolean retriesAFailingHandler() {
+            return true;
+        }
+
+        @Override
+        public Checkpoint aCheckpointToStartFrom() {
+            // Never reached either: subscribing throws before the position is applied to anything.
+            return new StringBasedCheckpoint("noop");
+        }
+    }
+
+    private static class NoopRestartableSubscriptionModelFixture extends NoopSubscriptionModelFixture
+            implements RestartableSubscriptionModelFixture {
+
+        @Override
+        public SubscriptionModel restart() {
+            return NoopSubscriptionModel.INSTANCE;
+        }
+
+        @Override
+        public boolean resumesAfterARestart() {
+            // Never reached: the model throws from subscribe long before the suite asks which branch to assert.
             return true;
         }
     }
@@ -429,6 +494,69 @@ class SuiteNeverSkipsTest {
         @Override
         public boolean retriesAFailingHandler() {
             return true;
+        }
+
+        @Override
+        public Checkpoint aCheckpointToStartFrom() {
+            // This model has no history, so every position means live. Its own globalCheckpoint() says the same thing.
+            return model.globalCheckpoint();
+        }
+
+        @Override
+        public void close() {
+            model.shutdown();
+        }
+    }
+
+    private static class WorkingRestartableSubscriptionModelFixture implements RestartableSubscriptionModelFixture {
+
+        private final WorkingRestartableSubscriptionModel.Storage storage = new WorkingRestartableSubscriptionModel.Storage();
+        private final boolean resumesAfterARestart;
+
+        private WorkingRestartableSubscriptionModel model;
+
+        WorkingRestartableSubscriptionModelFixture(boolean resumesAfterARestart) {
+            this.resumesAfterARestart = resumesAfterARestart;
+            this.model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart);
+        }
+
+        @Override
+        public SubscriptionModel subscriptionModel() {
+            return model;
+        }
+
+        @Override
+        public SubscriptionModel restart() {
+            model.shutdown();
+            model = new WorkingRestartableSubscriptionModel(storage, resumesAfterARestart);
+            return model;
+        }
+
+        @Override
+        public boolean resumesAfterARestart() {
+            return resumesAfterARestart;
+        }
+
+        @Override
+        public void publish(List<CloudEvent> events) {
+            // Straight to the storage-backed model, which appends whether or not anything is listening. That is what
+            // lets the suite publish into the gap a restart leaves.
+            model.feed(events);
+        }
+
+        @Override
+        public boolean deliversEventsPublishedWhilePaused() {
+            return false;
+        }
+
+        @Override
+        public boolean retriesAFailingHandler() {
+            return false;
+        }
+
+        @Override
+        public Checkpoint aCheckpointToStartFrom() {
+            return new StringBasedCheckpoint("0");
         }
 
         @Override

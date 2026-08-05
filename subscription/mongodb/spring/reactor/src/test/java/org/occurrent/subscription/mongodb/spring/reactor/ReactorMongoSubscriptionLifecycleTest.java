@@ -22,6 +22,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.json.JsonParseException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -34,6 +35,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -155,6 +157,26 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
         // Then
         assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
+    }
+
+    @Test
+    void subscribing_with_a_start_position_the_model_cannot_parse_is_refused_by_subscribe_itself() {
+        // Given: a checkpoint whose string form contains "resumeToken" (steering MongoCommons.applyStartPosition
+        // into its legacy string-parsing branch) but isn't valid BSON, so parsing it fails. Before subscribe made
+        // this eager check, the same failure only happened later, inside the Flux.defer built by
+        // resilientChangeStream/changeStream: shouldRestart sent it round the unbounded retry forever, so
+        // waitUntilStarted() never completed and isRunning(id) kept saying yes for a subscription that would
+        // never deliver anything.
+        String subscriptionId = UUID.randomUUID().toString();
+        StartAt unparsableStartAt = StartAt.checkpoint(new StringBasedCheckpoint("not-a-valid-resumeToken-document"));
+
+        // When
+        Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, unparsableStartAt, __ -> Mono.empty()));
+
+        // Then: refused synchronously by subscribe() itself, and nothing is left registered under the id
+        assertThat(throwable).isExactlyInstanceOf(JsonParseException.class);
+        assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
+        assertThat(subscriptionModel.subscriptionIds()).doesNotContain(subscriptionId);
     }
 
     @Test

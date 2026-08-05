@@ -22,9 +22,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -67,6 +70,35 @@ class SubscriptionModelConformanceGuardsTest {
         assertThatThrownBy(suite::fixture)
                 .isExactlyInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("No fixture");
+    }
+
+    @Test
+    void reject_a_fixture_that_declares_no_start_position_at_all() {
+        SubscriptionModelConformance suite = suiteWith(new StubFixture(NoopSubscriptionModel.INSTANCE) {
+            @Override
+            public Set<StartAtVariant> acceptedStartAtVariants() {
+                return Set.of();
+            }
+        });
+
+        assertThatThrownBy(suite::createFixtureAndCheckItsDeclaration)
+                .isExactlyInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("accepts no StartAt variant at all");
+    }
+
+    @Test
+    void reject_a_fixture_with_no_checkpoint_to_start_from() {
+        SubscriptionModelConformance suite = suiteWith(new StubFixture(NoopSubscriptionModel.INSTANCE) {
+            @Override
+            @SuppressWarnings("NullAway")
+            public Checkpoint aCheckpointToStartFrom() {
+                return null;
+            }
+        });
+
+        assertThatThrownBy(suite::createFixtureAndCheckItsDeclaration)
+                .isExactlyInstanceOf(NullPointerException.class)
+                .hasMessageContaining("returned null from aCheckpointToStartFrom()");
     }
 
     @Test
@@ -119,6 +151,11 @@ class SubscriptionModelConformanceGuardsTest {
         @Override
         public boolean retriesAFailingHandler() {
             return false;
+        }
+
+        @Override
+        public Checkpoint aCheckpointToStartFrom() {
+            return new StringBasedCheckpoint("a-checkpoint");
         }
     }
 
