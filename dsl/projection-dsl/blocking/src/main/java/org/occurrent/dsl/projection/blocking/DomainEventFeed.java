@@ -191,6 +191,23 @@ public final class DomainEventFeed<E> {
     }
 
     /**
+     * Go live without a catch-up: skip straight past the one-time replay for the projection registered under
+     * {@code id}, draining whatever live events it already buffered. Use this over {@link #catchUp(String)} when this
+     * feed's events are not in the local event store, so there is nothing to replay. No completion marker is written,
+     * so a later {@link #catchUp(String)} on the same projection still replays the full history.
+     *
+     * @throws IllegalArgumentException if no projection with that id is registered on this feed
+     */
+    public void goLive(String id) {
+        Objects.requireNonNull(id, "id cannot be null");
+        CatchupProjectionFeed<E> registered = feed.get();
+        if (registered == null || !registered.id().equals(id)) {
+            throw new IllegalArgumentException("No projection with id '" + id + "' is registered on this feed.");
+        }
+        registered.goLive();
+    }
+
+    /**
      * Stop a catch-up replay that is still in flight, so a shutting-down application does not leave one folding into
      * a store that is closing with it. The replay notices at its next event and unwinds without writing the
      * completion marker, so the next start replays the whole history again.

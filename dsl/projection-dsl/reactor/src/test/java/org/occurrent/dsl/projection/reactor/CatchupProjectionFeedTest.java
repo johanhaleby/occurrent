@@ -290,6 +290,65 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
+    void go_live_delivers_buffered_events_without_ever_reading_history() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        // Errors if replay() is ever subscribed to, so a passing test proves goLive() never reads history.
+        PositionOrderedReader failingReader = new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.error(new IllegalStateException("replay boom"));
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just(0L);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+        CatchupProjectionFeed<Counted> feed = feed("counter", failingReader, converter, repo, null);
+
+        feed.accept(new Counted("1")).subscribe();
+        feed.goLive().block();
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(1));
+
+        feed.accept(new Counted("2")).block();
+        assertThat(repo.get("counter")).isEqualTo(2);
+    }
+
+    @Test
+    void go_live_writes_no_completion_marker_so_a_later_catch_up_still_replays_history() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+
+        feed("counter", reader("1", "2"), converter, new ConcurrentHashMap<>(), marker).goLive().block();
+
+        assertThat(marker.checkpoints).isEmpty();
+
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        feed("counter", reader("1", "2"), converter, repo, marker).catchUp().block();
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
+    }
+
+    @Test
+    void go_live_completes_normally_the_first_time() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        CatchupProjectionFeed<Counted> feed = feed("counter", reader(), converter, repo, null);
+
+        StepVerifier.create(feed.goLive()).verifyComplete();
+
+        feed.accept(new Counted("1")).block();
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
     void a_null_event_id_fails_fast_instead_of_silently_dropping() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();

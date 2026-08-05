@@ -606,6 +606,11 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-testing-junit-jupiter-reactor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-testing-spring-boot</artifactId>
                 <version>${project.version}</version>
             </dependency>

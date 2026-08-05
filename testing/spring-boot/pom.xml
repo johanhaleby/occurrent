@@ -29,15 +29,35 @@
     <name>${mavenProjectName}</name>
 
     <dependencies>
+        <!--
+          Both neutral leaves are optional. Adding one, or both, as a test dependency is how an application opts a
+          stack into @EnableOccurrentTesting; OccurrentTestingImportSelector checks the classpath at import time to
+          decide which configuration, or both, to register. A blocking-only application never pulls in reactor-core
+          this way, and a reactive-only one never pulls in the blocking subscription API.
+        -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-testing-junit-jupiter-blocking</artifactId>
             <version>${project.version}</version>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-api-blocking</artifactId>
             <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-testing-junit-jupiter-reactor</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-api-reactor</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.springframework</groupId>
@@ -59,6 +79,12 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-eventstore-inmemory</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-synchronous-reactor</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>

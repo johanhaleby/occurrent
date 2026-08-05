@@ -45,6 +45,7 @@ import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
@@ -218,6 +219,11 @@ class ProjectionAnnotationRegistrar {
             }
             return;
         }
+        if (annotation.catchup() != org.occurrent.annotation.Catchup.FROM_EVENT_STORE) {
+            // Ignoring it would be the expensive kind of silence: someone reaching for catchup=NONE means "don't read
+            // the history", and an event-store projection left on its default start position reads all of it.
+            throw new IllegalArgumentException("@Projection '%s' sets catchup, which only applies to source=PUSH, where it decides whether the projection replays the event store before going live. An event-store projection chooses its history with startAt instead (startAt = NOW to skip it).".formatted(id));
+        }
 
         if (descriptor instanceof DcbProjection<?, ?, ?> raw) {
             DcbProjection<S, E, ID> dcbProjection = (DcbProjection<S, E, ID>) raw;
@@ -270,20 +276,31 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
-    // Register a @Projection(source = PUSH): feed it from an external push subscription model, wrapped in a
-    // replay-then-push catch-up so a new or rebuilt projection is backfilled from the event store first.
+    // Register a @Projection(source = PUSH) fed by a bare PushSubscriptionModel. Wrapped in a replay-then-push
+    // catch-up so a new or rebuilt projection is backfilled from the event store first, unless catchup = NONE, where
+    // the bare model is used directly and no event store is touched at all.
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, PushSubscriptionModel pushModel) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
-        PositionOrderedReader reader = applicationContext.getBean(PositionOrderedReader.class);
-        CheckpointStorage catchupMarker = applicationContext.getBean(CheckpointStorage.class);
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker, catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
-        // Retained so close() can stop it. Its replay runs on its own thread, so a context that closes without
-        // stopping it leaves that replay folding into a store that is closing with it.
-        pushModels.add(model);
+        boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
+        Subscribable subscribable;
+        if (catchesUp) {
+            PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Projection", PositionOrderedReader.class, id);
+            CheckpointStorage catchupMarker = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Projection", CheckpointStorage.class, id);
+            CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker, catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
+            // Retained so close() can stop it. Its replay runs on its own thread, so a context that closes without
+            // stopping it leaves that replay folding into a store that is closing with it.
+            pushModels.add(model);
+            subscribable = model;
+        } else {
+            subscribable = pushModel;
+        }
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
-        ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(model, converter) : ProjectionRunner.agnostic(model, converter);
+        ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(subscribable, converter) : ProjectionRunner.agnostic(subscribable, converter);
+        // No catchesUp guard needed: with catchup = NONE, validatePushDescriptor already rejected any startupMode but
+        // the default, so this is true there too, and a bare push subscription with nothing to replay resolves it
+        // immediately either way.
         boolean waitUntilStarted = SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode());
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)) {
             // With waitUntilStarted the catch-up replay finishes here before handing over to the live push feed;
@@ -317,9 +334,18 @@ class ProjectionAnnotationRegistrar {
         if (synchronous) {
             throw new IllegalArgumentException("@Projection '%s' cannot combine source=PUSH with mode=SYNCHRONOUS: a push feed is asynchronous.".formatted(id));
         }
+        boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
         if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
                 || annotation.resumeBehavior() != ResumeBehavior.DEFAULT) {
-            throw new IllegalArgumentException("@Projection '%s' with source=PUSH cannot set startAt, startAtGlobalPosition or resumeBehavior: the catch-up always replays from the beginning and live-resume is the broker's responsibility. startupMode is supported, so use startupMode = BACKGROUND to keep that replay off the startup path.".formatted(id));
+            // The startupMode hint only makes sense under the default catchup. With catchup=NONE there is no replay to
+            // move off the startup path, and startupMode is rejected there anyway (checked below).
+            String reason = catchesUp
+                    ? "It catches up before going live, but always from the beginning, so there is no start position to choose. Use startupMode = BACKGROUND to keep that replay off the startup path"
+                    : "With catchup=NONE it takes live events only, so there is no history to position into";
+            throw new IllegalArgumentException("@Projection '%s' with source=PUSH cannot set startAt, startAtGlobalPosition or resumeBehavior. %s, and live-resume is the broker's responsibility.".formatted(id, reason));
+        }
+        if (!catchesUp && annotation.startupMode() != StartupMode.DEFAULT) {
+            throw new IllegalArgumentException("@Projection '%s' combines source=PUSH with catchup=NONE, so it replays nothing and there is no startup work for startupMode to decide about. Remove startupMode, or drop catchup=NONE if you meant the projection to catch up first.".formatted(id));
         }
         if (!(descriptor instanceof Projection<?, ?, ?> raw)) {
             throw new IllegalArgumentException("@Projection '%s' with source=PUSH must return a Projection. A DcbProjection push source is not supported, since a DCB boundary cannot be catch-up-replayed in position order.".formatted(id));
@@ -328,17 +354,25 @@ class ProjectionAnnotationRegistrar {
     }
 
     // Register a source=PUSH projection whose feed bean is a DomainEventFeed: the projection folds domain events directly
-    // (no CloudEvent conversion on the live path), with a catch-up from the event store.
+    // (no CloudEvent conversion on the live path). Catches up from the event store unless catchup = NONE, where it goes
+    // live immediately instead and touches no event store at all.
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerDomainPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, DomainEventFeed<?> feedBean) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         MaterializedView<E> materializedView = resolveStore(annotation, method, projection, id);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
+        boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
+        // Only read below where catchesUp is true, where a goLive() branch runs instead.
         boolean waitUntilStarted = SubscriptionAnnotations.pushCatchUpShouldWaitUntilStarted(annotation.startupMode());
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)) {
             feed.register(id, materializedView, eventFilter);
-            domainFeedsToCatchUp.add(new DomainFeedCatchUp(id, feed, waitUntilStarted));
+            if (catchesUp) {
+                domainFeedsToCatchUp.add(new DomainFeedCatchUp(id, feed, waitUntilStarted));
+            } else {
+                // Nothing to replay, so there is nothing to defer to catchUpCollectedFeeds(): go live right away.
+                feed.goLive(id);
+            }
         } else {
             // register(...) alone puts the feed into buffering mode immediately, so deferring only the catch-up would
             // let accept(...) buffer into a bounded buffer rather than fold, and eventually overflow it. Defer both
@@ -346,7 +380,9 @@ class ProjectionAnnotationRegistrar {
             // running the deferred work leaves the feed in the same state registering it under auto mode would.
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
                 feed.register(id, materializedView, eventFilter);
-                if (waitUntilStarted) {
+                if (!catchesUp) {
+                    feed.goLive(id);
+                } else if (waitUntilStarted) {
                     feed.catchUp(id);
                 } else {
                     // Same treatment as auto mode, or startAll() would block for a full replay on a projection that

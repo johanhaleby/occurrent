@@ -247,6 +247,31 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
+     * Go live without a catch-up: drain whatever live events have buffered since {@link #accept} started being
+     * called, then deliver events directly from here on. Use this instead of {@link #catchUp()} for a feed whose
+     * events are not in the local event store, so there is nothing to replay. No completion marker is written, since
+     * nothing was replayed, so a later {@link #catchUp()} still replays the full history.
+     */
+    public void goLive() {
+        handover.catchUp(new BlockingHandover.Source<>() {
+            @Override
+            public boolean isAlreadyCaughtUp() {
+                return true;
+            }
+
+            @Override
+            public Stream<Delivered<E>> replay() {
+                throw new AssertionError("isAlreadyCaughtUp() is true, so this must never be called.");
+            }
+
+            @Override
+            public void markCaughtUp() {
+                throw new AssertionError("isAlreadyCaughtUp() is true, so nothing here was caught up to mark.");
+            }
+        });
+    }
+
+    /**
      * Stop a replay still in flight. It notices at its next event and unwinds without draining the live buffer, going
      * live, or writing the completion marker, so a partial replay is never recorded as a finished one and the next
      * {@link #catchUp()} replays the whole history again. A stop is not a failure: the feed stays usable rather than

@@ -25,47 +25,82 @@ import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * Stops every subscription before and after each test, so a test only runs the subscriptions it names with
+ * Stops every subscription model before and after each test, so a test only runs the subscriptions it names with
  * {@link #start(String)}. A test that writes events then cannot race a subscription it never asked for.
  * <p>
  * Stopping after each test matters because a Spring test context is cached across test classes, so a subscription one
  * class started would otherwise still be running for the next.
+ * <p>
+ * Accepts more than one subscription model, because a Spring context can have two life-cycle bearing ones, for example
+ * a durable model and a {@code SynchronousSubscriptionModel}. Every model given is stopped and resumed the same way,
+ * and a subscription id is looked for across all of them.
  */
 public final class OccurrentSubscriptionsExtension implements BeforeEachCallback, AfterEachCallback {
 
-    private final SubscriptionModelLifeCycle subscriptionModel;
+    private final List<SubscriptionModelLifeCycle> subscriptionModels;
     private final Set<String> alwaysStartIds = new LinkedHashSet<>();
     private final Set<String> knownIds = new LinkedHashSet<>();
     private @Nullable Runnable clearState;
     private @Nullable CheckpointStorage checkpointStorage;
 
-    private OccurrentSubscriptionsExtension(SubscriptionModelLifeCycle subscriptionModel) {
-        this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel must not be null");
+    private OccurrentSubscriptionsExtension(List<SubscriptionModelLifeCycle> subscriptionModels) {
+        this.subscriptionModels = List.copyOf(subscriptionModels);
     }
 
     /**
-     * An extension over {@code subscriptionModel} where no subscription runs until a test asks for one. Register it
+     * An extension over {@code subscriptionModels} where no subscription runs until a test asks for one. Register it
      * with {@code @RegisterExtension}.
      *
      * @param subscriptionModel the subscription model to stop and start, must not be {@code null}
+     * @param moreModels        further models to stop and start the same way, for a context with more than one
+     *                          life-cycle bearing model, must not contain {@code null}
      * @return a new extension
      */
-    public static OccurrentSubscriptionsExtension stoppedByDefault(SubscriptionModelLifeCycle subscriptionModel) {
-        return new OccurrentSubscriptionsExtension(subscriptionModel);
+    public static OccurrentSubscriptionsExtension stoppedByDefault(SubscriptionModelLifeCycle subscriptionModel, SubscriptionModelLifeCycle... moreModels) {
+        Objects.requireNonNull(subscriptionModel, "subscriptionModel must not be null");
+        Objects.requireNonNull(moreModels, "moreModels must not be null");
+        List<SubscriptionModelLifeCycle> models = new ArrayList<>();
+        models.add(subscriptionModel);
+        for (SubscriptionModelLifeCycle model : moreModels) {
+            models.add(Objects.requireNonNull(model, "moreModels must not contain null"));
+        }
+        return new OccurrentSubscriptionsExtension(models);
+    }
+
+    /**
+     * As {@link #stoppedByDefault(SubscriptionModelLifeCycle, SubscriptionModelLifeCycle...)}, for a caller that
+     * already holds the models in a list, such as every {@code SubscriptionModelLifeCycle} bean in a Spring context.
+     *
+     * @param subscriptionModels the subscription models to stop and start, must not be {@code null}, must not be
+     *                           empty, and must not contain {@code null}
+     * @return a new extension
+     */
+    public static OccurrentSubscriptionsExtension stoppedByDefault(List<? extends SubscriptionModelLifeCycle> subscriptionModels) {
+        Objects.requireNonNull(subscriptionModels, "subscriptionModels must not be null");
+        if (subscriptionModels.isEmpty()) {
+            throw new IllegalArgumentException("subscriptionModels must not be empty");
+        }
+        List<SubscriptionModelLifeCycle> copy = new ArrayList<>();
+        for (SubscriptionModelLifeCycle model : subscriptionModels) {
+            copy.add(Objects.requireNonNull(model, "subscriptionModels must not contain null"));
+        }
+        return new OccurrentSubscriptionsExtension(copy);
     }
 
     /**
      * Start these subscriptions before every test, for a test class where each test needs the same ones.
      *
      * @param subscriptionIds the ids to start before every test, must not be {@code null} and must not contain {@code null}
-     * @return this extension, so the call can be chained onto {@link #stoppedByDefault(SubscriptionModelLifeCycle)}
+     * @return this extension, so the call can be chained onto {@link #stoppedByDefault(SubscriptionModelLifeCycle, SubscriptionModelLifeCycle...)}
      */
     public OccurrentSubscriptionsExtension alwaysStart(String... subscriptionIds) {
         Objects.requireNonNull(subscriptionIds, "subscriptionIds must not be null");
@@ -108,7 +143,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
 
     @Override
     public void beforeEach(ExtensionContext context) {
-        subscriptionModel.stop();
+        subscriptionModels.forEach(SubscriptionModelLifeCycle::stop);
         // State first, then checkpoints, so a flush that recreates the checkpoint collection cannot leave one behind.
         if (clearState != null) {
             clearState.run();
@@ -133,7 +168,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
 
     @Override
     public void afterEach(ExtensionContext context) {
-        subscriptionModel.stop();
+        subscriptionModels.forEach(SubscriptionModelLifeCycle::stop);
     }
 
     /**
@@ -141,7 +176,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
      *
      * @param subscriptionId the id of a currently stopped subscription, must not be {@code null}
      * @return the running {@link Subscription}
-     * @throws IllegalArgumentException if the model has no stopped subscription with that id
+     * @throws IllegalArgumentException if no model has a stopped subscription with that id
      */
     public Subscription start(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId must not be null");
@@ -149,46 +184,64 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     }
 
     /**
-     * Start every subscription the model has, for the one test that needs to see them all working together. A
+     * Start every subscription every model has, for the one test that needs to see them all working together. A
      * subscription that is already running is left alone.
      *
      * @return the ids that were started, in no particular order
-     * @throws IllegalStateException if the subscription model cannot list its subscriptions
+     * @throws IllegalStateException if any model cannot list its subscriptions
      */
     public Set<String> startAll() {
         Set<String> ids = new LinkedHashSet<>(modelSubscriptionIds().orElseThrow(() -> new IllegalStateException(
-                "Cannot start all subscriptions because " + subscriptionModel.getClass().getName() + " cannot list them. "
-                        + "Name each subscription with start(String) instead, or use a model implementing "
+                "Cannot start all subscriptions because at least one subscription model cannot list them. "
+                        + "Name each subscription with start(String) instead, or use models implementing "
                         + IntrospectableSubscriptionModel.class.getSimpleName() + ".")));
-        ids.removeIf(subscriptionId -> !subscriptionModel.isPaused(subscriptionId));
+        ids.removeIf(subscriptionId -> subscriptionModels.stream().noneMatch(model -> model.isPaused(subscriptionId)));
         ids.forEach(this::resumeAndWait);
         return Set.copyOf(ids);
     }
 
+    // Tries each model in turn, since the id's owner is not known up front, and none of the DSL wrappers forward
+    // introspection to say so directly.
     private Subscription resumeAndWait(String subscriptionId) {
-        Subscription subscription;
-        try {
-            subscription = subscriptionModel.resumeSubscription(subscriptionId);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException(
-                    "Could not start subscription '" + subscriptionId + "', " + e.getMessage() + ". " + describeAvailableIds(), e);
+        List<IllegalArgumentException> failures = new ArrayList<>();
+        for (SubscriptionModelLifeCycle model : subscriptionModels) {
+            try {
+                Subscription subscription = model.resumeSubscription(subscriptionId);
+                knownIds.add(subscriptionId);
+                subscription.waitUntilStarted();
+                return subscription;
+            } catch (IllegalArgumentException e) {
+                failures.add(e);
+            }
         }
-        knownIds.add(subscriptionId);
-        subscription.waitUntilStarted();
-        return subscription;
+        IllegalArgumentException failure = new IllegalArgumentException(
+                "Could not start subscription '" + subscriptionId + "', " + failures.get(failures.size() - 1).getMessage()
+                        + ". " + describeAvailableIds());
+        failures.forEach(failure::addSuppressed);
+        throw failure;
     }
 
-    // Prefers what the model actually knows, since the ids this extension was told about are useless on a typo, they
+    // Prefers what the models actually know, since the ids this extension was told about are useless on a typo, they
     // contain the same wrong id and nothing else.
     private String describeAvailableIds() {
         return modelSubscriptionIds()
-                .map(ids -> ids.isEmpty() ? "The subscription model has no subscriptions." : "Subscriptions on the model: " + new TreeSet<>(ids) + ".")
+                .map(ids -> ids.isEmpty() ? "No subscription model has any subscriptions." : "Subscriptions on the model(s): " + new TreeSet<>(ids) + ".")
                 .orElseGet(() -> knownIds.isEmpty()
-                        ? "This subscription model cannot list its subscriptions, and this extension has not been told about any."
-                        : "This subscription model cannot list its subscriptions. Ids named via alwaysStart or start: " + knownIds + ".");
+                        ? "At least one subscription model cannot list its subscriptions, and this extension has not been told about any."
+                        : "At least one subscription model cannot list its subscriptions. Ids named via alwaysStart or start: " + knownIds + ".");
     }
 
+    // All-or-nothing: if any model in the list cannot be introspected, the union would silently under-report, so this
+    // answers empty rather than a partial list a caller could mistake for the whole truth.
     private Optional<Set<String>> modelSubscriptionIds() {
-        return IntrospectableSubscriptionModel.of(subscriptionModel).map(IntrospectableSubscriptionModel::subscriptionIds);
+        Set<String> ids = new LinkedHashSet<>();
+        for (SubscriptionModelLifeCycle model : subscriptionModels) {
+            Optional<IntrospectableSubscriptionModel> introspectable = IntrospectableSubscriptionModel.of(model);
+            if (introspectable.isEmpty()) {
+                return Optional.empty();
+            }
+            ids.addAll(introspectable.get().subscriptionIds());
+        }
+        return Optional.of(ids);
     }
 }

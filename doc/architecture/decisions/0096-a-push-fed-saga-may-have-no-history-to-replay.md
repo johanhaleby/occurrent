@@ -84,6 +84,9 @@ it already has.
 `@Saga` and `@Projection` now diverge on two attributes, in both directions: `@Saga` has `catchup` and `@Projection`
 does not, `@Projection` accepts a `DomainEventFeed` and `@Saga` does not. Both are argued above rather than incidental,
 but they are real drift in a pair of annotations otherwise kept in step, and the first of them is a gap to close.
+(Closed in [ADR 100](0100-a-push-fed-projection-may-also-have-no-history-to-replay.md). The second stands: a
+`DomainEventFeed` carries no stream metadata a saga needs for redelivery detection, which is a real difference in
+what the two annotations need from a feed, not a gap.)
 
 The `ManualStartPushSources` rename is free only because the type is unreleased: it was added in #481 and 0.32.0 has not
 shipped. Its reactor twin was renamed with it even though `@Saga` is blocking-only, so the two stacks do not diverge
