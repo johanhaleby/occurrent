@@ -225,26 +225,10 @@ class SagaAnnotationRegistrar {
         if (annotation.catchup() == org.occurrent.annotation.Catchup.NONE) {
             return pushModel;
         }
-        PositionOrderedReader reader = catchupBean(PositionOrderedReader.class, id);
-        CheckpointStorage catchupMarker = catchupBean(CheckpointStorage.class, id);
+        PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", PositionOrderedReader.class, id);
+        CheckpointStorage catchupMarker = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", CheckpointStorage.class, id);
         return new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker,
                 ProjectionAnnotationRegistrar.catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
-    }
-
-    /**
-     * A bean the catch-up replay needs, or a failure that names the way out. An application whose push feed carries
-     * another application's events has no event store to replay and so has neither of these beans, and that is the
-     * application most likely to reach this code, since catching up is the default. A bare
-     * {@code NoSuchBeanDefinitionException} would send it looking for a missing store rather than at
-     * {@code catchup = NONE}.
-     */
-    private <T> T catchupBean(Class<T> type, String id) {
-        T bean = applicationContext.getBeanProvider(type).getIfAvailable();
-        if (bean == null) {
-            throw new IllegalStateException(("@Saga '%s' with source=PUSH catches up from the event store before going live, which needs a %s bean, and there is none. " +
-                    "Set catchup = NONE if the feed carries events this application's event store does not hold, which is the case when another application writes them.").formatted(id, type.getSimpleName()));
-        }
-        return bean;
     }
 
     /**

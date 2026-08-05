@@ -153,6 +153,40 @@ class ProjectionAnnotationValidationTest {
     }
 
     @Test
+    void an_event_store_projection_that_sets_catchup_fails_fast_and_points_at_start_at() {
+        runner.withUserConfiguration(EventStoreCatchupConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("sets catchup, which only applies to source=PUSH")
+                    .hasMessageContaining("startAt = NOW to skip it");
+        });
+    }
+
+    @Test
+    void a_push_projection_with_catchup_none_that_sets_a_start_position_fails_fast_without_the_startup_mode_hint() {
+        runner.withUserConfiguration(PushModelFeedConfiguration.class, PushCatchupNoneStartKnobsConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot set startAt, startAtGlobalPosition or resumeBehavior")
+                    .hasMessageContaining("With catchup=NONE it takes live events only")
+                    .hasMessageNotContaining("startupMode = BACKGROUND");
+        });
+    }
+
+    @Test
+    void a_push_projection_with_catchup_none_that_sets_startup_mode_fails_fast() {
+        runner.withUserConfiguration(PushModelFeedConfiguration.class, PushCatchupNoneStartupModeConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("replays nothing and there is no startup work for startupMode to decide about")
+                    .hasMessageContaining("drop catchup=NONE if you meant the projection to catch up first");
+        });
+    }
+
+    @Test
     void projection_without_a_concrete_state_type_and_no_store_bean_fails_fast() {
         runner.withUserConfiguration(RawReturnTypeConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
@@ -409,6 +443,51 @@ class ProjectionAnnotationValidationTest {
 
     static class PushStartKnobsProjection {
         @Projection(id = "push-knobs", source = Source.PUSH, startAt = StartPosition.BEGINNING)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class EventStoreCatchupConfiguration {
+        @Bean
+        EventStoreCatchupProjection eventStoreCatchupProjection() {
+            return new EventStoreCatchupProjection();
+        }
+    }
+
+    static class EventStoreCatchupProjection {
+        @Projection(id = "event-store-catchup", catchup = org.occurrent.annotation.Catchup.NONE)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PushCatchupNoneStartKnobsConfiguration {
+        @Bean
+        PushCatchupNoneStartKnobsProjection pushCatchupNoneStartKnobsProjection() {
+            return new PushCatchupNoneStartKnobsProjection();
+        }
+    }
+
+    static class PushCatchupNoneStartKnobsProjection {
+        @Projection(id = "push-none-start-knobs", source = Source.PUSH, catchup = org.occurrent.annotation.Catchup.NONE, startAt = StartPosition.BEGINNING)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PushCatchupNoneStartupModeConfiguration {
+        @Bean
+        PushCatchupNoneStartupModeProjection pushCatchupNoneStartupModeProjection() {
+            return new PushCatchupNoneStartupModeProjection();
+        }
+    }
+
+    static class PushCatchupNoneStartupModeProjection {
+        @Projection(id = "push-none-startup-mode", source = Source.PUSH, catchup = org.occurrent.annotation.Catchup.NONE, startupMode = StartupMode.BACKGROUND)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return countProjection();
         }
