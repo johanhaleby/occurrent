@@ -25,6 +25,7 @@ import org.occurrent.tck.subscription.reactor.ReactiveSubscriptionModelFixture;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.ReactiveTransactionManager;
 import reactor.core.publisher.Flux;
 
@@ -77,6 +78,10 @@ class ReactorMongoReactiveSubscriptionModelFixture implements ReactiveSubscripti
     @Override
     public void close() {
         subscriptionModel.shutdown();
+        // Delete documents rather than dropping the collection, mirroring ReactorMongoSubscriptionModelFixture:
+        // dropping kills a live change stream, and shutdown() above has only just asked this model's own stream to
+        // close. Without this, a run with Testcontainers reuse enabled accumulates documents across runs.
+        reactiveMongoTemplate.remove(new Query(), eventCollectionName).block();
         mongoClient.close();
     }
 }
