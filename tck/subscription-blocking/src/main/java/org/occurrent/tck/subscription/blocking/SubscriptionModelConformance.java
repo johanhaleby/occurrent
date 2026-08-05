@@ -439,12 +439,12 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             assertThat(idsOf(resumedRecorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
                     .as("the resumed subscription actually delivers again, not just isRunning() reporting so")
                     .containsExactly(afterResume.getId());
-            if (!fixture().deliversEventsPublishedWhilePaused()) {
-                assertThat(stillPausedRecorded.soFar())
-                        .as("and the still-paused sibling, on a model that drops rather than holds, received nothing "
-                                + "even though the model itself now reports running")
-                        .isEmpty();
-            }
+            // Unconditional, unlike the deliversEventsPublishedWhilePaused()-guarded checks elsewhere in this class:
+            // stillPaused is never resumed in this test, so even a model that holds events for later delivery has
+            // nothing to hold them in yet. It is still paused, not merely dropping.
+            assertThat(stillPausedRecorded.soFar())
+                    .as("the still-paused sibling received nothing, even though the model itself now reports running")
+                    .isEmpty();
         }
 
         @Test
