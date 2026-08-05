@@ -394,6 +394,11 @@ subscription it holds, so `stop()` followed by `start()` is the same case. Two t
 
 - An event whose handler had not finished when the subscription was paused. The position advances after the handler
   returns, so pausing mid-handler means that event is handed over again on resume.
+- An event whose handler threw. The position does not advance past an event nobody processed, so the subscription
+  restarts on it rather than moving past it. This one is not new in spirit, since the checkpoint never advanced past
+  a failed event either, but it is new in the moment it happens: the retry used to wait for the next application
+  restart, and now it happens straight away. With `RetryStrategy.none()` the handler therefore sees the event a
+  second time before the subscription gives up.
 - Every event another consumer of the same subscription id handled while this one was paused. A competing consumer is
   paused precisely because a rival holds the lease, and the rival has been delivering in the meantime. When the lease
   comes back, this consumer resumes from where *it* left off, not from where the rival got to.
