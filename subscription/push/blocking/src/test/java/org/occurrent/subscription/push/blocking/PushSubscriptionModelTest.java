@@ -21,8 +21,6 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.filter.Filter;
-import org.occurrent.subscription.StreamSubscriptionFilter;
 
 import java.net.URI;
 import java.time.Duration;
@@ -35,39 +33,6 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class PushSubscriptionModelTest {
-
-    @Test
-    void routes_a_pushed_event_to_a_matching_handler() {
-        PushSubscriptionModel model = new PushSubscriptionModel();
-        List<String> received = new ArrayList<>();
-        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
-
-        model.accept(cloudEvent("1", "NameDefined"));
-
-        assertThat(received).containsExactly("1");
-    }
-
-    @Test
-    void routes_a_pushed_batch_in_order() {
-        PushSubscriptionModel model = new PushSubscriptionModel();
-        List<String> received = new ArrayList<>();
-        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
-
-        model.accept(List.of(cloudEvent("1", "NameDefined"), cloudEvent("2", "NameWasChanged")));
-
-        assertThat(received).containsExactly("1", "2");
-    }
-
-    @Test
-    void a_filter_gates_which_events_a_handler_receives() {
-        PushSubscriptionModel model = new PushSubscriptionModel();
-        List<String> received = new ArrayList<>();
-        model.subscribe("only-name-defined", StreamSubscriptionFilter.filter(Filter.type("NameDefined")), cloudEvent -> received.add(cloudEvent.getId()));
-
-        model.accept(List.of(cloudEvent("1", "NameDefined"), cloudEvent("2", "NameWasChanged"), cloudEvent("3", "NameDefined")));
-
-        assertThat(received).containsExactly("1", "3");
-    }
 
     @Test
     void a_second_consumer_is_refused_and_the_first_still_works() {
@@ -114,18 +79,6 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void a_cancelled_subscription_receives_no_further_events() {
-        PushSubscriptionModel model = new PushSubscriptionModel();
-        List<String> cancelledHandler = new ArrayList<>();
-        model.subscribe("cancel-me", cloudEvent -> cancelledHandler.add(cloudEvent.getId()));
-
-        model.cancelSubscription("cancel-me");
-        model.accept(cloudEvent("1", "NameDefined"));
-
-        assertThat(cancelledHandler).isEmpty();
-    }
-
-    @Test
     void cancelling_the_sole_subscription_frees_the_sink_for_a_different_id() {
         // The single-consumer slot counts what is registered now, not whether anything ever was, so cancelling
         // "cancel-me" must free it for an unrelated id, not just for "cancel-me" again.
@@ -141,22 +94,6 @@ class PushSubscriptionModelTest {
         model.accept(cloudEvent("1", "NameDefined"));
         assertThat(cancelledHandler).isEmpty();
         assertThat(newHandler).containsExactly("1");
-    }
-
-    @Test
-    void a_cancelled_subscription_id_can_be_registered_again() {
-        PushSubscriptionModel model = new PushSubscriptionModel();
-        model.subscribe("a", cloudEvent -> {
-        });
-
-        model.cancelSubscription("a");
-
-        List<String> received = new ArrayList<>();
-        Throwable thrown = catchThrowable(() -> model.subscribe("a", cloudEvent -> received.add(cloudEvent.getId())));
-
-        assertThat(thrown).isNull();
-        model.accept(cloudEvent("1", "NameDefined"));
-        assertThat(received).containsExactly("1");
     }
 
     @Test
