@@ -237,6 +237,9 @@ public class ReactorDurableSubscriptionModelTest {
         subscription.shutdown();
         mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
         mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
+        // Shutting the durable model down also shuts down the model it wraps, because the subscriptions live there
+        // now, so a restart builds a new one of those too. That is what a restarted application does anyway.
+        springReactorSubscriptionForMongoDB = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, storage);
         subscription.subscribe(subscriberId, cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)));
 
@@ -270,16 +273,14 @@ public class ReactorDurableSubscriptionModelTest {
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
         // The subscription is async so we need to wait for it
         await().atMost(Durations.ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
-        // The failed subscription is removed asynchronously by the error handler, so wait until the id is free before
-        // re-subscribing with the same id.
-        await().atMost(Durations.ONE_SECOND).until(() -> !subscription.isRunning(subscriberId));
-        // Since an exception occurred we need to run the stream again
-        stream.run();
+        // Nothing re-subscribes here on purpose. The wrapped model retries the action, so the event that failed is
+        // delivered on a later attempt and the subscription keeps its id.
         mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
         mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        assertThat(subscription.isRunning(subscriberId)).as("the subscription survived the action that failed").isTrue();
     }
 
     private Flux<CloudEvent> serialize(DomainEvent e) {
