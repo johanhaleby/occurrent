@@ -128,6 +128,9 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
         }
     }
 
+    // Part of a candidate's identity in the shared storage, alongside the subscription and the subscriber. Only the
+    // instance that put a candidate there stamps it, so two instances registering the same subscriber for the same
+    // subscription have to get one candidate each. Sharing one would leave it unstamped by whichever of them lost.
     private final String instanceId = UUID.randomUUID().toString();
     private final Storage storage;
     private final Map<String, Candidate> mine = new ConcurrentHashMap<>();
@@ -143,8 +146,14 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
 
     @Override
     public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
-        Candidate candidate = new Candidate(instanceId, subscriptionId, subscriberId, System.nanoTime());
-        mine.put(key(subscriptionId, subscriberId), candidate);
+        long now = System.nanoTime();
+        // Reuses the candidate this instance already has, because the shared storage holds that same object and only
+        // this instance stamps it. A second candidate for the same subscriber would leave the stored one unstamped
+        // until it went stale and the consumer lost a lock nobody took.
+        Candidate candidate = mine.computeIfAbsent(key(subscriptionId, subscriberId),
+                __ -> new Candidate(instanceId, subscriptionId, subscriberId, now));
+        candidate.lastSeen = now;
+        candidate.yieldingUntil = now;
         // A consumer that never had the lock has not been prohibited from anything, so seeding what the listeners were
         // last told keeps a registration that lost from reporting a change that did not happen.
         lastReported.putIfAbsent(key(subscriptionId, subscriberId), false);

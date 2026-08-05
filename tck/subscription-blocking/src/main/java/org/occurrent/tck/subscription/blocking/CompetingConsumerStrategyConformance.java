@@ -377,23 +377,26 @@ public abstract class CompetingConsumerStrategyConformance {
     /**
      * Waits until the subscriber holds the lock, or {@code timeToConverge()} runs out, and answers whether it does.
      * <p>
-     * This polls, which the rest of the suite avoids. It has to: {@code hasLock} is a question, and a consumer with no
-     * listener has nothing else to go on, so a suite covering that consumer has nothing to block on either. The answer
-     * is returned rather than asserted so the caller says what the answer means.
+     * This polls, which the rest of the suite avoids. It has to, since {@code hasLock} is a question and a consumer
+     * with no listener has nothing else to go on, so a suite covering that consumer has nothing to block on either.
+     * The answer is returned rather than asserted so the caller says what the answer means.
      */
     private boolean awaitLock(CompetingConsumerStrategy strategy, String subscriptionId, String subscriberId) {
-        return awaitEither(() -> strategy.hasLock(subscriptionId, subscriberId), () -> false);
+        return awaitUntil(() -> strategy.hasLock(subscriptionId, subscriberId));
     }
 
     /**
-     * Waits until either question answers yes, or {@code timeToConverge()} runs out, and answers whether one did. Two
-     * of them, because where the contract allows more than one consumer to end up with the lock, insisting on a
-     * particular one would be asserting a race rather than a contract.
+     * Waits until either question answers yes. Two of them, because where the contract allows more than one consumer
+     * to end up with the lock, insisting on a particular one would be asserting a race rather than a contract.
      */
     private boolean awaitEither(BooleanSupplier one, BooleanSupplier other) {
+        return awaitUntil(() -> one.getAsBoolean() || other.getAsBoolean());
+    }
+
+    private boolean awaitUntil(BooleanSupplier condition) {
         long deadline = System.nanoTime() + fixture().timeToConverge().toNanos();
         while (true) {
-            if (one.getAsBoolean() || other.getAsBoolean()) {
+            if (condition.getAsBoolean()) {
                 return true;
             }
             if (System.nanoTime() >= deadline) {

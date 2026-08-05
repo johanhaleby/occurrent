@@ -207,6 +207,15 @@ release path now marks the consumer as having stood down for a round, which fixe
 had before, since a consumer that gave a lease up and took it straight back before anybody else looked has not given it
 up in any useful sense.
 
+**Fixing `hasLock` uncovered a third defect, in `CompetingConsumerSubscriptionModel`, and it is worth recording because
+the stale answer was hiding it.** `resumeSubscription` asks `hasLock` and, when the answer is no, registers the consumer
+instead. Registering can be granted the lock there and then, `onConsumeGranted` resumes a paused consumer itself, and
+the caller then resumed a second time and failed on a delegate that was no longer paused. Nothing reached that path
+before, because after a system pause `hasLock` answered yes and the model took the other branch. The order is what
+fixes it: the consumer is recorded as running before it registers, so a callback arriving during the call finds nothing
+to resume, and the old state goes back if registering did not win. `CompetingConsumerSubscriptionModelTest.can_resume_after_consume_prohibited`
+is what fails without it.
+
 **And one candidate declaration was rejected, which is worth recording because it looked obviously right.** Synchronous
 delivery is not declared. A `deliversSynchronously()` flag cannot be held to anything on its `false` branch: "the handler
 had not run when publishing returned" is untrue even for a model that queues, whose consumer thread may legitimately have

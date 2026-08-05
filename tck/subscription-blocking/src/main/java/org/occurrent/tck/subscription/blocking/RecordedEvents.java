@@ -18,14 +18,11 @@ package org.occurrent.tck.subscription.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -54,32 +51,11 @@ public final class RecordedEvents implements Consumer<CloudEvent> {
     /**
      * Waits until {@code count} events have arrived, or the timeout expires, and returns everything that arrived. A
      * short return is not an error here: the caller asserts on the list, so "expected 3, got 1" is a comparison of two
-     * lists rather than a bare timeout.
+     * lists rather than a bare timeout. Anything else already there comes back too, so an over-delivering model is
+     * caught by the caller's assertion.
      */
     public List<CloudEvent> awaitAtLeast(int count, Duration timeout) {
-        if (count < 1) {
-            throw new IllegalArgumentException("count must be at least 1, was " + count
-                    + ". To assert that nothing arrives, publish a marker afterwards and assert on what came back, "
-                    + "since no wait can prove an absence.");
-        }
-        requireNonNull(timeout, "timeout cannot be null");
-        List<CloudEvent> received = new ArrayList<>();
-        long deadline = System.nanoTime() + timeout.toNanos();
-        while (received.size() < count) {
-            long remaining = deadline - System.nanoTime();
-            if (remaining <= 0) {
-                break;
-            }
-            CloudEvent next = poll(remaining);
-            if (next == null) {
-                break;
-            }
-            received.add(next);
-        }
-        // Whatever else has already arrived, so an over-delivering model is caught by the caller's assertion rather
-        // than leaving its extra events sitting in the queue unnoticed.
-        arrived.drainTo(received);
-        return received;
+        return Arrivals.awaitAtLeast(arrived, count, timeout, "event");
     }
 
     /**
@@ -87,17 +63,6 @@ public final class RecordedEvents implements Consumer<CloudEvent> {
      * being asserted, never as the whole of an assertion, since on its own it races delivery.
      */
     public List<CloudEvent> soFar() {
-        List<CloudEvent> received = new ArrayList<>();
-        arrived.drainTo(received);
-        return received;
-    }
-
-    private @Nullable CloudEvent poll(long remainingNanos) {
-        try {
-            return arrived.poll(remainingNanos, TimeUnit.NANOSECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while waiting for an event to arrive", e);
-        }
+        return Arrivals.drain(arrived);
     }
 }

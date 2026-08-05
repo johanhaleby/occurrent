@@ -185,6 +185,70 @@ class MongoLeaseTimingTest {
         assertThat(rival.hasLock()).isTrue();
     }
 
+    @Test
+    void is_given_up_the_moment_the_holder_releases_it() {
+        Consumer holder = new Consumer("the-holder");
+        holder.register();
+
+        holder.release();
+
+        assertThat(holder.hasLock())
+                .as("the holder does not have the lease any more, and a consumer that asks rather than being told has "
+                        + "nothing else to go on")
+                .isFalse();
+        assertThat(holder.changes)
+                .as("and it is told once that the lease is gone, by the release itself")
+                .containsExactly("granted", "prohibited");
+    }
+
+    @Test
+    void is_not_taken_back_until_the_round_after_a_release() {
+        Consumer holder = new Consumer("the-holder");
+        holder.register();
+        holder.release();
+
+        holder.refresh();
+
+        assertThat(holder.hasLock())
+                .as("the round a consumer released in is the round it stands down for, so a rival gets a look at the "
+                        + "lease before the consumer that gave it up competes for it again")
+                .isFalse();
+        assertThat(holder.changes)
+                .as("and nothing changed in that round, so the loss is not reported a second time")
+                .containsExactly("granted", "prohibited");
+
+        holder.refresh();
+
+        assertThat(holder.hasLock())
+                .as("from the next round it is an ordinary candidate again, and with nobody else asking it wins")
+                .isTrue();
+        assertThat(holder.changes).containsExactly("granted", "prohibited", "granted");
+    }
+
+    @Test
+    void goes_to_a_rival_even_when_the_holder_that_released_it_refreshes_first() {
+        Consumer holder = new Consumer("the-holder");
+        Consumer rival = new Consumer("the-rival");
+        holder.register();
+        rival.register();
+        holder.release();
+
+        // The holder refreshes before the rival does, which is the case the round it stands down for is there for. A
+        // consumer that competed again straight away would take back the lease it had just given up, and the rival
+        // asking a moment later would find it gone.
+        holder.refresh();
+        rival.refresh();
+
+        assertThat(rival.hasLock())
+                .as("standing down for a round is what makes releasing hand the lease over rather than hand it "
+                        + "straight back to whoever gave it up")
+                .isTrue();
+        holder.refresh();
+        assertThat(holder.hasLock())
+                .as("and the rival's lease is not up, so the holder competing again does not take it")
+                .isFalse();
+    }
+
     /**
      * One competing consumer with a support of its own, standing in for one application instance. Its refresh is held
      * rather than scheduled, so {@link #refresh()} is the only thing that runs it.
@@ -215,6 +279,10 @@ class MongoLeaseTimingTest {
 
         private boolean register() {
             return support.registerCompetingConsumer(locks, SUBSCRIPTION, subscriberId);
+        }
+
+        private void release() {
+            support.releaseCompetingConsumer(locks, SUBSCRIPTION, subscriberId);
         }
 
         private boolean hasLock() {

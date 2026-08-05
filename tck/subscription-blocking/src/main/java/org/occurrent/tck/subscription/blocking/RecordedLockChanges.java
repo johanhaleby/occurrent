@@ -17,15 +17,12 @@
 package org.occurrent.tck.subscription.blocking;
 
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 
 import static java.util.Objects.requireNonNull;
 
@@ -85,32 +82,11 @@ public final class RecordedLockChanges implements CompetingConsumerListener {
     /**
      * Waits until {@code count} changes have arrived, or the timeout expires, and returns everything that arrived. A
      * short return is not an error here: the caller asserts on the list, so "expected a grant, got nothing" is a
-     * comparison of two lists rather than a bare timeout.
+     * comparison of two lists rather than a bare timeout. Anything else already there comes back too, so a strategy
+     * reporting the same change twice is caught by the caller's assertion.
      */
     public List<LockChange> awaitAtLeast(int count, Duration timeout) {
-        if (count < 1) {
-            throw new IllegalArgumentException("count must be at least 1, was " + count
-                    + ". To assert that a change does not arrive, wait for one that must and assert on what came back, "
-                    + "since no wait can prove an absence.");
-        }
-        requireNonNull(timeout, "timeout cannot be null");
-        List<LockChange> received = new ArrayList<>();
-        long deadline = System.nanoTime() + timeout.toNanos();
-        while (received.size() < count) {
-            long remaining = deadline - System.nanoTime();
-            if (remaining <= 0) {
-                break;
-            }
-            LockChange next = poll(remaining);
-            if (next == null) {
-                break;
-            }
-            received.add(next);
-        }
-        // Whatever else has already arrived, so a strategy reporting the same change twice is caught by the caller's
-        // assertion rather than leaving its extra calls sitting in the queue unnoticed.
-        arrived.drainTo(received);
-        return received;
+        return Arrivals.awaitAtLeast(arrived, count, timeout, "lock change");
     }
 
     /**
@@ -118,17 +94,6 @@ public final class RecordedLockChanges implements CompetingConsumerListener {
      * asserted, never as the whole of an assertion, since on its own it races the strategy.
      */
     public List<LockChange> soFar() {
-        List<LockChange> received = new ArrayList<>();
-        arrived.drainTo(received);
-        return received;
-    }
-
-    private @Nullable LockChange poll(long remainingNanos) {
-        try {
-            return arrived.poll(remainingNanos, TimeUnit.NANOSECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while waiting for a lock change to arrive", e);
-        }
+        return Arrivals.drain(arrived);
     }
 }
