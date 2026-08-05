@@ -154,7 +154,9 @@ public class NativeMongoSubscriptionModelTest {
         StartAt unparsableStartAt = StartAt.checkpoint(new StringBasedCheckpoint("not-a-valid-resumeToken-document"));
 
         // When
-        Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, unparsableStartAt, __ -> System.out.println("hello")));
+        // A handler that does nothing, since subscribe is expected to throw before anything could reach it.
+        Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, unparsableStartAt, __ -> {
+        }));
 
         // Then: refused synchronously by subscribe() itself, and nothing is left registered under the id
         assertThat(throwable).isExactlyInstanceOf(JsonParseException.class);

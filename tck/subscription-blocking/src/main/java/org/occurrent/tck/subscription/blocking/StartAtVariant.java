@@ -20,6 +20,8 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 
+import java.util.function.Supplier;
+
 /**
  * The four ways a caller can say where a subscription starts, named so a fixture can declare which of them its model
  * accepts.
@@ -58,14 +60,18 @@ public enum StartAtVariant {
     /**
      * Builds the {@code StartAt} this variant names.
      *
-     * @param checkpointToStartFrom The checkpoint {@link #CHECKPOINT} starts from. Unused by the other three, since
-     *                              none of them carries a position.
+     * @param checkpointToStartFrom Supplies the checkpoint {@link #CHECKPOINT} starts from. Asked only for that
+     *                              variant, since none of the other three carries a position, and asking is a round
+     *                              trip to the store for a model that reads one. Asked at the moment the position is
+     *                              used rather than ahead of time, because a checkpoint read earlier than the
+     *                              subscription that starts from it is a position the model may legitimately replay
+     *                              from, which is not what the accepting test is about.
      */
-    public StartAt startAt(Checkpoint checkpointToStartFrom) {
+    public StartAt startAt(Supplier<Checkpoint> checkpointToStartFrom) {
         return switch (this) {
             case NOW -> StartAt.now();
             case SUBSCRIPTION_MODEL_DEFAULT -> StartAt.subscriptionModelDefault();
-            case CHECKPOINT -> StartAt.checkpoint(checkpointToStartFrom);
+            case CHECKPOINT -> StartAt.checkpoint(checkpointToStartFrom.get());
             // Resolves to the model's own default, so an accepting model has somewhere to start and this variant tests
             // the acceptance of a dynamic position rather than the position it happens to resolve to.
             case DYNAMIC -> StartAt.dynamic(StartAt::subscriptionModelDefault);

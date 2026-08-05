@@ -261,12 +261,13 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
         private void assertDeliversStartingFrom(StartAtVariant variant) {
             String id = subscriptionId();
             RecordedEvents recorded = new RecordedEvents();
-            // Read per variant rather than once for the loop. Hoisting it out looks like an easy saving, since only one
-            // variant carries a position, but it leaves the position behind: by the time CHECKPOINT ran, the earlier
-            // variants had published events of their own, so a change-stream model started at that stale position
-            // replayed them and the wait below was satisfied by a replayed event instead of this variant's own.
+            // Passed as a supplier, so only CHECKPOINT pays for it and it is read at the moment that variant
+            // subscribes. Reading it once for the whole loop instead looks like the obvious saving and is wrong: by the
+            // time CHECKPOINT ran, the earlier variants had published events of their own, so a change-stream model
+            // started at that older position replayed them and the wait below was satisfied by a replayed event
+            // instead of this variant's own.
             Subscription subscription = subscriptionModel()
-                    .subscribe(id, null, variant.startAt(fixture().aCheckpointToStartFrom()), recorded);
+                    .subscribe(id, null, variant.startAt(() -> fixture().aCheckpointToStartFrom()), recorded);
             assertThat(subscription.waitUntilStarted(DELIVERY_TIMEOUT))
                     .as("this model declares it accepts %s, so a subscription starting there must report started", variant)
                     .isTrue();
@@ -291,7 +292,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
 
         private void assertRefuses(StartAtVariant variant) {
             assertThatThrownBy(() -> subscriptionModel()
-                    .subscribe(subscriptionId(), null, variant.startAt(fixture().aCheckpointToStartFrom()), new RecordedEvents()))
+                    .subscribe(subscriptionId(), null, variant.startAt(() -> fixture().aCheckpointToStartFrom()), new RecordedEvents()))
                     .as("this model declares it does not accept %s, and a start position it cannot honour has to be "
                             + "refused rather than quietly ignored, which would start the subscription somewhere the "
                             + "caller did not ask for", variant)
