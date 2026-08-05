@@ -34,9 +34,15 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel 
      * The global checkpoint might be e.g. the wall clock time of the server, vector clock, number of events consumed etc.
      * This is useful to get the initial position of a subscription before any message has been consumed by the subscription
      * (and thus no {@link Checkpoint} has been persisted for the subscription). The reason for doing this would be
-     * to make sure that a subscription doesn't loose the very first message if there's an error consuming the first event.
+     * to make sure that a subscription doesn't lose the very first message if there's an error consuming the first event.
+     * <p>
+     * Completing empty is a documented answer, not a hypothetical one: it means there's an unresolvable problem,
+     * the same condition the blocking {@code CheckpointAwareSubscriptionModel} reports as a {@code null} checkpoint.
+     * A model that completes empty here cannot seed a catch-up handover from this position, but otherwise remains a
+     * working, live subscription.
      *
-     * @return The global checkpoint for the database.
+     * @return A {@link Mono} that emits the global checkpoint for the database, or completes empty if there's an
+     * unresolvable problem.
      */
     Mono<Checkpoint> globalCheckpoint();
 }
