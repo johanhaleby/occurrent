@@ -148,6 +148,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         if (shutdown) {
             throw new IllegalStateException("Cannot start subscription because the subscription model is shutdown.");
         }
+        // Validates the filter now, so an unsupported one is refused to the caller instead of failing later inside the
+        // deferred change-stream pipeline, where nobody is listening and the retry above it would re-throw it forever.
+        // Same fix NativeMongoSubscriptionModel got (#524); the plain Flux subscribe(filter, startAt) stays lazy on
+        // purpose, since a cold publisher delivers its failure to the subscriber. The result is discarded: the real
+        // options are built per (re)subscribe with the tracked start position.
+        ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, ChangeStreamOptions.builder());
         return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action);
     }
 
