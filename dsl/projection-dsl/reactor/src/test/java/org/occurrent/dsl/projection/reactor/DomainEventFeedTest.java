@@ -32,6 +32,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -167,7 +168,7 @@ class DomainEventFeedTest {
                 awaitUninterruptibly(proceed);
             }
         });
-        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
         feed.register("counter", projection(), repository);
 
@@ -205,25 +206,6 @@ class DomainEventFeedTest {
         }
     }
 
-    private static final class InMemoryReactiveCheckpointStorage implements CheckpointStorage {
-        private final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
-
-        @Override
-        public Mono<Checkpoint> read(String subscriptionId) {
-            return Mono.justOrEmpty(checkpoints.get(subscriptionId));
-        }
-
-        @Override
-        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
-            checkpoints.put(subscriptionId, checkpoint);
-            return Mono.just(checkpoint);
-        }
-
-        @Override
-        public Mono<Void> delete(String subscriptionId) {
-            return Mono.fromRunnable(() -> checkpoints.remove(subscriptionId));
-        }
-    }
 
     @Test
     void register_with_a_metadata_aware_fold_replays_and_folds_live_events_with_metadata_intact() {

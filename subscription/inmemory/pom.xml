@@ -55,6 +55,15 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <!-- Optional so blocking-only consumers carry neither this API nor reactor-core; the reactive
+                 InMemoryCheckpointStorage in the reactor subpackage is only loadable when a consumer already
+                 has the reactive stack. Same pattern as occurrent-command-dispatch's optional decider. -->
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-api-reactor</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
             <groupId>jakarta.annotation</groupId>
             <artifactId>jakarta.annotation-api</artifactId>
         </dependency>

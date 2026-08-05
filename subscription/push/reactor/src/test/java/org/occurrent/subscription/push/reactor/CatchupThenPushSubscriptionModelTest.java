@@ -29,6 +29,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
@@ -116,7 +117,7 @@ class CatchupThenPushSubscriptionModelTest {
 
     @Test
     void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
-        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created"), cloudEvent("2", "Updated")), 2);
 
         PushSubscriptionModel feed1 = new PushSubscriptionModel();
@@ -411,23 +412,4 @@ class CatchupThenPushSubscriptionModelTest {
                 .build();
     }
 
-    private static final class InMemoryReactiveCheckpointStorage implements CheckpointStorage {
-        private final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
-
-        @Override
-        public Mono<Checkpoint> read(String subscriptionId) {
-            return Mono.justOrEmpty(checkpoints.get(subscriptionId));
-        }
-
-        @Override
-        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
-            checkpoints.put(subscriptionId, checkpoint);
-            return Mono.just(checkpoint);
-        }
-
-        @Override
-        public Mono<Void> delete(String subscriptionId) {
-            return Mono.fromRunnable(() -> checkpoints.remove(subscriptionId));
-        }
-    }
 }
