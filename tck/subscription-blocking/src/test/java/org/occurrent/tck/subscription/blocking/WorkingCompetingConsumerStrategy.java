@@ -76,8 +76,7 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
         }
 
         private synchronized void remove(Candidate candidate) {
-            candidatesPerSubscription.getOrDefault(candidate.subscriptionId, List.of())
-                    .removeIf(candidate::isSameAs);
+            candidatesFor(candidate.subscriptionId).removeIf(candidate::isSameAs);
         }
 
         /**
@@ -85,7 +84,7 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
          * straight back to whoever gave it up.
          */
         private synchronized void moveToBack(Candidate candidate) {
-            List<Candidate> candidates = candidatesPerSubscription.getOrDefault(candidate.subscriptionId, List.of());
+            List<Candidate> candidates = candidatesFor(candidate.subscriptionId);
             if (candidates.removeIf(candidate::isSameAs)) {
                 candidates.add(candidate);
             }
@@ -95,11 +94,19 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
          * Who holds the lock for a subscription: the longest-standing candidate that is still alive and not yielding.
          */
         private synchronized boolean holds(Candidate candidate, long now) {
-            return candidatesPerSubscription.getOrDefault(candidate.subscriptionId, List.of()).stream()
+            return candidatesFor(candidate.subscriptionId).stream()
                     .filter(other -> other.isEligible(now))
                     .findFirst()
                     .filter(candidate::isSameAs)
                     .isPresent();
+        }
+
+        /**
+         * The candidates for a subscription, created if this is the first anybody has asked. Always a list that can be
+         * mutated, since {@code List.of()} refuses {@code removeIf} even when it is empty and there is nothing to remove.
+         */
+        private List<Candidate> candidatesFor(String subscriptionId) {
+            return candidatesPerSubscription.computeIfAbsent(subscriptionId, __ -> new ArrayList<>());
         }
     }
 
@@ -236,6 +243,7 @@ final class WorkingCompetingConsumerStrategy implements CompetingConsumerStrateg
     }
 
     private static String key(String subscriptionId, String subscriberId) {
-        return subscriptionId + " " + subscriberId;
+        // A separator neither id can contain, so two different pairs cannot collide on one key.
+        return subscriptionId + "\u0000" + subscriberId;
     }
 }
