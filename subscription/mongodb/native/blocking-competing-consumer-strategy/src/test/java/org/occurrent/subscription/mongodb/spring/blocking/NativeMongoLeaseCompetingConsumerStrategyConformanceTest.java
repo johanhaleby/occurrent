@@ -45,7 +45,7 @@ class NativeMongoLeaseCompetingConsumerStrategyConformanceTest extends Competing
 
     /**
      * Short enough that the suite's waits are over quickly, long enough that a slow round trip to MongoDB cannot cost a
-     * holder the lease it is refreshing every {@code leaseTime / 2}. Half a second of headroom on every refresh.
+     * holder the lease it is refreshing halfway through it.
      */
     private static final Duration LEASE_TIME = Duration.ofSeconds(1);
 
@@ -103,9 +103,9 @@ class NativeMongoLeaseCompetingConsumerStrategyConformanceTest extends Competing
         }
 
         /**
-         * One lease plus one refresh period is the worst case for a rival taking over from a holder that stopped
-         * refreshing, so 1.5 seconds here. Declared at 5 to leave room for a loaded machine: the suite stops waiting
-         * the moment the condition holds, so the extra is only ever paid by a test that was going to fail.
+         * A rival takes over from a holder that stopped refreshing after one lease plus one refresh period at worst,
+         * which is well under this. The room is for a loaded machine, and it costs nothing to leave, because the suite
+         * stops waiting the moment the condition holds and only a test that was going to fail pays the rest.
          */
         @Override
         public Duration timeToConverge() {

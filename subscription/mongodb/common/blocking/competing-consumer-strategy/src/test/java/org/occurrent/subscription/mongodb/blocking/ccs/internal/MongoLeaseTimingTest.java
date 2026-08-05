@@ -29,6 +29,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -64,6 +65,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("a MongoDB lease")
+// Nothing here waits, so this only has to catch a MongoDB call that never comes back. Without it such a call hangs the
+// shard for its full 20 minutes, and this shard has no rerun to fall back on.
+@Timeout(30)
 class MongoLeaseTimingTest {
 
     private static final String DATABASE = "mongoleasetiming";

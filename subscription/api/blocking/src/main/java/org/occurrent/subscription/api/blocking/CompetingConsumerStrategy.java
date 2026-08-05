@@ -23,11 +23,11 @@ public interface CompetingConsumerStrategy {
     boolean registerCompetingConsumer(String subscriptionId, String subscriberId);
 
     /**
-     * Unregister a competing consumer, it'll no longer receive events. If this competing consumer currently has lock to receive events,
-     * the lock will be handed to another subscriber for the same subscription.
+     * Unregister a competing consumer, it'll no longer receive events. If this competing consumer currently has the lock to
+     * receive events, the lock is handed to another subscriber for the same subscription, if there is one.
      * <p>
      * The strategy forgets the consumer, so it takes another {@link #registerCompetingConsumer(String, String)} to bring
-     * it back: it will not acquire the lock again on its own, however long it waits and whether or not anybody else takes
+     * it back. It will not acquire the lock again on its own, however long it waits and whether or not anybody else takes
      * the lock in the meantime. Use this when something has to happen before the consumer may consume again, the way a
      * subscription paused by a user needs an explicit resume. Where the consumer should come back by itself, use
      * {@link #releaseCompetingConsumer(String, String)} instead.
@@ -46,8 +46,8 @@ public interface CompetingConsumerStrategy {
      * on its own, with nobody calling {@link #registerCompetingConsumer(String, String)} a second time. This is the
      * weaker of the two ways to give a lock up, and the one to use when the consumer should come back by itself, the way
      * a subscription paused because a rival took the lock does. Where the consumer must not consume again until
-     * something explicitly says so, use {@link #unregisterCompetingConsumer(String, String)} instead, which also
-     * guarantees that somebody else gets the lock.
+     * something explicitly says so, use {@link #unregisterCompetingConsumer(String, String)} instead, which hands the
+     * lock to a waiting subscriber rather than leaving this one competing for it.
      * <p>
      * Two things follow, and they are the difference between the two methods rather than wording. The subscriber that
      * released does not hold the lock from here on, so {@link #hasLock(String, String)} answers {@code false} for it
