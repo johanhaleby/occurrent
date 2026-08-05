@@ -37,10 +37,13 @@ public enum Catchup {
      * those events, so a replay would find nothing, or worse, apply unrelated events that happen to live there. It is
      * also the option when the history is simply not wanted.
      * <p>
-     * A {@code @Saga} keeps its per-instance state in its own {@code SagaStateStore}, so one that has run before picks
-     * up where it left off either way, and the difference shows only on a first run against an existing history. A
-     * {@code @Projection} has nothing to fall back on: it starts from nothing and builds its read model only from
-     * what arrives from here on.
+     * A restart is unaffected either way. A {@code @Saga} keeps its per-instance state in its own
+     * {@code SagaStateStore}, and a {@code @Projection} keeps its read model in its own store, so an instance or key
+     * already recorded there picks up where it left off regardless of {@code catchup}. What changes with
+     * {@code NONE} is only what happens the first time a subscription reacts to a given instance or key. With the
+     * default, the event store's existing history for it is read and applied before anything else. With
+     * {@code NONE} there is none of that. The saga or projection starts from its own initial value and reacts only
+     * to what arrives from here on.
      */
     NONE
 }
