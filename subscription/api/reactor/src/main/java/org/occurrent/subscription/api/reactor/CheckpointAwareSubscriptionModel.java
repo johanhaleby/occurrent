@@ -23,12 +23,12 @@ import org.occurrent.subscription.Checkpoint;
 import reactor.core.publisher.Mono;
 
 /**
- * A {@link SubscriptionModel} that produces {@link CheckpointAwareCloudEvent} compatible {@link CloudEvent}'s.
+ * A {@link FluxSubscriptionModel} that produces {@link CheckpointAwareCloudEvent} compatible {@link CloudEvent}'s.
  * This is useful for subscriptions that want to persist the position for a given event if the event store doesn't
  * maintain the position for subscriptions automatically.
  */
 @NullMarked
-public interface CheckpointAwareSubscriptionModel extends SubscriptionModel {
+public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel {
 
     /**
      * The global checkpoint might be e.g. the wall clock time of the server, vector clock, number of events consumed etc.

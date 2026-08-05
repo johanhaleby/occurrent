@@ -29,9 +29,8 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
-import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
-import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.CatchupThenLiveOptions;
@@ -73,13 +72,13 @@ import java.util.function.Function;
  * {@code CatchupProjectionFeed}. The replay runs on {@code boundedElastic} rather than on the thread that called
  * {@link #subscribe}, so {@code waitUntilStarted()} is the only thing that joins it.
  * <p>
- * It implements {@link SubscriptionModelLifeCycle} rather than the reactor {@code SubscriptionModel}, which is the
- * bare {@code Flux}-returning change-stream primitive this wrapper cannot honour. Most of the life cycle is a fan-out
- * to the live feed. What this model adds is an answer for the window where a replay is in flight, which the live feed
- * cannot give because it is buffering rather than delivering.
+ * It is a {@link SubscriptionModel} but not a {@code FluxSubscriptionModel}: the latter is the bare
+ * {@code Flux}-returning primitive, which a model fed by a push source rather than by reading a change stream cannot
+ * honour. Most of the life cycle is a fan-out to the live feed. What this model adds is an answer for the window where
+ * a replay is in flight, which the live feed cannot give because it is buffering rather than delivering.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements Subscribable, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel {
 
     private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
 

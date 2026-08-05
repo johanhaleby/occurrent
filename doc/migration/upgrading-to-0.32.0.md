@@ -1,19 +1,23 @@
 # Upgrading to Occurrent 0.32.0
 
-Two things break, and only if you use the features they belong to.
+Three things break, and only if you use the features they belong to.
 
-**At compile time**, if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher` yourself, one
-method gained a parameter. Almost nobody does, since the model Occurrent ships implements it for you. Read
+**At compile time**, if you write reactive subscriptions, one type was renamed: the reactor `SubscriptionModel` is now
+`FluxSubscriptionModel`. The recipe below rewrites it for you. Read
+[section 5](#5-the-reactor-subscriptionmodel-is-now-fluxsubscriptionmodel).
+
+**Also at compile time**, if you implement `SynchronousEventDispatcher` or `ReactiveSynchronousEventDispatcher`
+yourself, one method gained a parameter. Almost nobody does, since the model Occurrent ships implements it for you. Read
 [section 4](#4-a-synchronous-subscription-no-longer-stops-at-the-first-failing-handler).
 
 **At startup**, a push sink now feeds exactly one projection or saga, so an application that shared one between several
 refuses to start. If you use a push source, read
 [section 3](#3-a-push-sink-feeds-exactly-one-projection-or-saga) first.
 
-Nothing was renamed, so nothing else you compile against moved. Four things are worth reading. One configuration
-property is deprecated and has a recipe that rewrites it for you, the MongoDB event stores changed how they persist the
-CloudEvent `time` attribute under `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, and a
-synchronous subscription no longer stops at the first failing handler.
+Five things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+MongoDB event stores changed how they persist the CloudEvent `time` attribute under
+`TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
+first failing handler, and the reactor subscription primitive was renamed.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -309,3 +313,60 @@ which runs inside your `inTransaction`, so if whether you open a transaction dep
 caller already opened, read the live state. That is what the two Spring executors Occurrent ships now do, since a
 `TransactionTemplate` configured with `PROPAGATION_NOT_SUPPORTED` or `PROPAGATION_NEVER` opens nothing and a fixed
 `true` would be a lie that costs the handlers behind a failure their event.
+
+
+## 5. The reactor `SubscriptionModel` is now `FluxSubscriptionModel`
+
+Only relevant if you write reactive subscriptions. Nothing on the blocking stack moved.
+
+`org.occurrent.subscription.api.reactor.SubscriptionModel` is renamed to `FluxSubscriptionModel`. It is the same
+interface with the same single method, the one that returns a `Flux<CloudEvent>` you subscribe to and dispose
+yourself.
+
+The old name is taken over by a new interface that means what the blocking `SubscriptionModel` has always meant, a
+named subscription model you can pause, resume and cancel by id. It is `Subscribable` plus
+`SubscriptionModelLifeCycle` and adds no methods, so nothing you already implement has to grow.
+
+### Run the recipe
+
+The same `org.occurrent.UpgradeToOccurrent_0_32` recipe from
+[section 1](#1-occurrentsubscriptionenabled-becomes-occurrentsubscriptionmode) does this rename too, in Java and
+Kotlin alike. If you already ran it, you already have both changes.
+
+Run it once, as part of the upgrade. It rewrites every reference to the old name, and it cannot tell code you wrote
+against the new `SubscriptionModel` afterwards from code that predates the rename, so running it a second time later
+would rename the new references too.
+
+### By hand
+
+Change the import and the type name:
+
+```java
+// Before
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
+
+SubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(mongo, "events", timeRepresentation);
+Flux<CloudEvent> events = subscriptionModel.subscribe();
+```
+
+```java
+// After
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
+
+FluxSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(mongo, "events", timeRepresentation);
+Flux<CloudEvent> events = subscriptionModel.subscribe();
+```
+
+Watch the wildcard case. If you imported `org.occurrent.subscription.api.reactor.*` and referred to
+`SubscriptionModel` unqualified, that name still compiles, because the new interface has it. Your code will then be
+typed on the named lifecycle-managed interface rather than the `Flux`-returning one, and the `subscribe()` call
+above stops compiling. The recipe handles this correctly, so it is the safer route.
+
+### Why it was renamed
+
+The two stacks used one name for two different things, which meant a reactive subscription model had no type naming
+what a blocking one names with `SubscriptionModel`. The subscription TCK needs that type, and inventing a third name
+for a concept the blocking stack already names would leave a reader asking what the difference is. There is none.
+[ADR 98](../architecture/decisions/0098-reactor-subscriptionmodel-means-what-blocking-subscriptionmodel-means.md)
+has the full reasoning.
+

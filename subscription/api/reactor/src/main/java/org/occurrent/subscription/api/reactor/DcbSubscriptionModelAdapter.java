@@ -30,21 +30,21 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Translates {@link DcbSubscriptionModel} calls into the shared reactive {@link SubscriptionModel}, building a
+ * Translates {@link DcbSubscriptionModel} calls into the shared reactive {@link FluxSubscriptionModel}, building a
  * {@link DcbSubscriptionFilter} from the criteria and converting the {@link DcbStartAt} to a generic start position.
  * <p>
  * The named, lifecycle-managed {@code subscribe} methods additionally require the {@code delegate} to implement
- * {@link Subscribable} and {@link SubscriptionModelLifeCycle}, since a bare {@link SubscriptionModel} has no notion
+ * {@link Subscribable} and {@link SubscriptionModelLifeCycle}, since a bare {@link FluxSubscriptionModel} has no notion
  * of a named subscription that can be cancelled by id. The composed durable subscription model and
  * {@code ReactorMongoSubscriptionModel} both satisfy this.
  */
 @NullMarked
 final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
 
-    private final SubscriptionModel delegate;
+    private final FluxSubscriptionModel delegate;
 
-    DcbSubscriptionModelAdapter(SubscriptionModel delegate) {
-        this.delegate = requireNonNull(delegate, SubscriptionModel.class.getSimpleName() + " cannot be null");
+    DcbSubscriptionModelAdapter(FluxSubscriptionModel delegate) {
+        this.delegate = requireNonNull(delegate, FluxSubscriptionModel.class.getSimpleName() + " cannot be null");
     }
 
     @Override
@@ -65,7 +65,7 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");
         requireNonNull(action, "Subscription action cannot be null");
         if (!(delegate instanceof Subscribable subscribable)) {
-            throw new IllegalStateException("Named DCB subscriptions require the underlying " + SubscriptionModel.class.getSimpleName() +
+            throw new IllegalStateException("Named DCB subscriptions require the underlying " + FluxSubscriptionModel.class.getSimpleName() +
                     " to also implement " + Subscribable.class.getSimpleName() + ", but " + delegate.getClass().getName() + " does not.");
         }
         // The DcbSubscriptionFilter is honored server-side for live delivery, but a DCB catch-up replays by the
@@ -84,7 +84,7 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
     public void cancelSubscription(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         if (!(delegate instanceof SubscriptionModelLifeCycle lifeCycle)) {
-            throw new IllegalStateException("Cancelling named DCB subscriptions requires the underlying " + SubscriptionModel.class.getSimpleName() +
+            throw new IllegalStateException("Cancelling named DCB subscriptions requires the underlying " + FluxSubscriptionModel.class.getSimpleName() +
                     " to also implement " + SubscriptionModelLifeCycle.class.getSimpleName() + ", but " + delegate.getClass().getName() + " does not.");
         }
         lifeCycle.cancelSubscription(subscriptionId);

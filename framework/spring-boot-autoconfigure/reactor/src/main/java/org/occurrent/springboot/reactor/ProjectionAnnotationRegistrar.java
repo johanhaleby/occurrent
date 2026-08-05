@@ -43,7 +43,7 @@ import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscribable;
-import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
 import org.occurrent.subscription.push.reactor.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
@@ -161,7 +161,7 @@ class ProjectionAnnotationRegistrar {
             if (synchronous) {
                 throw new IllegalArgumentException("@Projection '%s' returns a DcbProjection with mode = SYNCHRONOUS, which the reactive stack does not support in this version. Use mode = ASYNC for a DCB read model, or an agnostic Projection for synchronous read-your-writes.".formatted(id));
             }
-            ReactiveDcbProjectionRunner<E> runner = ReactiveDcbProjectionRunner.create(applicationContext.getBean(SubscriptionModel.class), converter);
+            ReactiveDcbProjectionRunner<E> runner = ReactiveDcbProjectionRunner.create(applicationContext.getBean(FluxSubscriptionModel.class), converter);
             boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
             DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
             startPositionSupport.applyStartupWorkarounds();

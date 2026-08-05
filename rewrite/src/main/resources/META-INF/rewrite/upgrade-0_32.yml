@@ -20,7 +20,9 @@ displayName: Upgrade to Occurrent 0.32.0
 description: >-
   Migrates an application from Occurrent 0.31.0 to 0.32.0. Rewrites the deprecated boolean
   occurrent.subscription.enabled configuration property to the occurrent.subscription.mode enum that replaced
-  it, in both .properties and .yaml files. There are no type or method renames in this release, so this is the
-  only rewrite it performs.
+  it, in both .properties and .yaml files. Also renames the reactor
+  org.occurrent.subscription.api.reactor.SubscriptionModel to FluxSubscriptionModel, since the old name now
+  belongs to a new interface meaning what the blocking SubscriptionModel means.
 recipeList:
   - org.occurrent.MigrateSubscriptionModeProperty_0_32
+  - org.occurrent.MigrateOccurrentRenames_0_32

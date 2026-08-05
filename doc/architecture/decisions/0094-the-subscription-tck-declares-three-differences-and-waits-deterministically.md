@@ -170,6 +170,15 @@ interface, so no behaviour changes. Two wrappers gain a capability as a side eff
 models, which already support registering while stopped and already accept a `StreamSubscriptionFilter`. Same reasoning as
 giving reactor `IntrospectableSubscriptionModel` above, and the same clause of AGENTS.md.
 
+**Amended 2026-08-05: the reactor side of that argument was carried further, in [ADR 98](0098-reactor-subscriptionmodel-means-what-blocking-subscriptionmodel-means.md).**
+This ADR said the two stacks do not have the same shape, that reactor `SubscriptionModel` hands back a bare cold
+`Flux` while the blocking one is the empty combination of `Subscribable` and `SubscriptionModelLifeCycle`. That was a
+true description and it did not have to stay true. Reactor now has `SubscriptionModel` meaning exactly what blocking
+means, and the Flux-returning primitive is `FluxSubscriptionModel`. Phase 7 consumes that interface rather than the
+plan of record's proposed `ManagedSubscriptionModel`, so the bridge names the type it bridges instead of handing every
+out-of-tree reactor implementor an asymmetry. Read ADR 98 for the naming, the bean-selector audit it required, and why
+the two interfaces stay separate rather than merging.
+
 **Only introspection is a per-model capability of the base contract.** Five interfaces looked like capabilities and one
 is. `IntrospectableSubscriptionModel` gets its own suite, worth having because both MongoDB models implement
 `subscriptionIds()` and neither had a test for it. `DelegatingSubscriptionModel` and `ManualStartSubscriptionModel` wrap
