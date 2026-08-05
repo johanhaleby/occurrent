@@ -32,8 +32,16 @@ import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 
@@ -43,9 +51,15 @@ import static java.util.Objects.requireNonNull;
  * {@code ReactorDcbCatchupSubscriptionModel} (DCB catch-up), so a single model serves an application that uses streams,
  * DCB, or both. Mirrors the routing of the blocking {@code CatchupSubscriptionModel}. A stream-only store that wants to
  * avoid the DCB dependency can use {@link ReactorStreamCatchupSubscriptionModel} directly as the DCB-free variant.
+ * <p>
+ * It also implements the reactor {@link SubscriptionModel} (issues #547 and #550): a named subscription is routed the
+ * same way and handled by the routed inner model, which replays and then hands the live half to the wrapped model's
+ * own named {@code subscribe(..)}, so retry and synchronous filter refusal are inherited. A durable model wrapping
+ * this one therefore delegates to it rather than driving the cold primitive itself. The life cycle forwards to the
+ * wrapped model, so give each composition its own wrapped model rather than sharing one.
  */
 @NullMarked
-public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel {
+public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
 
     private final @Nullable ReactorStreamCatchupSubscriptionModel streamCatchupSubscriptionModel;
     private final @Nullable ReactorDcbCatchupSubscriptionModel dcbCatchupSubscriptionModel;
@@ -152,5 +166,108 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         return dcbCatchupSubscriptionModel != null
                 ? dcbCatchupSubscriptionModel.globalCheckpoint()
                 : requireNonNull(streamCatchupSubscriptionModel).globalCheckpoint();
+    }
+
+    /**
+     * The named subscription entry point (issues #547 and #550): routes exactly like the cold
+     * {@link #subscribe(SubscriptionFilter, StartAt)} and hands the subscription to the routed inner model, which
+     * replays and then delegates the live half to the wrapped model's own named {@code subscribe(..)}. Everything the
+     * wrapped model does for a named subscription is therefore inherited, its handler retry and its synchronous
+     * refusal of an unsupported filter included.
+     */
+    @Override
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(action, "Action cannot be null");
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        SubscriptionModel routed = (SubscriptionModel) route(filter, startAt);
+        // Claim the owner slot before subscribing, so a life-cycle call racing the subscribe reaches the model that
+        // owns the replay rather than falling back to an arbitrary inner model; roll the claim back if the subscribe
+        // refuses, so the id stays free.
+        if (subscriptionOwners.putIfAbsent(subscriptionId, routed) != null) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        }
+        final Subscription subscription;
+        try {
+            subscription = routed.subscribe(subscriptionId, filter, startAt, action);
+        } catch (RuntimeException e) {
+            subscriptionOwners.remove(subscriptionId, routed);
+            throw e;
+        }
+        return subscription;
+    }
+
+    // Which inner model a named subscription was routed to, so a per-subscription life-cycle call reaches the model
+    // that may still be replaying it. All inner models forward to the same wrapped model, so an id this map does not
+    // know (never subscribed through this dispatcher) is answered by any inner model.
+    private final ConcurrentMap<String, SubscriptionModel> subscriptionOwners = new ConcurrentHashMap<>();
+
+    private SubscriptionModel ownerOf(String subscriptionId) {
+        SubscriptionModel owner = subscriptionOwners.get(subscriptionId);
+        if (owner != null) {
+            return owner;
+        }
+        return anyInnerModel();
+    }
+
+    private SubscriptionModel anyInnerModel() {
+        return streamCatchupSubscriptionModel != null ? streamCatchupSubscriptionModel : requireNonNull(dcbCatchupSubscriptionModel);
+    }
+
+    // The distinct inner models. Model-wide calls go to each, and each forwards to the same wrapped model, whose
+    // model-wide life-cycle operations are idempotent, so the repeated forward is harmless while the per-inner replay
+    // bookkeeping is what genuinely needs every inner to see the call.
+    private Stream<SubscriptionModel> innerModels() {
+        return Stream.of(streamCatchupSubscriptionModel, dcbCatchupSubscriptionModel, agnosticCatchupSubscriptionModel)
+                .filter(Objects::nonNull)
+                .map(SubscriptionModel.class::cast);
+    }
+
+    @Override
+    public void stop() {
+        innerModels().forEach(SubscriptionModel::stop);
+    }
+
+    @Override
+    public void start(boolean resumeSubscriptionsAutomatically) {
+        innerModels().forEach(inner -> inner.start(resumeSubscriptionsAutomatically));
+    }
+
+    @Override
+    public boolean isRunning() {
+        return anyInnerModel().isRunning();
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return ownerOf(subscriptionId).isRunning(subscriptionId);
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return ownerOf(subscriptionId).isPaused(subscriptionId);
+    }
+
+    @Override
+    public Subscription resumeSubscription(String subscriptionId) {
+        return ownerOf(subscriptionId).resumeSubscription(subscriptionId);
+    }
+
+    @Override
+    public void pauseSubscription(String subscriptionId) {
+        ownerOf(subscriptionId).pauseSubscription(subscriptionId);
+    }
+
+    @Override
+    public void cancelSubscription(String subscriptionId) {
+        SubscriptionModel owner = ownerOf(subscriptionId);
+        subscriptionOwners.remove(subscriptionId);
+        owner.cancelSubscription(subscriptionId);
+    }
+
+    @Override
+    public void shutdown() {
+        subscriptionOwners.clear();
+        innerModels().forEach(SubscriptionModel::shutdown);
     }
 }

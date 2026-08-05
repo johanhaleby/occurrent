@@ -370,3 +370,26 @@ for a concept the blocking stack already names would leave a reader asking what 
 [ADR 98](../architecture/decisions/0098-reactor-subscriptionmodel-means-what-blocking-subscriptionmodel-means.md)
 has the full reasoning.
 
+
+## 6. A durable reactor model over a catch-up model over a cold-only model
+
+`ReactorDurableSubscriptionModel` now hands its subscriptions to the model it wraps whenever that model manages named
+subscriptions itself, and the three reactor catch-up models now do. If your composition is
+`Durable(Catchup(customModel))` where `customModel` implements only the cold `FluxSubscriptionModel` primitive, the
+catch-up model has nothing underneath to delegate the live half to, and refuses with:
+
+> `ReactorStreamCatchupSubscriptionModel can only manage named subscriptions when the model it wraps manages them
+> itself (implements SubscriptionModel). The wrapped <your class> only offers the plain (cold) subscribe(filter,
+> startAt) primitive, so use that primitive directly, or wrap a model that manages named subscriptions.`
+
+Before this release the same composition ran through the durable model's own delivery loop, which retried nothing and
+validated nothing, the gap [#547](https://github.com/johanhaleby/occurrent/issues/547) records. The remediation is in
+the message: implement the reactor `SubscriptionModel` on your model, the way every model shipped by Occurrent now
+does, and the composition inherits its retry and validation. If you cannot, subscribe to the catch-up model's cold
+`Flux` directly and manage the delivery yourself, which is what the old path silently did for you without the
+resilience you probably assumed it had.
+
+Only the named `subscribe(..)` paths refuse. The model-wide life-cycle methods stay safe on such a composition:
+`shutdown()` (a Spring context close calls it through `destroyMethod`) and `stop()` are no-ops, `isRunning()` answers
+`false`, and cancelling an id the composition never knew is ignored, so an application that keeps the cold-only
+composition but never subscribes by name still starts, health-checks, and shuts down cleanly.

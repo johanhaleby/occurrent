@@ -108,13 +108,15 @@ class ReactorDurableSubscriptionModelFixture implements SubscriptionModelFixture
     }
 
     /**
-     * A failing action's {@code Mono} is not retried: {@code source(..)}'s {@code concatMap} propagates it straight
-     * out of that subscription's pipeline instead of persisting a checkpoint or reaching {@link #publish(List)},
-     * which is a plain, independent event-store write.
+     * A failing action's {@code Mono} is retried. Since the catch-up model promotion (#550) the durable model
+     * delegates this composition to the wrapped model's named {@code subscribe}, so the failing action lands inside
+     * {@code ReactorMongoSubscriptionModel}'s handler retry and is re-invoked with the model's backoff. This
+     * declaration said {@code false} while the composition ran the durable model's own unguarded pipeline, which is
+     * exactly the divergence #547 recorded and this fixture's red run demonstrated.
      */
     @Override
     public boolean retriesAFailingHandler() {
-        return false;
+        return true;
     }
 
     /**

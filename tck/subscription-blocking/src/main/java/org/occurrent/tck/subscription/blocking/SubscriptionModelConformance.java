@@ -488,6 +488,58 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
         }
 
         @Test
+        void resuming_one_subscription_after_stop_reopens_the_model_but_leaves_the_others_paused() {
+            if (!fixture().acceptsSeveralSubscriptions()) {
+                // Only one subscription can ever exist, so there is no sibling to leave paused, but the model-wide
+                // gate reopening on resume is still this model's claim and stays asserted rather than going unchecked.
+                String only = subscriptionId();
+                subscribeAndWait(only);
+
+                subscriptionModel().stop();
+                subscriptionModel().resumeSubscription(only).waitUntilStarted(DELIVERY_TIMEOUT);
+
+                assertThat(subscriptionModel().isRunning())
+                        .as("resumeSubscription(String) reopens the model-wide gate even for a model that only ever "
+                                + "has one subscription")
+                        .isTrue();
+                return;
+            }
+            String resumed = subscriptionId();
+            String stillPaused = subscriptionId();
+            RecordedEvents resumedRecorded = subscribeAndWait(resumed);
+            RecordedEvents stillPausedRecorded = subscribeAndWait(stillPaused);
+
+            subscriptionModel().stop();
+
+            subscriptionModel().resumeSubscription(resumed).waitUntilStarted(DELIVERY_TIMEOUT);
+
+            assertThat(subscriptionModel().isRunning())
+                    .as("resumeSubscription(String) reopens the model-wide gate rather than scoping to the one "
+                            + "subscription it resumed, so a caller must not read isRunning() as \"every subscription "
+                            + "is going again\"")
+                    .isTrue();
+            assertThat(subscriptionModel().isPaused(stillPaused))
+                    .as("a sibling that stop() paused is untouched by resuming the other one")
+                    .isTrue();
+            assertThat(subscriptionModel().isRunning(stillPaused))
+                    .as("per-subscription reporting still says so, even though the model itself now reports running")
+                    .isFalse();
+
+            CloudEvent afterResume = ConformanceEvents.event("1", "NameDefined");
+            publish(afterResume);
+
+            assertThat(idsOf(resumedRecorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+                    .as("the resumed subscription actually delivers again, not just isRunning() reporting so")
+                    .containsExactly(afterResume.getId());
+            // Unconditional, unlike the deliversEventsPublishedWhilePaused()-guarded checks elsewhere in this class:
+            // stillPaused is never resumed in this test, so even a model that holds events for later delivery has
+            // nothing to hold them in yet. It is still paused, not merely dropping.
+            assertThat(stillPausedRecorded.soFar())
+                    .as("the still-paused sibling received nothing, even though the model itself now reports running")
+                    .isEmpty();
+        }
+
+        @Test
         void start_after_stop_delivers_again() {
             String id = subscriptionId();
             RecordedEvents recorded = subscribeAndWait(id);

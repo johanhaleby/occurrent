@@ -66,6 +66,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.functional.Not.not;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
@@ -271,8 +272,10 @@ public class ReactorDurableSubscriptionModelTest {
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
-        // The subscription is async so we need to wait for it
-        await().atMost(Durations.ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
+        // The subscription is async so we need to wait for it. At-least, not equal: the wrapped model's retry can
+        // redeliver the failed event within a poll interval under load, so a wait for exactly 1 races the retry it
+        // exists to observe. The delivery count is pinned by the hasSize(3) assertion below either way.
+        await().atMost(Durations.ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, greaterThanOrEqualTo(1));
         // Nothing re-subscribes here on purpose. The wrapped model retries the action, so the event that failed is
         // delivered on a later attempt and the subscription keeps its id.
         mongoEventStore.write("2", 0, serialize(nameDefined2)).block();

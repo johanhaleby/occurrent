@@ -65,6 +65,25 @@ push and synchronous models get it). The three reactor catch-up models expose on
 contract of their own that ADR 94 gave them, so they implement `FluxSubscriptionModel` through
 `CheckpointAwareSubscriptionModel` and nothing else.
 
+**Amended for #550 (2026-08-05): the three catch-up models now carry the combining interface too.** The placement
+above was written while the catch-up models had no named subscriptions to offer, and #547 showed what that costs: the
+durable model wrapping a catch-up model had nothing to delegate to, so the composition the reactive starter wires for
+a position-writing store kept an unguarded delivery pipeline. The promotion gives the catch-up models a named
+`subscribe(..)` that replays without retry (matching the blocking catch-up models) and then hands the live half to the
+wrapped model's own named `subscribe(..)`, so retry and synchronous filter refusal are inherited rather than
+reimplemented, and forwards the life cycle to the wrapped model, which is a real life cycle rather than an invented
+one. The named machinery lives once, in `NamedCatchupSupport` beside the shared replay pipeline. The named path
+requires the wrapped model to be named itself; over a cold-only wrapped model the subscribe paths refuse loudly with
+the remediation in the message (the model-wide life-cycle calls stay safe no-ops there, so a Spring context close or a
+health check never throws for a capability the application did not use), because the alternative is a second copy of
+the named-over-cold driver that `ReactorDurableSubscriptionModel` already owns. Life-cycle semantics for an in-flight
+replay: a pause hands over paused (blocking parity); a stop aborts the replay without handing over and parks the
+subscription for relaunch on `start(..)`, replaying from its original position, which is deliberately SAFER than the
+blocking catch-up model's abandon-on-stop -- the blocking composition never notices that abandonment because its
+durable model parks subscriptions before the catch-up model sees them, a gate the delegating path here does not run
+through. The cold `Flux` primitive is unchanged and stays the contract for
+feeds. See ADR 101 for the staged decision this completes.
+
 **`CatchupThenPushSubscriptionModel` gains it, and the `DcbSubscriptionModelAdapter` gate is unaffected.** ORCHESTRATOR
 recorded that this model deliberately did not implement the reactor `SubscriptionModel`, on the grounds that the
 Flux-returning primitive is one a register-and-wrap model cannot honour. That reason survives the rename intact and
