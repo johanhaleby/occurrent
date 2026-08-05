@@ -70,6 +70,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 
 @Timeout(20)
 @DisplayNameGeneration(DisplayNameGenerator.Simple.class)
@@ -192,8 +193,10 @@ class SpringRedisCheckpointStorageTest {
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
-        // The subscription is async so we need to wait for it
-        await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
+        // The subscription is async so we need to wait for it. At least one call rather than exactly one,
+        // because the model restarts from the position it had read and the failed event was never processed,
+        // so it is handed to the handler again rather than skipped (#522).
+        await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, greaterThanOrEqualTo(1));
         // Since an exception occurred we need to run the stream again
         redisSubscription.shutdown();
         stream.run();

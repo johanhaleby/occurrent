@@ -18,11 +18,14 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.*;
+import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoCursor;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.*;
@@ -58,6 +61,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -67,6 +71,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -678,6 +683,129 @@ public class SpringMongoSubscriptionModelTest {
             // Restart-recovery await: after the mocked failure the subscription model restarts the change stream, which
             // can take longer than a couple of seconds on a loaded CI machine. Awaitility short-circuits on success.
             await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+        }
+    }
+
+    @Nested
+    @DisplayName("Restart resume position")
+    class RestartResumePositionTest {
+
+        /**
+         * The existing restart tests fail the very first attempt to open a change stream, so the subscription has
+         * read nothing and there is no position for a restart to continue from. This one lets the subscription read
+         * an event first and then takes the change stream away, which is the case where restarting at the present
+         * skips whatever was written during the outage.
+         */
+        @SuppressWarnings("unchecked")
+        // Two waits, 5 seconds for the first delivery and 10 for the one after the restart, plus the model's
+        // default retry backoff before it reconnects. 30 leaves headroom over that chain without letting a
+        // subscription that never comes back sit here for a minute.
+        @Timeout(value = 30, unit = SECONDS)
+        @Test
+        void continues_from_the_last_document_read_so_a_write_during_the_outage_still_arrives() {
+            // Given a change stream whose cursor can be told to stop handing documents over and then to fail the
+            // way a failover does. Withholding first is what makes the outage a window rather than an instant: an
+            // event can be written while the subscription is provably not reading, which is the only way to tell a
+            // restart that continues where it left off from one that reconnects at the present.
+            AtomicBoolean withholdDocuments = new AtomicBoolean(false);
+            AtomicBoolean failNextRead = new AtomicBoolean(false);
+            AtomicBoolean readFailed = new AtomicBoolean(false);
+            MongoCollection<Document> realEventCollection = mongoTemplate.getDb().getCollection(eventCollectionName);
+
+            MongoTemplate mongoTemplateSpy = spy(mongoTemplate);
+            MongoDatabase mongoDatabase = mock(MongoDatabase.class);
+            MongoCollection<Document> instrumentedCollection = (MongoCollection<Document>) mock(MongoCollection.class);
+            // Only the first change stream is instrumented (ChangeStreamTask#initCursor calls getDb() per cursor),
+            // so the restart runs through the real template and what it resumes from is the model's own decision
+            // rather than something this test arranged.
+            when(mongoTemplateSpy.getDb()).thenReturn(mongoDatabase).thenCallRealMethod();
+            when(mongoDatabase.getCollection(eventCollectionName)).thenReturn(instrumentedCollection);
+            when(instrumentedCollection.watch(any(Class.class)))
+                    .thenAnswer(__ -> instrumentedChangeStream(realEventCollection.watch(Document.class), withholdDocuments, failNextRead, readFailed));
+
+            subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, eventCollectionName, timeRepresentation);
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.ofSeconds(10));
+
+            NameDefined beforeTheOutage = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(beforeTheOutage));
+            // Waited for, not assumed: the position the restart has to continue from is the one this delivery
+            // leaves behind, so a test that raced ahead of it would be asserting something else.
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+
+            // When the change stream stops reading, two events are written, and only then does the stream fail.
+            // Two, because a change stream opened without a start position begins at the server's current
+            // operation time and includes an operation stamped at exactly that time, so with a single write the
+            // old restart-at-the-present behaviour delivered it anyway. The second write moves the server's
+            // operation time past the first, which is what a restart at the present then skips.
+            withholdDocuments.set(true);
+            NameWasChanged firstDuringTheOutage = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            NameWasChanged lastDuringTheOutage = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name3");
+            mongoEventStore.write("1", 1, serialize(firstDuringTheOutage));
+            mongoEventStore.write("1", 2, serialize(lastDuringTheOutage));
+            // The outage has to be real for the rest of this test to mean anything. Without this the subscription
+            // could be reading through the untouched change stream, delivering all three events for reasons that
+            // have nothing to do with where a restart resumes, and the assertion below would still pass.
+            await().during(ONE_SECOND).atMost(FIVE_SECONDS).untilAsserted(() ->
+                    assertThat(state)
+                            .as("nothing may reach the handler while the change stream is withholding documents")
+                            .hasSize(1));
+            failNextRead.set(true);
+
+            // Then
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(state).extracting(CloudEvent::getId)
+                            .as("the restarted subscription must continue from the event it had read, so both "
+                                    + "events written while its change stream was down still arrive")
+                            .containsExactly(beforeTheOutage.eventId(), firstDuringTheOutage.eventId(), lastDuringTheOutage.eventId()));
+            assertThat(readFailed)
+                    .as("the change stream this test instrumented must be the one the subscription was reading, "
+                            + "or the outage never happened and the delivery above proves nothing")
+                    .isTrue();
+        }
+
+        /**
+         * Delegates every call to the real change stream, except that the cursor it hands out withholds documents
+         * or fails on demand. Option calls are delegated too, and answer with this mock rather than the real
+         * iterable they return, so the chain {@code ChangeStreamTask} builds ends at the instrumented cursor.
+         */
+        @SuppressWarnings("unchecked")
+        private ChangeStreamIterable<Document> instrumentedChangeStream(ChangeStreamIterable<Document> real, AtomicBoolean withholdDocuments, AtomicBoolean failNextRead, AtomicBoolean readFailed) {
+            return mock(ChangeStreamIterable.class, invocation -> {
+                if (invocation.getMethod().getName().equals("iterator")) {
+                    return instrumentedCursor(real.iterator(), withholdDocuments, failNextRead, readFailed);
+                }
+                Object answer = invocation.getMethod().invoke(real, invocation.getArguments());
+                return answer == real ? invocation.getMock() : answer;
+            });
+        }
+
+        @SuppressWarnings("unchecked")
+        private MongoCursor<ChangeStreamDocument<Document>> instrumentedCursor(MongoCursor<ChangeStreamDocument<Document>> real, AtomicBoolean withholdDocuments, AtomicBoolean failNextRead, AtomicBoolean readFailed) {
+            return mock(MongoCursor.class, invocation -> {
+                if (!invocation.getMethod().getName().equals("tryNext")) {
+                    return invocation.getMethod().invoke(real, invocation.getArguments());
+                }
+                if (failNextRead.get()) {
+                    readFailed.set(true);
+                    throw new MongoSocketReadException("expected: simulated failover", new ServerAddress(), new IOException("Connection reset by peer"));
+                }
+                if (withholdDocuments.get()) {
+                    // Nothing to read, as far as the container is concerned. Slept on rather than answered
+                    // immediately, because its read loop calls tryNext() again as soon as this returns.
+                    Thread.sleep(20);
+                    return null;
+                }
+                ChangeStreamDocument<Document> next = (ChangeStreamDocument<Document>) real.tryNext();
+                if (next != null && withholdDocuments.get()) {
+                    // Withholding started while this call was already waiting on the server. Handing the
+                    // document over now would mean the outage never began. Dropping it costs nothing, since
+                    // the restart re-reads from the tracked position rather than from this cursor.
+                    return null;
+                }
+                return next;
+            });
         }
     }
 

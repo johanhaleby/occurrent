@@ -83,20 +83,17 @@ class SpringMongoSubscriptionModelFixture implements SubscriptionModelFixture {
     }
 
     /**
-     * This model rebuilds the change-stream request from the {@code StartAt} the subscription was created with, which
-     * for the default resolves to the present all over again, so an event written while a subscription was paused never
-     * reaches it. The native driver's model instead resumes from the position it had read to and delivers that event.
+     * This model tracks the change-stream position it has read to and rebuilds the change-stream request from there, so
+     * an event written while a subscription was paused arrives once it resumes (#522). The native driver's model and
+     * the reactor one answer the same way, for the same reason.
      * <p>
-     * Both answers cost something, which is why #522 has not picked one yet rather than this being a bug on one side.
-     * Resuming at the present loses the paused window. Resuming from the position read replays: a competing consumer is
-     * paused precisely because another consumer holds the lease, and that consumer has already delivered the events in
-     * the gap, so a gap-free resume hands them over a second time.
-     * {@code CompetingConsumerSubscriptionModelTest.pausing_and_resuming_both_competing_subscription_models_several_times}
-     * measures it, ending up with {@code 1, 2, 3, 4, 5, 4, 5}. The model cannot see whether a competing-consumer
-     * wrapper sits above it, so it cannot choose per case.
+     * The cost is redelivery, which is the direction Occurrent errs in: a competing consumer is paused precisely
+     * because another consumer holds the lease, and that consumer has already delivered the events in the gap, so a
+     * gap-free resume hands them over a second time. Wasted work beats a lost event (ADR 57).
      */
+    @Override
     public boolean deliversEventsPublishedWhilePaused() {
-        return false;
+        return true;
     }
 
     /**

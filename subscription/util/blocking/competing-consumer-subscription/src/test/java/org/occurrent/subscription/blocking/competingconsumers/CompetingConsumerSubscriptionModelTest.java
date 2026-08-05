@@ -427,7 +427,15 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel2.start();
 
         // Then
-        await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents.stream().map(t -> ((CloudEvent) t.toArray()[1]).getId())).containsExactly("1", "2", "3", "4", "5"));
+        // Distinct ids, for the same reason as the pause and resume test above (#522): stopping a model pauses
+        // its subscriptions and starting it resumes them, so a consumer that takes the lease back continues from
+        // the position it had read and hands over events the other consumer delivered meanwhile. This run ends up
+        // with 1, 2, 3, 4, 5, 4, 5. Every event must still arrive, and still in order.
+        await("waiting for all events").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents.stream().map(t -> ((CloudEvent) t.toArray()[1]).getId()).distinct()).containsExactly("1", "2", "3", "4", "5"));
+        // An upper bound as well as the set, so a model that replayed the whole stream on every resume could
+        // not pass this quietly. Ten is 5 events times 2 consumers, and it is a real ceiling: each consumer
+        // resumes from its own position, which only moves forward, so it can hand over a given event once.
+        assertThat(cloudEvents).hasSizeLessThanOrEqualTo(10);
     }
 
     // Note that pausing a subscription is async when using the SpringMongoSubscriptionModel.
@@ -457,7 +465,10 @@ class CompetingConsumerSubscriptionModelTest {
 
         // When
         eventStore.write("streamId", serialize(nameDefined));
-        await("waiting for first event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
+        // At least, not exactly, for every wait in this test: a lease bouncing between the two consumers can
+        // redeliver an event before the next write lands (#522), and an exact size that overshoots never
+        // recovers, so it would burn the whole timeout instead of moving on.
+        await("waiting for first event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSizeGreaterThanOrEqualTo(1));
 
         competingConsumerSubscriptionModel1.pauseSubscription(subscriptionId);
 
@@ -466,7 +477,7 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.resumeSubscription(subscriptionId).waitUntilStarted();
 
         eventStore.write("streamId", serialize(nameWasChanged2));
-        await("waiting for third event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(3));
+        await("waiting for third event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSizeGreaterThanOrEqualTo(3));
 
         competingConsumerSubscriptionModel2.pauseSubscription(subscriptionId);
         competingConsumerSubscriptionModel1.pauseSubscription(subscriptionId);
@@ -475,7 +486,7 @@ class CompetingConsumerSubscriptionModelTest {
 
         competingConsumerSubscriptionModel2.resumeSubscription(subscriptionId).waitUntilStarted();
         competingConsumerSubscriptionModel1.resumeSubscription(subscriptionId).waitUntilStarted();
-        await("waiting for fourth event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(4));
+        await("waiting for fourth event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSizeGreaterThanOrEqualTo(4));
 
         eventStore.write("streamId", serialize(nameWasChanged4));
 
@@ -485,7 +496,16 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel2.resumeSubscription(subscriptionId).waitUntilStarted();
 
         // Then
-        await("waiting for all events").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents.stream().map(t -> ((CloudEvent) t.toArray()[1]).getId())).containsExactly("1", "2", "3", "4", "5"));
+        // Distinct ids rather than the whole list, because delivery across a pause is at least once (#522): a
+        // subscription resumes from the position it had read to, so a consumer taking the lease back hands over
+        // events the other consumer already delivered while it held it. This run ends up with 1, 2, 3, 4, 5, 4, 5.
+        // Every event must still arrive, and still in order, which is what first arrival asserts; only the
+        // redelivery is tolerated.
+        await("waiting for all events").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents.stream().map(t -> ((CloudEvent) t.toArray()[1]).getId()).distinct()).containsExactly("1", "2", "3", "4", "5"));
+        // An upper bound as well as the set, so a model that replayed the whole stream on every resume could
+        // not pass this quietly. Ten is 5 events times 2 consumers, and it is a real ceiling: each consumer
+        // resumes from its own position, which only moves forward, so it can hand over a given event once.
+        assertThat(cloudEvents).hasSizeLessThanOrEqualTo(10);
     }
 
     @Test
