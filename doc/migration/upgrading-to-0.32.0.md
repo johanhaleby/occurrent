@@ -14,10 +14,11 @@ yourself, one method gained a parameter. Almost nobody does, since the model Occ
 refuses to start. If you use a push source, read
 [section 3](#3-a-push-sink-feeds-exactly-one-projection-or-saga) first.
 
-Five things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+Six things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
 `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
-first failing handler, and the reactor subscription primitive was renamed.
+first failing handler, the reactor subscription primitive was renamed, and a paused MongoDB subscription now delivers
+what was written while it was paused.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -370,3 +371,41 @@ for a concept the blocking stack already names would leave a reader asking what 
 [ADR 98](../architecture/decisions/0098-reactor-subscriptionmodel-means-what-blocking-subscriptionmodel-means.md)
 has the full reasoning.
 
+
+## 6. A paused MongoDB subscription delivers what was written while it was paused
+
+Nothing to change in your code, but the behaviour under you moved, so check your handlers before you upgrade.
+
+`SpringMongoSubscriptionModel` used to rebuild its change stream from the `StartAt` the subscription was created with.
+For the default that resolves to the present all over again, so an event written while a subscription was paused sat
+behind where the resumed stream started and was never delivered. It now resumes from the change-stream position it had
+read to, which is what `NativeMongoSubscriptionModel` and `ReactorMongoSubscriptionModel` already did, so the paused
+window arrives.
+
+The same position is used when a subscription restarts after a change-stream error, where the model also used to
+reconnect at the present. A subscription whose change stream history is no longer in the oplog still restarts at the
+present, and still only if you asked for that with `restartSubscriptionsOnChangeStreamHistoryLost`; without it, such a
+subscription stops and says so rather than silently skipping ahead, which is what that setting has always promised.
+
+### What this asks of you
+
+**Handlers must be idempotent.** Delivery across a pause is at least once, and `stop()` on the model pauses every
+subscription it holds, so `stop()` followed by `start()` is the same case. Two things produce a repeat:
+
+- An event whose handler had not finished when the subscription was paused. The position advances after the handler
+  returns, so pausing mid-handler means that event is handed over again on resume.
+- Every event another consumer of the same subscription id handled while this one was paused. A competing consumer is
+  paused precisely because a rival holds the lease, and the rival has been delivering in the meantime. When the lease
+  comes back, this consumer resumes from where *it* left off, not from where the rival got to.
+
+If your handler writes to a read model with an upsert keyed on the event, or checks the `streamid`/`streamversion` or
+`position` extension before acting, you already have what this needs. If it appends to a list or increments a counter
+without looking, it will double-count now where a pause used to hide the problem by dropping the event instead.
+
+### Why the trade goes this way
+
+Both answers cost something: resuming at the present loses events, resuming from the position read repeats them. They
+are not equally bad. A lost event is unrecoverable and violates the isolation rule Occurrent is designed around, while
+a repeat is absorbed by an idempotent handler, and every wrapper above these models already delivers at least once.
+[ADR 94](../architecture/decisions/0094-the-subscription-tck-declares-three-differences-and-waits-deterministically.md)
+records the measurement this was decided against, including the competing-consumer case where it costs the most.

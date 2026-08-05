@@ -221,7 +221,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
         return Flux.defer(() -> {
             SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
-            // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
+            // builder::resumeAt maps to the driver's startAtOperationTime here rather than to a resume token,
+            // and that includes an operation stamped at exactly the given time.
             ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, currentStartAt.get(), subscriptionModelContext);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
@@ -295,6 +296,13 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 .map(MongoOperationTimeCheckpoint::new);
     }
 
+    /**
+     * Pause an individual subscription. The change stream behind it is disposed, but the position it has read to is
+     * kept, so {@link #resumeSubscription(String)} continues from there and events written while it was paused are
+     * delivered rather than skipped.
+     *
+     * @see #resumeSubscription(String)
+     */
     @Override
     public synchronized void pauseSubscription(String subscriptionId) {
         if (shutdown) {
@@ -312,6 +320,18 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
     }
 
+    /**
+     * Resume a paused subscription from the change-stream position it had read to, so that nothing written while it
+     * was paused is lost.
+     * <p>
+     * Delivery is <i>at least once</i> across a pause: an event whose action's {@code Mono} had not completed when
+     * the subscription was paused, and every event another consumer of the same subscription id handled in the
+     * meantime, is handed to this action again on resume. That is deliberate, since wasted work is the cheaper
+     * mistake, and it means actions must be idempotent. A subscription that had not received anything yet has no
+     * position to resume from and starts at the present instead.
+     *
+     * @see #pauseSubscription(String)
+     */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         if (shutdown) {

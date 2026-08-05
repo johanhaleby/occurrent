@@ -102,19 +102,33 @@ the one `EventStoreFixture.timePrecision()` sits on: declare what cannot be aske
   the suite asserts the documented outcome either way: a deferring model redelivers, a dropping model does not.
   The primary axis is whether the model has a position to resume from at all: a model that dispatches as events arrive
   has nowhere to hold them and owes nothing, while a model reading a log or a change stream could resume where it left
-  off. **The two MongoDB models sit on the same side of that axis and still answer differently, and the reason is a
-  genuine open question rather than a bug on one side.** That took two attempts to establish. This ADR first called it an
-  intended difference on the strength of a code comment in each model, which was too weak a reason, since the Spring
-  comment is about avoiding replay and not about the paused window. It was then treated as a plain bug in the Spring
-  model and fixed there, and the fix made
+  off. **The two MongoDB models sat on the same side of that axis and still answered differently, and settling it took
+  three attempts.** This ADR first called it an intended difference on the strength of a code comment in each model,
+  which was too weak a reason, since the Spring comment is about avoiding replay and not about the paused window. It was
+  then treated as a plain bug in the Spring model and fixed there, and the fix made
   `CompetingConsumerSubscriptionModelTest.pausing_and_resuming_both_competing_subscription_models_several_times`
-  deliver `1, 2, 3, 4, 5, 4, 5`. That is the cost nobody had measured: a competing consumer is paused precisely because
+  deliver an event twice. That is the cost nobody had measured: a competing consumer is paused precisely because
   another consumer holds the lease, that consumer has already delivered the events in the gap, and a gap-free resume
-  hands them over again. Resuming at the present loses the paused window, resuming from the position read duplicates
-  under competing consumers, and a model cannot see whether a competing-consumer wrapper sits above it. So both branches
-  stay asserted and #522 owns the choice, with the duplicate delivery recorded there as evidence.
-  **The lesson to carry: a declaration must not park a bug, and reaching for the word bug before measuring what the fix
-  costs is the other way to get this wrong.**
+  hands them over again. That fix was reverted with the measurement recorded on #522, since resuming at the present
+  loses the paused window, resuming from the position read duplicates under competing consumers, and a model cannot see
+  whether a competing-consumer wrapper sits above it, so it cannot choose per case.
+
+  **Resolved on #522, 2026-08-05: gap-free resume is the contract and the duplicate is its price.** The two costs are
+  not symmetric, which is what the third pass added. Losing the paused window is a lost event, which the isolation rule
+  in `AGENTS.md` forbids outright, and ADR 57 already recorded which way to err when a design has to pick one: wasted
+  work beats loss. A duplicate is absorbed by an idempotent handler, and at-least-once is what every wrapper above
+  these models already delivers. So `SpringMongoSubscriptionModel` now tracks the change-stream position it has read to
+  and rebuilds from there, the way the native and reactor models always did, both MongoDB models declare
+  `deliversEventsPublishedWhilePaused()` as `true`, and all three document delivery across a pause as at least once.
+  Two competing-consumer tests assert every event arriving in order while tolerating a redelivery, rather than an exact
+  sequence. Relaxing those expectations is a correction to what the contract promises, not a weakened assertion, and the
+  events must still all arrive and still arrive in order. The second one was not in the original measurement: stopping a
+  model pauses its subscriptions, so `stopping_and_starting_both_competing_subscription_models_several_times` reaches
+  the same `1, 2, 3, 4, 5, 4, 5` as the pause and resume one. The declaration stays, because the register-only models
+  answer `false` for a reason that has nothing to do with this (ADR 85), which is the axis it was always about.
+  **The lesson to carry: a declaration must not park a bug, reaching for the word bug before measuring what the fix
+  costs is the other way to get this wrong, and a measured cost is what a decision is made against rather than an
+  argument about which comment sounded more deliberate.**
 - **Which `StartAt` variants a model accepts.** A sealed set of four, asserted as delivery for the accepted ones and
   refusal for the rest. This is phase 8's declared restriction mechanism, and it is where the per-wrapper deliberate
   refusals get asserted rather than rediscovered.

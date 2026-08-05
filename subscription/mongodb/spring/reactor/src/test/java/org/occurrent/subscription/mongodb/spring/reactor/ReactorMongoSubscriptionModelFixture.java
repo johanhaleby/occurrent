@@ -84,11 +84,10 @@ class ReactorMongoSubscriptionModelFixture implements SubscriptionModelFixture {
 
     /**
      * A named subscription advances its tracked resume position only once the action's {@code Mono} completes
-     * ({@code ReactorMongoSubscriptionModel.startInternalSubscription}'s {@code doOnSuccess}), unlike
-     * {@code SpringMongoSubscriptionModel}, which rebuilds the change-stream request from the subscription's original
-     * {@code StartAt} on resume. Pausing here disposes the change stream but keeps that tracked position, so resuming
-     * restarts the change stream with {@code startAfter}/{@code resumeAt} from it, replaying whatever committed while
-     * paused.
+     * ({@code ReactorMongoSubscriptionModel.startInternalSubscription}'s {@code doOnSuccess}). Pausing here disposes
+     * the change stream but keeps that tracked position, so resuming restarts the change stream with
+     * {@code startAfter}/{@code resumeAt} from it, replaying whatever committed while paused. Both blocking MongoDB
+     * models answer the same way, for the same reason (#522).
      */
     @Override
     public boolean deliversEventsPublishedWhilePaused() {

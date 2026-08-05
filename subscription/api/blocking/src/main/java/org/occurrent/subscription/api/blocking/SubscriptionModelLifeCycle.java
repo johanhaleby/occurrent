@@ -73,6 +73,12 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      * Pause an individual subscription. It'll be paused <i>temporarily</i>, which means that it can be
      * resumed later ({@link #resumeSubscription(String)}). This is useful for testing purposes when you want
      * to write events to an event store without triggering this particular subscription.
+     * <p>
+     * What happens to an event published while a subscription is paused is up to the model, so read the one you
+     * use rather than assuming either answer. A model reading a log or a change stream can resume from the
+     * position it had reached and deliver that event, at the price of handing over an event a second time if
+     * something else consumed it in the meantime. A model that dispatches events as they arrive has nowhere to
+     * hold them, so the event never reaches that handler at all.
      *
      * @param subscriptionId The id of the subscription to pause.
      * @throws IllegalArgumentException If subscription is not running

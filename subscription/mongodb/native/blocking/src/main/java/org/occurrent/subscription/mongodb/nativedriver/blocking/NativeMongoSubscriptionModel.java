@@ -402,6 +402,18 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
     }
 
+    /**
+     * Resume a paused subscription from the change-stream position it had read to, so that nothing written while it
+     * was paused is lost.
+     * <p>
+     * Delivery is <i>at least once</i> across a pause: an event whose handler had not finished when the subscription
+     * was paused, and every event another consumer of the same subscription id handled in the meantime, is handed to
+     * this handler again on resume. That is deliberate, since wasted work is the cheaper mistake, and it means
+     * handlers must be idempotent. A subscription that had not received anything yet has no position to resume from
+     * and starts at the present instead.
+     *
+     * @see #pauseSubscription(String)
+     */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         if (shutdown) {
@@ -427,6 +439,13 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         return new NativeMongoSubscription(subscriptionId, startedLatch);
     }
 
+    /**
+     * Pause an individual subscription. The change stream behind it is closed, but the position it has read to is
+     * kept, so {@link #resumeSubscription(String)} continues from there and events written while it was paused are
+     * delivered rather than skipped.
+     *
+     * @see #resumeSubscription(String)
+     */
     @Override
     public synchronized void pauseSubscription(String subscriptionId) {
         if (shutdown) {
