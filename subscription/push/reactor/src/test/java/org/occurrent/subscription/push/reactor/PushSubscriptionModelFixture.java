@@ -17,6 +17,8 @@
 package org.occurrent.subscription.push.reactor;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.occurrent.tck.subscription.reactor.BlockingSubscriptionOverReactive;
@@ -59,6 +61,15 @@ class PushSubscriptionModelFixture implements SubscriptionModelFixture {
     @Override
     public boolean retriesAFailingHandler() {
         return false;
+    }
+
+    /**
+     * A push sink has no start position at all, it just forwards whatever arrives, so any checkpoint is equally
+     * honest here. {@code GlobalCheckpoint.of(0)} is the obvious nothing.
+     */
+    @Override
+    public Checkpoint aCheckpointToStartFrom() {
+        return GlobalCheckpoint.of(0);
     }
 
     /**

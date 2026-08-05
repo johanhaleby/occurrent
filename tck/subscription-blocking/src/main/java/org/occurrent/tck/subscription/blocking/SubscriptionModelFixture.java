@@ -18,9 +18,14 @@ package org.occurrent.tck.subscription.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * What a {@link SubscriptionModel} implementation hands the conformance suites.
@@ -99,6 +104,70 @@ public interface SubscriptionModelFixture {
      */
     default boolean acceptsSeveralSubscriptions() {
         return true;
+    }
+
+    /**
+     * Which of the four ways of saying where a subscription starts this model accepts.
+     * <p>
+     * Every accepted variant owes a subscription that receives what is published after it, and every variant left out
+     * owes an {@link IllegalArgumentException} from {@code subscribe}. Both halves are asserted, so leaving a variant
+     * out is a claim the model has to live up to rather than a way of not being asked about it.
+     * <p>
+     * Accepting a variant is not the same as acting on it. A model that dispatches events as they arrive has no
+     * position to start from and its own javadoc says it ignores the one it is given, which is still an accepted
+     * variant here: what the suite holds it to is that the subscription works, not that the position moved anything.
+     * A model that cannot honour a position and refuses it instead owes the refusal, which is what
+     * {@code CatchupThenPushSubscriptionModel} does with every variant but
+     * {@link StartAtVariant#SUBSCRIPTION_MODEL_DEFAULT}, since it replays a whole history and has nothing to apply a
+     * caller's position to.
+     * <p>
+     * The default is all four, because that is what every Occurrent model but that one does.
+     */
+    default Set<StartAtVariant> acceptedStartAtVariants() {
+        return EnumSet.allOf(StartAtVariant.class);
+    }
+
+    /**
+     * A checkpoint this model can be started from, used to build the {@link StartAtVariant#CHECKPOINT} start position.
+     * <p>
+     * Hand back a position at or before the present, since the suite starts a subscription there and then expects
+     * everything published afterwards to arrive. A model reading a change stream should answer with what it reports
+     * from {@code globalCheckpoint()}, which is the position a catch-up handover would use. A model that ignores the
+     * start position may answer with anything, and {@code GlobalCheckpoint.of(0)} is the obvious nothing.
+     * <p>
+     * Asked of the fixture rather than of the model because {@code SubscriptionModel} has no member that reports one:
+     * only the checkpoint-aware models do, and this suite runs against the rest as well.
+     */
+    Checkpoint aCheckpointToStartFrom();
+
+    /**
+     * The answer for a model that reports a position but is allowed to answer null, which most of them are: hand back
+     * what it reported, or the global position zero when it reported nothing.
+     * <p>
+     * A convenience rather than a default on {@link #aCheckpointToStartFrom()}, which stays abstract on purpose. A
+     * default would let a model that really does read a position inherit "position zero" by forgetting to override,
+     * and a model reading a change stream treats a position it does not recognise as "start where you would have
+     * started anyway", so the suite would pass while testing nothing.
+     */
+    static Checkpoint orGlobalPositionZero(@Nullable Checkpoint reported) {
+        return reported == null ? GlobalCheckpoint.of(0) : reported;
+    }
+
+    /**
+     * Whether a subscription id this model has not seen before is replayed the whole history first, or starts where it
+     * was told to start.
+     * <p>
+     * Both answers are asserted. Answering {@code false}, which every change-stream and in-process model does, owes a
+     * new subscription that does <em>not</em> receive what was published before it existed. Answering {@code true} owes
+     * exactly the opposite, and it is a real contract rather than an accident of implementation: a model whose whole
+     * job is to bring a read model up to date replays first and goes live after, which is why it also refuses a
+     * caller-supplied start position in {@link #acceptedStartAtVariants()}.
+     * <p>
+     * Declared rather than asked because nothing on {@code SubscriptionModel} reports it, and finding out by
+     * subscribing would already have delivered whatever the answer is.
+     */
+    default boolean replaysHistoryToANewSubscription() {
+        return false;
     }
 
     /**

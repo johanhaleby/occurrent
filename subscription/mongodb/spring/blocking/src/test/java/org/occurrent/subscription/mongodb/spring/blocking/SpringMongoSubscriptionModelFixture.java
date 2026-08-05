@@ -22,6 +22,7 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -102,6 +103,15 @@ class SpringMongoSubscriptionModelFixture implements SubscriptionModelFixture {
     @Override
     public boolean retriesAFailingHandler() {
         return true;
+    }
+
+    /**
+     * This model reads a change stream and is checkpoint aware, so the honest answer is whatever it reports from
+     * its own {@code globalCheckpoint()}.
+     */
+    @Override
+    public Checkpoint aCheckpointToStartFrom() {
+        return SubscriptionModelFixture.orGlobalPositionZero(subscriptionModel.globalCheckpoint());
     }
 
     @Override

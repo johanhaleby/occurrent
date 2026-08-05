@@ -51,7 +51,9 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * <strong>What this suite deliberately does not assert.</strong> {@code globalCheckpoint()} documents null as
  * "an unresolvable problem", and the honest consequence is that such a model cannot sit behind catch-up at all.
  * Asserting that refusal needs a catch-up model to drive, which lives in a wrapper module the TCK does not and should
- * not depend on, so it belongs with the wrapper suites rather than here. See the amendment to ADR 94.
+ * not depend on, so it does not belong here. It landed instead as
+ * {@code StreamCatchupSubscriptionModelTest.a_model_that_reports_no_checkpoint_cannot_sit_behind_catchup}, in the
+ * module that owns the catch-up model. See the amendment to ADR 94.
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)

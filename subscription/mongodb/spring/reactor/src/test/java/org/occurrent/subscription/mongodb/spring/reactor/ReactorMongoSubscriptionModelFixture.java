@@ -21,6 +21,7 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.occurrent.tck.subscription.reactor.BlockingSubscriptionOverReactive;
@@ -31,6 +32,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.ReactiveTransactionManager;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -102,6 +104,21 @@ class ReactorMongoSubscriptionModelFixture implements SubscriptionModelFixture {
     @Override
     public boolean retriesAFailingHandler() {
         return true;
+    }
+
+    /**
+     * This model reads a change stream and is checkpoint aware, so the honest answer is whatever it reports from
+     * its own {@code globalCheckpoint()}. That {@code Mono} can complete empty when the server refuses
+     * {@code hostInfo}, which blocks to null here.
+     * <p>
+     * Bounded rather than a bare {@code block()}, copying {@code BlockingSubscriptionOverReactive}'s twenty seconds
+     * for this same call: it is one command against the store, so a model that has not answered by then is not going
+     * to, and an unbounded block would hang the shard for its whole timeout instead of failing the test.
+     */
+    @Override
+    public Checkpoint aCheckpointToStartFrom() {
+        return SubscriptionModelFixture.orGlobalPositionZero(
+                reactorSubscriptionModel.globalCheckpoint().block(Duration.ofSeconds(20)));
     }
 
     @Override

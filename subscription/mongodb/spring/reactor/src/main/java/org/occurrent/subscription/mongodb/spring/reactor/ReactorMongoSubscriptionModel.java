@@ -155,6 +155,11 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         // purpose, since a cold publisher delivers its failure to the subscriber. The result is discarded: the real
         // options are built per (re)subscribe with the tracked start position.
         ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, ChangeStreamOptions.builder());
+        // And the start position, which was the other half of #524 and stayed lazy when the filter was fixed. A
+        // checkpoint this model cannot parse failed inside the Flux.defer below, where shouldRestart sends it round the
+        // unbounded retry forever: waitUntilStarted() never answers and isRunning(id) keeps saying yes. A dynamic
+        // position is a no-op in there, for a reason checkStartPosition documents.
+        MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(ReactorMongoSubscriptionModel.class));
         return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action);
     }
 

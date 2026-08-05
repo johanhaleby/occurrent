@@ -199,6 +199,11 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         // caller holding a subscription that never delivered while the retry wrapper re-threw the same
         // IllegalArgumentException forever. SpringMongoSubscriptionModel always refused it here.
         List<Bson> pipeline = createPipeline(timeRepresentation, filter);
+        // The start position, for the same reason and with the same history. A checkpoint this model cannot parse used
+        // to fail down in newInternalSubscription on the dispatcher thread, where the retry wrapper re-threw it forever
+        // and the caller was left holding a subscription whose latch never counted down. A dynamic position is a no-op
+        // in there, for a reason checkStartPosition documents.
+        MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(NativeMongoSubscriptionModel.class));
 
         CountDownLatch subscriptionStartedLatch = new CountDownLatch(1);
         AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);

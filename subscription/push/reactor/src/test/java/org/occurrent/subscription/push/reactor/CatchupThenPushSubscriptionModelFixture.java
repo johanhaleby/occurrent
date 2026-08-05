@@ -17,11 +17,15 @@
 package org.occurrent.subscription.push.reactor;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.tck.subscription.blocking.StartAtVariant;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.occurrent.tck.subscription.reactor.BlockingSubscriptionOverReactive;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Feeds {@link CatchupThenPushSubscriptionModel} through {@link InMemoryReactivePositionOrderedReader}, the way the
@@ -29,15 +33,13 @@ import java.util.List;
  * write listener forwards to the live feed: {@link #publish(List)} does both halves itself since the reader and the
  * live feed are separate constructor arguments here.
  * <p>
- * No blocking wiring of this model exists to mirror (phase 6 did not wire it: see the ORCHESTRATOR TCK notes), so
- * every declaration below is derived directly from this model's own source, not copied from a sibling.
+ * Every declaration below is derived from this model's own source rather than copied from a sibling, and the blocking
+ * twin's fixture is derived the same way from the blocking model.
  * <p>
- * This fixture backs the introspection and reactive-only suites ONLY. The general
- * {@code SubscriptionModelConformance} is deliberately NOT wired here yet: this model's documented contract replays
- * the whole history to every NEW subscription id, so the suite's fresh-subscription-starts-now assumption fails on a
- * cancelled-then-recreated subscription for a reason that is the model's declared {@code StartAt} behaviour, not a
- * bug. Wiring it needs the declared {@code StartAt}-restriction mechanism the phase 8 wrapper suites add (#395), the
- * same reason phase 6 left the blocking wrapper models to phase 8.
+ * This fixture now backs the general {@code SubscriptionModelConformance} as well as the introspection and
+ * reactive-only suites. Phase 7 held that wiring back because the suite assumed a fresh subscription starts at the
+ * present, which this model contradicts by contract, and there was no way to say so. The two declarations that say it
+ * are below.
  */
 class CatchupThenPushSubscriptionModelFixture implements SubscriptionModelFixture {
 
@@ -74,6 +76,37 @@ class CatchupThenPushSubscriptionModelFixture implements SubscriptionModelFixtur
     @Override
     public boolean retriesAFailingHandler() {
         return false;
+    }
+
+    /**
+     * Only reached for the refusal below, since {@code CHECKPOINT} is not an accepted variant here, and any checkpoint
+     * is as good as another for a model that rejects the whole variant before looking at the value.
+     */
+    @Override
+    public Checkpoint aCheckpointToStartFrom() {
+        return GlobalCheckpoint.of(0);
+    }
+
+    /**
+     * The one model in Occurrent that refuses a start position, and it refuses three of the four variants. It replays a
+     * whole history and then hands over to a live feed, so there is nothing for a caller's position to apply to, and
+     * {@code subscribe} rejects anything but the default rather than accepting a position it would then ignore. The
+     * refusal is on the variant rather than on what the variant resolves to, which is why a {@code Dynamic} resolving
+     * to the default is refused as well.
+     */
+    @Override
+    public Set<StartAtVariant> acceptedStartAtVariants() {
+        return Set.of(StartAtVariant.SUBSCRIPTION_MODEL_DEFAULT);
+    }
+
+    /**
+     * The other half of the same contract, and the reason phase 7 could not wire the general suite here. A subscription
+     * id this model has not seen before is replayed the whole history from the reader before it goes live, which is
+     * what the model is for: a read model built by an application that was not running when the events were written.
+     */
+    @Override
+    public boolean replaysHistoryToANewSubscription() {
+        return true;
     }
 
     /**

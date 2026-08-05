@@ -22,6 +22,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
@@ -36,6 +37,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.ReactiveTransactionManager;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
@@ -115,6 +117,21 @@ class ReactorDurableSubscriptionModelFixture implements SubscriptionModelFixture
     @Override
     public boolean retriesAFailingHandler() {
         return true;
+    }
+
+    /**
+     * The durable model passes {@code globalCheckpoint()} straight through to the wrapped catch-up model, which in
+     * turn passes it through to the underlying {@link ReactorMongoSubscriptionModel}, so the honest answer is what
+     * that reports. Its {@code Mono} can complete empty when the server refuses {@code hostInfo}, which blocks to
+     * null here.
+     * <p>
+     * Bounded rather than a bare {@code block()}, copying {@code BlockingSubscriptionOverReactive}'s twenty seconds
+     * for this same call: it is one command against the store, so a model that has not answered by then is not going
+     * to, and an unbounded block would hang the shard for its whole timeout instead of failing the test.
+     */
+    @Override
+    public Checkpoint aCheckpointToStartFrom() {
+        return SubscriptionModelFixture.orGlobalPositionZero(durableModel.globalCheckpoint().block(Duration.ofSeconds(20)));
     }
 
     @Override
