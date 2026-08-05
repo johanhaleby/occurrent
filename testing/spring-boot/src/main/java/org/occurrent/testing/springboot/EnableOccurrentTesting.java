@@ -52,12 +52,21 @@ import java.lang.annotation.Target;
  * and catch-up it actually uses.
  * <p>
  * Everything this adds is available without Spring by constructing the extension directly, see
- * {@link org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension#stoppedByDefault}.
+ * {@link org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension#stoppedByDefault} or, on the reactive
+ * stack, {@link org.occurrent.testing.junit.reactor.OccurrentSubscriptionsExtension#stoppedByDefault}.
+ * <p>
+ * A reactive application gets an {@code org.occurrent.testing.junit.reactor.OccurrentSubscriptionsExtension} bean
+ * instead, which is autowired the same way, once {@code occurrent-testing-junit-jupiter-reactor} is a test dependency.
+ * Adding that artifact rather than the blocking one, or both for an application that runs both stacks, is the opt-in.
+ * {@link OccurrentTestingImportSelector} decides which configuration this annotation imports by checking the
+ * classpath. Whichever context is present, every {@code SubscriptionModelLifeCycle} bean in it is stopped, because a
+ * Spring context can hold more than one life-cycle bearing model, for example a durable model and a
+ * {@code SynchronousSubscriptionModel}, and deny-by-default means stopping every one of them.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 @Inherited
-@Import(OccurrentTestingConfiguration.class)
+@Import(OccurrentTestingImportSelector.class)
 public @interface EnableOccurrentTesting {
 }

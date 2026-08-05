@@ -240,6 +240,85 @@ class OccurrentSubscriptionsExtensionTest {
         assertThat(received).hasSize(1);
     }
 
+    @Test
+    void two_models_are_both_stopped_and_started() {
+        SynchronousSubscriptionModel synchronousModel = new SynchronousSubscriptionModel();
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        synchronousModel.subscribe("order-projection", cloudEvent -> received.add(cloudEvent.getId()));
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel, synchronousModel);
+        runBeforeEach(extension);
+
+        synchronousModel.dispatch(List.of(event()));
+        assertThat(received)
+                .as("stoppedByDefault must stop every model it is given, not only the first")
+                .isEmpty();
+
+        extension.start("order-projection");
+        synchronousModel.dispatch(List.of(event()));
+        assertThat(received).hasSize(1);
+
+        synchronousModel.shutdown();
+    }
+
+    @Test
+    void start_finds_the_id_on_whichever_model_owns_it() {
+        SynchronousSubscriptionModel synchronousModel = new SynchronousSubscriptionModel();
+        CopyOnWriteArrayList<CloudEvent> ordersReceived = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> projectionReceived = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe("orders", ordersReceived::add);
+        synchronousModel.subscribe("order-projection", cloudEvent -> projectionReceived.add(cloudEvent.getId()));
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel, synchronousModel);
+        runBeforeEach(extension);
+
+        extension.start("order-projection");
+        extension.start("orders");
+
+        eventStore.write("stream1", List.of(event()));
+        subscriptionModel.waitUntilAllEventsProcessed();
+        synchronousModel.dispatch(List.of(event()));
+
+        assertThat(ordersReceived).hasSize(1);
+        assertThat(projectionReceived).hasSize(1);
+
+        synchronousModel.shutdown();
+    }
+
+    @Test
+    void start_all_unions_the_ids_across_every_model() {
+        SynchronousSubscriptionModel synchronousModel = new SynchronousSubscriptionModel();
+        subscriptionModel.subscribe("orders", event -> {
+        });
+        synchronousModel.subscribe("order-projection", cloudEvent -> {
+        });
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel, synchronousModel);
+        runBeforeEach(extension);
+
+        assertThat(extension.startAll()).containsExactlyInAnyOrder("orders", "order-projection");
+
+        synchronousModel.shutdown();
+    }
+
+    @Test
+    void the_error_naming_available_ids_lists_every_model_that_can_say() {
+        SynchronousSubscriptionModel synchronousModel = new SynchronousSubscriptionModel();
+        subscriptionModel.subscribe("orders", event -> {
+        });
+        synchronousModel.subscribe("order-projection", cloudEvent -> {
+        });
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel, synchronousModel);
+        runBeforeEach(extension);
+
+        assertThatThrownBy(() -> extension.start("odrers"))
+                .hasMessageContaining("orders")
+                .hasMessageContaining("order-projection");
+
+        synchronousModel.shutdown();
+    }
+
     // A lifecycle with no IntrospectableSubscriptionModel anywhere in it, so startAll has nothing to enumerate.
     private static final class NotIntrospectableSubscriptionModel implements SubscriptionModelLifeCycle {
         @Override

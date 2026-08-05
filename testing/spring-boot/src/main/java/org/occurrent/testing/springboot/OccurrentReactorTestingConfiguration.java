@@ -16,8 +16,8 @@
 
 package org.occurrent.testing.springboot;
 
-import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
-import org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension;
+import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
+import org.occurrent.testing.junit.reactor.OccurrentSubscriptionsExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.annotation.Bean;
@@ -27,31 +27,32 @@ import org.springframework.context.annotation.Scope;
 import java.util.List;
 
 /**
- * Exposes an {@link OccurrentSubscriptionsExtension} over every blocking {@link SubscriptionModelLifeCycle} bean in
- * the application context, so a test can autowire the extension instead of constructing it from the subscription
- * models it first has to inject itself.
+ * The reactive counterpart of {@link OccurrentTestingConfiguration}: exposes a reactive
+ * {@link OccurrentSubscriptionsExtension} over every reactive {@link SubscriptionModelLifeCycle} bean in the
+ * application context.
  * <p>
- * Every such bean, not just one: a context can hold more than one life-cycle bearing model, for example a durable
- * model and a {@code SynchronousSubscriptionModel}, and deny-by-default means none of them run until a test asks.
+ * Registered under its own bean name, distinct from the blocking configuration's, so a mixed application using both
+ * stacks gets both extensions rather than one overwriting the other.
  *
  * @see EnableOccurrentTesting
  */
 @Configuration(proxyBeanMethods = false)
-public class OccurrentTestingConfiguration {
+public class OccurrentReactorTestingConfiguration {
 
     /**
-     * The extension that stops every subscription model before and after each test.
+     * The extension that stops every reactive subscription model before and after each test.
      * <p>
-     * It is a prototype bean because the extension accumulates the subscription ids a test told it about, and a test
-     * class registering it with {@code @RegisterExtension} should not inherit the ids another test class named.
+     * It is a prototype bean for the same reason the blocking one is: the extension accumulates the subscription ids a
+     * test told it about, and a test class registering it with {@code @RegisterExtension} should not inherit the ids
+     * another test class named.
      *
-     * @param subscriptionModels every {@code SubscriptionModelLifeCycle} bean in the application context
+     * @param subscriptionModels every reactive {@code SubscriptionModelLifeCycle} bean in the application context
      * @return an extension to register with {@code @RegisterExtension}
      * @throws IllegalStateException if the context has no such bean, so there is nothing to stop
      */
     @Bean
     @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
-    public OccurrentSubscriptionsExtension occurrentSubscriptionsExtension(ObjectProvider<SubscriptionModelLifeCycle> subscriptionModels) {
+    public OccurrentSubscriptionsExtension occurrentReactorSubscriptionsExtension(ObjectProvider<SubscriptionModelLifeCycle> subscriptionModels) {
         List<SubscriptionModelLifeCycle> models = subscriptionModels.orderedStream().toList();
         if (models.isEmpty()) {
             throw new IllegalStateException("No " + SubscriptionModelLifeCycle.class.getSimpleName() + " bean found in "
