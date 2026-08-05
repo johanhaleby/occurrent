@@ -60,10 +60,26 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * {@link SubscriptionModelLifeCycle}) and {@link CheckpointAwareSubscriptionModel}, so a {@code Durable(delegate)} chain
  * composes uniformly and can be handed to
  * the reactive subscription DSLs and to lifecycle management, mirroring the blocking {@code DurableSubscriptionModel}.
- * The named {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} method reads events from the wrapped
- * model's plain (cold) {@link CheckpointAwareSubscriptionModel#subscribe(SubscriptionFilter, StartAt)} primitive,
- * resolving the start position from storage when the caller asks for the subscription-model default, and persisting the
- * position after each event per {@link ReactorDurableSubscriptionModelConfig}.
+ * The named {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} method behaves in one of two ways,
+ * decided by what the wrapped model offers.
+ * <p>
+ * When the wrapped model manages named subscriptions of its own, in other words when it is a
+ * {@link SubscriptionModel}, this model hands the subscription to it and adds only the durable position handling,
+ * exactly as the blocking {@code DurableSubscriptionModel} does. Everything the wrapped model already does for a named
+ * subscription therefore still applies, so an unsupported {@link SubscriptionFilter} is refused when
+ * {@code subscribe(..)} is called and a failing action is retried by the wrapped model rather than ending the
+ * subscription. Its life cycle is the wrapped model's life cycle, so pausing, resuming, cancelling, stopping and
+ * starting are all forwarded, and so is {@link #shutdown()}. Give each durable model its own wrapped model on this
+ * path: two durable models sharing one would stop and shut down each other's subscriptions.
+ * <p>
+ * When the wrapped model offers only the plain (cold)
+ * {@link CheckpointAwareSubscriptionModel#subscribe(SubscriptionFilter, StartAt)} primitive, which is what the reactor
+ * catch-up models do, this model drives that primitive itself and manages the life cycle. A failing action is not
+ * retried on that path and an unsupported filter is reported when the subscription starts rather than when it is
+ * created, because there is no named subscription underneath to inherit either from. See issue #547.
+ * <p>
+ * Either way the start position is resolved from storage when the caller asks for the subscription-model default, and
+ * the position is persisted after each event per {@link ReactorDurableSubscriptionModelConfig}.
  * <p>
  * Note that this implementation stores the checkpoint after _every_ action by default. If you have a lot of
  * events and duplication is not that much of a deal, consider changing this behavior by supplying an instance of
@@ -76,6 +92,14 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private final CheckpointAwareSubscriptionModel subscription;
     private final CheckpointStorage storage;
     private final ReactorDurableSubscriptionModelConfig config;
+    // Set when the wrapped model manages named subscriptions of its own, which is when this model hands the
+    // subscription to it instead of driving the cold primitive. Null for a model that only exposes the primitive,
+    // which is what the reactor catch-up models do.
+    private final @Nullable SubscriptionModel delegate;
+    // Only used when delegating, and only to answer subscriptionIds() for a wrapped model that cannot be asked. Every
+    // reactor model that carries a subscription id in this repository is also introspectable, so this is the answer for
+    // an out-of-tree one that is not.
+    private final Set<String> delegatedSubscriptionIds = ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<String, InternalSubscription> runningSubscriptions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions = new ConcurrentHashMap<>();
 
@@ -105,6 +129,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         this.subscription = requireNonNull(subscription, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.storage = requireNonNull(storage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         this.config = requireNonNull(config, ReactorDurableSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
+        this.delegate = subscription instanceof SubscriptionModel subscriptionModel ? subscriptionModel : null;
     }
 
     /**
@@ -124,18 +149,88 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
-        if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        if (delegate != null) {
+            // Deliberately outside this model's monitor. Reading the start position waits on the checkpoint store, and
+            // holding the monitor across that would let one slow read block every life cycle call, shutdown included.
+            // The wrapped model does its own locking, and this model keeps no state of its own on this path.
+            return subscribeByDelegating(delegate, subscriptionId, filter, startAt, action);
         }
-        if (shutdown) {
-            throw new IllegalStateException("Cannot start subscription because the subscription model is shutdown.");
+
+        synchronized (this) {
+            if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
+                throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+            }
+            if (shutdown) {
+                throw new IllegalStateException("Cannot start subscription because the subscription model is shutdown.");
+            }
+            return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action, null);
         }
-        return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action, null);
+    }
+
+    /**
+     * Hands the subscription to the wrapped model and only adds the durable position handling on top, mirroring the
+     * blocking {@code DurableSubscriptionModel}. The wrapped model keeps everything it already does for a named
+     * subscription, which is what makes an unsupported filter refused here in {@code subscribe(..)} and a failing
+     * action retried rather than fatal.
+     */
+    private Subscription subscribeByDelegating(SubscriptionModel delegate, String subscriptionId, @Nullable SubscriptionFilter filter,
+                                               StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        StartAt startAtToUse = durableStartAt(subscriptionId, startAt, delegate);
+        // A null startAtToUse means a dynamic StartAt opted out of starting, so the wrapped model gets the original
+        // position and the untouched action, and this model stays out of the way, exactly as the blocking twin does.
+        Subscription delegated = startAtToUse == null
+                ? delegate.subscribe(subscriptionId, filter, startAt, action)
+                : delegate.subscribe(subscriptionId, filter, startAtToUse, persistingAction(subscriptionId, action));
+        delegatedSubscriptionIds.add(subscriptionId);
+        return delegated;
+    }
+
+    // The caller's action with the checkpoint save behind it, which is the whole of what this model adds to a delivery.
+    private Function<CloudEvent, Mono<Void>> persistingAction(String subscriptionId, Function<CloudEvent, Mono<Void>> action) {
+        return cloudEvent -> action.apply(cloudEvent)
+                .then(Mono.defer(() -> config.persistCloudEventPositionPredicate.test(cloudEvent)
+                        ? storage.save(subscriptionId, getCheckpointOrThrowIAE(cloudEvent)).then()
+                        : Mono.empty()));
+    }
+
+    /**
+     * The reactor counterpart of the blocking {@code DurableSubscriptionModel#generateStartAtPositionFrom}. The
+     * subscription-model default becomes a dynamic {@link StartAt} so that the wrapped model asks for the position when
+     * it actually subscribes. That keeps this {@code subscribe(..)} synchronous, which is what lets the wrapped model
+     * refuse an unsupported filter to the caller instead of failing later where nobody is listening.
+     * <p>
+     * Returns {@code null} when a dynamic {@code StartAt} opted out of starting.
+     */
+    private @Nullable StartAt durableStartAt(String subscriptionId, StartAt startAt, SubscriptionModel delegate) {
+        if (startAt.isDefault()) {
+            // Awaited here, so that what the wrapped model receives is a position and not something it has to resolve
+            // later. It re-resolves the position whenever it restarts a change stream, and that runs on a scheduler
+            // thread where awaiting a reactive read is refused outright, which would leave a subscription that hit one
+            // transient storage error unable to ever start. Awaiting on this thread also reads the position before the
+            // subscription is registered, so one registered while the wrapped model is stopped begins from here rather
+            // than from wherever the feed has reached when it is finally started.
+            return resolveStartAt(subscriptionId, startAt, null).block();
+        } else if (startAt.isDynamic()) {
+            StartAt nextStartAt = startAt.get(new SubscriptionModelContext(ReactorDurableSubscriptionModel.class));
+            return nextStartAt == null ? null : durableStartAt(subscriptionId, nextStartAt, delegate);
+        }
+        return startAt;
+    }
+
+    // Where the feed is, read once and remembered, so a subscription that is not started yet can begin from here. A
+    // failed read is swallowed because the position is read again when the subscription starts.
+    private Mono<Checkpoint> capturePositionNow(String subscriptionId) {
+        return subscription.globalCheckpoint()
+                .onErrorResume(throwable -> {
+                    log.warn("Could not read the current position while registering subscription {}, it will be read again when the subscription starts", subscriptionId, throwable);
+                    return Mono.empty();
+                })
+                .cache();
     }
 
     private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt,
@@ -147,12 +242,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // Read where the feed is now and hold it, because starting this subscription later would otherwise begin
             // wherever the feed had reached by then, skipping everything written while it waited. Nothing is stored
             // until the subscription starts, so one that never starts leaves nothing behind.
-            Mono<Checkpoint> positionNow = subscription.globalCheckpoint()
-                    .onErrorResume(throwable -> {
-                        log.warn("Could not read the current position while registering subscription {}, it will be read again when the subscription starts", subscriptionId, throwable);
-                        return Mono.empty();
-                    })
-                    .cache();
+            Mono<Checkpoint> positionNow = capturePositionNow(subscriptionId);
             // Kept as this subscription's disposable so shutdown and cancellation stop a read that is still in flight.
             Disposable reading = positionNow.subscribe();
             InternalSubscription internalSubscription = new InternalSubscription(reading, currentStartAt, filter, action, Mono.never(), positionNow);
@@ -188,12 +278,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // event (per the config predicate) when persist is true. currentStartAt is advanced only after the action
     // completes so that pause/resume continues from the last delivered event rather than replaying or skipping.
     private Flux<Void> source(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action, AtomicReference<StartAt> currentStartAt, boolean persist, Sinks.Empty<Void> startedSink) {
+        Function<CloudEvent, Mono<Void>> delivery = persist ? persistingAction(subscriptionId, action) : action;
         return subscription.subscribe(filter, startAt)
                 .doOnSubscribe(__ -> startedSink.tryEmitEmpty())
-                .concatMap(cloudEvent -> action.apply(cloudEvent)
-                        .then(Mono.defer(() -> persist && config.persistCloudEventPositionPredicate.test(cloudEvent)
-                                ? storage.save(subscriptionId, getCheckpointOrThrowIAE(cloudEvent)).then()
-                                : Mono.empty()))
+                .concatMap(cloudEvent -> delivery.apply(cloudEvent)
                         .doOnSuccess(unused -> currentStartAt.set(StartAt.checkpoint(getCheckpointOrThrowIAE(cloudEvent)))));
     }
 
@@ -225,6 +313,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public synchronized void pauseSubscription(String subscriptionId) {
+        if (delegate != null) {
+            delegate.pauseSubscription(subscriptionId);
+            return;
+        }
         if (shutdown) {
             throw new IllegalStateException(ReactorDurableSubscriptionModel.class.getSimpleName() + " is shutdown");
         } else if (isPaused(subscriptionId)) {
@@ -242,6 +334,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
+        if (delegate != null) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
         if (shutdown) {
             throw new IllegalStateException(ReactorDurableSubscriptionModel.class.getSimpleName() + " is shutdown");
         } else if (isRunning(subscriptionId)) {
@@ -267,6 +362,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      */
     @Override
     public synchronized void cancelSubscription(String subscriptionId) {
+        if (delegate != null) {
+            delegate.cancelSubscription(subscriptionId);
+            delegatedSubscriptionIds.remove(subscriptionId);
+            deleteStoredCheckpoint(subscriptionId);
+            return;
+        }
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
         if (internalSubscription != null) {
             internalSubscription.disposable.dispose();
@@ -276,14 +377,23 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         if (pausedSubscription != null) {
             pausedSubscription.disposable.dispose();
         }
-        // Best-effort asynchronous cleanup of the stored position. cancelSubscription is void (fire-and-forget), so the
-        // delete runs on its own without blocking the caller.
+        deleteStoredCheckpoint(subscriptionId);
+    }
+
+    // Best-effort asynchronous cleanup of the stored position. cancelSubscription is void (fire-and-forget), so the
+    // delete runs on its own without blocking the caller.
+    private void deleteStoredCheckpoint(String subscriptionId) {
         storage.delete(subscriptionId).subscribe(unused -> {
         }, throwable -> log.warn("Failed to delete stored checkpoint for cancelled subscription {}", subscriptionId, throwable));
     }
 
     @Override
     public synchronized void shutdown() {
+        if (delegate != null) {
+            delegate.shutdown();
+            delegatedSubscriptionIds.clear();
+            return;
+        }
         shutdown = true;
         running = false;
         runningSubscriptions.values().forEach(internalSubscription -> internalSubscription.disposable.dispose());
@@ -294,6 +404,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public synchronized void stop() {
+        if (delegate != null) {
+            delegate.stop();
+            return;
+        }
         if (!shutdown) {
             running = false;
             // Snapshot the ids first: pauseSubscription mutates runningSubscriptions, and ConcurrentHashMap#forEach is
@@ -304,6 +418,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public synchronized void start(boolean resumeSubscriptionsAutomatically) {
+        if (delegate != null) {
+            delegate.start(resumeSubscriptionsAutomatically);
+            return;
+        }
         if (!shutdown) {
             running = true;
             if (resumeSubscriptionsAutomatically) {
@@ -315,16 +433,25 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     @Override
     public boolean isRunning() {
+        if (delegate != null) {
+            return delegate.isRunning();
+        }
         return running;
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
+        if (delegate != null) {
+            return delegate.isRunning(subscriptionId);
+        }
         return !shutdown && runningSubscriptions.containsKey(subscriptionId);
     }
 
     @Override
     public boolean isPaused(String subscriptionId) {
+        if (delegate != null) {
+            return delegate.isPaused(subscriptionId);
+        }
         return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
     }
 
@@ -335,6 +462,13 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      */
     @Override
     public synchronized Set<String> subscriptionIds() {
+        if (delegate != null) {
+            // The wrapped model owns the subscriptions now, so ask it when it can be asked. The ids handed to it
+            // through this model are the fallback for one that cannot.
+            return delegate instanceof IntrospectableSubscriptionModel introspectable
+                    ? introspectable.subscriptionIds()
+                    : Set.copyOf(delegatedSubscriptionIds);
+        }
         return Stream.concat(runningSubscriptions.keySet().stream(), pausedSubscriptions.keySet().stream())
                 .collect(Collectors.toUnmodifiableSet());
     }
