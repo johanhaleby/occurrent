@@ -44,6 +44,15 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.occurrent.tck.subscription.blocking.SubscriptionModelFixture.orGlobalPositionZero;
 
 /**
+ * <strong>Only {@code IntrospectableSubscriptionModelConformance} runs against this fixture today, so most of what it
+ * declares below is unasserted.</strong> The general {@code SubscriptionModelConformance} wiring is held back on
+ * issue 553, because this model accepts a subscription id that is already in use and accepts pausing a subscription
+ * that is not running, where the other four models refuse both. Until that is settled, treat
+ * {@code acceptedStartAtVariants()}, {@code aCheckpointToStartFrom()}, {@code deliversEventsPublishedWhilePaused()}
+ * and {@code retriesAFailingHandler()} here as reasoned claims that nothing checks, not as tested facts. Each one is
+ * derived from the source and says so, which is what makes them worth keeping, but a reader should not assume the
+ * suite has held this model to any of them.
+ * <p>
  * Wraps {@link CompetingConsumerSubscriptionModel} around exactly the stack its own class-level javadoc recommends:
  * a {@link DurableSubscriptionModel} persisting a checkpoint after every event, over a {@link SpringMongoSubscriptionModel}
  * reading a real change stream, under a real {@link SpringMongoLeaseCompetingConsumerStrategy} lease. One

@@ -53,6 +53,12 @@ import static org.occurrent.tck.subscription.blocking.SubscriptionModelConforman
  * <strong>Delivery here is at-least-once, not exactly-once.</strong> A model resuming from the last position it stored
  * rather than from just after it hands that event over a second time, and nothing in Occurrent promises otherwise, so
  * these assertions are about what must arrive and never about what must not repeat.
+ * <p>
+ * The 60 second class timeout is the same number the other suites use, and the margin here is thinner than it looks:
+ * the longest test chains three {@code DELIVERY_TIMEOUT} waits at 10 seconds each, and between them it tears a model
+ * down and builds another one, which against a real store means closing a change stream and opening a fresh one. That
+ * leaves about 30 seconds for two rebuilds. Raise this before raising {@code DELIVERY_TIMEOUT}, since a wait that
+ * outlives the class timeout reports a {@code TimeoutException} instead of naming the event that never arrived.
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -99,7 +105,10 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
         CloudEvent whileNothingWasRunning = ConformanceEvents.event("2", "NameWasChanged");
         publish(whileNothingWasRunning);
         RecordedEvents afterTheRestart = new RecordedEvents();
-        restarted.subscribe(id, afterTheRestart).waitUntilStarted(DELIVERY_TIMEOUT);
+        assertThat(restarted.subscribe(id, afterTheRestart).waitUntilStarted(DELIVERY_TIMEOUT))
+                .as("the rebuilt subscription must report started, or whichever branch runs below reports a missing "
+                        + "event as a checkpoint problem when it was really a subscription that never started")
+                .isTrue();
 
         if (restartable().resumesAfterARestart()) {
             List<CloudEvent> received = afterTheRestart.awaitUntil(

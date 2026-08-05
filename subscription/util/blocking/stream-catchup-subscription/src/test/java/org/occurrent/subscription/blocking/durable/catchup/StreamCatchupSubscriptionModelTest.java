@@ -49,6 +49,7 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -193,7 +194,10 @@ class StreamCatchupSubscriptionModelTest {
                 .as("and nothing may be replayed, because delivering the history and then silently never going live is "
                         + "worse than refusing: the read model would look up to date and stop moving")
                 .isEmpty();
-        assertThatThrownBy(() -> ((CatchupSubscription) started).delegatedSubscription().get())
+        // Bounded, because waitUntilStarted answering false does not prove the replay finished: it answers false on a
+        // timeout too. An unbounded get() would then wait for a replay that never ends, and a regression that blocks
+        // instead of throwing would hang the whole run rather than failing this test.
+        assertThatThrownBy(() -> ((CatchupSubscription) started).delegatedSubscription().get(5, TimeUnit.SECONDS))
                 .as("the reason has to reach whoever reads the log, or an operator sees a subscription that simply "
                         + "never started")
                 .hasRootCauseInstanceOf(IllegalStateException.class)
