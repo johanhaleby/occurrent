@@ -15,7 +15,18 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      * It can be started again using {@link #start}.
      * <p>
      * Every subscription that was running is left <i>paused</i>, so {@link #isPaused(String)} returns {@code true} for it,
-     * and {@link #resumeSubscription(String)} can bring it back on its own without starting the rest.
+     * and {@link #resumeSubscription(String)} can bring it back on its own without starting the rest: every other
+     * subscription {@code stop()} paused stays paused (its own {@link #isPaused(String)} and {@link #isRunning(String)}
+     * are unaffected) until it too is resumed or {@link #start} is called.
+     * <p>
+     * For a model that owns a single running/stopped flag, resuming that one subscription also reopens the model as
+     * a whole: {@link #isRunning()} reports {@code true} again as soon as the first subscription is resumed, since
+     * such a model has no state between "everything is stopped" and "the gate is open, and each subscription's own
+     * paused/running flag decides whether it uses it". Do not read a {@code true} {@link #isRunning()} after a
+     * partial resume as "every subscription that was running before {@code stop()} is delivering again" on such a
+     * model; check each one individually with {@link #isRunning(String)}. A model that layers its own gate on top of
+     * a delegate, like {@link ManualStartSubscriptionModel}, is not bound by this and documents its own
+     * {@link #isRunning()} answer.
      */
     void stop();
 
@@ -60,11 +71,17 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
     boolean isPaused(String subscriptionId);
 
     /**
-     * Resume a paused ({@link #pauseSubscription(String)}) subscription. This is useful for testing purposes when you want
+     * Resume a paused ({@link #pauseSubscription(String)} or {@link #stop()}) subscription. This is useful for testing purposes when you want
      * to write events to an event store and you want a particular subscription to receive these events (but you may have paused
      * others).
+     * <p>
+     * On a model that owns a single running/stopped flag, resuming a subscription that {@link #stop()} paused reopens
+     * the model-wide gate: {@link #isRunning()} reports {@code true} again, even though every other subscription
+     * {@code stop()} paused is left exactly as {@code stop()} left it, individually paused and not running, until it
+     * too is resumed or {@link #start} is called. See {@link #stop()} for why such a model has no state in between,
+     * and for the one documented exception.
      *
-     * @param subscriptionId The id of the subscription to pause.
+     * @param subscriptionId The id of the subscription to resume.
      * @throws IllegalArgumentException If subscription is not paused
      */
     Subscription resumeSubscription(String subscriptionId);
