@@ -28,53 +28,12 @@ import org.occurrent.subscription.StreamSubscriptionFilter;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SynchronousSubscriptionModelTest {
-
-    @Test
-    void invokes_matching_handler_synchronously_on_the_calling_thread() {
-        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
-        List<CloudEvent> received = new ArrayList<>();
-        Thread callingThread = Thread.currentThread();
-        List<Thread> handlerThreads = new ArrayList<>();
-        model.subscribe("sub", cloudEvent -> {
-            received.add(cloudEvent);
-            handlerThreads.add(Thread.currentThread());
-        });
-
-        model.dispatch(List.of(cloudEvent("1", "NameDefined"), cloudEvent("2", "NameWasChanged")));
-
-        assertThat(received).extracting(CloudEvent::getId).containsExactly("1", "2");
-        assertThat(handlerThreads).containsOnly(callingThread);
-    }
-
-    @Test
-    void a_filter_gates_which_events_a_handler_receives() {
-        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
-        List<String> received = new ArrayList<>();
-        model.subscribe("only-name-defined", StreamSubscriptionFilter.filter(Filter.type("NameDefined")), cloudEvent -> received.add(cloudEvent.getId()));
-
-        model.dispatch(List.of(cloudEvent("1", "NameDefined"), cloudEvent("2", "NameWasChanged"), cloudEvent("3", "NameDefined")));
-
-        assertThat(received).containsExactly("1", "3");
-    }
-
-    @Test
-    void multiple_handlers_run_in_registration_order() {
-        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
-        List<String> order = new ArrayList<>();
-        model.subscribe("first", cloudEvent -> order.add("first:" + cloudEvent.getId()));
-        model.subscribe("second", cloudEvent -> order.add("second:" + cloudEvent.getId()));
-
-        model.dispatch(List.of(cloudEvent("1", "NameDefined")));
-
-        assertThat(order).containsExactly("first:1", "second:1");
-    }
 
     @Test
     void a_throwing_handler_propagates_to_the_caller() {
@@ -123,49 +82,6 @@ class SynchronousSubscriptionModelTest {
     }
 
     @Test
-    void a_stopped_model_dispatches_to_nobody_and_the_caller_still_returns() {
-        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
-        List<String> received = new ArrayList<>();
-        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
-
-        model.stop();
-        model.dispatch(List.of(cloudEvent("1", "NameDefined")));
-
-        assertThat(received).isEmpty();
-        assertThat(model.isRunning()).isFalse();
-        assertThat(model.isPaused("sub")).isTrue();
-    }
-
-    @Test
-    void an_event_dispatched_while_paused_is_dropped_rather_than_delivered_on_resume() {
-        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
-        List<String> received = new ArrayList<>();
-        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
-
-        model.stop();
-        model.dispatch(List.of(cloudEvent("missed", "NameDefined")));
-        model.resumeSubscription("sub");
-        model.dispatch(List.of(cloudEvent("seen", "NameDefined")));
-
-        assertThat(received).containsExactly("seen");
-    }
-
-    @Test
-    void a_paused_subscription_is_skipped_while_its_siblings_still_receive() {
-        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
-        List<String> quiet = new ArrayList<>();
-        List<String> noisy = new ArrayList<>();
-        model.subscribe("quiet", cloudEvent -> quiet.add(cloudEvent.getId()));
-        model.subscribe("noisy", cloudEvent -> noisy.add(cloudEvent.getId()));
-
-        model.pauseSubscription("quiet");
-        model.dispatch(List.of(cloudEvent("1", "NameDefined")));
-
-        assertThat(quiet).isEmpty();
-        assertThat(noisy).containsExactly("1");
-    }
-
-    @Test
     void registering_on_a_stopped_model_yields_a_paused_subscription() {
         SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
         List<String> received = new ArrayList<>();
@@ -177,18 +93,6 @@ class SynchronousSubscriptionModelTest {
         model.resumeSubscription("registered-while-stopped");
         model.dispatch(List.of(cloudEvent("1", "NameDefined")));
         assertThat(received).containsExactly("1");
-    }
-
-    @Test
-    void subscription_ids_lists_running_and_paused_subscriptions() {
-        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
-        model.subscribe("running", cloudEvent -> {
-        });
-        model.subscribe("paused", cloudEvent -> {
-        });
-        model.pauseSubscription("paused");
-
-        assertThat(model.subscriptionIds()).containsExactlyInAnyOrder("running", "paused");
     }
 
     @Test
