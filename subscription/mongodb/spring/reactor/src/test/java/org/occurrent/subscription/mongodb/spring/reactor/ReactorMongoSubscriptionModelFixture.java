@@ -63,7 +63,9 @@ class ReactorMongoSubscriptionModelFixture implements SubscriptionModelFixture {
                 .build();
         this.eventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         this.reactorSubscriptionModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollectionName, timeRepresentation);
-        this.subscriptionModel = BlockingSubscriptionOverReactive.of(reactorSubscriptionModel);
+        // The checkpoint-aware factory, because this model genuinely is: the bridge then also answers the blocking
+        // CheckpointAwareSubscriptionModel, which is what lets CheckpointAwareSubscriptionModelConformance run.
+        this.subscriptionModel = BlockingSubscriptionOverReactive.ofCheckpointAware(reactorSubscriptionModel);
     }
 
     ReactorMongoSubscriptionModel reactorSubscriptionModel() {

@@ -19,8 +19,10 @@ package org.occurrent.tck.subscription.reactor;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -51,7 +53,7 @@ import static java.util.Objects.requireNonNull;
  * {@link ReactiveSubscriptionModelConformance} rather than here.
  */
 @NullMarked
-public final class BlockingSubscriptionOverReactive implements SubscriptionModel, IntrospectableSubscriptionModel {
+public class BlockingSubscriptionOverReactive implements SubscriptionModel, IntrospectableSubscriptionModel {
 
     /**
      * Above this, a timeout is treated as "wait forever". The blocking no-arg {@code waitUntilStarted()} default
@@ -60,6 +62,14 @@ public final class BlockingSubscriptionOverReactive implements SubscriptionModel
      * any bounded wait a suite is allowed to take.
      */
     private static final Duration PRACTICALLY_FOREVER = Duration.ofDays(365);
+
+    /**
+     * Bound on blocking for {@code globalCheckpoint()}. The blocking method the bridge implements has no timeout
+     * parameter, so the bound has to live here, and an unbounded {@code block()} would hang a suite instead of
+     * failing it. Twenty seconds copies the reactive-only suite's budget: the answer is a single command against the
+     * store, so a model that has not answered by then is not going to.
+     */
+    private static final Duration CHECKPOINT_TIMEOUT = Duration.ofSeconds(20);
 
     private final org.occurrent.subscription.api.reactor.SubscriptionModel subscriptionModel;
     private final org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel introspectable;
@@ -86,6 +96,43 @@ public final class BlockingSubscriptionOverReactive implements SubscriptionModel
     public static BlockingSubscriptionOverReactive of(org.occurrent.subscription.api.reactor.SubscriptionModel subscriptionModel,
                                                       org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel introspectable) {
         return new BlockingSubscriptionOverReactive(subscriptionModel, introspectable);
+    }
+
+    /**
+     * Bridges a model that can also report where the event feed is, so
+     * {@code CheckpointAwareSubscriptionModelConformance} can run against it. This is a separate factory rather than
+     * behaviour of the plain bridge on purpose: that suite treats implementing the blocking
+     * {@link CheckpointAwareSubscriptionModel} as the declaration itself, so a bridge that implemented it
+     * unconditionally would drag every bridged model through a suite only checkpoint-aware ones can answer.
+     * <p>
+     * A reactor model that completes {@code globalCheckpoint()} empty is mapped to the blocking {@code null}, which
+     * the blocking interface documents as "an unresolvable problem" and the suite asserts on both branches. That
+     * empty completion is a real answer in the wild, not a hypothetical: see issue #517.
+     */
+    public static <T extends org.occurrent.subscription.api.reactor.SubscriptionModel
+            & org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel
+            & org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel> BlockingSubscriptionOverReactive ofCheckpointAware(T subscriptionModel) {
+        requireNonNull(subscriptionModel, "Reactive subscription model cannot be null");
+        return new CheckpointAwareBridge(subscriptionModel, subscriptionModel, subscriptionModel);
+    }
+
+    private static final class CheckpointAwareBridge extends BlockingSubscriptionOverReactive implements CheckpointAwareSubscriptionModel {
+
+        private final org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel checkpointAware;
+
+        private CheckpointAwareBridge(org.occurrent.subscription.api.reactor.SubscriptionModel subscriptionModel,
+                                      org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel introspectable,
+                                      org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel checkpointAware) {
+            super(subscriptionModel, introspectable);
+            this.checkpointAware = checkpointAware;
+        }
+
+        @Override
+        public @Nullable Checkpoint globalCheckpoint() {
+            // blockOptional rather than block: an empty completion is a documented answer (issue #517), and it maps
+            // to the blocking null rather than to an error.
+            return checkpointAware.globalCheckpoint().blockOptional(CHECKPOINT_TIMEOUT).orElse(null);
+        }
     }
 
     // Subscribable
