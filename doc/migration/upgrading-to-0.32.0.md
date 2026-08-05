@@ -388,3 +388,8 @@ the message: implement the reactor `SubscriptionModel` on your model, the way ev
 does, and the composition inherits its retry and validation. If you cannot, subscribe to the catch-up model's cold
 `Flux` directly and manage the delivery yourself, which is what the old path silently did for you without the
 resilience you probably assumed it had.
+
+Only the named `subscribe(..)` paths refuse. The model-wide life-cycle methods stay safe on such a composition:
+`shutdown()` (a Spring context close calls it through `destroyMethod`) and `stop()` are no-ops, `isRunning()` answers
+`false`, and cancelling an id the composition never knew is ignored, so an application that keeps the cold-only
+composition but never subscribes by name still starts, health-checks, and shuts down cleanly.

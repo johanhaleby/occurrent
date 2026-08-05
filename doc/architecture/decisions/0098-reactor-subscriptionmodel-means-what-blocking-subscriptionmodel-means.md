@@ -73,9 +73,15 @@ a position-writing store kept an unguarded delivery pipeline. The promotion give
 wrapped model's own named `subscribe(..)`, so retry and synchronous filter refusal are inherited rather than
 reimplemented, and forwards the life cycle to the wrapped model, which is a real life cycle rather than an invented
 one. The named machinery lives once, in `NamedCatchupSupport` beside the shared replay pipeline. The named path
-requires the wrapped model to be named itself; over a cold-only wrapped model it refuses loudly with the remediation
-in the message, because the alternative is a second copy of the named-over-cold driver that
-`ReactorDurableSubscriptionModel` already owns. The cold `Flux` primitive is unchanged and stays the contract for
+requires the wrapped model to be named itself; over a cold-only wrapped model the subscribe paths refuse loudly with
+the remediation in the message (the model-wide life-cycle calls stay safe no-ops there, so a Spring context close or a
+health check never throws for a capability the application did not use), because the alternative is a second copy of
+the named-over-cold driver that `ReactorDurableSubscriptionModel` already owns. Life-cycle semantics for an in-flight
+replay: a pause hands over paused (blocking parity); a stop aborts the replay without handing over and parks the
+subscription for relaunch on `start(..)`, replaying from its original position, which is deliberately SAFER than the
+blocking catch-up model's abandon-on-stop -- the blocking composition never notices that abandonment because its
+durable model parks subscriptions before the catch-up model sees them, a gate the delegating path here does not run
+through. The cold `Flux` primitive is unchanged and stays the contract for
 feeds. See ADR 101 for the staged decision this completes.
 
 **`CatchupThenPushSubscriptionModel` gains it, and the `DcbSubscriptionModelAdapter` gate is unaffected.** ORCHESTRATOR
