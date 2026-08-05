@@ -24,73 +24,36 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>occurrent-testing-spring-boot</artifactId>
+    <artifactId>occurrent-testing-junit-jupiter-reactor</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
-        <!--
-          Both neutral leaves are optional. Adding one, or both, as a test dependency is how an application opts a
-          stack into @EnableOccurrentTesting; OccurrentTestingImportSelector checks the classpath at import time to
-          decide which configuration, or both, to register. A blocking-only application never pulls in reactor-core
-          this way, and a reactive-only one never pulls in the blocking subscription API.
-        -->
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-testing-junit-jupiter-blocking</artifactId>
-            <version>${project.version}</version>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-api-blocking</artifactId>
-            <version>${project.version}</version>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-testing-junit-jupiter-reactor</artifactId>
-            <version>${project.version}</version>
-            <optional>true</optional>
-        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-api-reactor</artifactId>
             <version>${project.version}</version>
-            <optional>true</optional>
         </dependency>
         <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-context</artifactId>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
         </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib</artifactId>
+            <optional>true</optional>
+        </dependency>
 
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-inmemory</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-inmemory</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-synchronous-reactor</artifactId>
             <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-test</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -104,4 +67,27 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jetbrains.dokka</groupId>
+                        <artifactId>dokka-maven-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

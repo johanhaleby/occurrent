@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-package org.occurrent.testing.junit.blocking;
+package org.occurrent.testing.junit.reactor;
 
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
-import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
-import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -34,15 +34,24 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * Stops every subscription model before and after each test, so a test only runs the subscriptions it names with
- * {@link #start(String)}. A test that writes events then cannot race a subscription it never asked for.
+ * The reactive counterpart of the blocking {@code OccurrentSubscriptionsExtension}: stops every subscription model
+ * before and after each test, so a test only runs the subscriptions it names with {@link #start(String)}. A test that
+ * writes events then cannot race a subscription it never asked for.
  * <p>
  * Stopping after each test matters because a Spring test context is cached across test classes, so a subscription one
  * class started would otherwise still be running for the next.
  * <p>
- * Accepts more than one subscription model, because a Spring context can have two life-cycle bearing ones, for example
- * a durable model and a {@code SynchronousSubscriptionModel}. Every model given is stopped and resumed the same way; a
- * subscription id is looked for across all of them.
+ * <strong>Two differences from the blocking twin, both forced by the reactive types.</strong> Resuming a subscription
+ * waits on {@link Subscription#waitUntilStarted()}, and clearing a checkpoint waits on
+ * {@link CheckpointStorage#delete(String)}, both of which return a {@code Mono} rather than blocking the calling
+ * thread. A JUnit {@code beforeEach} is synchronous, so this extension blocks on them itself rather than asking every
+ * test to. And there is no reactive {@code DelegatingSubscriptionModel} to unwrap, so introspection is a plain
+ * {@code instanceof} check on the model handed in, through {@link IntrospectableSubscriptionModel}, rather than the
+ * recursive {@code of(..)} the blocking side has.
+ * <p>
+ * Accepts more than one subscription model, because a reactive Spring context typically has two life-cycle bearing
+ * ones, the durable model and a {@code SynchronousSubscriptionModel}. Every model given is stopped and resumed the
+ * same way; a subscription id is looked for across all of them.
  */
 public final class OccurrentSubscriptionsExtension implements BeforeEachCallback, AfterEachCallback {
 
@@ -163,7 +172,8 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
                     + "them for. " + describeAvailableIds() + " Name the subscriptions with alwaysStart(String...), or "
                     + "use a model implementing " + IntrospectableSubscriptionModel.class.getSimpleName() + ".");
         }
-        ids.forEach(storage::delete);
+        // Sequential rather than fanned out, since this runs once per test and a flush is not a race to win.
+        ids.forEach(id -> storage.delete(id).block());
     }
 
     @Override
@@ -200,15 +210,15 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
         return Set.copyOf(ids);
     }
 
-    // Tries each model in turn, since the id's owner is not known up front, and none of the DSL wrappers forward
-    // introspection to say so directly.
+    // Tries each model in turn, since the id's owner is not known up front, and none of the reactive DSL wrappers
+    // forward introspection to say so directly.
     private Subscription resumeAndWait(String subscriptionId) {
         List<IllegalArgumentException> failures = new ArrayList<>();
         for (SubscriptionModelLifeCycle model : subscriptionModels) {
             try {
                 Subscription subscription = model.resumeSubscription(subscriptionId);
                 knownIds.add(subscriptionId);
-                subscription.waitUntilStarted();
+                subscription.waitUntilStarted().block();
                 return subscription;
             } catch (IllegalArgumentException e) {
                 failures.add(e);
@@ -236,11 +246,10 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     private Optional<Set<String>> modelSubscriptionIds() {
         Set<String> ids = new LinkedHashSet<>();
         for (SubscriptionModelLifeCycle model : subscriptionModels) {
-            Optional<IntrospectableSubscriptionModel> introspectable = IntrospectableSubscriptionModel.of(model);
-            if (introspectable.isEmpty()) {
+            if (!(model instanceof IntrospectableSubscriptionModel introspectable)) {
                 return Optional.empty();
             }
-            ids.addAll(introspectable.get().subscriptionIds());
+            ids.addAll(introspectable.subscriptionIds());
         }
         return Optional.of(ids);
     }
