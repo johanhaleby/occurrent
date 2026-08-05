@@ -25,6 +25,12 @@ public interface CompetingConsumerStrategy {
     /**
      * Unregister a competing consumer, it'll no longer receive events. If this competing consumer currently has lock to receive events,
      * the lock will be handed to another subscriber for the same subscription.
+     * <p>
+     * The strategy forgets the consumer, so it takes another {@link #registerCompetingConsumer(String, String)} to bring
+     * it back: it will not acquire the lock again on its own, however long it waits and whether or not anybody else takes
+     * the lock in the meantime. Use this when something has to happen before the consumer may consume again, the way a
+     * subscription paused by a user needs an explicit resume. Where the consumer should come back by itself, use
+     * {@link #releaseCompetingConsumer(String, String)} instead.
      *
      * @param subscriptionId The id of of the subscription
      * @param subscriberId   The unique of of the subscriber
@@ -33,8 +39,20 @@ public interface CompetingConsumerStrategy {
 
 
     /**
-     * Release a competing consumer, it'll no longer receive events. If this competing consumer currently has lock to receive events,
-     * the lock will be handed to another subscriber for the same subscription.
+     * Release a competing consumer, it'll no longer receive events. If this competing consumer currently has the lock to
+     * receive events, the lock becomes available to the subscribers competing for the same subscription.
+     * <p>
+     * The consumer stays registered, so it remains one of those subscribers and the strategy may grant it the lock again
+     * on its own, with nobody calling {@link #registerCompetingConsumer(String, String)} a second time. This is the
+     * weaker of the two ways to give a lock up, and the one to use when the consumer should come back by itself, the way
+     * a subscription paused because a rival took the lock does. Where the consumer must not consume again until
+     * something explicitly says so, use {@link #unregisterCompetingConsumer(String, String)} instead, which also
+     * guarantees that somebody else gets the lock.
+     * <p>
+     * Two things follow, and they are the difference between the two methods rather than wording. The subscriber that
+     * released does not hold the lock from here on, so {@link #hasLock(String, String)} answers {@code false} for it
+     * until it is granted the lock again. And the lock does not stay unheld: a subscriber competing for this
+     * subscription ends up with it, which may be the one that released it if it wins the competition again.
      *
      * @param subscriptionId The id of of the subscription
      * @param subscriberId   The unique of of the subscriber
@@ -72,6 +90,11 @@ public interface CompetingConsumerStrategy {
 
     /**
      * A {@code CompetingConsumerListener} will be called when certain life-cycle events occurs.
+     * <p>
+     * It is told what changed rather than what is currently true, so a subscriber is told once each time the answer for
+     * it moves and not once per round of whatever coordination the strategy runs. A listener may therefore treat every
+     * call as something to act on. Registering a listener is optional: a consumer that would rather ask than be told
+     * uses {@link CompetingConsumerStrategy#hasLock(String, String)}, which answers the same thing.
      */
     interface CompetingConsumerListener {
 

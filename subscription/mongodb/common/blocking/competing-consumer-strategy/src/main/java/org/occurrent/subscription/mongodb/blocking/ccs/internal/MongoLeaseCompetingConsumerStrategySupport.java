@@ -59,9 +59,22 @@ public class MongoLeaseCompetingConsumerStrategySupport {
 
 
     public MongoLeaseCompetingConsumerStrategySupport(Duration leaseTime, Clock clock, RetryStrategy retryStrategy) {
+        this(leaseTime, clock, retryStrategy, ScheduledRefresh.auto());
+    }
+
+    /**
+     * Takes the {@link ScheduledRefresh} rather than building one, so that a test can hold the refresh itself and run
+     * it when it chooses. Together with the {@link Clock} this class already takes, that makes the lease's own timing
+     * testable without any real time passing: move the clock past the lease and run the refresh, rather than sleeping
+     * for the lease and hoping the background thread got there.
+     * <p>
+     * Package-private on purpose. {@code ScheduledRefresh} is not public, and neither strategy's builder exposes a
+     * refresh schedule, so this widens nothing a user can reach.
+     */
+    MongoLeaseCompetingConsumerStrategySupport(Duration leaseTime, Clock clock, RetryStrategy retryStrategy, ScheduledRefresh scheduledRefresh) {
         this.clock = clock;
         this.leaseTime = leaseTime;
-        this.scheduledRefresh = ScheduledRefresh.auto();
+        this.scheduledRefresh = scheduledRefresh;
         this.running = true;
         this.competingConsumerListeners = Collections.newSetFromMap(new ConcurrentHashMap<>());
         this.competingConsumers = new ConcurrentHashMap<>();
@@ -123,7 +136,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     /**
-     * Remove the lock use by this
+     * Give up the lease this subscriber holds, while keeping it a candidate for the lease. The scheduled refresh takes
+     * it back on its own if nobody else has taken it in the meantime, which is what a subscription paused by the system
+     * rather than by a user rests on, since nothing will explicitly resume it.
      */
     public void releaseCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId) {
         releaseCompetingConsumer(collection, subscriptionId, subscriberId, null);
@@ -134,9 +149,22 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
         logDebug("Releasing consumer (subscriberId={}, subscriptionId={}, suppliedStatus={})", subscriberId, subscriptionId, suppliedStatus);
 
+        CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
         final Status status;
         if (suppliedStatus == null) {
-            status = competingConsumers.get(new CompetingConsumer(subscriptionId, subscriberId));
+            status = competingConsumers.get(competingConsumer);
+            if (status == Status.LOCK_ACQUIRED) {
+                // A release keeps the consumer in the map, so it stays a candidate, but the lease below is about to go
+                // and it does not have it any more. Leaving the status alone would make hasLock answer yes for a
+                // subscriber that no longer receives events, and would make the next refresh find its commit rejected
+                // and report the loss a second time.
+                //
+                // LOCK_RELEASED rather than LOCK_NOT_ACQUIRED so that the next refresh stands this consumer down for
+                // one round instead of racing straight back for the lease it just gave up. Nothing guarantees a rival
+                // wins that race, since both refresh on their own schedule, but a consumer that gave the lease up and
+                // took it back before anybody else had a chance to look has not given it up in any useful sense.
+                competingConsumers.put(competingConsumer, Status.LOCK_RELEASED);
+            }
         } else {
             status = suppliedStatus;
         }
@@ -191,6 +219,12 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                     competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId));
                     logDebug("Completed calling onConsumeProhibited for all listeners (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
                 }
+            } else if (status == Status.LOCK_RELEASED) {
+                // The round this consumer stands down for after releasing. It is an ordinary candidate again from the
+                // next round on, so nothing is reported here: it neither holds the lease nor has just stopped holding
+                // it, and the release already told the listeners about that.
+                logDebug("Consumer stood down for this round after releasing (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
+                competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
             } else {
                 registerCompetingConsumer(collection, cc.subscriptionId, cc.subscriberId);
             }
@@ -201,7 +235,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     private enum Status {
-        LOCK_ACQUIRED, LOCK_NOT_ACQUIRED
+        LOCK_ACQUIRED, LOCK_NOT_ACQUIRED, LOCK_RELEASED
     }
 
     private static void logDebug(String message, @Nullable Object... params) {

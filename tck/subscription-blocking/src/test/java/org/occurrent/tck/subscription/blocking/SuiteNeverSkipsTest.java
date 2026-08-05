@@ -26,6 +26,7 @@ import org.junit.platform.testkit.engine.Events;
 import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.Duration;
@@ -101,6 +102,16 @@ class SuiteNeverSkipsTest {
     }
 
     @Test
+    void the_competing_consumer_suite_fails_every_test_against_a_strategy_that_honours_nothing() {
+        assertEveryTestFails(HonoursNothingCompetingConsumerConformance.class, "a strategy that honours nothing");
+    }
+
+    @Test
+    void the_competing_consumer_suite_passes_every_test_against_a_strategy_that_honours_everything() {
+        assertEveryTestPasses(HonoursEverythingCompetingConsumerConformance.class, "competing consumer strategy");
+    }
+
+    @Test
     void the_in_process_suite_fails_every_test_against_a_model_that_delivers_asynchronously() {
         // The one case where "honours nothing" is the wrong shape. This suite's whole subject is that delivery already
         // happened when publishing returned, so the model that must fail it is a working asynchronous one rather than a
@@ -115,6 +126,7 @@ class SuiteNeverSkipsTest {
                 .contains(CheckpointStorageConformance.class.getName(), SubscriptionModelConformance.class.getName(),
                         IntrospectableSubscriptionModelConformance.class.getName(),
                         CheckpointAwareSubscriptionModelConformance.class.getName(),
+                        CompetingConsumerStrategyConformance.class.getName(),
                         InProcessDeliveryConformance.class.getName());
 
         SortedMap<String, List<String>> offenders = SkipMechanismScan.of(SubscriptionModelConformance.class);
@@ -290,6 +302,66 @@ class SuiteNeverSkipsTest {
         @Override
         protected SubscriptionModelFixture createFixture() {
             return new WorkingSubscriptionModelFixture();
+        }
+    }
+
+    static class HonoursNothingCompetingConsumerConformance extends CompetingConsumerStrategyConformance {
+
+        @Override
+        protected CompetingConsumerStrategyFixture createFixture() {
+            return new CompetingConsumerStrategyFixture() {
+                @Override
+                public CompetingConsumerStrategy competingConsumerStrategy() {
+                    return NoopCompetingConsumerStrategy.INSTANCE;
+                }
+
+                @Override
+                public CompetingConsumerStrategy newCompetingConsumerStrategy() {
+                    return NoopCompetingConsumerStrategy.INSTANCE;
+                }
+
+                @Override
+                public Duration timeToConverge() {
+                    // Never waited out: every call into the strategy throws before the suite gets as far as waiting.
+                    return Duration.ofSeconds(1);
+                }
+            };
+        }
+    }
+
+    static class HonoursEverythingCompetingConsumerConformance extends CompetingConsumerStrategyConformance {
+
+        @Override
+        protected CompetingConsumerStrategyFixture createFixture() {
+            return new CompetingConsumerStrategyFixture() {
+
+                private final WorkingCompetingConsumerStrategy.Storage storage = new WorkingCompetingConsumerStrategy.Storage();
+                private final CompetingConsumerStrategy strategy = new WorkingCompetingConsumerStrategy(storage);
+
+                @Override
+                public CompetingConsumerStrategy competingConsumerStrategy() {
+                    return strategy;
+                }
+
+                @Override
+                public CompetingConsumerStrategy newCompetingConsumerStrategy() {
+                    return new WorkingCompetingConsumerStrategy(storage);
+                }
+
+                /**
+                 * Two orders of magnitude above this strategy's own round, since the bound is only paid in full by a
+                 * failure and a tight one would make the anti-skip run itself the flaky thing.
+                 */
+                @Override
+                public Duration timeToConverge() {
+                    return Duration.ofSeconds(5);
+                }
+
+                @Override
+                public void close() {
+                    strategy.shutdown();
+                }
+            };
         }
     }
 
