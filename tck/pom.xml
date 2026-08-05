@@ -36,6 +36,7 @@
         <module>eventstore-blocking</module>
         <module>eventstore-reactor</module>
         <module>subscription-blocking</module>
+        <module>subscription-reactor</module>
     </modules>
 
 </project>
