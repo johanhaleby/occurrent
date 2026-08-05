@@ -276,6 +276,11 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return cause instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
     }
 
+    /**
+     * Completes empty when the server prohibits the {@code hostInfo} command, which is what a shared Atlas
+     * cluster does. See {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} for what an empty completion
+     * means to a caller.
+     */
     @Override
     public Mono<Checkpoint> globalCheckpoint() {
         // Increment by 1 so the resume position lands after the most recently written event, matching
