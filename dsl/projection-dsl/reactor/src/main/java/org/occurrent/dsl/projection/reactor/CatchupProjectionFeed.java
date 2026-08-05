@@ -252,6 +252,37 @@ public final class CatchupProjectionFeed<E> {
     }
 
     /**
+     * Go live without a catch-up: skip the one-time replay and start delivering buffered live events. Use this
+     * instead of {@link #catchUp()} for a feed whose events are not in the local event store, so there is nothing to
+     * replay. No completion marker is recorded, since nothing was replayed, so a later {@link #catchUp()} still
+     * replays the full history.
+     * <p>
+     * Call once, the same as {@link #catchUp()}. A second call on the same feed does not error, but does nothing: it
+     * tries to subscribe this feed's live sink a second time, which the sink rejects because it accepts only one
+     * subscriber ever, and nothing surfaces that rejection to the caller.
+     *
+     * @return A {@link Mono} that completes once the feed is live.
+     */
+    public Mono<Void> goLive() {
+        return handover.catchUp(new ReactiveHandover.Source<>() {
+            @Override
+            public Mono<Boolean> isAlreadyCaughtUp() {
+                return Mono.just(true);
+            }
+
+            @Override
+            public Flux<DeliveredEvent<E>> replay() {
+                throw new AssertionError("isAlreadyCaughtUp() is true, so this must never be called.");
+            }
+
+            @Override
+            public Mono<Void> markCaughtUp() {
+                throw new AssertionError("isAlreadyCaughtUp() is true, so nothing here was caught up to mark.");
+            }
+        }).then();
+    }
+
+    /**
      * Stop a replay still in flight. It notices at its next event and unwinds without draining the live buffer, going
      * live, or recording the completion marker, so a partial replay is never recorded as a finished one and the next
      * {@link #catchUp()} replays the whole history again. A stop is not a failure: the feed stays usable rather than

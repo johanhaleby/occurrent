@@ -161,15 +161,28 @@ public @interface Projection {
     /**
      * Where the projection reads its events from. {@link Source#EVENT_STORE} (the default) uses the framework's
      * asynchronous catch-up and durable subscription models. {@link Source#PUSH} feeds the projection from an external
-     * push feed (RabbitMQ, Kafka, ...) instead, wrapped in a replay-then-push catch-up. Select the feed bean
-     * with {@link #subscriptionModel()} or {@link #subscriptionModelName()}. Its type decides how live events are
-     * delivered (a {@code PushSubscriptionModel} delivers CloudEvents, a {@code DomainEventFeed} delivers domain events
-     * directly). A push source is mutually exclusive with {@link Mode#SYNCHRONOUS}, and it rejects {@link #startAt()},
-     * {@link #startAtGlobalPosition()} and {@link #resumeBehavior()}, since the catch-up always replays from the
-     * beginning and where the live feed resumes is the broker's responsibility. {@link #startupMode()} <em>is</em>
-     * supported: set it to {@link StartupMode#BACKGROUND} to keep that replay off the startup path.
+     * push feed (RabbitMQ, Kafka, ...) instead, wrapped in a replay-then-push catch-up unless {@link #catchup()} is
+     * {@link Catchup#NONE}. Select the feed bean with {@link #subscriptionModel()} or {@link #subscriptionModelName()}.
+     * Its type decides how live events are delivered (a {@code PushSubscriptionModel} delivers CloudEvents, a
+     * {@code DomainEventFeed} delivers domain events directly). A push source is mutually exclusive with
+     * {@link Mode#SYNCHRONOUS}, and it rejects {@link #startAt()}, {@link #startAtGlobalPosition()} and
+     * {@link #resumeBehavior()}, since the catch-up always replays from the beginning and where the live feed resumes
+     * is the broker's responsibility. {@link #startupMode()} <em>is</em> supported under the default {@link #catchup()}:
+     * set it to {@link StartupMode#BACKGROUND} to keep that replay off the startup path.
      */
     Source source() default Source.EVENT_STORE;
+
+    /**
+     * Whether a {@link Source#PUSH} projection is backfilled from the event store before it goes live.
+     * {@link Catchup#FROM_EVENT_STORE} (the default) replays history once and hands over. {@link Catchup#NONE} takes
+     * live events only and touches no event store at all, which is what a projection fed by another application's
+     * broker needs, since the local event store holds none of those events. With a {@code PushSubscriptionModel} feed
+     * that skips the catch-up wrapper entirely, and with a {@code DomainEventFeed} the projection registers and goes
+     * live without ever reading history. {@link #startupMode()} is rejected together with {@link Catchup#NONE}, since
+     * there is no replay for it to move off the startup path. Setting this on a {@link Source#EVENT_STORE} projection
+     * is rejected, since that projection chooses its history with {@link #startAt()} instead.
+     */
+    Catchup catchup() default Catchup.FROM_EVENT_STORE;
 
     /**
      * The push feed bean to feed this projection when {@link #source()} is {@link Source#PUSH}, given as the bean's type

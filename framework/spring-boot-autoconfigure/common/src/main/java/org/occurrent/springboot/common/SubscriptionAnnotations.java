@@ -333,6 +333,23 @@ public final class SubscriptionAnnotations {
         }
     }
 
+    /**
+     * A bean a catching-up push subscription needs, or a failure that names the way out. Shared by {@code @Saga} and
+     * {@code @Projection} so the message is the same on both. An application whose push feed carries another
+     * application's events has no event store to replay and so has neither a reader nor a checkpoint marker bean,
+     * which is the application most likely to reach this, since catching up is the default. A bare
+     * {@code NoSuchBeanDefinitionException} would send it looking for a missing store rather than at
+     * {@code catchup = NONE}.
+     */
+    public static <T> T resolveCatchupBean(ApplicationContext applicationContext, String annotationName, Class<T> type, String id) {
+        T bean = applicationContext.getBeanProvider(type).getIfAvailable();
+        if (bean == null) {
+            throw new IllegalStateException(("%s '%s' with source=PUSH catches up from the event store before going live, which needs a %s bean, and there is none. " +
+                    "Set catchup = NONE if the feed carries events this application's event store does not hold, which is the case when another application writes them.").formatted(annotationName, id, type.getSimpleName()));
+        }
+        return bean;
+    }
+
     private static <E> @NonNull List<Class<E>> getConcreteEventTypes(String subscriptionId, Class<E> specifiedEventType) {
         final List<Class<E>> domainEventTypesToSubscribeTo;
         if (specifiedEventType.isSealed()) {

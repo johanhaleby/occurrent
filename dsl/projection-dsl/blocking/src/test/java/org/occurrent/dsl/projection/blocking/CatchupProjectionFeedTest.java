@@ -351,6 +351,53 @@ class CatchupProjectionFeedTest {
     }
 
     @Test
+    void go_live_delivers_buffered_events_without_ever_reading_history() {
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        // Throws if replay() is ever called, so a passing test proves goLive() never reads history.
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", projection(), repository, failingReader(), countedConverter(), Counted::eventId, null);
+
+        feed.accept(new Counted("1"));
+        feed.goLive();
+
+        assertThat(repo.get("counter")).isEqualTo(1);
+
+        feed.accept(new Counted("2"));
+        assertThat(repo.get("counter")).isEqualTo(2);
+    }
+
+    @Test
+    void go_live_writes_no_completion_marker_so_a_later_catch_up_still_replays_history() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        feed("counter", store, converter, new ConcurrentHashMap<>(), marker).goLive();
+
+        assertThat(marker.exists("counter")).isFalse();
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed("counter", store, converter, repo, marker).catchUp();
+
+        assertThat(repo.get("counter")).isEqualTo(2);
+    }
+
+    @Test
+    void calling_go_live_twice_is_harmless() {
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        CatchupProjectionFeed<Counted> feed = feed("counter", new InMemoryEventStore(), countedConverter(), repo, null);
+
+        feed.goLive();
+        feed.accept(new Counted("1"));
+        feed.goLive();
+        feed.accept(new Counted("2"));
+
+        assertThat(repo.get("counter")).isEqualTo(2);
+    }
+
+    @Test
     void a_null_event_id_fails_fast_instead_of_silently_dropping() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = countedConverter();
