@@ -153,6 +153,18 @@ class ProjectionAnnotationValidationTest {
     }
 
     @Test
+    void a_default_catchup_push_projection_with_no_reader_bean_fails_fast_naming_catchup_none() {
+        runner.withUserConfiguration(PushModelFeedConfiguration.class, PushModelStoreConfiguration.class, PushDefaultCatchupConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("@Projection 'push-default-catchup'")
+                    .hasMessageContaining("catches up from the event store before going live, which needs a PositionOrderedReader bean")
+                    .hasMessageContaining("Set catchup = NONE");
+        });
+    }
+
+    @Test
     void an_event_store_projection_that_sets_catchup_fails_fast_and_points_at_start_at() {
         runner.withUserConfiguration(EventStoreCatchupConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
@@ -443,6 +455,30 @@ class ProjectionAnnotationValidationTest {
 
     static class PushStartKnobsProjection {
         @Projection(id = "push-knobs", source = Source.PUSH, startAt = StartPosition.BEGINNING)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PushModelStoreConfiguration {
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, store::put);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class PushDefaultCatchupConfiguration {
+        @Bean
+        PushDefaultCatchupProjection pushDefaultCatchupProjection() {
+            return new PushDefaultCatchupProjection();
+        }
+    }
+
+    static class PushDefaultCatchupProjection {
+        @Projection(id = "push-default-catchup", source = Source.PUSH)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return countProjection();
         }
