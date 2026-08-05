@@ -163,7 +163,9 @@ public abstract class ReactiveSubscriptionModelConformance {
 
             fixture().publish(List.of(ConformanceEvents.event("2", "NameWasChanged")));
 
-            assertThat(ConformanceEvents.idsOf(recorded.awaitAtLeast(1, TIMEOUT)))
+            // The wait is for the later event itself, not a count: a retrying model records the redelivered "1"
+            // first, which would satisfy a count of one while "2" is still in flight.
+            assertThat(ConformanceEvents.idsOf(recorded.awaitUntil(events -> ConformanceEvents.idsOf(events).contains("2"), TIMEOUT)))
                     .as("a later event must still be delivered after an action failed, or one bad event ends the " +
                             "subscription. A retrying model may also redeliver the failed event first, which is why " +
                             "only the later event's arrival is asserted")
