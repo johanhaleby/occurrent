@@ -171,7 +171,16 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         // in-flight event, never skip one.
         Disposable disposable = resilientChangeStream(filter, currentStartAt, __ -> {
                 }, startedSink)
-                .concatMap(cloudEvent -> action.apply(cloudEvent)
+                // The action's own error is retried here, with the same backoff the change stream restarts with,
+                // mirroring the blocking models' RetryStrategy around the handler (no attempt cap by default). Without
+                // this the error passes retryWhen, which only guards the change stream above, and terminates the whole
+                // subscription: one bad delivery would end it while isRunning(id) said otherwise. Mono.defer, because
+                // a retry must re-invoke the action the way the blocking RetryStrategy re-calls the handler:
+                // resubscribing whatever Mono the first call returned would replay that attempt's failure forever.
+                .concatMap(cloudEvent -> Mono.defer(() -> action.apply(cloudEvent))
+                        .retryWhen(Retry.backoff(Long.MAX_VALUE, config.minBackoff)
+                                .maxBackoff(config.maxBackoff)
+                                .doBeforeRetry(retrySignal -> log.warn("Action for subscription {} failed, will retry (attempt {})", subscriptionId, retrySignal.totalRetries() + 1, retrySignal.failure())))
                         .doOnSuccess(unused -> currentStartAt.set(StartAt.checkpoint(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(cloudEvent)))))
                 .subscribe(unused -> {
                         }, throwable -> {

@@ -57,12 +57,14 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CountDownLatch;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -252,27 +254,35 @@ public class ReactorMongoSubscriptionLifecycleTest {
     }
 
     @Test
-    void a_subscription_that_terminates_with_an_unrecoverable_error_is_removed_from_running_and_can_be_resubscribed() {
-        // Given: the action itself throws, which concatMap surfaces as a terminal error the outer retryWhen never
-        // sees, since it only covers the change stream, not the action. An explicit position from before the write
-        // is used, since waitUntilStarted() only signals that the change stream Flux was subscribed to, not that the
-        // server has acknowledged the command and the cursor is positioned, so a write right after it could
-        // otherwise land before the cursor is actually watching.
+    void a_subscription_whose_action_fails_is_retried_and_stays_running() {
+        // Given: the action throws on the first delivery only. The failure is retried with the model's backoff (the
+        // reactor counterpart of the blocking models' RetryStrategy around the handler), so one bad delivery must not
+        // end the subscription. An explicit position from before the write is used, since waitUntilStarted() only
+        // signals that the change stream Flux was subscribed to, not that the server has acknowledged the command and
+        // the cursor is positioned, so a write right after it could otherwise land before the cursor is actually
+        // watching.
         String subscriptionId = UUID.randomUUID().toString();
+        AtomicInteger deliveries = new AtomicInteger();
+        CountDownLatch delivered = new CountDownLatch(1);
         StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         subscriptionModel.subscribe(subscriptionId, beforeWrite, __ -> {
-            throw new RuntimeException("boom");
+            if (deliveries.incrementAndGet() == 1) {
+                throw new RuntimeException("boom, once");
+            }
+            delivered.countDown();
+            return Mono.empty();
         }).waitUntilStarted().block(Duration.ofSeconds(10));
 
         // When
         mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
 
-        // Then: the dead subscription is no longer tracked as running or paused
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
-        assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse();
-
-        // A new subscription can reuse the same id since the dead one is forgotten
-        subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10));
+        // Then: the event reaches the action on a later attempt, and the subscription is still tracked as running,
+        // so its id cannot be taken by a second subscribe
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered.getCount()).isZero());
+        assertThat(deliveries.get()).isGreaterThanOrEqualTo(2);
+        assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+        assertThatThrownBy(() -> subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
