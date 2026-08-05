@@ -81,7 +81,6 @@ public class InMemorySubscriptionModelTest {
         assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("InMemorySubscriptionModel only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
     }
     
-    @SuppressWarnings("ResultOfMethodCallIgnored")
     @Test
     void inmemory_subscription_model_allows_cancelling_a_subscription() throws InterruptedException {
         // Given
@@ -94,7 +93,9 @@ public class InMemorySubscriptionModelTest {
         // When
         inMemoryEventStore.write("1", serialize(nameDefined1));
         // The subscription is async so we need to wait for it
-        eventReceived.await(1, SECONDS);
+        assertThat(eventReceived.await(1, SECONDS))
+                .as("the event must have been delivered before the subscription is cancelled")
+                .isTrue();
 
         inMemorySubscriptionModel.cancelSubscription(subscriberId);
 
