@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 
@@ -65,7 +66,7 @@ public final class RecordedEvents implements Consumer<CloudEvent> {
      * be for the very thing the assertion needs. A short return is not an error here either: the caller asserts on
      * the list, so a model that never satisfies the condition fails that assertion on the full list.
      */
-    public List<CloudEvent> awaitUntil(java.util.function.Predicate<List<CloudEvent>> condition, Duration timeout) {
+    public List<CloudEvent> awaitUntil(Predicate<List<CloudEvent>> condition, Duration timeout) {
         return Arrivals.awaitUntil(arrived, condition, timeout, "event");
     }
 

@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 
@@ -80,7 +81,7 @@ final class Arrivals {
      * condition the caller is about to assert removes that race without changing what is asserted: a model that never
      * satisfies it still comes back at the deadline, and the caller's assertion then fails on the full list.
      */
-    static <T> List<T> awaitUntil(BlockingQueue<T> arrived, java.util.function.Predicate<List<T>> condition, Duration timeout, String what) {
+    static <T> List<T> awaitUntil(BlockingQueue<T> arrived, Predicate<List<T>> condition, Duration timeout, String what) {
         requireNonNull(condition, "condition cannot be null");
         requireNonNull(timeout, "timeout cannot be null");
         List<T> received = new ArrayList<>();

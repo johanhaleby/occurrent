@@ -53,6 +53,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
+import reactor.util.retry.RetryBackoffSpec;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -184,8 +185,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 // a retry must re-invoke the action the way the blocking RetryStrategy re-calls the handler:
                 // resubscribing whatever Mono the first call returned would replay that attempt's failure forever.
                 .concatMap(cloudEvent -> Mono.defer(() -> action.apply(cloudEvent))
-                        .retryWhen(Retry.backoff(Long.MAX_VALUE, config.minBackoff)
-                                .maxBackoff(config.maxBackoff)
+                        .retryWhen(unboundedBackoff()
                                 .doBeforeRetry(retrySignal -> log.warn("Action for subscription {} failed, will retry (attempt {})", subscriptionId, retrySignal.totalRetries() + 1, retrySignal.failure())))
                         .doOnSuccess(unused -> currentStartAt.set(StartAt.checkpoint(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(cloudEvent)))))
                 .subscribe(unused -> {
@@ -209,9 +209,13 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     private Flux<CloudEvent> resilientChangeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
         return changeStream(filter, currentStartAt, onDocumentRead, startedSink)
-                .retryWhen(Retry.backoff(Long.MAX_VALUE, config.minBackoff)
-                        .maxBackoff(config.maxBackoff)
+                .retryWhen(unboundedBackoff()
                         .filter(throwable -> shouldRestart(throwable, currentStartAt)));
+    }
+
+    // One spec for both retry sites, so the action retry cannot drift from the backoff the change stream restarts with.
+    private RetryBackoffSpec unboundedBackoff() {
+        return Retry.backoff(Long.MAX_VALUE, config.minBackoff).maxBackoff(config.maxBackoff);
     }
 
     private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
