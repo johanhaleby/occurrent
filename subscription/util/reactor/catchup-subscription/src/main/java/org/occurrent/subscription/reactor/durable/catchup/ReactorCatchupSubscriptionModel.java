@@ -37,6 +37,7 @@ import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
@@ -177,6 +178,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         SubscriptionModel routed = (SubscriptionModel) route(filter, startAt);
         Subscription subscription = routed.subscribe(subscriptionId, filter, startAt, action);
@@ -206,7 +208,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     // bookkeeping is what genuinely needs every inner to see the call.
     private Stream<SubscriptionModel> innerModels() {
         return Stream.of(streamCatchupSubscriptionModel, dcbCatchupSubscriptionModel, agnosticCatchupSubscriptionModel)
-                .filter(java.util.Objects::nonNull)
+                .filter(Objects::nonNull)
                 .map(SubscriptionModel.class::cast);
     }
 

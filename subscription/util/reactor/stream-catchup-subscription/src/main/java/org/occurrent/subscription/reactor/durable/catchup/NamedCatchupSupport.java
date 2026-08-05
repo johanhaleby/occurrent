@@ -95,9 +95,6 @@ final class NamedCatchupSupport {
                                       CatchupReader reader, long windowSize, int handoverCacheSize, long startPosition,
                                       Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
-        if (catchingUp.containsKey(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
-        }
         BoundedIdCache cache = new BoundedIdCache(handoverCacheSize);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
         CatchupState state = new CatchupState();
