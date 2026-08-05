@@ -100,3 +100,12 @@ open.
 Delegating the life cycle means the wrapped model's answers become this model's answers, including for `isRunning`,
 `isPaused` and `subscriptionIds`. A wrapped model that is named but not introspectable cannot be asked for its
 subscription ids, so the ids handed to it through this model are used instead.
+
+## Amendment (2026-08-05): the promotion happened, closing the stage
+
+#550 was answered with the promotion, so the two-path split this ADR tolerated is no longer the end state for the
+starter's composition: the three reactor catch-up models now implement the combining interface themselves (see the
+matching ADR 98 amendment), the durable model's delegate-when-named branch fires for `Durable(Catchup(Mongo))`
+unchanged, and the held-back conformance wirings for that composition come back with the change. The durable model's
+cold-driving path remains, for a wrapped model that only offers the `Flux` primitive, and the fixture-declaration
+difference between the two compositions disappears: `retriesAFailingHandler()` is true for both.

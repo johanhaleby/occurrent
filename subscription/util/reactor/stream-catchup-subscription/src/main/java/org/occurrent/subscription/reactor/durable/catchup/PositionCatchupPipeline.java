@@ -18,6 +18,7 @@ package org.occurrent.subscription.reactor.durable.catchup;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
@@ -76,24 +77,42 @@ final class PositionCatchupPipeline {
         if (startPosition < 0) {
             throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
         }
-        // Capture the live resume token before the bulk replay so an event committing during the replay is still
-        // delivered live. If the model reports no token (e.g. an empty oplog or a restricted cluster) a no-loss
-        // handover cannot be guaranteed, so fail loudly instead of silently dropping events.
+        BoundedIdCache cache = new BoundedIdCache(handoverCacheSize);
+        return captureLiveToken(subscriptionModel)
+                .flatMapMany(liveToken -> {
+                    Flux<CloudEvent> live = subscriptionModel.subscribe(liveSubscriptionFilter, StartAt.checkpoint(liveToken))
+                            .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(cloudEvent.getId()));
+                    return replay(startPosition, cache).concatWith(live);
+                });
+    }
+
+    /**
+     * Captures the live resume token before the bulk replay so an event committing during the replay is still
+     * delivered live. If the model reports no token (e.g. an empty oplog or a restricted cluster) a no-loss
+     * handover cannot be guaranteed, so it fails loudly instead of silently dropping events. Shared by the cold
+     * pipeline above and the named catch-up path in {@code NamedCatchupSupport}.
+     */
+    Mono<Checkpoint> captureLiveToken(CheckpointAwareSubscriptionModel subscriptionModel) {
         return subscriptionModel.globalCheckpoint()
-                .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")))
-                .flatMapMany(liveToken ->
-                        reader.currentHead().flatMapMany(bulkHead -> {
-                            BoundedIdCache cache = new BoundedIdCache(handoverCacheSize);
-                            // Cache the replayed ids, including the bulk tail, since the reactive global position
-                            // resumes inclusively and the live change stream re-delivers boundary events already
-                            // emitted. Dedup by id, not position, so an in-flight event never seen during the
-                            // replay is still delivered once, live.
-                            Flux<CloudEvent> bulk = windows(startPosition, bulkHead, cache);
-                            Flux<CloudEvent> reconcile = reconcile(bulkHead, cache);
-                            Flux<CloudEvent> live = subscriptionModel.subscribe(liveSubscriptionFilter, StartAt.checkpoint(liveToken))
-                                    .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(cloudEvent.getId()));
-                            return Flux.concat(bulk, reconcile, live);
-                        }));
+                .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")));
+    }
+
+    /**
+     * The replay half on its own: bulk windows then one reconcile pass, every emitted id recorded in {@code cache}.
+     * Cache the replayed ids, including the bulk tail, since the reactive global position resumes inclusively and the
+     * live change stream re-delivers boundary events already emitted. Dedup by id, not position, so an in-flight event
+     * never seen during the replay is still delivered once, live. Shared by the cold pipeline above and the named
+     * catch-up path in {@code NamedCatchupSupport}.
+     */
+    Flux<CloudEvent> replay(long startPosition, BoundedIdCache cache) {
+        if (startPosition < 0) {
+            throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
+        }
+        return reader.currentHead().flatMapMany(bulkHead -> {
+            Flux<CloudEvent> bulk = windows(startPosition, bulkHead, cache);
+            Flux<CloudEvent> reconcile = reconcile(bulkHead, cache);
+            return Flux.concat(bulk, reconcile);
+        });
     }
 
     // Emits events in (fromExclusive, toInclusive], paging in position windows. Records every emitted id in the cache
