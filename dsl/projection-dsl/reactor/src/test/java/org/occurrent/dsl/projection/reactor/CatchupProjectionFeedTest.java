@@ -324,11 +324,11 @@ class CatchupProjectionFeedTest {
     @Test
     void go_live_writes_no_completion_marker_so_a_later_catch_up_still_replays_history() {
         CloudEventConverter<Counted> converter = countedConverter();
-        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
 
         feed("counter", reader("1", "2"), converter, new ConcurrentHashMap<>(), marker).goLive().block();
 
-        assertThat(marker.checkpoints).isEmpty();
+        assertThat(marker.read("counter").blockOptional()).isEmpty();
 
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         feed("counter", reader("1", "2"), converter, repo, marker).catchUp().block();

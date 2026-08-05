@@ -158,14 +158,14 @@ class DomainEventFeedTest {
     @Test
     void go_live_writes_no_completion_marker_so_a_later_catch_up_still_replays_history() {
         CloudEventConverter<Counted> converter = countedConverter();
-        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
 
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
         ConcurrentHashMap<String, Integer> throwaway = new ConcurrentHashMap<>();
         feed.register("counter", projection(), ViewStateRepository.create(throwaway::get, throwaway::put));
         feed.goLive("counter").block();
 
-        assertThat(marker.checkpoints).isEmpty();
+        assertThat(marker.read("counter").blockOptional()).isEmpty();
 
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         DomainEventFeed<Counted> restarted = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
