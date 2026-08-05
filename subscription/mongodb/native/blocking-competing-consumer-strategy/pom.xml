@@ -47,16 +47,12 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- Test -->
+        <!-- Test. This module shipped with dependencies for tests nobody wrote, including an event store and a
+             subscription model that the competing-consumer contract has no use for: it is about who holds a lock, and
+             no event is published anywhere in it. What is here now is what the conformance suite needs. -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-mongodb-native-blocking</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-mongodb-native</artifactId>
+            <artifactId>occurrent-tck-subscription-blocking</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
@@ -67,13 +63,33 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-mongodb</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.awaitility</groupId>
-            <artifactId>awaitility</artifactId>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
