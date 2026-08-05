@@ -113,6 +113,68 @@ class DomainEventFeedTest {
     }
 
     @Test
+    void go_live_of_the_registered_id_skips_the_replay_and_goes_live() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        feed.goLive("counter").block();
+        feed.accept(new Counted("live")).block();
+
+        // The two history events were never replayed, so only the live one was folded.
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void go_live_of_an_unregistered_id_throws() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+
+        StepVerifier.create(feed.goLive("missing"))
+                .verifyErrorSatisfies(e -> assertThat(e)
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("missing")
+                        .hasMessageContaining("No projection"));
+    }
+
+    @Test
+    void go_live_of_an_id_that_does_not_match_the_registered_projection_throws() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        StepVerifier.create(feed.goLive("not-counter"))
+                .verifyErrorSatisfies(e -> assertThat(e)
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("not-counter")
+                        .hasMessageContaining("No projection"));
+    }
+
+    @Test
+    void go_live_writes_no_completion_marker_so_a_later_catch_up_still_replays_history() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
+        ConcurrentHashMap<String, Integer> throwaway = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(throwaway::get, throwaway::put));
+        feed.goLive("counter").block();
+
+        assertThat(marker.checkpoints).isEmpty();
+
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        DomainEventFeed<Counted> restarted = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
+        restarted.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        restarted.catchUpAll().block();
+
+        assertThat(repo.get("counter")).isEqualTo(2);
+    }
+
+    @Test
     void registering_two_projections_with_different_ids_throws() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);

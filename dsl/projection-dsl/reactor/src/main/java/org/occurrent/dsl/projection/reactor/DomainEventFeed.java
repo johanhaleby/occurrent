@@ -203,4 +203,26 @@ public final class DomainEventFeed<E> {
             return registered.catchUp();
         });
     }
+
+    /**
+     * Go live without a catch-up: skip the one-time replay for the single projection registered under {@code id}.
+     * Use this instead of {@link #catchUp(String)} when this feed's events are not in the local event store, so
+     * there is nothing to replay. No completion marker is recorded, so a later {@link #catchUp(String)} on the same
+     * projection still replays the full history.
+     * <p>
+     * The lookup happens when the returned {@link Mono} is subscribed, the same as {@link #catchUp(String)}. An id
+     * that matches nothing fails the {@link Mono} with an {@link IllegalArgumentException} rather than throwing here.
+     *
+     * @return A {@link Mono} that completes once that projection is live.
+     */
+    public Mono<Void> goLive(String id) {
+        Objects.requireNonNull(id, "id cannot be null");
+        return Mono.defer(() -> {
+            CatchupProjectionFeed<E> registered = feed.get();
+            if (registered == null || !registered.id().equals(id)) {
+                return Mono.error(new IllegalArgumentException("No projection with id '" + id + "' is registered on this feed."));
+            }
+            return registered.goLive();
+        });
+    }
 }
