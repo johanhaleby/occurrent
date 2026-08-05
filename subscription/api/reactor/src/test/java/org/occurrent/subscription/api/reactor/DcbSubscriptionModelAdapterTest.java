@@ -146,7 +146,7 @@ class DcbSubscriptionModelAdapterTest {
                 .build();
     }
 
-    private static final class RecordingSubscriptionModel implements SubscriptionModel {
+    private static final class RecordingSubscriptionModel implements FluxSubscriptionModel {
         private final Flux<CloudEvent> events;
         @Nullable
         private SubscriptionFilter capturedFilter;
@@ -165,7 +165,7 @@ class DcbSubscriptionModelAdapterTest {
         }
     }
 
-    private static final class RecordingSubscribableSubscriptionModel implements SubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
+    private static final class RecordingSubscribableSubscriptionModel implements FluxSubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
         @Nullable
         private SubscriptionFilter capturedFilter;
         @Nullable
@@ -237,7 +237,7 @@ class DcbSubscriptionModelAdapterTest {
 
     // A register-only model (like a push model): implements Subscribable and the narrower CancellableSubscriptions,
     // not the full SubscriptionModelLifeCycle, so it has nothing to start, stop, or pause.
-    private static final class RecordingCancellableOnlySubscriptionModel implements SubscriptionModel, Subscribable, CancellableSubscriptions {
+    private static final class RecordingCancellableOnlySubscriptionModel implements FluxSubscriptionModel, Subscribable, CancellableSubscriptions {
 
         @Override
         public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {

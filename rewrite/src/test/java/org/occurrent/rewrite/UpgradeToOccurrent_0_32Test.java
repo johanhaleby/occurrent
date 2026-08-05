@@ -20,13 +20,15 @@ import org.openrewrite.config.Environment;
 import org.openrewrite.test.RecipeSpec;
 import org.openrewrite.test.RewriteTest;
 
+import static org.openrewrite.java.Assertions.java;
 import static org.openrewrite.properties.Assertions.properties;
 import static org.openrewrite.yaml.Assertions.yaml;
 
 /**
- * Verifies the umbrella {@code UpgradeToOccurrent_0_32} recipe resolves its sub-recipe through a classpath-scanning
- * Environment, which is what proves the cross-file recipe reference actually links. The transforms themselves are
- * covered in {@link SubscriptionModePropertyRenameTest}, so one case per format is enough here.
+ * Verifies the umbrella {@code UpgradeToOccurrent_0_32} recipe resolves its sub-recipes through a classpath-scanning
+ * Environment, which is what proves the cross-file recipe references actually link. The transforms themselves are
+ * covered in {@link SubscriptionModePropertyRenameTest} and {@link ReactorSubscriptionModelRename_0_32Test}, so one
+ * case per sub-recipe is enough here.
  */
 class UpgradeToOccurrent_0_32Test implements RewriteTest {
 
@@ -44,6 +46,40 @@ class UpgradeToOccurrent_0_32Test implements RewriteTest {
                 properties(
                         "occurrent.subscription.enabled=false",
                         "occurrent.subscription.mode=disabled"
+                )
+        );
+    }
+
+    @Test
+    void renamesTheReactorSubscriptionModel() {
+        rewriteRun(
+                java(
+                        """
+                        package org.occurrent.subscription.api.reactor;
+
+                        public interface SubscriptionModel {
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.reactor.SubscriptionModel;
+
+                        class Foo {
+                            SubscriptionModel subscriptionModel;
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
+
+                        class Foo {
+                            FluxSubscriptionModel subscriptionModel;
+                        }
+                        """
                 )
         );
     }

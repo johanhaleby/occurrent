@@ -42,6 +42,14 @@ mvn rewrite:run
 
 ## 0.32.0
 
+`org.occurrent.UpgradeToOccurrent_0_32` runs two things:
+
+- `org.occurrent.MigrateOccurrentRenames_0_32` renames the reactor `org.occurrent.subscription.api.reactor.SubscriptionModel`
+  to `FluxSubscriptionModel`, in Java and Kotlin. The old name now belongs to a new interface meaning what the blocking
+  `SubscriptionModel` means, so the rename is what keeps your references pointing at the type you wrote them against. It
+  matches on the fully qualified name, so the blocking `SubscriptionModel` is left alone.
+- `org.occurrent.MigrateSubscriptionModeProperty_0_32`, described below.
+
 `org.occurrent.MigrateSubscriptionModeProperty_0_32` rewrites the deprecated `occurrent.subscription.enabled`
 configuration property to `occurrent.subscription.mode`, in `.properties` and `.yaml` alike. It is value-dependent,
 `false` becoming `disabled` and `true` becoming `auto`, so a plain key rename would leave a value the new property

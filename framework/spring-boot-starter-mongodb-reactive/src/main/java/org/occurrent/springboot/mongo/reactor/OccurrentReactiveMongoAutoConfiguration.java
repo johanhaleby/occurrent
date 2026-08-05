@@ -61,8 +61,9 @@ import org.occurrent.springboot.reactor.OccurrentReactorBeanNames;
 import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationConfiguration;
 import org.occurrent.springboot.reactor.PositionOrderedEventStores;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
+import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import org.occurrent.subscription.api.reactor.Subscribable;
-import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModelConfig;
@@ -188,9 +189,15 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      */
     // @Primary so that a Subscribable injection point (for example the asynchronous subscription DSLs) resolves to
     // this asynchronous model rather than the register-only SynchronousSubscriptionModel, which is also a Subscribable.
+    //
+    // The register-only models are ignored when deciding whether the application brought its own. They have no start
+    // position, no checkpoint and no catch-up, so one of them standing in for this bean would silently take away every
+    // asynchronous subscription. That reaches a declared SynchronousSubscriptionModel, which the
+    // @ConditionalOnMissingBean further down invites, and a PushSubscriptionModel, which a push projection needs one
+    // of per consumer.
     @Bean(destroyMethod = "shutdown")
     @Primary
-    @ConditionalOnMissingBean({SubscriptionModel.class, Subscribable.class})
+    @ConditionalOnMissingBean(value = {FluxSubscriptionModel.class, Subscribable.class}, ignored = RegisteringSubscribable.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public ReactorDurableSubscriptionModel occurrentDurableSubscriptionModel(ReactiveMongoOperations mongo, CheckpointStorage storage,
                                                                              OccurrentProperties occurrentProperties, ObjectProvider<DcbEventStore> dcbEventStore,
@@ -334,7 +341,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(DcbSubscriptions.class)
     @Conditional({OnDcbEventStoreCapabilityCondition.class, OnSubscriptionsNotDisabledCondition.class})
-    public DcbSubscriptions<E> occurrentDcbSubscriptions(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+    public DcbSubscriptions<E> occurrentDcbSubscriptions(FluxSubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         return new DcbSubscriptions<>(subscriptionModel, cloudEventConverter);
     }
 

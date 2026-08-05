@@ -29,7 +29,7 @@ import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.reactor.DcbSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
-import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -41,14 +41,14 @@ import static java.util.Objects.requireNonNull;
 /**
  * Subscribes to live DCB-tagged events reactively without passing the {@link CloudEventConverter} on every call.
  * <p>
- * This wraps a reactive {@link SubscriptionModel} and a {@link CloudEventConverter}, mirroring how
+ * This wraps a reactive {@link FluxSubscriptionModel} and a {@link CloudEventConverter}, mirroring how
  * {@link DcbDomainEventQueries} wraps its dependencies. Each {@code subscribe} returns a {@link Flux} that is the
  * subscription, so it is cancelled by cancelling the downstream subscription, for example disposing the
  * {@link reactor.core.Disposable} returned by {@code subscribe()}.
  * <p>
  * Delivery is live. Events are filtered by the {@link DcbCriteria} server-side where the backend supports it, with an
  * in-process scoping filter as a correctness floor. A {@link DcbStartAt} is passed through to the underlying
- * {@link SubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()} replays history
+ * {@link FluxSubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()} replays history
  * depends on that model. A plain model has no DCB catch-up and treats such a start as live, whereas a model composed
  * with {@code ReactorDcbCatchupSubscriptionModel} replays history from that position before going live.
  * <p>
@@ -66,8 +66,8 @@ public final class DcbSubscriptions<E> {
     private final DcbSubscriptionModel subscriptionModel;
     private final CloudEventConverter<E> cloudEventConverter;
 
-    public DcbSubscriptions(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
-        this.subscriptionModel = DcbSubscriptionModel.from(requireNonNull(subscriptionModel, SubscriptionModel.class.getSimpleName() + " cannot be null"));
+    public DcbSubscriptions(FluxSubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+        this.subscriptionModel = DcbSubscriptionModel.from(requireNonNull(subscriptionModel, FluxSubscriptionModel.class.getSimpleName() + " cannot be null"));
         this.cloudEventConverter = requireNonNull(cloudEventConverter, CloudEventConverter.class.getSimpleName() + " cannot be null");
     }
 

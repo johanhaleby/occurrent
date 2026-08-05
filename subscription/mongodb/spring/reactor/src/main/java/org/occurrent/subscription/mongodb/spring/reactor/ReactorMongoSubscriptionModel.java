@@ -32,6 +32,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -78,12 +79,12 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * stream automatically resubscribes and resumes from the position of the last change-stream document read, so
  * recovery is gap-free rather than a replay or a skipped window. See {@link ReactorMongoSubscriptionModelConfig}.
  * <p>
- * Also supports named, lifecycle-managed subscriptions ({@link Subscribable}, {@link SubscriptionModelLifeCycle}):
- * pause, resume, and cancel an individual subscription by id, in addition to the plain {@link #subscribe(SubscriptionFilter, StartAt)}
- * {@link Flux} primitive.
+ * Also supports named, lifecycle-managed subscriptions, which is what makes it a {@link SubscriptionModel} ({@link Subscribable}
+ * plus {@link SubscriptionModelLifeCycle}): pause, resume, and cancel an individual subscription by id, in addition to
+ * the plain {@link #subscribe(SubscriptionFilter, StartAt)} {@link Flux} primitive.
  */
 @NullMarked
-public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel {
+public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
 
     private final ReactiveMongoOperations mongo;

@@ -27,10 +27,10 @@ import reactor.core.publisher.Mono;
 import java.util.function.Function;
 
 /**
- * A named, lifecycle-managed counterpart to the plain reactive {@link SubscriptionModel#subscribe(SubscriptionFilter, StartAt)}
+ * A named, lifecycle-managed counterpart to the plain reactive {@link FluxSubscriptionModel#subscribe(SubscriptionFilter, StartAt)}
  * primitive. Where that primitive returns a bare {@link Flux} the caller subscribes to and
  * disposes itself, a {@code Subscribable} tracks the subscription by id so it can be paused, resumed, and cancelled
- * through {@link SubscriptionModelLifeCycle}.
+ * through {@link SubscriptionModelLifeCycle}. A model implementing both is a {@link SubscriptionModel}.
  */
 @NullMarked
 public interface Subscribable {

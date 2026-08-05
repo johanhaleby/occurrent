@@ -26,7 +26,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.reactor.Subscription;
-import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
 import reactor.core.publisher.Mono;
 
 import java.util.function.BiFunction;
@@ -44,7 +44,7 @@ import static java.util.Objects.requireNonNull;
  * {@link ViewStateRepository}/{@link MaterializedView} overloads drive a blocking view store from the reactive pipeline,
  * scheduled on {@code boundedElastic} (see {@link Projections}).
  * <p>
- * <strong>Whether this catches up and resumes durably, or is live-only, depends on the {@code SubscriptionModel} passed
+ * <strong>Whether this catches up and resumes durably, or is live-only, depends on the {@code FluxSubscriptionModel} passed
  * to {@link #create}</strong>, since it subscribes through {@link DcbSubscriptions}, which is only as capable as that
  * model. A catch-up-capable model (the Spring composite, or a hand-wired {@code CatchupSubscriptionModel}) replays
  * history and resumes across restarts, a plain live model does neither. For a strongly consistent read, fold on demand
@@ -62,11 +62,11 @@ public final class ReactiveDcbProjectionRunner<E> {
      * Creates a runner that subscribes through the given {@code subscriptionModel}, matching the factory style of
      * {@link ReactiveProjectionRunner}.
      */
-    public static <E> ReactiveDcbProjectionRunner<E> create(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+    public static <E> ReactiveDcbProjectionRunner<E> create(FluxSubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         return new ReactiveDcbProjectionRunner<>(subscriptionModel, cloudEventConverter);
     }
 
-    private ReactiveDcbProjectionRunner(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+    private ReactiveDcbProjectionRunner(FluxSubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
         this.dcbSubscriptions = new DcbSubscriptions<>(
                 requireNonNull(subscriptionModel, "subscriptionModel cannot be null"),
                 requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null"));

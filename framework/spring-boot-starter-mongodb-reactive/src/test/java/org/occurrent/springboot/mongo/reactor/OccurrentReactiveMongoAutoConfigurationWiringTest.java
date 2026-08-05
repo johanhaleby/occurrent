@@ -37,6 +37,8 @@ import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
+import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -138,6 +140,54 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
             assertThat(context).doesNotHaveBean(DcbSubscriptions.class);
             assertThat(context).doesNotHaveBean(DcbDomainEventQueries.class);
         });
+    }
+
+    @Test
+    void an_application_supplied_synchronous_subscription_model_keeps_the_durable_subscription_model() {
+        // The condition on the durable model steps aside only for the application's own asynchronous model. A
+        // SynchronousSubscriptionModel is register-only and is no substitute for it, so declaring one must not silently
+        // remove every asynchronous subscription in the application. The starter invites you to declare one, for
+        // example to pass a DataFieldReader so a synchronous subscription can filter on a payload field.
+        SynchronousSubscriptionModel own = new SynchronousSubscriptionModel();
+
+        contextRunner().withBean(SynchronousSubscriptionModel.class, () -> own).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(SynchronousSubscriptionModel.class)).isSameAs(own);
+            assertThat(context).hasSingleBean(ReactorDurableSubscriptionModel.class);
+            // @Primary is what keeps a by-type Subscribable injection point on the asynchronous model.
+            assertThat(context.getBean(Subscribable.class)).isInstanceOf(ReactorDurableSubscriptionModel.class);
+        });
+    }
+
+    @Test
+    void an_application_supplied_push_subscription_model_keeps_the_durable_subscription_model() {
+        // The same defect, reached the more likely way. Upgrading to 0.32.0 asks an application sharing one push sink
+        // between projections to declare a PushSubscriptionModel bean per consumer, and PushSubscriptionModel is a
+        // RegisteringSubscribable too, so it satisfied the same condition.
+        PushSubscriptionModel own = new PushSubscriptionModel();
+
+        contextRunner().withBean(PushSubscriptionModel.class, () -> own).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context).hasSingleBean(ReactorDurableSubscriptionModel.class);
+            assertThat(context.getBean(Subscribable.class)).isInstanceOf(ReactorDurableSubscriptionModel.class);
+        });
+    }
+
+    @Test
+    void an_application_supplied_asynchronous_subscription_model_still_replaces_the_durable_one() {
+        // The other direction, so the exclusion above cannot be mistaken for turning the condition off. A model that is
+        // not register-only is a genuine replacement, and the starter must step aside rather than adding a second
+        // asynchronous model beside it.
+        //
+        // The bean is made primary because the starter also contributes a register-only SynchronousSubscriptionModel,
+        // so without that the two Subscribable beans are ambiguous at the subscription DSL's injection point. That is a
+        // separate defect, present on the blocking stack in the same shape, and not what this test is about.
+        contextRunner()
+                .withBean(SubscriptionModel.class, () -> mock(SubscriptionModel.class), beanDefinition -> beanDefinition.setPrimary(true))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(ReactorDurableSubscriptionModel.class);
+                });
     }
 
     @Test

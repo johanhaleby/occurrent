@@ -26,6 +26,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
@@ -55,8 +56,9 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * subscription durable: it resumes from the last stored position across restarts and stores the position after each
  * successful {@code action}.
  * <p>
- * It is a transparent decorator that itself implements {@link Subscribable}, {@link CheckpointAwareSubscriptionModel},
- * and {@link SubscriptionModelLifeCycle}, so a {@code Durable(delegate)} chain composes uniformly and can be handed to
+ * It is a transparent decorator that itself implements {@link SubscriptionModel} ({@link Subscribable} plus
+ * {@link SubscriptionModelLifeCycle}) and {@link CheckpointAwareSubscriptionModel}, so a {@code Durable(delegate)} chain
+ * composes uniformly and can be handed to
  * the reactive subscription DSLs and to lifecycle management, mirroring the blocking {@code DurableSubscriptionModel}.
  * The named {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} method reads events from the wrapped
  * model's plain (cold) {@link CheckpointAwareSubscriptionModel#subscribe(SubscriptionFilter, StartAt)} primitive,
@@ -68,7 +70,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * {@link ReactorDurableSubscriptionModelConfig}.
  */
 @NullMarked
-public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel {
+public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
 
     private final CheckpointAwareSubscriptionModel subscription;
