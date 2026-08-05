@@ -151,6 +151,71 @@ suite rather than by reading the interfaces.**
   state the attempt produced. A model answering `false` owes the refusal, one answering `true` owes two subscriptions
   that receive independently.
 
+**Amended when the competing-consumer suite was written. Its fixture declares one thing, and it is not a difference
+between implementations.** `CompetingConsumerStrategyFixture.timeToConverge()` is a bound on how long the suite waits
+for a strategy's own coordination to settle who holds a lock when nothing told it directly. Three assertions need it,
+and they are one property from three sides: a rival takes over from a holder that stopped coordinating, a registration
+that lost wins later without registering again, and a released consumer takes its lock back. In none of them does
+anybody call into the strategy that has to change its answer, so the change arrives on a schedule the interface does
+not report. It is closer to `EventStoreFixture.timePrecision()` than to `preservesCheckpointType`: it describes what an
+implementation can do rather than which of two behaviours it chose, so there are not two branches to assert. Both
+MongoDB fixtures declare five seconds against a worst case of one and a half, because the suite stops waiting the
+moment the condition holds and a generous bound is therefore only ever paid in full by a test that was going to fail.
+
+**No lease reaches the published contract, and that is the whole design of this suite.** Both of Occurrent's strategies
+keep a lease in MongoDB, and a suite written around one would be a description of MongoDB rather than a contract: a
+strategy backed by a leader election or a broker owes the same guarantees and has no lease to expire. So the suite
+asserts crash liveness generically, that a holder which stops coordinating without releasing or unregistering loses the
+lock to a rival before long, which is the one property the whole pattern exists for and the property a lease is one way
+of providing. `shutdown()` is what the suite uses to stop a strategy coordinating, since that is the closest a test can
+get to a process going away through published API, and it asserts nothing about what a shut-down strategy answers
+afterwards. When the lease itself is up, and what refreshing one does, is covered separately and deterministically in
+`MongoLeaseTimingTest` against the shared support class. That took one prefactor: the support class now takes its
+`ScheduledRefresh` beside the `Clock` it already took, so a test holds both halves and no time passes while it runs.
+The alternative, a short lease and a sleep, cannot tell "the lease was up" from "the machine was busy", which is what
+the existing competing-consumer tests had to live with.
+
+**The fixture hands over a factory rather than a second strategy.** Contention is external and coordinated only through
+storage the interface does not mention, so a single reference has no notion of a rival and the suite has to build them.
+A factory rather than one extra accessor because some of what the suite asserts needs a third instance that outlives a
+rival it deliberately shuts down. Constructing several strategies over one storage therefore becomes an explicit,
+documented demand on an implementor.
+
+**This is the one suite that polls, and only where the API leaves nothing to block on.** `CompetingConsumerSubscriptionModel`
+registers a listener and reacts to what it is told, while `SagaRunner` registers a consumer, never adds a listener, and
+asks `hasLock` on every tick. Both styles are covered, and the second one has nothing but a question to ask, so the
+suite asks it on a loop until the bound runs out. That is not the wait for a quiet period the waiting rules ban: it
+waits for something that must happen and stops when it does, rather than for a period in which nothing must. Everything
+observable through a listener still blocks on a queue, through `RecordedLockChanges`, which is `RecordedEvents` for
+lock changes.
+
+**The green anti-skip run is a second implementation rather than a copy of one.** `WorkingCompetingConsumerStrategy`
+elects the longest-standing live candidate out of a shared map and treats one that stopped heart-beating as gone, which
+is nothing like a lease. That is deliberate on top of what a green run is for here: if a suite written against a lease
+could only be satisfied by a lease, a second implementation is the cheapest way to find out. It is around 150 lines
+against `WorkingCheckpointStorage`'s nine, which is more than that precedent but nowhere near the thousand-line copy
+the event-store leaves were quoted, and since it is a design of its own there is nothing for a production change to
+drift away from.
+
+**Writing the suite found two defects in the MongoDB strategies, and both are fixed rather than declared.** Releasing a
+consumer left it recorded as still holding the lease, so `hasLock` answered yes for a subscriber that had just given
+the lease up, which would have let a saga's timer poller keep firing timers on a lease it no longer held. And the next
+refresh then found its commit rejected and reported the loss a second time, though nothing had changed since the first
+report. A listener is a change feed, which the `CompetingConsumerListener` javadoc now says, and the suite asserts that
+giving a lock up and taking it back is reported as exactly two changes rather than one per round of coordination. The
+release path now marks the consumer as having stood down for a round, which fixes both and keeps the head start a rival
+had before, since a consumer that gave a lease up and took it straight back before anybody else looked has not given it
+up in any useful sense.
+
+**Fixing `hasLock` uncovered a third defect, in `CompetingConsumerSubscriptionModel`, and it is worth recording because
+the stale answer was hiding it.** `resumeSubscription` asks `hasLock` and, when the answer is no, registers the consumer
+instead. Registering can be granted the lock there and then, `onConsumeGranted` resumes a paused consumer itself, and
+the caller then resumed a second time and failed on a delegate that was no longer paused. Nothing reached that path
+before, because after a system pause `hasLock` answered yes and the model took the other branch. The order is what
+fixes it: the consumer is recorded as running before it registers, so a callback arriving during the call finds nothing
+to resume, and the old state goes back if registering did not win. `CompetingConsumerSubscriptionModelTest.can_resume_after_consume_prohibited`
+is what fails without it.
+
 **And one candidate declaration was rejected, which is worth recording because it looked obviously right.** Synchronous
 delivery is not declared. A `deliversSynchronously()` flag cannot be held to anything on its `false` branch: "the handler
 had not run when publishing returned" is untrue even for a model that queues, whose consumer thread may legitimately have
@@ -201,6 +266,22 @@ under #396.
 `releaseCompetingConsumer` carry byte-identical javadoc, so a suite cannot assert the difference between them. Reactor
 `globalCheckpoint()` never documents the empty-`Mono` case that `ReactorMongoSubscriptionModel` returns. Both get child
 issues under #396, filed as #516 and #517.
+
+**Amended when the competing-consumer suite was written: #516 is answered, and the answer is that the contract does
+distinguish the two, in a way neither javadoc mentioned.** Unregistering forgets the consumer, so it never holds the
+lock again without registering a second time, and somebody else gets the lock if anybody is waiting. Releasing keeps it
+registered, so it is one of the candidates for the lock it just gave up and may win it back with nobody registering it
+again. That is exactly the difference `CompetingConsumerSubscriptionModel` was already relying on, unwritten, when it
+unregisters a subscription a user paused and releases one the system paused. So this is a javadoc fix on
+`CompetingConsumerStrategy` rather than a divergence under #396, and the suite asserts both halves.
+
+The suite asserts one further thing about releasing, and what it does *not* assert is the interesting part. It does not
+assert that a rival gets the lock, even though that is what the old javadoc promised, because the consumer that
+released is still competing for it and which of them wins is a race between two schedules the contract says nothing
+about. A test demanding the rival would be asserting the phase two background threads happened to be in, and the MongoDB
+strategy loses that race about as often as it wins it. What a release may never do is leave the lock unheld, and a
+caller who needs the stronger guarantee has `unregisterCompetingConsumer`, which the suite does hold to it. The
+javadoc now says that rather than promising a handover it cannot make.
 
 ## Consequences
 

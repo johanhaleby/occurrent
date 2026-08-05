@@ -250,9 +250,13 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                             // Safe because it was already checked to be paused above
                             subscription = delegate.resumeSubscription(subscriptionId);
                         }
-                    } else if (registerCompetingConsumer(subscriptionId, subscriberId) && !competingConsumer.isWaiting()) {
+                    } else if (competingConsumer.isWaiting()) {
+                        // A waiting consumer has nothing to resume, since it never subscribed. Registering is all it
+                        // takes, because onConsumeGranted subscribes it if the lock is granted.
+                        registerCompetingConsumer(subscriptionId, subscriberId);
+                        subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
+                    } else if (registerAsRunning(competingConsumer)) {
                         // Safe because it was already checked to be paused above
-                        competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
                         subscription = delegate.resumeSubscription(subscriptionId);
                     } else {
                         // Not allowed to resume without the lock
@@ -541,6 +545,27 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     private boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
         logDebug("Registering CompetingConsumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
         return competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId);
+    }
+
+    /**
+     * Records the consumer as running, registers it, and puts the old state back if registering did not win the lock.
+     * <p>
+     * The order matters. Registering can be granted the lock there and then, and {@link #onConsumeGranted(String, String)}
+     * resumes a paused consumer itself, so a consumer still recorded as paused when registration is granted is resumed
+     * once by that callback and once by the caller here, and the second resume finds the delegate already running.
+     * Recording it as running first leaves the callback nothing to do.
+     * <p>
+     * Only for a paused consumer. A waiting one has to stay waiting across the call, because that is what makes
+     * {@code onConsumeGranted} subscribe it.
+     */
+    private boolean registerAsRunning(CompetingConsumer competingConsumer) {
+        SubscriptionIdAndSubscriberId key = competingConsumer.subscriptionIdAndSubscriberId;
+        competingConsumers.put(key, competingConsumer.registerRunning());
+        boolean acquired = registerCompetingConsumer(key.subscriptionId(), key.subscriberId());
+        if (!acquired) {
+            competingConsumers.put(key, competingConsumer);
+        }
+        return acquired;
     }
 
     private boolean hasLock(String subscriptionId, String subscriberId) {
