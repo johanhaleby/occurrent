@@ -181,8 +181,19 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         SubscriptionModel routed = (SubscriptionModel) route(filter, startAt);
-        Subscription subscription = routed.subscribe(subscriptionId, filter, startAt, action);
-        subscriptionOwners.put(subscriptionId, routed);
+        // Claim the owner slot before subscribing, so a life-cycle call racing the subscribe reaches the model that
+        // owns the replay rather than falling back to an arbitrary inner model; roll the claim back if the subscribe
+        // refuses, so the id stays free.
+        if (subscriptionOwners.putIfAbsent(subscriptionId, routed) != null) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        }
+        final Subscription subscription;
+        try {
+            subscription = routed.subscribe(subscriptionId, filter, startAt, action);
+        } catch (RuntimeException e) {
+            subscriptionOwners.remove(subscriptionId, routed);
+            throw e;
+        }
         return subscription;
     }
 
