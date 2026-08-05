@@ -53,22 +53,26 @@ answer #547's follow-up comment asked for.
 reactive starter's own branch for a store that writes no `position` (`OccurrentReactiveMongoAutoConfiguration`), the
 `mongodb-subscription-to-spring-event` forwarder example, and `ReactorDurableSubscriptionModelTest`.
 
-**The start position is resolved through a dynamic `StartAt` rather than before the call.** The wrapped model's
-`subscribe(..)` has to run inside this model's `subscribe(..)`, or its filter validation could not reach the caller,
-and the reactive checkpoint read cannot be awaited there without blocking the calling thread first. A dynamic `StartAt`
-moves the read to the moment the wrapped model subscribes, which is the same mechanism the already-shipped
-`ResumeStartPositions.replayThenResume` uses and documents.
+**The start position is awaited before the wrapped model is asked to subscribe, rather than handed to it as a dynamic
+`StartAt` to resolve later.** The wrapped model's `subscribe(..)` has to run inside this model's `subscribe(..)`, or
+its filter validation could not reach the caller, so the position has to be known by then either way. Handing over a
+dynamic `StartAt` looked cheaper, because `ResumeStartPositions.replayThenResume` already awaits a checkpoint read
+inside one, but it puts the read somewhere it must not be: the wrapped model re-resolves the position every time it
+restarts a change stream, and that runs on a scheduler thread where awaiting a reactive read is refused outright. A
+subscription that met one transient storage error on its first attempt would then be unable to start ever again,
+because every retry would fail on the thread check rather than on the original error. Awaiting once here costs the
+calling thread nothing it was not already paying, since the wrapped model resolves the position synchronously inside
+the same call.
 
-**That resolution is remembered after the first attempt, unlike the blocking twin, which re-reads storage every time.**
-The wrapped model re-resolves the position when it restarts a change stream, and that happens on a scheduler thread
-where awaiting a reactive read is refused outright. Reusing the first answer is safe here because the only writer of a
-subscription's checkpoint is that subscription, so a restart before the first delivery finds storage exactly as the
-first attempt left it.
+**The await is deliberately outside this model's monitor.** Holding it across a checkpoint-store round trip would let
+one slow read block every other life cycle call on the model, including `shutdown()`. Nothing on this path keeps state
+of this model's own, and the wrapped model does its own locking.
 
-**A subscription registered while the wrapped model is stopped still reads the feed position at registration.** Without
-it, starting that subscription later would begin wherever the feed had reached by then and skip everything written
-while it waited, which the no-loss rule does not allow. The cold path already did this and the wrapped model does not,
-so the delegating path keeps doing it.
+**A subscription registered while the wrapped model is stopped therefore has its position read, and stored, at
+registration rather than when it starts.** That is what stops it from beginning wherever the feed has reached by the
+time it is started, which the no-loss rule does not allow. It differs from the other path, which stores nothing until a
+subscription starts, so a subscription registered and then never started leaves a stored checkpoint behind. That errs
+toward redelivery rather than loss, which is the direction ADR 57 already chose.
 
 **This amends ADR 98 in one respect and leaves the rest standing.** ADR 98 put the combining interface on the four
 models that carry a subscription id and recorded that the three reactor catch-up models expose only a cold `Flux`.
