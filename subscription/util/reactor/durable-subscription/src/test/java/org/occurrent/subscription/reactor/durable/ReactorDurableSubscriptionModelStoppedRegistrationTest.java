@@ -46,13 +46,16 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     @Test
     void registering_while_stopped_stores_nothing() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
 
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThat(storage.read(SUBSCRIPTION_ID).blockOptional(TIMEOUT)).isEmpty();
+        // Not just "nothing is stored": save was never invoked at all. Over a cold storage, an emptiness read alone
+        // is also satisfied by a save whose returned Mono was assembled and dropped, which is its own defect.
+        assertThat(storage.saves).hasValue(0);
         assertThat(delegate.startedAt).isEmpty();
         assertThat(model.isPaused(SUBSCRIPTION_ID)).isTrue();
     }
@@ -128,7 +131,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     @Test
     void a_dynamic_start_position_that_opts_out_still_starts_without_storing_a_position() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
         StartAt optOut = StartAt.dynamic(() -> null);
@@ -137,6 +140,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(storage.read(SUBSCRIPTION_ID).blockOptional(TIMEOUT)).isEmpty();
+        assertThat(storage.saves).hasValue(0);
         assertThat(delegate.startedAt).isNotEmpty();
     }
 
@@ -156,6 +160,22 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         assertThat(delegate.startedAt).hasSize(1);
         assertThat(delegate.startedAt.getFirst()).isInstanceOf(StartAt.StartAtCheckpoint.class);
         return ((StartAt.StartAtCheckpoint) delegate.startedAt.getFirst()).checkpoint.asString();
+    }
+
+    /**
+     * Counts {@code save} invocations at the point of the call, deliberately before the returned {@code Mono} runs:
+     * the guard is "the model never called save", and counting at subscription time would let an assembled-and-dropped
+     * save go unnoticed, which is the defect class the count exists to catch.
+     */
+    private static final class SaveCountingCheckpointStorage extends InMemoryCheckpointStorage {
+
+        final AtomicInteger saves = new AtomicInteger();
+
+        @Override
+        public Mono<org.occurrent.subscription.Checkpoint> save(String subscriptionId, org.occurrent.subscription.Checkpoint checkpoint) {
+            saves.incrementAndGet();
+            return super.save(subscriptionId, checkpoint);
+        }
     }
 
 }
