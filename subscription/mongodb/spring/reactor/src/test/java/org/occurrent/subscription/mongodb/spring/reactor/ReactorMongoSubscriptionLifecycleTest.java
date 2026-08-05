@@ -91,13 +91,14 @@ public class ReactorMongoSubscriptionLifecycleTest {
     private MongoClient mongoClient;
     private ReactorMongoEventStore mongoEventStore;
     private ReactorMongoSubscriptionModel subscriptionModel;
+    private ReactiveMongoTemplate reactiveMongoTemplate;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void createEventStore() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivelifecycle");
         mongoClient = MongoClients.create(connectionString);
-        ReactiveMongoTemplate reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         subscriptionModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
@@ -283,6 +284,40 @@ public class ReactorMongoSubscriptionLifecycleTest {
         assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
         assertThatThrownBy(() -> subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void pausing_a_subscription_mid_retry_backoff_cancels_the_pending_retry() {
+        // Given: a model whose retry backoff is long (1 s) so the pause below always lands inside the backoff window
+        // rather than racing the retry it means to cancel. Pause disposes the subscription's pipeline, which is what
+        // cancels a scheduled retry, and nothing else pins that: a pause that merely stopped new deliveries would
+        // leave the retry timer live and the action would run again while "paused".
+        ReactorMongoSubscriptionModel slowRetry = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events",
+                TimeRepresentation.RFC_3339_STRING, new ReactorMongoSubscriptionModelConfig().backoff(Duration.ofSeconds(1), Duration.ofSeconds(2)));
+        try {
+            String subscriptionId = UUID.randomUUID().toString();
+            AtomicInteger attempts = new AtomicInteger();
+            StartAt beforeWrite = StartAt.checkpoint(slowRetry.globalCheckpoint().block());
+            slowRetry.subscribe(subscriptionId, beforeWrite, __ -> {
+                attempts.incrementAndGet();
+                return Mono.error(new RuntimeException("always failing"));
+            }).waitUntilStarted().block(Duration.ofSeconds(10));
+
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
+            await().atMost(10, SECONDS).untilAsserted(() -> assertThat(attempts.get()).isGreaterThanOrEqualTo(1));
+
+            // When: pause within the 1 s backoff window that opened when the first attempt failed.
+            slowRetry.pauseSubscription(subscriptionId);
+
+            // Then: the pending retry never fires. The observation window is 2.5 s, past both the 1 s first retry
+            // and the 2 s second, so a retry the pause failed to cancel would be observed. A fixed window rather
+            // than a condition wait, because "nothing happens" has no condition to await.
+            Mono.delay(Duration.ofMillis(2500)).block();
+            assertThat(attempts).hasValue(1);
+            assertThat(slowRetry.isPaused(subscriptionId)).isTrue();
+        } finally {
+            slowRetry.shutdown();
+        }
     }
 
     @Test

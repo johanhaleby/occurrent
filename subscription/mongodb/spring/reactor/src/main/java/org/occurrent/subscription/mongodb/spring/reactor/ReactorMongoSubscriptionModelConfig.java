@@ -82,11 +82,13 @@ public class ReactorMongoSubscriptionModelConfig {
     }
 
     /**
-     * Specify the exponential backoff bounds to use when the subscription model automatically restarts a subscription after a change stream error.
-     * The multiplier between attempts is fixed at 2.0, matching {@code NativeMongoSubscriptionModel} and {@code SpringMongoSubscriptionModel}.
+     * Specify the exponential backoff bounds the subscription model retries with. The same bounds govern both retry
+     * loops: restarting a subscription after a change stream error, and re-invoking a subscription's action after its
+     * {@code Mono} errors. The multiplier between attempts is fixed at 2.0, matching
+     * {@code NativeMongoSubscriptionModel} and {@code SpringMongoSubscriptionModel}.
      *
-     * @param minBackoff The initial (and minimum) wait time before restarting
-     * @param maxBackoff The maximum wait time between restart attempts
+     * @param minBackoff The initial (and minimum) wait time before retrying
+     * @param maxBackoff The maximum wait time between attempts
      * @return A new instance of {@code ReactorMongoSubscriptionModelConfig}
      */
     public ReactorMongoSubscriptionModelConfig backoff(Duration minBackoff, Duration maxBackoff) {
