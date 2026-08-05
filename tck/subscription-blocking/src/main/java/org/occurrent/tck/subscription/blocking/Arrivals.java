@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 
@@ -67,6 +68,36 @@ final class Arrivals {
                 break;
             }
             received.add(next);
+        }
+        arrived.drainTo(received);
+        return received;
+    }
+
+    /**
+     * Waits until everything that has arrived satisfies {@code condition}, or the timeout expires, and returns
+     * everything that arrived. For an assertion about arrival ORDER a plain count is the wrong thing to wait on: a
+     * model with a slow delivery seam (a catch-up replay handing over to a live feed, say) reaches the count while a
+     * later-ordered item is still in flight, and the assertion reads a list that was still growing. Waiting on the
+     * condition the caller is about to assert removes that race without changing what is asserted: a model that never
+     * satisfies it still comes back at the deadline, and the caller's assertion then fails on the full list.
+     */
+    static <T> List<T> awaitUntil(BlockingQueue<T> arrived, Predicate<List<T>> condition, Duration timeout, String what) {
+        requireNonNull(condition, "condition cannot be null");
+        requireNonNull(timeout, "timeout cannot be null");
+        List<T> received = new ArrayList<>();
+        long deadline = System.nanoTime() + timeout.toNanos();
+        arrived.drainTo(received);
+        while (!condition.test(received)) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                break;
+            }
+            T next = poll(arrived, remaining, what);
+            if (next == null) {
+                break;
+            }
+            received.add(next);
+            arrived.drainTo(received);
         }
         arrived.drainTo(received);
         return received;

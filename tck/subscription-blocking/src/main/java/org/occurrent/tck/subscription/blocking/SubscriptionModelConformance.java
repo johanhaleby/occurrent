@@ -317,7 +317,14 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                 // Held for the subscription, so it arrives before the marker that was published after it.
                 CloudEvent marker = ConformanceEvents.event("3", "MarkerEvent");
                 publish(marker);
-                List<CloudEvent> received = recorded.awaitAtLeast(2, DELIVERY_TIMEOUT);
+                // The wait is for the order the assertion is about, not a count: a model resuming through a replay
+                // handed over to a live feed reaches a count of 2 while the marker is still crossing that seam, and a
+                // count-wait would then assert on a list that was still growing.
+                List<CloudEvent> received = recorded.awaitUntil(events -> {
+                    List<String> ids = idsOf(events);
+                    int held = ids.indexOf(whilePaused.getId());
+                    return held >= 0 && ids.subList(held + 1, ids.size()).contains(marker.getId());
+                }, DELIVERY_TIMEOUT);
                 // A subsequence rather than the exact list, because a model resuming from the last event it delivered
                 // rather than from just after it may hand that one over again. Redelivery is not forbidden by this
                 // contract, so asserting the exact list here would reject an at-least-once model over something this

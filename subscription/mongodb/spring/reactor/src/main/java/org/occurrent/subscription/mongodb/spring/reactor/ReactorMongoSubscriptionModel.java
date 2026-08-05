@@ -53,6 +53,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
+import reactor.util.retry.RetryBackoffSpec;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -148,6 +149,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         if (shutdown) {
             throw new IllegalStateException("Cannot start subscription because the subscription model is shutdown.");
         }
+        // Validates the filter now, so an unsupported one is refused to the caller instead of failing later inside the
+        // deferred change-stream pipeline, where nobody is listening and the retry above it would re-throw it forever.
+        // Same fix NativeMongoSubscriptionModel got (#524); the plain Flux subscribe(filter, startAt) stays lazy on
+        // purpose, since a cold publisher delivers its failure to the subscriber. The result is discarded: the real
+        // options are built per (re)subscribe with the tracked start position.
+        ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, ChangeStreamOptions.builder());
         return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action);
     }
 
@@ -171,7 +178,15 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         // in-flight event, never skip one.
         Disposable disposable = resilientChangeStream(filter, currentStartAt, __ -> {
                 }, startedSink)
-                .concatMap(cloudEvent -> action.apply(cloudEvent)
+                // The action's own error is retried here, with the same backoff the change stream restarts with,
+                // mirroring the blocking models' RetryStrategy around the handler (no attempt cap by default). Without
+                // this the error passes retryWhen, which only guards the change stream above, and terminates the whole
+                // subscription: one bad delivery would end it while isRunning(id) said otherwise. Mono.defer, because
+                // a retry must re-invoke the action the way the blocking RetryStrategy re-calls the handler:
+                // resubscribing whatever Mono the first call returned would replay that attempt's failure forever.
+                .concatMap(cloudEvent -> Mono.defer(() -> action.apply(cloudEvent))
+                        .retryWhen(unboundedBackoff()
+                                .doBeforeRetry(retrySignal -> log.warn("Action for subscription {} failed, will retry (attempt {})", subscriptionId, retrySignal.totalRetries() + 1, retrySignal.failure())))
                         .doOnSuccess(unused -> currentStartAt.set(StartAt.checkpoint(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(cloudEvent)))))
                 .subscribe(unused -> {
                         }, throwable -> {
@@ -194,9 +209,13 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     private Flux<CloudEvent> resilientChangeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
         return changeStream(filter, currentStartAt, onDocumentRead, startedSink)
-                .retryWhen(Retry.backoff(Long.MAX_VALUE, config.minBackoff)
-                        .maxBackoff(config.maxBackoff)
+                .retryWhen(unboundedBackoff()
                         .filter(throwable -> shouldRestart(throwable, currentStartAt)));
+    }
+
+    // One spec for both retry sites, so the action retry cannot drift from the backoff the change stream restarts with.
+    private RetryBackoffSpec unboundedBackoff() {
+        return Retry.backoff(Long.MAX_VALUE, config.minBackoff).maxBackoff(config.maxBackoff);
     }
 
     private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {

@@ -57,12 +57,14 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CountDownLatch;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -89,13 +91,14 @@ public class ReactorMongoSubscriptionLifecycleTest {
     private MongoClient mongoClient;
     private ReactorMongoEventStore mongoEventStore;
     private ReactorMongoSubscriptionModel subscriptionModel;
+    private ReactiveMongoTemplate reactiveMongoTemplate;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void createEventStore() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivelifecycle");
         mongoClient = MongoClients.create(connectionString);
-        ReactiveMongoTemplate reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         subscriptionModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
@@ -252,27 +255,69 @@ public class ReactorMongoSubscriptionLifecycleTest {
     }
 
     @Test
-    void a_subscription_that_terminates_with_an_unrecoverable_error_is_removed_from_running_and_can_be_resubscribed() {
-        // Given: the action itself throws, which concatMap surfaces as a terminal error the outer retryWhen never
-        // sees, since it only covers the change stream, not the action. An explicit position from before the write
-        // is used, since waitUntilStarted() only signals that the change stream Flux was subscribed to, not that the
-        // server has acknowledged the command and the cursor is positioned, so a write right after it could
-        // otherwise land before the cursor is actually watching.
+    void a_subscription_whose_action_fails_is_retried_and_stays_running() {
+        // Given: the action throws on the first delivery only. The failure is retried with the model's backoff (the
+        // reactor counterpart of the blocking models' RetryStrategy around the handler), so one bad delivery must not
+        // end the subscription. An explicit position from before the write is used, since waitUntilStarted() only
+        // signals that the change stream Flux was subscribed to, not that the server has acknowledged the command and
+        // the cursor is positioned, so a write right after it could otherwise land before the cursor is actually
+        // watching.
         String subscriptionId = UUID.randomUUID().toString();
+        AtomicInteger deliveries = new AtomicInteger();
+        CountDownLatch delivered = new CountDownLatch(1);
         StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         subscriptionModel.subscribe(subscriptionId, beforeWrite, __ -> {
-            throw new RuntimeException("boom");
+            if (deliveries.incrementAndGet() == 1) {
+                throw new RuntimeException("boom, once");
+            }
+            delivered.countDown();
+            return Mono.empty();
         }).waitUntilStarted().block(Duration.ofSeconds(10));
 
         // When
         mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
 
-        // Then: the dead subscription is no longer tracked as running or paused
-        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
-        assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse();
+        // Then: the event reaches the action on a later attempt, and the subscription is still tracked as running,
+        // so its id cannot be taken by a second subscribe
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(delivered.getCount()).isZero());
+        assertThat(deliveries.get()).isGreaterThanOrEqualTo(2);
+        assertThat(subscriptionModel.isRunning(subscriptionId)).isTrue();
+        assertThatThrownBy(() -> subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 
-        // A new subscription can reuse the same id since the dead one is forgotten
-        subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10));
+    @Test
+    void pausing_a_subscription_mid_retry_backoff_cancels_the_pending_retry() {
+        // Given: a model whose retry backoff is long (1 s) so the pause below always lands inside the backoff window
+        // rather than racing the retry it means to cancel. Pause disposes the subscription's pipeline, which is what
+        // cancels a scheduled retry, and nothing else pins that: a pause that merely stopped new deliveries would
+        // leave the retry timer live and the action would run again while "paused".
+        ReactorMongoSubscriptionModel slowRetry = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events",
+                TimeRepresentation.RFC_3339_STRING, new ReactorMongoSubscriptionModelConfig().backoff(Duration.ofSeconds(1), Duration.ofSeconds(2)));
+        try {
+            String subscriptionId = UUID.randomUUID().toString();
+            AtomicInteger attempts = new AtomicInteger();
+            StartAt beforeWrite = StartAt.checkpoint(slowRetry.globalCheckpoint().block());
+            slowRetry.subscribe(subscriptionId, beforeWrite, __ -> {
+                attempts.incrementAndGet();
+                return Mono.error(new RuntimeException("always failing"));
+            }).waitUntilStarted().block(Duration.ofSeconds(10));
+
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
+            await().atMost(10, SECONDS).untilAsserted(() -> assertThat(attempts.get()).isGreaterThanOrEqualTo(1));
+
+            // When: pause within the 1 s backoff window that opened when the first attempt failed.
+            slowRetry.pauseSubscription(subscriptionId);
+
+            // Then: the pending retry never fires. The observation window is 2.5 s, past both the 1 s first retry
+            // and the 2 s second, so a retry the pause failed to cancel would be observed. A fixed window rather
+            // than a condition wait, because "nothing happens" has no condition to await.
+            Mono.delay(Duration.ofMillis(2500)).block();
+            assertThat(attempts).hasValue(1);
+            assertThat(slowRetry.isPaused(subscriptionId)).isTrue();
+        } finally {
+            slowRetry.shutdown();
+        }
     }
 
     @Test

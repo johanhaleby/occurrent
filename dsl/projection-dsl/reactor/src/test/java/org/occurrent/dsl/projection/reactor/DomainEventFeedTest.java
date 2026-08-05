@@ -32,6 +32,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -157,14 +158,14 @@ class DomainEventFeedTest {
     @Test
     void go_live_writes_no_completion_marker_so_a_later_catch_up_still_replays_history() {
         CloudEventConverter<Counted> converter = countedConverter();
-        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
 
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
         ConcurrentHashMap<String, Integer> throwaway = new ConcurrentHashMap<>();
         feed.register("counter", projection(), ViewStateRepository.create(throwaway::get, throwaway::put));
         feed.goLive("counter").block();
 
-        assertThat(marker.checkpoints).isEmpty();
+        assertThat(marker.read("counter").blockOptional()).isEmpty();
 
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         DomainEventFeed<Counted> restarted = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
@@ -229,7 +230,7 @@ class DomainEventFeedTest {
                 awaitUninterruptibly(proceed);
             }
         });
-        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
         feed.register("counter", projection(), repository);
 
@@ -267,25 +268,6 @@ class DomainEventFeedTest {
         }
     }
 
-    private static final class InMemoryReactiveCheckpointStorage implements CheckpointStorage {
-        private final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
-
-        @Override
-        public Mono<Checkpoint> read(String subscriptionId) {
-            return Mono.justOrEmpty(checkpoints.get(subscriptionId));
-        }
-
-        @Override
-        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
-            checkpoints.put(subscriptionId, checkpoint);
-            return Mono.just(checkpoint);
-        }
-
-        @Override
-        public Mono<Void> delete(String subscriptionId) {
-            return Mono.fromRunnable(() -> checkpoints.remove(subscriptionId));
-        }
-    }
 
     @Test
     void register_with_a_metadata_aware_fold_replays_and_folds_live_events_with_metadata_intact() {

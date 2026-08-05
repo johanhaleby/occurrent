@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 
@@ -56,6 +57,17 @@ public final class RecordedEvents implements Consumer<CloudEvent> {
      */
     public List<CloudEvent> awaitAtLeast(int count, Duration timeout) {
         return Arrivals.awaitAtLeast(arrived, count, timeout, "event");
+    }
+
+    /**
+     * Waits until what has arrived satisfies {@code condition}, or the timeout expires, and returns everything that
+     * arrived. Use this over {@link #awaitAtLeast(int, Duration)} when the assertion is about arrival ORDER: a model
+     * with a slow delivery seam can satisfy a count while a later-ordered event is still in flight, so the wait must
+     * be for the very thing the assertion needs. A short return is not an error here either: the caller asserts on
+     * the list, so a model that never satisfies the condition fails that assertion on the full list.
+     */
+    public List<CloudEvent> awaitUntil(Predicate<List<CloudEvent>> condition, Duration timeout) {
+        return Arrivals.awaitUntil(arrived, condition, timeout, "event");
     }
 
     /**

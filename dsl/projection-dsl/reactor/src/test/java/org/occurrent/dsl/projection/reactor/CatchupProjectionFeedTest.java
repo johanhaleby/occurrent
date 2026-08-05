@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -200,7 +201,7 @@ class CatchupProjectionFeedTest {
     void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
         CloudEventConverter<Counted> converter = countedConverter();
         Map<String, Integer> repo = new ConcurrentHashMap<>();
-        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
 
         feed("counter", reader("1", "2"), converter, repo, marker).catchUp().block();
         await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
@@ -323,11 +324,11 @@ class CatchupProjectionFeedTest {
     @Test
     void go_live_writes_no_completion_marker_so_a_later_catch_up_still_replays_history() {
         CloudEventConverter<Counted> converter = countedConverter();
-        InMemoryReactiveCheckpointStorage marker = new InMemoryReactiveCheckpointStorage();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
 
         feed("counter", reader("1", "2"), converter, new ConcurrentHashMap<>(), marker).goLive().block();
 
-        assertThat(marker.checkpoints).isEmpty();
+        assertThat(marker.read("counter").blockOptional()).isEmpty();
 
         Map<String, Integer> repo = new ConcurrentHashMap<>();
         feed("counter", reader("1", "2"), converter, repo, marker).catchUp().block();
@@ -480,23 +481,4 @@ class CatchupProjectionFeedTest {
     record Counted(String eventId) {
     }
 
-    private static final class InMemoryReactiveCheckpointStorage implements CheckpointStorage {
-        private final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
-
-        @Override
-        public Mono<Checkpoint> read(String subscriptionId) {
-            return Mono.justOrEmpty(checkpoints.get(subscriptionId));
-        }
-
-        @Override
-        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
-            checkpoints.put(subscriptionId, checkpoint);
-            return Mono.just(checkpoint);
-        }
-
-        @Override
-        public Mono<Void> delete(String subscriptionId) {
-            return Mono.fromRunnable(() -> checkpoints.remove(subscriptionId));
-        }
-    }
 }

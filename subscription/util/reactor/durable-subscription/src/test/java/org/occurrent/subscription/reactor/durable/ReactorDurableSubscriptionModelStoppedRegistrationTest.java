@@ -21,6 +21,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
+
+import java.time.Duration;
 import reactor.core.publisher.Mono;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -36,18 +39,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDurableSubscriptionModelStoppedRegistrationTest {
 
+    private static final Duration TIMEOUT = Duration.ofSeconds(2);
+
     private static final String SUBSCRIPTION_ID = "someSubscription";
 
     @Test
     void registering_while_stopped_stores_nothing() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
 
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
-        assertThat(storage.checkpoints).isEmpty();
+        assertThat(storage.read(SUBSCRIPTION_ID).blockOptional(TIMEOUT)).isEmpty();
+        // Not just "nothing is stored": save was never invoked at all. Over a cold storage, an emptiness read alone
+        // is also satisfied by a save whose returned Mono was assembled and dropped, which is its own defect.
+        assertThat(storage.saves).hasValue(0);
         assertThat(delegate.startedAt).isEmpty();
         assertThat(model.isPaused(SUBSCRIPTION_ID)).isTrue();
     }
@@ -63,7 +71,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
         model.resumeSubscription(SUBSCRIPTION_ID);
 
-        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+        assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString()).isEqualTo("at-registration");
         assertThat(startedAtCheckpoint(delegate)).isEqualTo("at-registration");
     }
 
@@ -71,14 +79,14 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     void a_subscription_that_already_has_a_stored_position_keeps_it() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
-        storage.checkpoints.put(SUBSCRIPTION_ID, new StringBasedCheckpoint("from-a-previous-run"));
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("from-a-previous-run")).block(TIMEOUT);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
 
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
         model.resumeSubscription(SUBSCRIPTION_ID);
 
-        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("from-a-previous-run");
+        assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString()).isEqualTo("from-a-previous-run");
         assertThat(startedAtCheckpoint(delegate)).isEqualTo("from-a-previous-run");
     }
 
@@ -95,7 +103,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         delegate.globalCheckpoint = new StringBasedCheckpoint("read-again-at-start");
         model.resumeSubscription(SUBSCRIPTION_ID);
 
-        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("read-again-at-start");
+        assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString()).isEqualTo("read-again-at-start");
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
     }
 
@@ -117,13 +125,13 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(evaluations.get()).isPositive();
-        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+        assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString()).isEqualTo("at-registration");
     }
 
     @Test
     void a_dynamic_start_position_that_opts_out_still_starts_without_storing_a_position() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
         StartAt optOut = StartAt.dynamic(() -> null);
@@ -131,7 +139,8 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.subscribe(SUBSCRIPTION_ID, null, optOut, __ -> Mono.empty());
         model.resumeSubscription(SUBSCRIPTION_ID);
 
-        assertThat(storage.checkpoints).isEmpty();
+        assertThat(storage.read(SUBSCRIPTION_ID).blockOptional(TIMEOUT)).isEmpty();
+        assertThat(storage.saves).hasValue(0);
         assertThat(delegate.startedAt).isNotEmpty();
     }
 
@@ -143,7 +152,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
 
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
-        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+        assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString()).isEqualTo("at-registration");
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
     }
 
@@ -151,6 +160,22 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         assertThat(delegate.startedAt).hasSize(1);
         assertThat(delegate.startedAt.getFirst()).isInstanceOf(StartAt.StartAtCheckpoint.class);
         return ((StartAt.StartAtCheckpoint) delegate.startedAt.getFirst()).checkpoint.asString();
+    }
+
+    /**
+     * Counts {@code save} invocations at the point of the call, deliberately before the returned {@code Mono} runs:
+     * the guard is "the model never called save", and counting at subscription time would let an assembled-and-dropped
+     * save go unnoticed, which is the defect class the count exists to catch.
+     */
+    private static final class SaveCountingCheckpointStorage extends InMemoryCheckpointStorage {
+
+        final AtomicInteger saves = new AtomicInteger();
+
+        @Override
+        public Mono<org.occurrent.subscription.Checkpoint> save(String subscriptionId, org.occurrent.subscription.Checkpoint checkpoint) {
+            saves.incrementAndGet();
+            return super.save(subscriptionId, checkpoint);
+        }
     }
 
 }

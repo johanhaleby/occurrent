@@ -349,3 +349,29 @@ replays. So does one that cannot store a checkpoint again for a subscription tha
 The cost is CI time, and it is a real cost. These suites add wall-clock to the subscription shards rather than removing
 it, and unlike the event-store phases there is no deletion to pay for it. The per-shard budget of 240 seconds only
 warns, but the 20 minute timeout does not.
+
+**Amended when phase 7 was built.** The reactor leaf reuses the blocking suites through
+`BlockingSubscriptionOverReactive` in `tck/subscription-reactor`, which presents a reactor `SubscriptionModel` (the
+combining interface from #543) as a blocking one, and a small `ReactiveSubscriptionModelConformance` covers what a
+bridge cannot see: that the action's `Mono` does its work when subscribed rather than when assembled, that a failing
+action fails through the model and leaves it running, that `waitUntilStarted()` answers and answers again, and that
+disposing a wait leaves the subscription working. Two wirings were deliberately held back rather than declared around.
+`CatchupThenPushSubscriptionModel` replays its whole history for every new subscription id by documented contract, so
+the general suite's assumption that a fresh subscription starts at the present fails it structurally; that is exactly
+the restriction phase 8's `StartAt` declaration exists to express, so its general-conformance wiring waits for phase 8
+while its introspection and reactive-only wirings run now. And `ReactorDurableSubscriptionModel` reads the wrapped
+model's cold `Flux` primitive through its own delivery pipeline instead of delegating to the named `subscribe` the way
+the blocking `DurableSubscriptionModel` does, so it inherits neither retry nor synchronous filter validation and
+cannot pass those assertions by any focused change. Whether it gains its own retry policy or is reshaped to delegate
+like its blocking twin is a design decision recorded as its own issue, not something a fixture flag may paper over.
+
+The question this ADR left to phase 7 is answered: the reactor in-memory checkpoint storage is published. It lives at
+`org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage` in the already-shipped
+`occurrent-subscription-inmemory` artifact, beside its blocking twin, with `occurrent-subscription-api-reactor` as an
+optional dependency. The same simple name in a `reactor` subpackage mirrors how the two api modules already name their
+halves, no new artifact is minted for one class (the handover-engine reversal set that bar), and the optional scope
+keeps reactor-core off blocking-only consumers' classpaths, the pattern `occurrent-command-dispatch` established for
+its decider dependency. One behavioural difference from the four private copies it replaces, all now deleted: the
+published publishers are cold. The copies stored the checkpoint when `save(..)` was called; the published class does
+nothing until subscription, which is the contract ADR 93 holds every published reactive publisher to, and its test
+asserts both the cold branch and the eager argument validation.
