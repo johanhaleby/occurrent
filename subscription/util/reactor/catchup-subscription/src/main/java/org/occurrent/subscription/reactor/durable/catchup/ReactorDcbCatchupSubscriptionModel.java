@@ -32,9 +32,12 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.function.Function;
 import java.util.function.Predicate;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
@@ -67,7 +70,7 @@ import static java.util.Objects.requireNonNull;
  * constructor is used), since catch-up is DCB-specific.
  */
 @NullMarked
-class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel {
+class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
 
     /**
      * Default number of DCB positions read per replay window.
@@ -84,6 +87,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
+    private final NamedCatchupSupport namedSubscriptions;
     private final DcbEventStore dcbEventStore;
     private final @Nullable DcbCriteria defaultCriteria;
     private final long windowSize;
@@ -109,6 +113,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
 
     public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultCriteria, long windowSize, int handoverCacheSize) {
         this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
+        this.namedSubscriptions = new NamedCatchupSupport(subscriptionModel, ReactorDcbCatchupSubscriptionModel.class);
         this.dcbEventStore = requireNonNull(dcbEventStore, DcbEventStore.class.getSimpleName() + " cannot be null");
         this.defaultCriteria = defaultCriteria;
         if (windowSize <= 0) {
@@ -131,17 +136,100 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         final DcbCriteria criteria;
-        if (filter == null) {
-            if (defaultCriteria == null) {
-                return Flux.error(new IllegalArgumentException("A " + DcbSubscriptionFilter.class.getSimpleName() + " is required unless a default " + DcbCriteria.class.getSimpleName() + " was supplied to the constructor."));
-            }
-            criteria = defaultCriteria;
-        } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
-            criteria = dcbSubscriptionFilter.criteria();
-        } else {
-            return Flux.error(new IllegalArgumentException(ReactorDcbCatchupSubscriptionModel.class.getSimpleName() + " only supports a " + DcbSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName()));
+        try {
+            criteria = resolveCriteria(filter);
+        } catch (IllegalArgumentException e) {
+            // The cold primitive reports an unsupported filter through the publisher, per its contract.
+            return Flux.error(e);
         }
         return subscribe(criteria, startAt);
+    }
+
+    // Resolves the caller's SubscriptionFilter to the DcbCriteria this model replays and delivers, throwing for a
+    // filter this model does not understand. The named path throws this synchronously from subscribe(..); the cold
+    // primitive converts it to an error publisher.
+    private DcbCriteria resolveCriteria(@Nullable SubscriptionFilter filter) {
+        if (filter == null) {
+            if (defaultCriteria == null) {
+                throw new IllegalArgumentException("A " + DcbSubscriptionFilter.class.getSimpleName() + " is required unless a default " + DcbCriteria.class.getSimpleName() + " was supplied to the constructor.");
+            }
+            return defaultCriteria;
+        } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
+            return dcbSubscriptionFilter.criteria();
+        }
+        throw new IllegalArgumentException(ReactorDcbCatchupSubscriptionModel.class.getSimpleName() + " only supports a " + DcbSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName());
+    }
+
+    /**
+     * The named subscription entry point (issues #547 and #550). An unsupported {@code filter} is refused here,
+     * synchronously. A {@code startAt} that resolves to a {@code position} replays history from that position without
+     * retrying a failing action, then hands the live half to the wrapped model's own named {@code subscribe(..)}, so
+     * live delivery inherits the wrapped model's handler retry. Any other start delegates straight to the wrapped
+     * model. Requires the wrapped model to manage named subscriptions itself.
+     */
+    @Override
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(action, "Action cannot be null");
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        DcbCriteria criteria = resolveCriteria(filter);
+        Predicate<CloudEvent> livePredicate = cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria);
+        SubscriptionFilter liveFilter = DcbSubscriptionFilter.filter(criteria);
+
+        StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorDcbCatchupSubscriptionModel.class));
+        if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
+            return namedSubscriptions.subscribeStraightToLive(subscriptionId, liveFilter, livePredicate, resolved == null ? startAt : resolved, action);
+        }
+        long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
+        CatchupReader reader = new DcbCatchupReader(dcbEventStore, criteria);
+        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, reader, windowSize, handoverCacheSize, startPosition, action);
+    }
+
+    // --- The life cycle forwards to the wrapped model, with bookkeeping for subscriptions still replaying.
+
+    @Override
+    public void stop() {
+        namedSubscriptions.stop();
+    }
+
+    @Override
+    public void start(boolean resumeSubscriptionsAutomatically) {
+        namedSubscriptions.start(resumeSubscriptionsAutomatically);
+    }
+
+    @Override
+    public boolean isRunning() {
+        return namedSubscriptions.isRunning();
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return namedSubscriptions.isRunning(subscriptionId);
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return namedSubscriptions.isPaused(subscriptionId);
+    }
+
+    @Override
+    public Subscription resumeSubscription(String subscriptionId) {
+        return namedSubscriptions.resumeSubscription(subscriptionId);
+    }
+
+    @Override
+    public void pauseSubscription(String subscriptionId) {
+        namedSubscriptions.pauseSubscription(subscriptionId);
+    }
+
+    @Override
+    public void cancelSubscription(String subscriptionId) {
+        namedSubscriptions.cancelSubscription(subscriptionId);
+    }
+
+    @Override
+    public void shutdown() {
+        namedSubscriptions.shutdown();
     }
 
     @Override

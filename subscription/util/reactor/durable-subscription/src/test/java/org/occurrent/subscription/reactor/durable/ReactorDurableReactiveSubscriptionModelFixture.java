@@ -16,49 +16,47 @@
 
 package org.occurrent.subscription.reactor.durable;
 
-import com.mongodb.reactivestreams.client.MongoClient;
 import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionModel;
-import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
-import org.occurrent.tck.subscription.reactor.BlockingSubscriptionOverReactive;
+import org.occurrent.tck.subscription.reactor.ReactiveSubscriptionModelConformance;
+import org.occurrent.tck.subscription.reactor.ReactiveSubscriptionModelFixture;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
-import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.ReactiveTransactionManager;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.UUID;
 
+import static com.mongodb.reactivestreams.client.MongoClients.create;
+
 /**
- * Feeds {@code Durable(Catchup(Mongo))}, the composition the Spring Boot starter actually wires
- * (see {@code ORCHESTRATOR.md}'s "Primary execution flows": Durable persists the checkpoint, Catchup replays history
- * for whatever start position Durable resolves, before handing over to the live Mongo model). Every fixture instance
- * gets its own event collection and its own checkpoint collection, named with a UUID, mirroring
- * {@code ReactorMongoSubscriptionModelFixture}.
+ * The reactive-only counterpart of {@link ReactorDurableSubscriptionModelFixture}, feeding
+ * {@link ReactiveSubscriptionModelConformance} the {@code Durable(Catchup(Mongo))} composition directly rather than
+ * through the blocking bridge.
  */
-class ReactorDurableSubscriptionModelFixture implements SubscriptionModelFixture {
+class ReactorDurableReactiveSubscriptionModelFixture implements ReactiveSubscriptionModelFixture {
 
     private final String streamId = UUID.randomUUID().toString();
 
+    private final com.mongodb.reactivestreams.client.MongoClient mongoClient;
     private final ReactorMongoEventStore eventStore;
-    private final ReactorMongoSubscriptionModel mongoModel;
     private final ReactorDurableSubscriptionModel durableModel;
-    private final SubscriptionModel subscriptionModel;
     private final ReactiveMongoTemplate reactiveMongoTemplate;
     private final String eventCollectionName;
     private final String checkpointCollectionName;
 
-    ReactorDurableSubscriptionModelFixture(MongoClient mongoClient, String databaseName) {
+    ReactorDurableReactiveSubscriptionModelFixture(String replicaSetUrl, String databaseName) {
+        this.mongoClient = create(replicaSetUrl);
         this.eventCollectionName = "events-" + UUID.randomUUID();
         this.checkpointCollectionName = "checkpoints-" + UUID.randomUUID();
         this.reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, databaseName);
@@ -71,22 +69,16 @@ class ReactorDurableSubscriptionModelFixture implements SubscriptionModelFixture
                 .timeRepresentation(timeRepresentation)
                 .build();
         this.eventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
-        this.mongoModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollectionName, timeRepresentation);
-        // A default filter, or the catch-up model refuses a subscription made with no SubscriptionFilter at all,
-        // which is exactly what the TCK's convenience subscribe(id, action) overload passes.
+        ReactorMongoSubscriptionModel mongoModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, eventCollectionName, timeRepresentation);
+        // A default filter, or the catch-up model refuses a subscription made with no SubscriptionFilter at all.
         CheckpointAwareSubscriptionModel catchupModel = new ReactorCatchupSubscriptionModel(mongoModel, eventStore, Filter.all());
         ReactorCheckpointStorage checkpointStorage = new ReactorCheckpointStorage(reactiveMongoTemplate, checkpointCollectionName);
         this.durableModel = new ReactorDurableSubscriptionModel(catchupModel, checkpointStorage);
-        this.subscriptionModel = BlockingSubscriptionOverReactive.of(durableModel);
-    }
-
-    ReactorDurableSubscriptionModel durableModel() {
-        return durableModel;
     }
 
     @Override
     public SubscriptionModel subscriptionModel() {
-        return subscriptionModel;
+        return durableModel;
     }
 
     @Override
@@ -94,35 +86,9 @@ class ReactorDurableSubscriptionModelFixture implements SubscriptionModelFixture
         eventStore.write(streamId, Flux.fromIterable(events)).block();
     }
 
-    /**
-     * Resuming reuses the checkpoint of the last event this subscription actually delivered
-     * ({@code ReactorDurableSubscriptionModel.source(..)}'s {@code doOnSuccess}), a concrete {@code StartAt} that
-     * skips {@code resolveStartAt}'s default-position branch, so the wrapped catch-up model bulk-replays everything
-     * committed after it, including whatever was published while paused.
-     */
-    @Override
-    public boolean deliversEventsPublishedWhilePaused() {
-        return true;
-    }
-
-    /**
-     * A failing action's {@code Mono} is retried. Since the catch-up model promotion (#550) the durable model
-     * delegates this composition to the wrapped model's named {@code subscribe}, so the failing action lands inside
-     * {@code ReactorMongoSubscriptionModel}'s handler retry and is re-invoked with the model's backoff. This
-     * declaration said {@code false} while the composition ran the durable model's own unguarded pipeline, which is
-     * exactly the divergence #547 recorded and this fixture's red run demonstrated.
-     */
-    @Override
-    public boolean retriesAFailingHandler() {
-        return true;
-    }
-
     @Override
     public void close() {
         durableModel.shutdown();
-        // Delete documents rather than dropping either collection: dropping kills a live change stream, and
-        // shutdown() above has only just asked this model's own stream to close.
-        reactiveMongoTemplate.remove(new Query(), eventCollectionName).block();
-        reactiveMongoTemplate.remove(new Query(), checkpointCollectionName).block();
+        mongoClient.close();
     }
 }

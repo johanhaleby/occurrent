@@ -14,11 +14,11 @@ yourself, one method gained a parameter. Almost nobody does, since the model Occ
 refuses to start. If you use a push source, read
 [section 3](#3-a-push-sink-feeds-exactly-one-projection-or-saga) first.
 
-Six things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+Seven things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
 `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
-first failing handler, the reactor subscription primitive was renamed, and a paused MongoDB subscription now delivers
-what was written while it was paused.
+first failing handler, the reactor subscription primitive was renamed, a durable reactor model refuses a composition it
+used to accept, and a paused MongoDB subscription now delivers what was written while it was paused.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -372,7 +372,30 @@ for a concept the blocking stack already names would leave a reader asking what 
 has the full reasoning.
 
 
-## 6. A paused MongoDB subscription delivers what was written while it was paused
+## 6. A durable reactor model over a catch-up model over a cold-only model
+
+`ReactorDurableSubscriptionModel` now hands its subscriptions to the model it wraps whenever that model manages named
+subscriptions itself, and the three reactor catch-up models now do. If your composition is
+`Durable(Catchup(customModel))` where `customModel` implements only the cold `FluxSubscriptionModel` primitive, the
+catch-up model has nothing underneath to delegate the live half to, and refuses with:
+
+> `ReactorStreamCatchupSubscriptionModel can only manage named subscriptions when the model it wraps manages them
+> itself (implements SubscriptionModel). The wrapped <your class> only offers the plain (cold) subscribe(filter,
+> startAt) primitive, so use that primitive directly, or wrap a model that manages named subscriptions.`
+
+Before this release the same composition ran through the durable model's own delivery loop, which retried nothing and
+validated nothing, the gap [#547](https://github.com/johanhaleby/occurrent/issues/547) records. The remediation is in
+the message: implement the reactor `SubscriptionModel` on your model, the way every model shipped by Occurrent now
+does, and the composition inherits its retry and validation. If you cannot, subscribe to the catch-up model's cold
+`Flux` directly and manage the delivery yourself, which is what the old path silently did for you without the
+resilience you probably assumed it had.
+
+Only the named `subscribe(..)` paths refuse. The model-wide life-cycle methods stay safe on such a composition:
+`shutdown()` (a Spring context close calls it through `destroyMethod`) and `stop()` are no-ops, `isRunning()` answers
+`false`, and cancelling an id the composition never knew is ignored, so an application that keeps the cold-only
+composition but never subscribes by name still starts, health-checks, and shuts down cleanly.
+
+## 7. A paused MongoDB subscription delivers what was written while it was paused
 
 Nothing to change in your code, but the behaviour under you moved, so check your handlers before you upgrade.
 
@@ -390,7 +413,7 @@ subscription stops and says so rather than silently skipping ahead, which is wha
 ### What this asks of you
 
 **Handlers must be idempotent.** Delivery across a pause is at least once, and `stop()` on the model pauses every
-subscription it holds, so `stop()` followed by `start()` is the same case. Two things produce a repeat:
+subscription it holds, so `stop()` followed by `start()` is the same case. Three things produce a repeat:
 
 - An event whose handler had not finished when the subscription was paused. The position advances after the handler
   returns, so pausing mid-handler means that event is handed over again on resume.
@@ -406,6 +429,21 @@ subscription it holds, so `stop()` followed by `start()` is the same case. Two t
 If your handler writes to a read model with an upsert keyed on the event, or checks the `streamid`/`streamversion` or
 `position` extension before acting, you already have what this needs. If it appends to a list or increments a counter
 without looking, it will double-count now where a pause used to hide the problem by dropping the event instead.
+
+**A long pause can now outlive the oplog, and the default is to stop rather than skip.** Resuming at the present could
+never fail, because the present is always in the oplog. Resuming from a position can, and MongoDB answers with change
+stream history lost (error 286) when that position has rolled off. A competing consumer on standby for longer than your
+oplog window is the case to think about, and so is any outage that outlasts it. With
+`restartSubscriptionsOnChangeStreamHistoryLost` left at its default of `false` the subscription logs the error and stops
+delivering, and `isRunning(id)` keeps answering `true`, so nothing in the API tells you it has gone quiet. Three ways
+out, and the right one depends on what the subscription is for:
+
+- Size the oplog for the longest standby you expect. This is the only one that keeps every event.
+- Set `restartSubscriptionsOnChangeStreamHistoryLost(true)` if you would rather the subscription restart at the present
+  and lose the window it could not reach. That is the old behaviour, now something you ask for rather than something
+  that happens quietly.
+- Put a catch-up model in front of a subscription that may stand by for a long time, so it replays from the event store
+  instead of depending on the oplog at all.
 
 ### Why the trade goes this way
 

@@ -34,9 +34,12 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
@@ -80,9 +83,18 @@ import static java.util.Objects.requireNonNull;
  * a durable model. Its generic {@link #subscribe(SubscriptionFilter, StartAt)} only accepts an
  * {@link StreamSubscriptionFilter}, or no filter, in which case the default {@link Filter} passed to the
  * constructor is used.
+ * <p>
+ * It also implements the reactor {@link SubscriptionModel} (issues #547 and #550): named subscriptions replay the same
+ * way and then hand the live half to the wrapped model's own named {@code subscribe(..)}, so a named catch-up
+ * subscription inherits everything the wrapped model does for one, its handler retry and its synchronous refusal of an
+ * unsupported filter included. A failing action during the replay itself is not retried, matching the blocking
+ * catch-up models, and the failure reaches whoever waits on the returned subscription. The named path therefore
+ * requires the wrapped model to manage named subscriptions itself; over a cold-only wrapped model it refuses loudly.
+ * The life cycle forwards to the wrapped model, so give each catch-up model its own wrapped model rather than sharing
+ * one between compositions.
  */
 @NullMarked
-public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel {
+public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
 
     // Guards every replay read and the live subscription this model performs so a DCB-tagged event is never delivered
     // to a stream subscriber, even on a store that has both capabilities enabled (see ADR 50).
@@ -103,6 +115,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
+    private final NamedCatchupSupport namedSubscriptions;
     private final PositionOrderedReader positionOrderedReader;
     private final @Nullable Filter defaultFilter;
     private final long windowSize;
@@ -142,6 +155,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
      */
     public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize, @Nullable Filter capabilityScope) {
         this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
+        this.namedSubscriptions = new NamedCatchupSupport(subscriptionModel, ReactorStreamCatchupSubscriptionModel.class);
         this.positionOrderedReader = requireNonNull(positionOrderedReader, PositionOrderedReader.class.getSimpleName() + " cannot be null");
         this.defaultFilter = defaultFilter;
         this.capabilityScope = capabilityScope;
@@ -165,19 +179,103 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         final Filter resolvedFilter;
-        if (filter == null) {
-            if (defaultFilter == null) {
-                return Flux.error(new IllegalArgumentException("A " + StreamSubscriptionFilter.class.getSimpleName() + " is required unless a default " + Filter.class.getSimpleName() + " was supplied to the constructor."));
-            }
-            resolvedFilter = defaultFilter;
-        } else if (filter instanceof StreamSubscriptionFilter streamSubscriptionFilter) {
-            resolvedFilter = streamSubscriptionFilter.filter();
-        } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
-            resolvedFilter = agnosticSubscriptionFilter.filter();
-        } else {
-            return Flux.error(new IllegalArgumentException(ReactorStreamCatchupSubscriptionModel.class.getSimpleName() + " only supports an " + StreamSubscriptionFilter.class.getSimpleName() + " or " + AgnosticSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName()));
+        try {
+            resolvedFilter = resolveFilter(filter);
+        } catch (IllegalArgumentException e) {
+            // The cold primitive reports an unsupported filter through the publisher, per its contract.
+            return Flux.error(e);
         }
         return subscribe(resolvedFilter, startAt);
+    }
+
+    // Resolves the caller's SubscriptionFilter to the stream Filter this model replays and delivers, throwing for a
+    // filter this model does not understand. The named path throws this synchronously from subscribe(..); the cold
+    // primitive converts it to an error publisher.
+    private Filter resolveFilter(@Nullable SubscriptionFilter filter) {
+        if (filter == null) {
+            if (defaultFilter == null) {
+                throw new IllegalArgumentException("A " + StreamSubscriptionFilter.class.getSimpleName() + " is required unless a default " + Filter.class.getSimpleName() + " was supplied to the constructor.");
+            }
+            return defaultFilter;
+        } else if (filter instanceof StreamSubscriptionFilter streamSubscriptionFilter) {
+            return streamSubscriptionFilter.filter();
+        } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
+            return agnosticSubscriptionFilter.filter();
+        }
+        throw new IllegalArgumentException(ReactorStreamCatchupSubscriptionModel.class.getSimpleName() + " only supports an " + StreamSubscriptionFilter.class.getSimpleName() + " or " + AgnosticSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName());
+    }
+
+    /**
+     * The named subscription entry point (issues #547 and #550). An unsupported {@code filter} is refused here,
+     * synchronously. A {@code startAt} that resolves to a {@code position} replays history from that position without
+     * retrying a failing action, then hands the live half to the wrapped model's own named {@code subscribe(..)}, so
+     * live delivery inherits the wrapped model's handler retry. Any other start delegates straight to the wrapped
+     * model. Requires the wrapped model to manage named subscriptions itself.
+     */
+    @Override
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(action, "Action cannot be null");
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        Filter scoped = withCapabilityScope(resolveFilter(filter));
+        Predicate<CloudEvent> matchesLocally = FilterMatcher.matcherIgnoringPayloadConditions(scoped);
+        Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && matchesLocally.test(cloudEvent);
+        SubscriptionFilter liveFilter = StreamSubscriptionFilter.filter(scoped);
+
+        StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorStreamCatchupSubscriptionModel.class));
+        if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
+            return namedSubscriptions.subscribeStraightToLive(subscriptionId, liveFilter, livePredicate, resolved == null ? startAt : resolved, action);
+        }
+        long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
+        CatchupReader reader = new StreamCatchupReader(positionOrderedReader, scoped);
+        return namedSubscriptions.subscribeWithCatchup(subscriptionId, liveFilter, livePredicate, reader, windowSize, handoverCacheSize, startPosition, action);
+    }
+
+    // --- The life cycle forwards to the wrapped model, with bookkeeping for subscriptions still replaying.
+
+    @Override
+    public void stop() {
+        namedSubscriptions.stop();
+    }
+
+    @Override
+    public void start(boolean resumeSubscriptionsAutomatically) {
+        namedSubscriptions.start(resumeSubscriptionsAutomatically);
+    }
+
+    @Override
+    public boolean isRunning() {
+        return namedSubscriptions.isRunning();
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return namedSubscriptions.isRunning(subscriptionId);
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return namedSubscriptions.isPaused(subscriptionId);
+    }
+
+    @Override
+    public Subscription resumeSubscription(String subscriptionId) {
+        return namedSubscriptions.resumeSubscription(subscriptionId);
+    }
+
+    @Override
+    public void pauseSubscription(String subscriptionId) {
+        namedSubscriptions.pauseSubscription(subscriptionId);
+    }
+
+    @Override
+    public void cancelSubscription(String subscriptionId) {
+        namedSubscriptions.cancelSubscription(subscriptionId);
+    }
+
+    @Override
+    public void shutdown() {
+        namedSubscriptions.shutdown();
     }
 
     @Override

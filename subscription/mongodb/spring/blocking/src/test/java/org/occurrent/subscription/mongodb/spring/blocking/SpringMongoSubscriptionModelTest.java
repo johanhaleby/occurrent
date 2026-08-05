@@ -709,6 +709,7 @@ public class SpringMongoSubscriptionModelTest {
             // restart that continues where it left off from one that reconnects at the present.
             AtomicBoolean withholdDocuments = new AtomicBoolean(false);
             AtomicBoolean failNextRead = new AtomicBoolean(false);
+            AtomicBoolean readFailed = new AtomicBoolean(false);
             MongoCollection<Document> realEventCollection = mongoTemplate.getDb().getCollection(eventCollectionName);
 
             MongoTemplate mongoTemplateSpy = spy(mongoTemplate);
@@ -720,7 +721,7 @@ public class SpringMongoSubscriptionModelTest {
             when(mongoTemplateSpy.getDb()).thenReturn(mongoDatabase).thenCallRealMethod();
             when(mongoDatabase.getCollection(eventCollectionName)).thenReturn(instrumentedCollection);
             when(instrumentedCollection.watch(any(Class.class)))
-                    .thenAnswer(__ -> instrumentedChangeStream(realEventCollection.watch(Document.class), withholdDocuments, failNextRead));
+                    .thenAnswer(__ -> instrumentedChangeStream(realEventCollection.watch(Document.class), withholdDocuments, failNextRead, readFailed));
 
             subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, eventCollectionName, timeRepresentation);
             LocalDateTime now = LocalDateTime.now();
@@ -743,6 +744,13 @@ public class SpringMongoSubscriptionModelTest {
             NameWasChanged lastDuringTheOutage = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name3");
             mongoEventStore.write("1", 1, serialize(firstDuringTheOutage));
             mongoEventStore.write("1", 2, serialize(lastDuringTheOutage));
+            // The outage has to be real for the rest of this test to mean anything. Without this the subscription
+            // could be reading through the untouched change stream, delivering all three events for reasons that
+            // have nothing to do with where a restart resumes, and the assertion below would still pass.
+            await().during(ONE_SECOND).atMost(FIVE_SECONDS).untilAsserted(() ->
+                    assertThat(state)
+                            .as("nothing may reach the handler while the change stream is withholding documents")
+                            .hasSize(1));
             failNextRead.set(true);
 
             // Then
@@ -751,6 +759,10 @@ public class SpringMongoSubscriptionModelTest {
                             .as("the restarted subscription must continue from the event it had read, so both "
                                     + "events written while its change stream was down still arrive")
                             .containsExactly(beforeTheOutage.eventId(), firstDuringTheOutage.eventId(), lastDuringTheOutage.eventId()));
+            assertThat(readFailed)
+                    .as("the change stream this test instrumented must be the one the subscription was reading, "
+                            + "or the outage never happened and the delivery above proves nothing")
+                    .isTrue();
         }
 
         /**
@@ -759,10 +771,10 @@ public class SpringMongoSubscriptionModelTest {
          * iterable they return, so the chain {@code ChangeStreamTask} builds ends at the instrumented cursor.
          */
         @SuppressWarnings("unchecked")
-        private ChangeStreamIterable<Document> instrumentedChangeStream(ChangeStreamIterable<Document> real, AtomicBoolean withholdDocuments, AtomicBoolean failNextRead) {
+        private ChangeStreamIterable<Document> instrumentedChangeStream(ChangeStreamIterable<Document> real, AtomicBoolean withholdDocuments, AtomicBoolean failNextRead, AtomicBoolean readFailed) {
             return mock(ChangeStreamIterable.class, invocation -> {
                 if (invocation.getMethod().getName().equals("iterator")) {
-                    return instrumentedCursor(real.iterator(), withholdDocuments, failNextRead);
+                    return instrumentedCursor(real.iterator(), withholdDocuments, failNextRead, readFailed);
                 }
                 Object answer = invocation.getMethod().invoke(real, invocation.getArguments());
                 return answer == real ? invocation.getMock() : answer;
@@ -770,12 +782,13 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @SuppressWarnings("unchecked")
-        private MongoCursor<ChangeStreamDocument<Document>> instrumentedCursor(MongoCursor<ChangeStreamDocument<Document>> real, AtomicBoolean withholdDocuments, AtomicBoolean failNextRead) {
+        private MongoCursor<ChangeStreamDocument<Document>> instrumentedCursor(MongoCursor<ChangeStreamDocument<Document>> real, AtomicBoolean withholdDocuments, AtomicBoolean failNextRead, AtomicBoolean readFailed) {
             return mock(MongoCursor.class, invocation -> {
                 if (!invocation.getMethod().getName().equals("tryNext")) {
                     return invocation.getMethod().invoke(real, invocation.getArguments());
                 }
                 if (failNextRead.get()) {
+                    readFailed.set(true);
                     throw new MongoSocketReadException("expected: simulated failover", new ServerAddress(), new IOException("Connection reset by peer"));
                 }
                 if (withholdDocuments.get()) {
@@ -784,7 +797,14 @@ public class SpringMongoSubscriptionModelTest {
                     Thread.sleep(20);
                     return null;
                 }
-                return real.tryNext();
+                ChangeStreamDocument<Document> next = (ChangeStreamDocument<Document>) real.tryNext();
+                if (next != null && withholdDocuments.get()) {
+                    // Withholding started while this call was already waiting on the server. Handing the
+                    // document over now would mean the outage never began. Dropping it costs nothing, since
+                    // the restart re-reads from the tracked position rather than from this cursor.
+                    return null;
+                }
+                return next;
             });
         }
     }

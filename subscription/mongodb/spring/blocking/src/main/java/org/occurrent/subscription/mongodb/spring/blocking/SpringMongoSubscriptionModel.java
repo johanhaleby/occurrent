@@ -509,9 +509,13 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             }
             ChangeStreamRequest<Document> newChangeStreamRequest = internalSubscription.newChangeStreamRequest();
             activeRestartSignal.put(subscriptionId, failureSignal);
+            // Removed before the replacement is registered, not after. Both share the listener that advances the
+            // tracked position, so a straggling delivery from the old cursor would move it back to an older token
+            // and replay from there. Nothing is lost either way, since the replacement starts from the position
+            // rather than from the present.
+            messageListenerContainer.remove(oldSpringSubscription);
             org.springframework.data.mongodb.core.messaging.Subscription newSpringSubscription = registerNewSpringSubscription(subscriptionId, newChangeStreamRequest, failureSignal);
             internalSubscription.occurrentSubscription.changeSubscription(newSpringSubscription);
-            messageListenerContainer.remove(oldSpringSubscription);
         }
         log.info("Subscription {} successfully restarted", subscriptionId);
         try {
