@@ -387,8 +387,13 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         return running;
     }
 
+    /**
+     * Synchronized because a subscription moves between the two maps in two steps, so an unsynchronized reader can
+     * land between them and miss an id that exists. It also keeps a caller from seeing the ids of a model that
+     * {@link #shutdown()} has already flagged as shut down but not yet cleared.
+     */
     @Override
-    public Set<String> subscriptionIds() {
+    public synchronized Set<String> subscriptionIds() {
         return Stream.concat(runningSubscriptions.keySet().stream(), pausedSubscriptions.keySet().stream())
                 .collect(Collectors.toUnmodifiableSet());
     }

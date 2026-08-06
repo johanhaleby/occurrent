@@ -27,7 +27,7 @@ import java.util.*;
  * Empties a MongoDB database between tests by deleting documents, leaving the collections and their indexes in place.
  * <p>
  * Compose it with {@code OccurrentSubscriptionsExtension} from {@code occurrent-testing-junit-jupiter-blocking}, which runs it
- * after stopping every subscription and before resuming any, so nothing has to pin extension order:
+ * after stopping every subscription and before resuming any, so you do not have to control extension order:
  * <pre>{@code
  * @RegisterExtension
  * OccurrentSubscriptionsExtension subscriptions = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel)
@@ -51,8 +51,8 @@ import java.util.*;
  * the worse of the two failures, because the other one at least fails a test.
  *
  * <h2>What it covers</h2>
- * {@link #everyCollectionIn(MongoDatabase)} names no collections, which is the point: Occurrent creates more of them
- * than an application tends to remember. Alongside the events there is a stream position collection, a DCB checkpoint
+ * {@link #everyCollectionIn(MongoDatabase)} names no collections. That is the point, because Occurrent creates more
+ * of them than an application tends to remember. Alongside the events there is a stream position collection, a DCB checkpoint
  * collection, the subscription checkpoint collection, and a competing consumer lock collection, and a hand written list
  * silently stops covering one the day a feature is switched on. Views and {@code system.*} collections are skipped.
  */
@@ -158,7 +158,7 @@ public final class OccurrentMongoFlush implements Runnable, BeforeEachCallback {
     }
 
     /**
-     * Empties the database before each test. Deliberately not an {@code AfterEachCallback}: the next test's
+     * Empties the database before each test. This is deliberately not an {@code AfterEachCallback}. The next test's
      * {@code beforeEach} empties it anyway, so doing it twice costs time for nothing, and what a failing test left
      * behind is what you want to look at.
      */

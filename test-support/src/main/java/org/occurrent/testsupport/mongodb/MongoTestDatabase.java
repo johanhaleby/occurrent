@@ -29,11 +29,11 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * The database a container owns, as a {@link MongoDatabase}, for the test-side APIs that ask for one rather than for a
- * connection string. {@code OccurrentMongoFlush} is the reason this exists: it takes a database on purpose, because a
+ * connection string. {@code OccurrentMongoFlush} is the reason this exists. It takes a database on purpose, because a
  * connection string is what let a test name a collection where it meant to name a database.
  * <p>
  * One {@link MongoClient} is kept per server for the lifetime of the JVM, and every test class asking for the same
- * server shares it. That is deliberate rather than incidental: a client per call would mean one per test method across
+ * server shares it. That is deliberate rather than incidental. A client per call would mean one per test method across
  * some ninety test classes, and the extension this replaces opened and closed one on every single {@code beforeEach}.
  * A shared client is safe here because the databases are not shared, since
  * {@link ReplicaSetReadyMongoDBContainer} gives each container object its own.

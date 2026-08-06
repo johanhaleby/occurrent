@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.mongodb.spring.blocking;
+package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
