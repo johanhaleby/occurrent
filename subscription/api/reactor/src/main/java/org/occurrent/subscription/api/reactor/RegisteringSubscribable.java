@@ -231,15 +231,28 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     }
 
     /**
+     * Synchronized on {@link #registrationLock} for the same reason as {@link #subscriptionIds()}: it keeps this
+     * answer from disagreeing with that one about an id whose registration is mid-flight.
+     *
      * @return {@code true} if at least one handler is registered.
      */
     public final boolean hasSubscriptions() {
-        return !registrations.isEmpty();
+        synchronized (registrationLock) {
+            return !registrations.isEmpty();
+        }
     }
 
+    /**
+     * Synchronized on {@link #registrationLock} because {@link #subscribe}, {@link #cancelSubscription} and
+     * {@link #shutdown()} rearrange {@code subscriptionIds} and {@code registrations} in more than one step under
+     * that same lock, so a reader taking it too cannot land between those steps and disagree with
+     * {@link #hasSubscriptions()} about whether a given id is currently registered.
+     */
     @Override
     public final Set<String> subscriptionIds() {
-        return Set.copyOf(subscriptionIds);
+        synchronized (registrationLock) {
+            return Set.copyOf(subscriptionIds);
+        }
     }
 
     /**
