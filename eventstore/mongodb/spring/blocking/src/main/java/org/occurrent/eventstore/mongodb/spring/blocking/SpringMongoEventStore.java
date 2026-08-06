@@ -604,6 +604,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * <p>
      * Sorts by position and clamps the upper bound to the store's highest written position at read time, so a
      * concurrent append is never partially visible.
+     * <p>
+     * The returned stream is backed by a live server cursor and is read one batch at a time, so a replay from the
+     * beginning never holds the whole matched history in memory and the first event is available before the read has
+     * finished. Close it, or consume it to exhaustion, so the cursor is released.
      */
     @Override
     public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
@@ -619,7 +623,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Criteria filterCriteria = FilterConverter.convertFilterToCriteria(null, timeRepresentation, filter);
         Query mongoQuery = new Query(new Criteria().andOperator(positionCriteria, filterCriteria))
                 .with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
-        return mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
+        // stream() rather than find(): find decodes the entire result into a List before the first element is
+        // consumed, and this read has no limit by default, so a replay from the beginning would hold the whole event
+        // history as decoded documents at once and deliver nothing until it had.
+        return autoClose(mongoTemplate.stream(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName))
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
     }
 

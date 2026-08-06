@@ -39,10 +39,15 @@ public interface PositionOrderedReader {
 
     /**
      * Reads events matching {@code filter} ordered by position ascending, within {@code range}.
+     * <p>
+     * The stream is lazy and may hold a database resource, such as a server cursor, so close it when you are done
+     * with it. Use it in a try-with-resources block, or close it explicitly, in particular when you stop reading
+     * before the end of the range. Consuming it to exhaustion releases the resource too, so a full read that runs to
+     * completion leaks nothing, but a caller cannot tell from here whether it will.
      *
      * @param filter The filter events must match to be included.
      * @param range  The position window to read.
-     * @return The matching events, in position order.
+     * @return The matching events, in position order. Must be closed.
      */
     Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range);
 

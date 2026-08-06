@@ -341,7 +341,11 @@ public class DomainEventQueries<T> {
     /**
      * Reads domain events strictly after the global sequence {@code position}, in ascending position order.
      * Equivalent to {@code readInPositionOrder(Filter.all(), PositionRange.afterPosition(position))}.
+     * <p>
+     * The returned stream must be closed, for the reason given on
+     * {@link #readInPositionOrder(Filter, PositionRange)}.
      *
+     * @return The matching domain events, in position order. Must be closed.
      * @throws UnsupportedOperationException if the underlying event store does not write a position.
      * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
      */
@@ -351,7 +355,13 @@ public class DomainEventQueries<T> {
 
     /**
      * Reads domain events matching {@code filter} within {@code range}, in ascending position order.
+     * <p>
+     * The stream is lazy and may hold a database resource, such as a server cursor, so close it when you are done
+     * with it. Use it in a try-with-resources block, or close it explicitly, in particular when you stop reading
+     * before the end of the range. Consuming it to exhaustion releases the resource too, so a full read that runs to
+     * completion leaks nothing, but a caller cannot tell from here whether it will.
      *
+     * @return The matching domain events, in position order. Must be closed.
      * @throws UnsupportedOperationException if the underlying event store does not write a position.
      * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
      */
