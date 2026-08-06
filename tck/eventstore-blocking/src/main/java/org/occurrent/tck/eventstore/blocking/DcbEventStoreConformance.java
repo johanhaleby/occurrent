@@ -52,7 +52,7 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.typesOf
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.untaggedDcbEvent;
 
 /**
- * The Dynamic Consistency Boundary contract: which events a criteria selects, what the read options do to the
+ * The Dynamic Consistency Boundary contract covers which events a criteria selects, what the read options do to the
  * selection, and when an append condition conflicts.
  * <p>
  * Occurrent's stores answer a token-qualified append condition in two genuinely different ways, so the fixture
@@ -70,14 +70,14 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.untagge
  *     positions before its events commit can report a head ahead of what a reader can see, which is exactly why
  *     {@link DcbEventStream#consistencyToken()} exists.</li>
  *     <li><strong>Position contiguity across appends, or any literal position value.</strong> A block is contiguous
- *     within one append and nothing more: a rejected append can reserve and abandon a block, leaving a permanent gap
+ *     within one append and nothing more. A rejected append can reserve and abandon a block, leaving a permanent gap
  *     (ADR 84). Every bound read here is derived from a position handed back by an append, never written as a
  *     literal.</li>
  *     <li><strong>Which storage stream a DCB event landed in.</strong> Placement is a storage choice a store derives
- *     from tags, and {@link org.occurrent.eventstore.api.dcb.DcbStreamIdGenerator} says so: it is not part of the DCB
+ *     from tags, and {@link org.occurrent.eventstore.api.dcb.DcbStreamIdGenerator} says so. It is not part of the DCB
  *     contract, and a caller reasons in tags rather than stream ids.</li>
  *     <li><strong>How {@code exists} and {@code count} are implemented.</strong> Both document a full read as their
- *     default and invite an implementation to do better, so asserting call counts or efficiency would pin the default
+ *     default and invite an implementation to do better, so asserting call counts or efficiency would test the default
  *     rather than the contract.</li>
  * </ul>
  */

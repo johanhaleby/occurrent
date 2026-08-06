@@ -39,7 +39,7 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The contract every {@link CompetingConsumerStrategy} owes: at most one subscriber consumes a subscription at a time,
+ * The contract every {@link CompetingConsumerStrategy} owes. At most one subscriber consumes a subscription at a time,
  * and the lock always finds its way to somebody who wants it.
  * <p>
  * Occurrent consumes this contract two ways, and the suite covers both. {@code CompetingConsumerSubscriptionModel}
@@ -48,15 +48,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * serves only the first of those passes nothing here.
  * <p>
  * <strong>What the suite does not have an opinion about is how a strategy coordinates.</strong> Occurrent's two
- * implementations use a lease in MongoDB, and none of that appears below: no test knows a lease exists, waits out one,
+ * implementations use a lease in MongoDB, and none of that appears below. No test knows a lease exists, waits out one,
  * or asserts when one expires. What is asserted instead is the property a lease is one way of providing, that a holder
  * which stops coordinating loses the lock to a rival rather than blocking the subscription forever. The lease's own
- * timing is a property of the implementation, and Occurrent pins it where it belongs, in deterministic tests against
+ * timing is a property of the implementation, and Occurrent covers it separately, in deterministic tests against
  * the MongoDB support class with a clock the test moves itself.
  * <p>
- * Every wait here is for something that must arrive, bounded by {@link CompetingConsumerStrategyFixture#timeToConverge()}.
- * There is no wait for a quiet period: it would pass just as well against a strategy that coordinates with nobody, and
- * any constant short enough to keep the suite quick is short enough to flake on a loaded machine.
+ * Every wait here is for something that must arrive, capped by {@link CompetingConsumerStrategyFixture#timeToConverge()}.
+ * There is no wait for a quiet period, because it would pass just as well against a strategy that coordinates with
+ * nobody, and any constant short enough to keep the suite quick is short enough to flake on a loaded machine.
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)

@@ -40,8 +40,9 @@ import static org.occurrent.tck.ConformanceEvents.event;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
 
 /**
- * The {@link org.occurrent.eventstore.api.blocking.EventStoreOperations} contract: deleting a whole stream, deleting a
- * single event by id and source, deleting everything a {@link Filter} matches, and updating one event in place.
+ * The {@link org.occurrent.eventstore.api.blocking.EventStoreOperations} contract covers deleting a whole stream,
+ * deleting a single event by id and source, deleting everything a {@link Filter} matches, and updating one event in
+ * place.
  * <p>
  * Extend it from a test class per store, as described on {@link EventStoreConformance}:
  * <pre>{@code
@@ -51,9 +52,9 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * }
  * }</pre>
  * <p>
- * These are the operations an event-sourced system is not supposed to need, which is exactly why they need pinning: a
- * store that silently does nothing on {@code deleteEvent}, or that leaves a stream version pointing past the events it
- * still holds, breaks callers in ways an append-only test never reaches.
+ * These are the operations an event-sourced system is not supposed to need, which is exactly why they need their own
+ * tests. A store that silently does nothing on {@code deleteEvent}, or that leaves a stream version pointing past the
+ * events it still holds, breaks callers in ways an append-only test never reaches.
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)

@@ -45,7 +45,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
 
 /**
- * The contract every {@link SubscriptionModel} owes: an event published while a subscription is running reaches its
+ * The contract every {@link SubscriptionModel} owes. An event published while a subscription is running reaches its
  * handler, a filter decides which events do, and the life cycle does what it says.
  * <p>
  * An implementation extends this and supplies a {@link SubscriptionModelFixture}:
@@ -58,14 +58,14 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * }
  * }</pre>
  * <p>
- * Not extending this suite is how an implementation declines to be conformance tested. That is a visible, greppable
- * absence rather than a runtime skip, and nothing here calls {@code Assumptions}: where models legitimately differ, the
+ * Not extending this suite is how an implementation declines to be conformance tested. That is a visible, searchable
+ * absence rather than a runtime skip, and nothing here calls {@code Assumptions}. Where models legitimately differ, the
  * fixture declares which way it goes and the suite asserts the documented outcome for that answer, so both branches are
  * checked by somebody.
  * <p>
- * <strong>How this suite waits.</strong> Every wait is for something that must arrive, bounded, through
- * {@link RecordedEvents}. For "this event must not arrive" it publishes a marker afterwards and waits for the marker,
- * then asserts the whole recorded list. That is not a stylistic choice: a wait for a period in which nothing happens
+ * <strong>How this suite waits.</strong> Every wait is for something that must arrive within {@link #DELIVERY_TIMEOUT},
+ * through {@link RecordedEvents}. For "this event must not arrive" it publishes a marker afterwards and waits for the marker,
+ * then asserts the whole recorded list. That is not a stylistic choice. A wait for a period in which nothing happens
  * passes just as well against a subscription that was never listening, and any constant short enough to keep a test
  * quick is short enough to flake on a loaded CI runner. The marker rests on one property every model has, that a
  * subscription receives events in publish order, so a marker published after the forbidden event cannot arrive first.
@@ -80,8 +80,8 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  *     transaction, so a lower position can commit after a higher one. Arrival order is the promise, not position order.</li>
  *     <li><strong>That {@code start()} is idempotent.</strong> One model refuses a second {@code start()} and the rest
  *     accept it, and nothing says which is right.</li>
- *     <li><strong>At-least-once delivery, and resuming after a restart.</strong> Neither is a promise of this contract:
- *     both need durable state that survives the model, which only some models have. {@link RestartConformance} covers
+ *     <li><strong>At-least-once delivery, and resuming after a restart.</strong> Neither is a promise of this contract.
+ *     Both need durable state that survives the model, which only some models have. {@link RestartConformance} covers
  *     them, and a model that cannot be rebuilt over the state it left behind declines it by not extending it.</li>
  * </ul>
  */
@@ -114,7 +114,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
     /**
      * How long a wait for an event that must arrive is given.
      * <p>
-     * Ten seconds, and the number is arithmetic rather than taste: the longest test here chains four of these waits, so
+     * Ten seconds, and the number is arithmetic rather than taste. The longest test here chains four of these waits, so
      * anything above 15 would let a slow model blow the class-level {@code @Timeout} mid-wait and report a
      * {@code TimeoutException} instead of an assertion naming what never arrived. It is still generous against the rest
      * of this repository, where the same wait shape is usually spelled 2 to 5 seconds. Raise the {@code @Timeout} before
@@ -411,8 +411,8 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                 CloudEvent marker = ConformanceEvents.event("3", "MarkerEvent");
                 publish(marker);
                 // The wait is for the order the assertion is about, not a count: a model resuming through a replay
-                // handed over to a live feed reaches a count of 2 while the marker is still crossing that seam, and a
-                // count-wait would then assert on a list that was still growing.
+                // handed over to a live feed reaches a count of 2 while the marker is still crossing that handover,
+                // and a count-wait would then assert on a list that was still growing.
                 List<CloudEvent> received = recorded.awaitUntil(events -> {
                     List<String> ids = idsOf(events);
                     int held = ids.indexOf(whilePaused.getId());

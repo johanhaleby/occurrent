@@ -19,21 +19,21 @@ package org.occurrent.annotation;
 
 /**
  * Whether a {@link Source#PUSH} subscription is backfilled from the event store before it takes live events. Applies
- * only to a push source: a {@link Source#EVENT_STORE} subscription chooses how much history it reads with
+ * only to a push source. A {@link Source#EVENT_STORE} subscription chooses how much history it reads with
  * {@code startAt} instead. Read by both {@code @Saga} and {@code @Projection}.
  */
 public enum Catchup {
     /**
-     * The default: replay the event store from the beginning once, then hand over to the live feed, so a subscription
-     * that has never run works through the stored history before it starts reacting to live events. The replay reads
-     * the local event store, so that store has to hold the events the feed carries. It records that it finished, so a
-     * restart skips it and lets the broker resume.
+     * The default. It replays the event store from the beginning once, then hands over to the live feed, so a
+     * subscription that has never run works through the stored history before it starts reacting to live events. The
+     * replay reads the local event store, so that store has to hold the events the feed carries. It records that it
+     * finished, so a restart skips it and lets the broker resume.
      */
     FROM_EVENT_STORE,
     /**
      * Take live events only, from whatever the feed delivers next, with no replay and no event store involved.
      * <p>
-     * This is what a subscription fed by another application's broker needs: the local event store does not hold
+     * This is what a subscription fed by another application's broker needs. The local event store does not hold
      * those events, so a replay would find nothing, or worse, apply unrelated events that happen to live there. It is
      * also the option when the history is simply not wanted.
      * <p>

@@ -52,8 +52,8 @@ import static java.util.Objects.requireNonNull;
  * Presents a reactive event store as a blocking one, so the blocking conformance suites can be run against it
  * unchanged instead of being written a second time in terms of {@code Mono} and {@code Flux}.
  * <p>
- * This is a test bridge and nothing more. It is not a general-purpose adapter and must not be used in production:
- * every method blocks the calling thread, which is exactly what a reactive store exists to avoid.
+ * This is a test bridge and nothing more. It is not a general-purpose adapter and must not be used in production.
+ * Every method blocks the calling thread, which is exactly what a reactive store exists to avoid.
  * <p>
  * A bridge cannot see everything. Whether a failure arrives as {@code Mono.error} rather than being thrown from the
  * assembly call, whether a store does any work before something subscribes, and what cancellation does are all

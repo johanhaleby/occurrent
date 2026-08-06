@@ -60,7 +60,7 @@ import static org.occurrent.tck.ConformanceEvents.eventAt;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
 
 /**
- * The {@link org.occurrent.eventstore.api.blocking.EventStoreQueries} contract: reading across streams with a
+ * The {@link org.occurrent.eventstore.api.blocking.EventStoreQueries} contract covers reading across streams with a
  * {@link Filter}, a {@link SortBy}, and paging, plus {@code count} and {@code exists}.
  * <p>
  * Extend it from a test class per store, as described on {@link EventStoreConformance}:
@@ -73,10 +73,10 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * <p>
  * Most of what is here filters and sorts on CloudEvent attributes the specification defines, so a store that keeps
  * events in a shape this TCK knows nothing about still has to answer. Three places are documented to differ, each
- * declared by the fixture and asserted both ways rather than skipped: composing a natural sort step with a field
- * sort ({@link EventStoreFixture#composesNaturalSortWithFieldSorts()}), whether natural order is insertion order
- * ({@link EventStoreFixture#naturalOrderIsInsertionOrder()}), and whether the store can filter on a field inside the
- * {@code data} payload ({@link EventStoreFixture#supportsDataFilter()}).
+ * declared by the fixture and asserted both ways rather than skipped. They are composing a natural sort step with a
+ * field sort ({@link EventStoreFixture#composesNaturalSortWithFieldSorts()}), whether natural order is insertion
+ * order ({@link EventStoreFixture#naturalOrderIsInsertionOrder()}), and whether the store can filter on a field
+ * inside the {@code data} payload ({@link EventStoreFixture#supportsDataFilter()}).
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -288,7 +288,7 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
 
         /**
          * Runs the assertions when the store declares it can read a payload, and otherwise asserts that it refuses.
-         * Returning early after asserting the refusal is not a skip: the store answered for itself either way.
+         * Returning early after asserting the refusal is not a skip. The store answered for itself either way.
          */
         private boolean declinesDataFilters(Filter probe) {
             // Call this after writing, never before. A query over an empty store never reaches the filter, so a store

@@ -31,7 +31,7 @@ import java.util.function.Supplier;
  * {@code occurrent.subscription.mode} is {@code manual}. Such a projection is fed by a
  * {@code PushSubscriptionModel} or {@code DomainEventFeed} bean the application supplies, not by the framework's own
  * subscription model, so the withholding that mode applies to that bean never reaches it. This registry is what
- * withholds it instead: inject it and bring one projection up with {@link #start(String)}, or every withheld one with
+ * withholds it instead. Inject it and bring one projection up with {@link #start(String)}, or every withheld one with
  * {@link #startAll()}, once the application is ready to run them.
  * <p>
  * Starting an id a second time, or one that was never withheld (for example because {@code occurrent.subscription.mode}

@@ -39,7 +39,7 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * its own.
  * <p>
  * Extend it only if your model calls the handler on the thread that published the event. A model that delivers
- * asynchronously declines by not extending it, and there is deliberately no fixture flag for this: ADR 94 records why a
+ * asynchronously declines by not extending it, and there is deliberately no fixture flag for this. ADR 94 records why a
  * flag would be a switch for turning off the only test of the property. Nothing guards the suite either, so a model that
  * does deliver asynchronously fails the first assertion rather than being turned away, which is what keeps the suite open
  * to an implementation from outside this repository.

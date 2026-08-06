@@ -26,10 +26,9 @@ import reactor.core.publisher.Flux;
 
 /**
  * The bare reactive subscription primitive. {@link #subscribe(SubscriptionFilter, StartAt)} hands back a {@link Flux}
- * of cloud events that starts when the caller subscribes to it and stops when the caller disposes it. The purpose of a
- * subscription is to read events from an event store and react to these events. Typically a subscription will forward
- * the event to another piece of infrastructure such as a message bus or to create views from the events (such as
- * projections, sagas, snapshots etc).
+ * of cloud events that starts when the caller subscribes to it and stops when the caller disposes it. A subscription
+ * reads events from an event store and reacts to them, typically by forwarding each event to another piece of
+ * infrastructure such as a message bus, or by using it to build a view such as a projection, saga, or snapshot.
  * <p>
  * This is the counterpart to {@link SubscriptionModel}, which tracks a subscription by id so it can be paused, resumed
  * and cancelled. A model fed by a push source rather than by reading a change stream cannot honour this primitive, so
@@ -39,18 +38,17 @@ import reactor.core.publisher.Flux;
 public interface FluxSubscriptionModel {
 
     /**
-     * Stream events from the event store as they arrive and provide a function which allows to configure the
-     * {@link SubscriptionFilter} that is used. Use this method if want to start streaming from a specific
-     * position.
+     * Stream events from the event store as they arrive, matching {@code filter} and starting from {@code startAt}.
+     * Use this overload when you need to both filter events and choose a specific start position.
      *
-     * @return A {@link Flux} with cloud events.
+     * @return A {@link Flux} of cloud events.
      */
     Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt);
 
     /**
-     * Stream events from the event store as they arrive but filter only events that matches the <code>filter</code>.
+     * Stream events from the event store as they arrive, matching {@code filter} only.
      *
-     * @return A {@link Flux} with cloud events which also includes the {@link Checkpoint} that can be used to resume the stream from the current position.
+     * @return A {@link Flux} of cloud events, each carrying the {@link Checkpoint} you can use to resume the stream from that position.
      */
     default Flux<CloudEvent> subscribe(SubscriptionFilter filter) {
         return subscribe(filter, StartAt.subscriptionModelDefault());
@@ -58,18 +56,18 @@ public interface FluxSubscriptionModel {
 
 
     /**
-     * Stream events from the event store as they arrive from the given start position ({@code startAt}).
+     * Stream events from the event store as they arrive, starting from {@code startAt}.
      *
-     * @return A {@link Flux} with cloud events which also includes the {@link Checkpoint} that can be used to resume the stream from the current position.
+     * @return A {@link Flux} of cloud events, each carrying the {@link Checkpoint} you can use to resume the stream from that position.
      */
     default Flux<CloudEvent> subscribe(StartAt startAt) {
         return subscribe(null, startAt);
     }
 
     /**
-     * Stream events from the event store as they arrive.
+     * Stream every event from the event store as it arrives.
      *
-     * @return A {@link Flux} with cloud events which also includes the {@link Checkpoint} that can be used to resume the stream from the current position.
+     * @return A {@link Flux} of cloud events, each carrying the {@link Checkpoint} you can use to resume the stream from that position.
      */
     default Flux<CloudEvent> subscribe() {
         return subscribe(null, StartAt.subscriptionModelDefault());

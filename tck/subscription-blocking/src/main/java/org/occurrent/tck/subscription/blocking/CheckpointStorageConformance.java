@@ -39,7 +39,7 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The contract every {@link CheckpointStorage} owes: a checkpoint saved for a subscription id can be read back, is
+ * The contract every {@link CheckpointStorage} owes. A checkpoint saved for a subscription id can be read back, is
  * gone once deleted, and reports its own existence honestly in between.
  * <p>
  * An implementation extends this and supplies a {@link CheckpointStorageFixture}:
@@ -53,7 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * }</pre>
  * <p>
  * Not extending this suite is how an implementation declines to be conformance tested. That is a visible, greppable
- * absence rather than a runtime skip, and nothing here calls {@code Assumptions}: where storages legitimately differ,
+ * absence rather than a runtime skip, and nothing here calls {@code Assumptions}. Where storages legitimately differ,
  * the fixture declares which way it goes and the suite asserts the documented outcome for that answer, so both branches
  * are checked by somebody.
  * <p>

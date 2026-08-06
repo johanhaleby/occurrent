@@ -24,7 +24,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 /**
  * How a store decides whether a token-qualified {@link DcbAppendCondition} was violated.
  * <p>
- * Both models are sound in the sense that matters: neither lets a real conflict through as a successful append. They
+ * Both models are sound in the sense that matters. Neither lets a real conflict through as a successful append. They
  * differ in what else they do, and the difference is observable, so a fixture declares which one its store implements
  * and {@code DcbEventStoreConformance} asserts the outcome that model owes rather than skipping the question.
  * <p>
@@ -65,8 +65,8 @@ public enum DcbAppendConditionModel {
      * <ul>
      *     <li>An event whose type the criteria excludes <strong>does</strong> conflict when it carries a tag the
      *     criteria requires, because the marker the token was derived from is keyed on the tag and knows nothing about
-     *     types. A false conflict, which self-heals: the application service re-reads the still-excluded boundary and
-     *     retries.</li>
+     *     types. It is a false conflict, and it self-heals, because the application service re-reads the
+     *     still-excluded boundary and retries.</li>
      *     <li>{@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} does <strong>not</strong> detect a
      *     tag-scoped append committed after the read, because a whole-store lock is keyed on a marker that only
      *     another whole-store append touches. This is the limitation
