@@ -89,7 +89,7 @@ unified global or DCB position, so it stays nested and annotation-specific.
 `EventMetadata` moves from `org.occurrent.dsl.subscription.EventMetadata` (module `dsl/subscription-dsl/common`) to
 `org.occurrent.cloudevents.EventMetadata` (module `cloudevents-extension`). It is also rewritten from a Kotlin
 `data class` to a plain Java class, so the Kotlin-only surface (reified `get<T>`, operator `get`, `copy`) is dropped.
-The typed accessors you actually fold events with, `getStreamId()`, `getStreamVersion()`, `getPosition()`,
+The typed accessors you actually apply events with, `getStreamId()`, `getStreamVersion()`, `getPosition()`,
 `getData()`, the static `empty()`, and the static `from(CloudEvent)`, are unchanged in name and behavior, so this is
 otherwise a drop-in upgrade. `DcbEventMetadata` stays in `dsl/dcb-dsl/common` and only its import of `EventMetadata`
 changes. Rationale is in [ADR 71](../architecture/decisions/0071-relocate-eventmetadata-to-cloudevents-extension.md).
