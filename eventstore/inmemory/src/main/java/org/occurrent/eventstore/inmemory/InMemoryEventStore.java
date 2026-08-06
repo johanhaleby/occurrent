@@ -96,8 +96,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      */
     public InMemoryEventStore() {
         // @formatter:off
-        this(__ -> {
-        });
+        this(__ -> {});
         // @formatter:on
     }
 
@@ -117,7 +116,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * Create an instance of {@link InMemoryEventStore} with a <code>listener</code> and a custom
      * {@link DcbStreamIdGenerator} that decides which Occurrent storage stream DCB-written events are placed in.
      *
-     * @param listener            A listener that will be invoked after events have been written to the datastore (synchronously!)
+     * @param listener             A listener that will be invoked after events have been written to the datastore (synchronously!)
      * @param dcbStreamIdGenerator Derives the storage stream id for DCB appends from the events' DCB tags
      */
     public InMemoryEventStore(Consumer<List<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
