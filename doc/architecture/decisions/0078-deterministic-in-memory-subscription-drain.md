@@ -24,7 +24,7 @@ Delivery is genuinely asynchronous in the model tests use. `InMemorySubscription
 
 ## Decision
 
-**`InMemorySubscriptionModel` gains `waitUntilAllEventsProcessed(Duration)`,** with a no-argument convenience defaulting to 10 seconds. It returns whether everything drained rather than throwing, mirroring `Subscription.waitUntilStarted(Duration)`, which is the shape this stack already uses for a bounded wait.
+**`InMemorySubscriptionModel` gains `waitUntilAllEventsProcessed(Duration)`,** with a no-argument convenience defaulting to 10 seconds. It throws `IllegalStateException`, naming the subscriptions still busy, if the timeout expires before everything drains. This is a reshape of the original decision, [recorded below](#reshape-throw-instead-of-returning-a-boolean-2026-08-06): the method shipped returning a `boolean`, mirroring `Subscription.waitUntilStarted(Duration)`, but the usual "wait, then assert" caller shape fell straight through a dropped return value into whatever the following assertion said, which is the failure mode this ADR exists to remove.
 
 **Done is counted, not inferred from the queue.** `InMemorySubscription` keeps a count of outstanding events, incremented before an event becomes visible to the consumer thread and decremented in a `finally` after the handler returns. A subscription is idle when that count is zero.
 
@@ -59,3 +59,9 @@ Sound, because an event id carries no ordering assumption, and it would work aga
 - The wait polls its own condition internally on a short interval. The determinism comes from the condition being exact, not from avoiding a sleep, and the alternative (a lock and condition signalled per completed handler) is more machinery than the guarantee needs.
 - Only the projection tests that use the in-memory model were converted. The roughly 90 other Awaitility test files are change-stream or Spring integration tests where polling is still the correct thing, so sweeping them would be a large diff that mostly made things worse.
 - Awaitility was never a user-facing problem, contrary to the issue. Every module declares it in test scope and Maven never propagates test scope, so a user depending on the Projection DSL never received it. The gain here is determinism and a better failure, not dependency hygiene.
+
+## Reshape: throw instead of returning a boolean (2026-08-06)
+
+The method was unreleased when this was found, so it was reshaped directly rather than given a sibling method. `waitUntilAllEventsProcessed()` returned `boolean`, and a `boolean` an easy value to drop: the natural caller shape is "wait, then assert on the read model", and a caller who wrote `subscriptionModel.waitUntilAllEventsProcessed(timeout);` without wrapping it in an assertion got no compiler complaint, only a `false` silently discarded. A genuine regression then fell through the timeout straight into whatever the following assertion reported, which reads as "the read model has the wrong value" rather than "the projection never advanced" — exactly the failure mode this ADR's Context section describes and the boolean return reintroduced.
+
+The method now returns `void` and throws `IllegalStateException` on a timeout or an interrupt, naming the still-busy subscription ids in the message. A caller cannot silently ignore a timeout the way it could ignore a `false`. `#585` tracks this reshape; issue [#451](https://github.com/johanhaleby/occurrent/issues/451) is unaffected, since the decision above (a deterministic count-based drain, no position watermark) still holds.

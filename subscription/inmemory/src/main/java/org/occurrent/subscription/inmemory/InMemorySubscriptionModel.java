@@ -201,11 +201,17 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
      * This exists because delivery here is asynchronous: {@code accept(...)} queues on the caller's thread and a pool
      * thread runs the handler. It has no equivalent on a change-stream model, where the cursor is unbounded and there
      * is no point at which everything written has arrived.
+     * <p>
+     * Returning normally is the only way this reports success, so the usual "wait, then assert" shape cannot fall
+     * through a timeout into the assertion. A timeout throws and names the subscriptions still busy, which is the
+     * failure a caller wants to read: "the projection never advanced", not whatever the assertion happened to say
+     * about a read model that was never updated.
      *
      * @param timeout How long to wait.
-     * @return {@code true} if every subscription finished, {@code false} if the timeout expired first.
+     * @throws IllegalStateException If the timeout expires before every subscription is done, or if the waiting thread
+     *                               is interrupted.
      */
-    public boolean waitUntilAllEventsProcessed(Duration timeout) {
+    public void waitUntilAllEventsProcessed(Duration timeout) {
         Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
         long timeoutNanos = safeTimeout.timeUnit().toNanos(safeTimeout.timeout());
         // Compare elapsed against the budget rather than now against a precomputed deadline. A large timeout would
@@ -213,16 +219,25 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
         long start = System.nanoTime();
         while (true) {
             if (allSubscriptionsIdle()) {
-                return true;
+                return;
             }
             if (System.nanoTime() - start >= timeoutNanos) {
-                return allSubscriptionsIdle();
+                // One read serves as both the final re-check and the message, so a subscription that finished between
+                // the two cannot produce a timeout naming nobody.
+                List<String> stillBusy = busySubscriptionIds();
+                if (stillBusy.isEmpty()) {
+                    return;
+                }
+                throw new IllegalStateException("Timed out after " + timeout + " waiting for "
+                        + InMemorySubscriptionModel.class.getSimpleName() + " to process all events. Still processing: "
+                        + String.join(", ", stillBusy) + ".");
             }
             try {
                 MILLISECONDS.sleep(1);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return false;
+                throw new IllegalStateException("Interrupted while waiting for " + InMemorySubscriptionModel.class.getSimpleName()
+                        + " to process all events.", e);
             }
         }
     }
@@ -230,15 +245,20 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
     /**
      * Block until every subscription has handled the events fed to it so far, waiting up to 10 seconds.
      *
-     * @return {@code true} if every subscription finished, {@code false} if the wait expired first.
+     * @throws IllegalStateException If the wait expires before every subscription is done, or if the waiting thread is
+     *                               interrupted.
      * @see #waitUntilAllEventsProcessed(Duration)
      */
-    public boolean waitUntilAllEventsProcessed() {
-        return waitUntilAllEventsProcessed(Duration.ofSeconds(10));
+    public void waitUntilAllEventsProcessed() {
+        waitUntilAllEventsProcessed(Duration.ofSeconds(10));
     }
 
     private boolean allSubscriptionsIdle() {
         return subscriptions.values().stream().allMatch(InMemorySubscription::isIdle);
+    }
+
+    private List<String> busySubscriptionIds() {
+        return subscriptions.values().stream().filter(subscription -> !subscription.isIdle()).map(InMemorySubscription::id).sorted().toList();
     }
 
     @PreDestroy

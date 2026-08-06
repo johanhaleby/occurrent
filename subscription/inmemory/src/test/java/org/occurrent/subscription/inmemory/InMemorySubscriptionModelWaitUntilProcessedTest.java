@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 @DisplayName("InMemorySubscriptionModel waitUntilAllEventsProcessed")
@@ -68,17 +69,17 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
             subscriptionModel.accept(List.of(cloudEvent("1")));
             assertThat(entered.await(5, SECONDS)).isTrue();
 
-            // When the wait is given less time than the handler will take, it must report a timeout rather than
-            // treating an empty queue as done. This is the assertion a queue-only implementation fails.
-            boolean drainedWhileHandlerRunning = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofMillis(300));
-
-            // Then
-            assertAll(
-                    () -> assertThat(drainedWhileHandlerRunning).isFalse(),
-                    () -> assertThat(handled).isEmpty()
-            );
-
-            release.countDown();
+            // When the wait is given less time than the handler will take, it must throw naming the still-busy
+            // subscription rather than treating an empty queue as done. This is the assertion a queue-only
+            // implementation fails.
+            try {
+                assertThatThrownBy(() -> subscriptionModel.waitUntilAllEventsProcessed(Duration.ofMillis(300)))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("slow");
+                assertThat(handled).isEmpty();
+            } finally {
+                release.countDown();
+            }
         }
 
         @Test
@@ -97,13 +98,10 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
 
             // When
             release.countDown();
-            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
+            subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
 
-            // Then
-            assertAll(
-                    () -> assertThat(drained).isTrue(),
-                    () -> assertThat(handled).containsExactly("1")
-            );
+            // Then no exception was thrown, and the handler ran
+            assertThat(handled).containsExactly("1");
         }
     }
 
@@ -119,13 +117,10 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
 
             // When
             subscriptionModel.accept(List.of(cloudEvent("1"), cloudEvent("2"), cloudEvent("3")));
-            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
+            subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
 
             // Then no polling is needed anywhere in this test
-            assertAll(
-                    () -> assertThat(drained).isTrue(),
-                    () -> assertThat(handled).containsExactly("1", "2", "3")
-            );
+            assertThat(handled).containsExactly("1", "2", "3");
         }
 
         @Test
@@ -141,11 +136,10 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
 
             // When
             subscriptionModel.accept(List.of(cloudEvent("1")));
-            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
+            subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
 
             // Then
             assertAll(
-                    () -> assertThat(drained).isTrue(),
                     () -> assertThat(fast).containsExactly("1"),
                     () -> assertThat(slow).containsExactly("1")
             );
@@ -158,11 +152,8 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
 
         @Test
         void the_wait_returns_immediately_with_no_subscriptions() {
-            // When
-            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
-
-            // Then
-            assertThat(drained).isTrue();
+            // When / Then no exception
+            subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
         }
 
         @Test
@@ -171,11 +162,8 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
             subscriptionModel.subscribe("projection", cloudEvent -> {
             }).waitUntilStarted();
 
-            // When
-            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
-
-            // Then
-            assertThat(drained).isTrue();
+            // When / Then no exception
+            subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
         }
     }
 
@@ -202,18 +190,17 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
             release.countDown();
 
             // When
-            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
+            subscriptionModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
 
             // Then
             assertAll(
-                    () -> assertThat(drained).isTrue(),
                     () -> assertThat(subscriptionModel.isPaused("paused")).isTrue(),
                     () -> assertThat(handled).containsExactly("1", "2")
             );
         }
 
         @Test
-        void the_wait_reports_a_timeout_when_a_paused_subscription_is_stuck_in_its_handler() throws InterruptedException {
+        void the_wait_throws_when_a_paused_subscription_is_stuck_in_its_handler() throws InterruptedException {
             // Given a paused subscription whose handler never returns, so its backlog cannot drain
             CountDownLatch entered = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
@@ -226,13 +213,15 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
             assertThat(entered.await(5, SECONDS)).isTrue();
             subscriptionModel.pauseSubscription("paused");
 
-            // When
-            boolean drained = subscriptionModel.waitUntilAllEventsProcessed(Duration.ofMillis(300));
-
-            // Then it reports the timeout rather than claiming success, which is what a skipped subscription would do
-            assertThat(drained).isFalse();
-
-            release.countDown();
+            // When / Then it throws naming the still-busy subscription rather than claiming success, which is what a
+            // skipped subscription would do
+            try {
+                assertThatThrownBy(() -> subscriptionModel.waitUntilAllEventsProcessed(Duration.ofMillis(300)))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("paused");
+            } finally {
+                release.countDown();
+            }
         }
     }
 
@@ -253,13 +242,10 @@ class InMemorySubscriptionModelWaitUntilProcessedTest {
 
                 // When
                 failingModel.accept(List.of(cloudEvent("1")));
-                boolean drained = failingModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
+                failingModel.waitUntilAllEventsProcessed(Duration.ofSeconds(5));
 
                 // Then the wait does not hang on a handler that will never succeed
-                assertAll(
-                        () -> assertThat(drained).isTrue(),
-                        () -> assertThat(attempts.get()).isGreaterThanOrEqualTo(1)
-                );
+                assertThat(attempts.get()).isGreaterThanOrEqualTo(1);
             } finally {
                 failingModel.shutdown();
             }

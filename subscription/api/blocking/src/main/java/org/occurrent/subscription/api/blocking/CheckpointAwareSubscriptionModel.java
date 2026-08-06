@@ -20,13 +20,14 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.GlobalCheckpointSource;
 
 /**
  * A {@link SubscriptionModel} that produces {@link CheckpointAwareCloudEvent} compatible {@link CloudEvent}'s.
  * This is useful for subscribers that want to persist the checkpoint for a given subscription if the event store doesn't
  * maintain the position for subscriptions.
  */
-public interface CheckpointAwareSubscriptionModel extends SubscriptionModel {
+public interface CheckpointAwareSubscriptionModel extends SubscriptionModel, GlobalCheckpointSource<@Nullable Checkpoint> {
 
     /**
      * The global checkpoint might be e.g. the wall clock time of the server, vector clock, number of events consumed etc.
@@ -36,5 +37,6 @@ public interface CheckpointAwareSubscriptionModel extends SubscriptionModel {
      *
      * @return The global checkpoint for the database or {@code null} if there's an unresolvable problem
      */
+    @Override
     @Nullable Checkpoint globalCheckpoint();
 }

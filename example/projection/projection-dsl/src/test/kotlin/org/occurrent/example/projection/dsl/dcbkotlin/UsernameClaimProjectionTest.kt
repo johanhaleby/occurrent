@@ -78,7 +78,7 @@ class UsernameClaimProjectionTest {
         append("username:johan", AccountRegistered("johan"))
 
         // A single-instance projection keys its one slot by the subscription id, not the tagged username.
-        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+        subscriptionModel.waitUntilAllEventsProcessed()
         assertThat(store["is-username-claimed"]).isTrue()
     }
 

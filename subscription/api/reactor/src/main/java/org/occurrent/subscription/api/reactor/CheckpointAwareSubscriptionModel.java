@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.GlobalCheckpointSource;
 import reactor.core.publisher.Mono;
 
 /**
@@ -28,7 +29,7 @@ import reactor.core.publisher.Mono;
  * maintain the position for subscriptions automatically.
  */
 @NullMarked
-public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel {
+public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel, GlobalCheckpointSource<Mono<Checkpoint>> {
 
     /**
      * The global checkpoint might be e.g. the wall clock time of the server, vector clock, number of events consumed etc.
@@ -44,5 +45,6 @@ public interface CheckpointAwareSubscriptionModel extends FluxSubscriptionModel 
      * @return A {@link Mono} that emits the global checkpoint for the database, or completes empty if there's an
      * unresolvable problem.
      */
+    @Override
     Mono<Checkpoint> globalCheckpoint();
 }
