@@ -48,6 +48,11 @@ import static java.util.function.Predicate.not;
  * </pre>
  * <p>
  * If the above code is executed on multiple nodes/processes, then only <i>one</i> subscriber will receive events.
+ * <br>
+ * <br>
+ * That is also the scope of the usual "a subscription id identifies one subscription" rule here: it holds within one
+ * {@link CompetingConsumerSubscriptionModel} instance, which refuses a subscription id it already has, and says nothing
+ * about the other instances, which are meant to use the very same id.
  */
 @NullMarked
 public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel, CompetingConsumerListener {
@@ -74,14 +79,20 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      * Start listening to cloud events persisted to the event store using the supplied start position and <code>filter</code>.
      *
      * @param subscriberId   The unique if of the subscriber
-     * @param subscriptionId The id of the subscription, must be unique!
+     * @param subscriptionId The id of the subscription, must be unique in this subscription model instance! Other
+     *                       instances are expected to use the same subscription id, since that is what makes them
+     *                       compete for it.
      * @param filter         The filter to use to limit which events that are of interest from the EventStore.
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
+     * @throws IllegalArgumentException If this subscription model instance already has a subscription with this id.
      */
     public Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriberId, "SubscriberId cannot be null");
         Objects.requireNonNull(subscriptionId, "SubscriptionId cannot be null");
+        if (isSubscriptionIdInUse(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        }
 
         final Subscription subscription;
         if (startAt.get(new SubscriptionModelContext(CompetingConsumerSubscriptionModel.class)) == null) {
@@ -112,6 +123,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     public synchronized void cancelSubscription(String subscriptionId) {
         logDebug("Cancelling CompetingConsumer subscription (subscriptionId={})", subscriptionId);
         delegate.cancelSubscription(subscriptionId);
+        // Forgotten here too, not only in the competing consumer map, so the id is free for a new subscription
+        // afterwards. Remembering a cancelled one also made start() resume a subscription the delegate no longer has.
+        nonCompetingConsumersSubscriptions.remove(subscriptionId);
         findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId))
                 .ifPresent(cc -> unregisterCompetingConsumer(cc, __ -> competingConsumers.remove(cc.subscriptionIdAndSubscriberId)));
     }
@@ -320,6 +334,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             CompetingConsumer competingConsumer = findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).orElse(null);
             if (competingConsumer == null) {
                 logDebug("Failed to find CompetingConsumer for subscription (subscriptionId={}, pausedByUser={})", subscriptionId, pausedByUser);
+                // The delegate refuses this as well, but never sees it: an id with no competing consumer here stops at
+                // this branch, so returning quietly was the wrapper answering for the delegate, and answering wrongly.
+                throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
             } else if (competingConsumer.isWaiting()) {
                 logDebug("CompetingConsumer in waiting state, will ignore (subscriptionId={}, subscriberId={}, pausedByUser={})", subscriptionId, competingConsumer.getSubscriberId(), pausedByUser);
             } else {
@@ -570,6 +587,22 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     private boolean hasLock(String subscriptionId, String subscriberId) {
         return competingConsumerStrategy.hasLock(subscriptionId, subscriberId);
+    }
+
+    /**
+     * Uniqueness is scoped to this instance, and only to this instance. Several instances subscribing to one
+     * subscription id is the competing consumer pattern itself, and the strategy is what coordinates them. Several
+     * subscriptions for one id <i>inside</i> one instance is a different thing, and nothing here can express it:
+     * {@link #cancelSubscription(String)}, {@link #pauseSubscription(String)} and {@link #resumeSubscription(String)}
+     * all resolve by subscription id alone, so the second one would be unreachable through every one of them, and both
+     * would be sharing the single delegate that refuses a duplicate id in its own right.
+     * <p>
+     * Both collections count, because a subscription whose start position opted out of competing consumption occupies
+     * the id just as much as a competing one does.
+     */
+    private boolean isSubscriptionIdInUse(String subscriptionId) {
+        return nonCompetingConsumersSubscriptions.contains(subscriptionId)
+                || findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).isPresent();
     }
 
     private Optional<CompetingConsumer> findFirstCompetingConsumerMatching(Predicate<CompetingConsumer> predicate) {
