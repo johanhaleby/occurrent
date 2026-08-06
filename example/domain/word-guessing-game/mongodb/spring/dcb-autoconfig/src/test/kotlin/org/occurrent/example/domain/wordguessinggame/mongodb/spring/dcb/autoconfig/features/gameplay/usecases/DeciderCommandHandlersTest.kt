@@ -151,6 +151,11 @@ class DeciderCommandHandlersTest {
 
         val guesses = readGameplayCloudEvents(gameId).toDomainEvents().filterIsInstance<PlayerGuessedTheWrongWord>()
         assertThat(guesses).extracting("playerId").containsExactlyInAnyOrderElementsOf(players)
+
+        // Starting the game reveals two characters and a wrong guess reveals a third, so a third reveal is the
+        // proof that the policy wrote while the guesses were in flight. Without this the test would still pass
+        // with the policy switched off, and then nothing would have contended.
+        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), 3)
     }
 
     private fun readGameplayCloudEvents(gameId: UUID) = dcbEventStore.read(GameDcbQueries.gameplay(gameId)).events()
@@ -162,6 +167,11 @@ class DeciderCommandHandlersTest {
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
             assertThat(events<E>(criteria)).hasSize(1)
         }.let { events<E>(criteria).single() }
+
+    private inline fun <reified E : GameEvent> eventuallyAtLeast(criteria: DcbCriteria, size: Int) =
+        await().atMost(Duration.ofSeconds(10)).untilAsserted {
+            assertThat(events<E>(criteria)).hasSizeGreaterThanOrEqualTo(size)
+        }
 
     private inline fun <reified E : GameEvent> events(criteria: DcbCriteria): List<E> =
         domainEventQueries.queryForList(criteria).filterIsInstance<E>()
