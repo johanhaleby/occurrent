@@ -93,8 +93,14 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // snapshot.
     @Override
     public void afterSingletonsInstantiated() {
-        if (applicationContext.getBeanProvider(Subscribable.class).getIfAvailable() == null
-                && applicationContext.getBeanProvider(SynchronousSubscriptionModel.class).getIfAvailable() == null) {
+        // A presence check, not a resolution: getBeanProvider(...).getIfAvailable() throws NoUniqueBeanDefinitionException
+        // the moment two Subscribable beans exist (an application's own asynchronous model plus the register-only
+        // SynchronousSubscriptionModel this starter always contributes), which starts failing every context the
+        // instant subscriptions are enabled, whether or not any bean here uses an annotation at all. This only needs
+        // to know whether at least one candidate exists, so getBeanNamesForType (which never throws on ambiguity) is
+        // the right tool; which one is meant is resolved later, per annotation, by the actual registrars.
+        if (applicationContext.getBeanNamesForType(Subscribable.class).length == 0
+                && applicationContext.getBeanNamesForType(SynchronousSubscriptionModel.class).length == 0) {
             return;
         }
         List<Object[]> projectionMethods = new ArrayList<>();
