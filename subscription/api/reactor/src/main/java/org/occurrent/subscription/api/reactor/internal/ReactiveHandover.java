@@ -98,6 +98,7 @@ public final class ReactiveHandover<T> {
 
     private final Function<T, Mono<Void>> deliver;
     private final Function<T, String> dedupId;
+    private final String noun;
     private final int maxBufferedEvents;
     private final BoundedIdCache deliveredIds;
     private final Sinks.Many<Item> liveSink;
@@ -107,9 +108,10 @@ public final class ReactiveHandover<T> {
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
     private volatile boolean stopped = false;
 
-    private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options) {
+    private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
         this.deliver = deliver;
         this.dedupId = dedupId;
+        this.noun = noun;
         this.maxBufferedEvents = options.maxBufferedEvents();
         this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
         this.liveSink = Sinks.many().unicast().onBackpressureBuffer(new ArrayBlockingQueue<>(maxBufferedEvents));
@@ -119,19 +121,26 @@ public final class ReactiveHandover<T> {
      * @param deliver Folds a payload, replayed during the catch-up or live once going live.
      * @param dedupId Extracts the replay-to-live de-dup key from a payload.
      * @param options De-dup cache size and live-buffer cap.
+     * @param noun    The caller's noun for {@link HandoverMessages#catchUpFailed(String)}, e.g.
+     *                {@code "projection feed"} or {@code "subscription"}, the same as the blocking engine takes.
      */
     public static <T> ReactiveHandover<T> create(
-            Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options) {
+            Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
         Objects.requireNonNull(deliver, "deliver cannot be null");
         Objects.requireNonNull(dedupId, "dedupId cannot be null");
         Objects.requireNonNull(options, "options cannot be null");
-        return new ReactiveHandover<>(deliver, dedupId, options);
+        Objects.requireNonNull(noun, "noun cannot be null");
+        return new ReactiveHandover<>(deliver, dedupId, options, noun);
     }
 
     /**
      * Feed a live payload. The returned {@link Mono} completes once the payload has been folded (or immediately if it
      * is a de-duplicated overlap). Payloads fed before or during the catch-up are buffered and delivered after the
      * replay.
+     * <p>
+     * A payload fed after a failed catch-up is refused rather than completed, and stays refused: the caller
+     * acknowledges on completion, so completing would acknowledge a payload nothing handled. Recovery is the caller's
+     * to choose, not this engine's (ADR 104).
      */
     public Mono<Void> accept(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
@@ -139,7 +148,7 @@ public final class ReactiveHandover<T> {
             ackSink.onDispose(() -> pendingLiveAcks.remove(ackSink));
             Throwable failure = terminalError.get();
             if (failure != null) {
-                ackSink.error(failure);
+                ackSink.error(catchUpFailed(failure));
                 return;
             }
             if (stopped) {
@@ -154,7 +163,7 @@ public final class ReactiveHandover<T> {
             // already run, and the caller's Mono would never complete.
             failure = terminalError.get();
             if (failure != null) {
-                ackSink.error(failure);
+                ackSink.error(catchUpFailed(failure));
                 return;
             }
             if (stopped) {
@@ -235,7 +244,10 @@ public final class ReactiveHandover<T> {
                     // narrow, and closing it means moving the completion signal off the marker phase.
                     terminalError.set(error);
                     catchupDone.tryEmitError(error);
-                    pendingLiveAcks.forEach(sink -> sink.error(error));
+                    // Wrapped like the later refusals in accept(..): the caller sees the same "this is terminal, and
+                    // here is what to do" message whichever side of the failure its payload arrived on. The catch-up
+                    // signal above still carries the raw cause, since that caller asked about the catch-up itself.
+                    pendingLiveAcks.forEach(sink -> sink.error(catchUpFailed(error)));
                 });
 
         return catchupDone.asMono();
@@ -281,6 +293,13 @@ public final class ReactiveHandover<T> {
 
     private Item replayedItem(T replayed) {
         return new Item(() -> deliver.apply(replayed), dedupKey(replayed), null);
+    }
+
+    // The blocking engine wraps its terminal failure in this message and this one used to propagate the raw cause, so
+    // the same refusal read as a transient handler error on one stack and as a terminal one on the other. The recovery
+    // differs (retry versus release and set up again), which is exactly what the message says, so both stacks say it.
+    private IllegalStateException catchUpFailed(Throwable cause) {
+        return new IllegalStateException(HandoverMessages.catchUpFailed(noun), cause);
     }
 
     @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.

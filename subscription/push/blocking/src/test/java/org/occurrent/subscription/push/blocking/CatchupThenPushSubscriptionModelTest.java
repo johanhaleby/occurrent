@@ -184,7 +184,7 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
-    void a_catch_up_failure_releases_the_registration() {
+    void a_catch_up_failure_keeps_the_registration_refusing() {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
         PositionOrderedReader failingReader = failingReader();
 
@@ -195,24 +195,31 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable replayFailure = catchThrowable(subscription::waitUntilStarted);
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
-        // The dead handler is released on the catch-up failure path, so a later live event is simply a no-op delivery
-        // rather than resurrecting the stored failure.
+        // The registration is kept, so the handover that recorded the failure refuses every later event instead of
+        // returning normally. Returning normally is what would acknowledge the event to the broker and lose it, which
+        // is the whole of ADR 104: nobody chose this failure, so nobody chose to discard what arrives after it.
         Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
 
-        assertThat(thrown).isNull();
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        // Registered and refusing reads as running, unlike the released registration this used to leave behind.
+        assertThat(model.isRunning("sub")).isTrue();
+        assertThat(model.isCatchingUp("sub")).isFalse();
     }
 
     @Test
-    void the_same_subscription_id_can_be_used_again_after_a_catch_up_failure() {
+    void the_same_subscription_id_can_be_used_again_once_a_failed_catch_up_is_cancelled() {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
 
         CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
         var failed = failingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
         });
-        // Waiting is also what orders the release: it runs on the replay thread before the task completes, so the id
-        // is free by the time this returns.
         Throwable replayFailure = catchThrowable(failed::waitUntilStarted);
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        // The recovery is explicit now: the id stays taken until someone releases it, which is what stops the failure
+        // being papered over by the next subscribe. ADR 90 needs the registration slot to be a clearable reference
+        // rather than a one-way latch, and this is what proves it still is.
+        failingModel.cancelSubscription("sub");
 
         List<String> delivered = new ArrayList<>();
         PositionOrderedReader workingReader = reader(Stream::empty, 0);
@@ -227,10 +234,13 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
-    void a_subscription_registered_after_a_failed_one_still_receives_events() {
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
+    void a_subscription_on_its_own_feed_is_unaffected_by_another_ones_failed_catch_up() {
+        // One feed per subscription, which is what ADR 90 asks for anyway. Sharing one feed between the two only ever
+        // worked here because the failure released the slot, and it no longer does.
+        PushSubscriptionModel failedFeed = new PushSubscriptionModel();
+        PushSubscriptionModel healthyFeed = new PushSubscriptionModel();
 
-        CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
+        CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), failedFeed, null);
         var failed = failingModel.subscribe("failed", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
         });
         Throwable replayFailure = catchThrowable(failed::waitUntilStarted);
@@ -238,13 +248,15 @@ class CatchupThenPushSubscriptionModelTest {
 
         List<String> delivered = new ArrayList<>();
         PositionOrderedReader workingReader = reader(Stream::empty, 0);
-        CatchupThenPushSubscriptionModel healthyModel = new CatchupThenPushSubscriptionModel(workingReader, liveFeed, null);
+        CatchupThenPushSubscriptionModel healthyModel = new CatchupThenPushSubscriptionModel(workingReader, healthyFeed, null);
         healthyModel.subscribe("healthy", null, StartAt.subscriptionModelDefault(), ce -> delivered.add(ce.getId())).waitUntilStarted();
 
-        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
+        Throwable thrown = catchThrowable(() -> healthyFeed.accept(cloudEvent("1", "Created")));
 
         assertThat(thrown).isNull();
         assertThat(delivered).containsExactly("1");
+        // The failed one still refuses on its own feed, so isolation runs both ways.
+        assertThat(catchThrowable(() -> failedFeed.accept(cloudEvent("2", "Created")))).isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -479,7 +491,111 @@ class CatchupThenPushSubscriptionModelTest {
     }
 
     @Test
-    void an_error_from_the_fold_surfaces_unchanged_and_releases_the_registration() {
+    void starting_the_model_again_replays_a_catch_up_that_was_stopped() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+
+        CountDownLatch firstFolded = new CountDownLatch(1);
+        CountDownLatch releaseFold = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+        // Park inside the first fold so stop() lands mid-replay rather than after it.
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            folded.add(ce.getId());
+            firstFolded.countDown();
+            awaitLatch(releaseFold);
+        });
+
+        assertThat(firstFolded.await(5, TimeUnit.SECONDS)).isTrue();
+        model.stop();
+        releaseFold.countDown();
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+
+        // This is what used to be impossible. The registration was cancelled on the stopped path, so start() brought
+        // back only the live feed and the subscription never came back: isRunning() said true while isRunning(id)
+        // said false, and the projection was silently dead. A stop is not a failure (ADR 104), so it replays again,
+        // which is the answer CatchupProjectionFeed.stopCatchUp() already recorded.
+        model.start(true);
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!marker.exists("proj") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(marker.exists("proj")).isTrue();
+        assertThat(model.isRunning("proj")).isTrue();
+        assertThat(model.isCatchingUp("proj")).isFalse();
+        // The whole history again, because nothing was marked and this model keeps no replay cursor. The first,
+        // partly folded run is still in there, which is the at-least-once contract the fold has to tolerate anyway.
+        assertThat(folded).endsWith("1", "2", "3");
+
+        // And the live feed works afterwards, so the handover really did hand over rather than just stop replaying.
+        feed.accept(cloudEvent("4", "Updated"));
+        assertThat(folded).endsWith("2", "3", "4");
+    }
+
+    @Test
+    void starting_the_model_without_resuming_subscriptions_leaves_a_stopped_replay_for_resume_to_pick_up() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+
+        CountDownLatch firstFolded = new CountDownLatch(1);
+        CountDownLatch releaseFold = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            folded.add(ce.getId());
+            firstFolded.countDown();
+            awaitLatch(releaseFold);
+        });
+
+        assertThat(firstFolded.await(5, TimeUnit.SECONDS)).isTrue();
+        model.stop();
+        releaseFold.countDown();
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+
+        // "Do not resume subscriptions automatically" has to mean the replay stays down too, or the flag would be
+        // ignored for exactly the subscriptions whose catch-up is the thing that was stopped.
+        model.start(false);
+        Thread.sleep(200);
+
+        assertThat(model.isCatchingUp("proj")).isFalse();
+        assertThat(marker.exists("proj")).isFalse();
+
+        // The caller picks it up one at a time instead, and resuming means replaying again: there is no cursor.
+        assertThat(model.resumeSubscription("proj").waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        assertThat(marker.exists("proj")).isTrue();
+        assertThat(folded).endsWith("1", "2");
+        feed.accept(cloudEvent("3", "Updated"));
+        assertThat(folded).endsWith("1", "2", "3");
+    }
+
+    @Test
+    void a_failed_catch_up_is_not_replayed_by_starting_the_model_again() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+        assertThat(catchThrowable(subscription::waitUntilStarted)).isInstanceOf(IllegalStateException.class);
+
+        // Stopped and failed are not the same state. Restarting a replay that failed would turn a loud refusal into a
+        // restart loop, so only a stop is reversible. A failure needs cancelSubscription and a fresh subscribe.
+        model.stop();
+        model.start(true);
+
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(catchThrowable(() -> feed.accept(cloudEvent("1", "Created"))))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+    }
+
+    @Test
+    void an_error_from_the_fold_surfaces_unchanged_and_leaves_the_registration_refusing() {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
         PositionOrderedReader reader = reader(() -> {
             throw new NoClassDefFoundError("lazily loaded class boom");
@@ -491,11 +607,18 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable thrown = catchThrowable(subscription::waitUntilStarted);
 
         assertThat(thrown).isInstanceOf(NoClassDefFoundError.class).hasMessageContaining("lazily loaded class boom");
-        assertThat(catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")))).isNull();
+        // An Error, not a RuntimeException, and it has to refuse just the same. The handover used to record only
+        // RuntimeException, which was survivable while this model released the registration on failure. It no longer
+        // does, so an unrecorded Error would leave a handover quietly buffering live events and acknowledging them
+        // into a replay that is never coming back.
+        assertThat(catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Catch-up failed")
+                .hasRootCauseInstanceOf(NoClassDefFoundError.class);
     }
 
     @Test
-    void a_caller_that_never_waits_still_gets_the_registration_released_on_failure() throws Exception {
+    void a_caller_that_never_waits_still_gets_a_refusing_registration_on_failure() throws Exception {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
 
@@ -503,12 +626,16 @@ class CatchupThenPushSubscriptionModelTest {
         model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
         });
 
-        // The release runs on the replay thread, so it lands without anyone joining it.
+        // The failure is recorded on the replay thread, so it lands without anyone joining it. The registration stays,
+        // which is the point: under BACKGROUND nobody is waiting to be told, so the queue backing up is the signal.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (liveFeed.subscriptionIds().contains("sub") && System.nanoTime() < deadline) {
+        while (model.isCatchingUp("sub") && System.nanoTime() < deadline) {
             Thread.sleep(10);
         }
-        assertThat(liveFeed.subscriptionIds()).doesNotContain("sub");
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(liveFeed.subscriptionIds()).contains("sub");
+        assertThat(catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created"))))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
     }
 
     private static void awaitLatch(CountDownLatch latch) {

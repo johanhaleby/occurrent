@@ -44,6 +44,10 @@ public enum Catchup {
      * default, the event store's existing history for it is read and applied before anything else. With
      * {@code NONE} there is none of that. The saga or projection starts from its own initial value and reacts only
      * to what arrives from here on.
+     * <p>
+     * Delivery is still at-least-once, so the handler has to tolerate the same event arriving twice. The de-dup cache
+     * behind a catch-up only suppresses the overlap between the replay and the live feed, and with {@code NONE} there
+     * is no replay and therefore no overlap. It is not a guard against your broker redelivering a message.
      */
     NONE
 }

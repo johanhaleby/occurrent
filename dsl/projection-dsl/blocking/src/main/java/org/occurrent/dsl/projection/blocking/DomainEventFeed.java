@@ -130,15 +130,25 @@ public final class DomainEventFeed<E> {
     }
 
     /**
+     * Whether a projection is registered on this feed, so a listener can ask before it feeds one rather than finding
+     * out from {@link #accept(Object)}. The feed's answer to {@code RegisteringSubscribable.hasSubscriptions()} on the
+     * push subscription model.
+     */
+    public boolean hasProjection() {
+        return feed.get() != null;
+    }
+
+    /**
      * Feed a live domain event to the registered projection, on the calling thread. Call this from the broker
      * listener, acknowledging the message only once it returns. An exception from the projection propagates.
+     *
+     * @throws IllegalStateException if no projection is registered on this feed. Refused rather than accepted,
+     *                               because the listener acknowledges once this returns and the broker discards what
+     *                               it acknowledges, so returning normally would lose the event. See ADR 104.
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        CatchupProjectionFeed<E> registered = feed.get();
-        if (registered != null) {
-            registered.accept(event);
-        }
+        registeredProjection().accept(event);
     }
 
     /**
@@ -146,19 +156,29 @@ public final class DomainEventFeed<E> {
      * about it, so a projection keyed on the stream id, version or position works on the live path and not only during
      * the catch-up replay. Use this when the broker message carries those values and your listener can read them.
      * Otherwise call {@link #accept(Object)}, which folds with no metadata.
+     *
+     * @throws IllegalStateException if no projection is registered on this feed, for the reason
+     *                               {@link #accept(Object)} gives.
      */
     public void accept(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
+        registeredProjection().accept(metadata, event);
+    }
+
+    // The one place the "nothing registered" refusal is spelled, so the two accept overloads and catchUpAll cannot
+    // drift apart on it.
+    private CatchupProjectionFeed<E> registeredProjection() {
         CatchupProjectionFeed<E> registered = feed.get();
-        if (registered != null) {
-            registered.accept(metadata, event);
+        if (registered == null) {
+            throw new IllegalStateException(SingleConsumerMessages.noConsumerRegistered("DomainEventFeed", "projection"));
         }
+        return registered;
     }
 
     /**
      * Run the one-time catch-up of the registered projection (replay history, then go live). Call once, after the
-     * projection is registered and the live feed is wired. A no-op when nothing is registered.
+     * projection is registered and the live feed is wired.
      * <p>
      * A failure here is terminal for this feed, so let it reach the caller and do not start the application. The
      * projection rejects every later event afterwards. Unlike a subscription model, the feed does not drop it: the
@@ -167,12 +187,12 @@ public final class DomainEventFeed<E> {
      * <p>
      * Named for when a feed could carry several projections. It carries one, so this and {@link #catchUp(String)} do
      * the same thing whenever the id matches.
+     *
+     * @throws IllegalStateException if no projection is registered on this feed. It used to be a no-op, which meant a
+     *                               feed nobody registered on caught up "successfully" and then silently fed nothing.
      */
     public void catchUpAll() {
-        CatchupProjectionFeed<E> registered = feed.get();
-        if (registered != null) {
-            registered.catchUp();
-        }
+        registeredProjection().catchUp();
     }
 
     /**

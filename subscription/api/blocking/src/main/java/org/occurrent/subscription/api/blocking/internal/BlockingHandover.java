@@ -121,6 +121,10 @@ public final class BlockingHandover<T> {
 
     /**
      * Feed a live payload. Buffered while the catch-up replay runs, folded directly afterwards, on the calling thread.
+     * <p>
+     * A payload fed after a failed catch-up is refused rather than accepted, and stays refused: the caller
+     * acknowledges once this returns, so returning normally would acknowledge a payload nothing handled. Recovery is
+     * the caller's to choose, not this engine's (ADR 104).
      *
      * @throws IllegalStateException if a prior {@link #catchUp(Source)} has failed, or if the live buffer overflows
      *                                during the catch-up.
@@ -197,9 +201,15 @@ public final class BlockingHandover<T> {
             drainBufferAndGoLive();
             source.markCaughtUp();
             return true;
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
             // Record the failure so a live payload fed after a failed catch-up fails fast instead of buffering until
             // overflow and hiding the error.
+            //
+            // Error is recorded alongside RuntimeException, not only rethrown. Its callers no longer release the
+            // registration when a catch-up fails (ADR 104), so a failure this engine does not record leaves a handover
+            // that keeps buffering live payloads and returning normally, which acknowledges them into a replay that is
+            // never coming back. That is the loss the refusal exists to prevent, and something like a
+            // NoClassDefFoundError out of the fold is exactly how it would arrive.
             synchronized (lock) {
                 catchUpFailure = e;
             }

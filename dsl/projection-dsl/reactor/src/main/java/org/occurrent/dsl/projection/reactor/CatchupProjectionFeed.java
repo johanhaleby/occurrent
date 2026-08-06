@@ -94,7 +94,7 @@ public final class CatchupProjectionFeed<E> {
         this.catchupMarker = catchupMarker;
         this.handover = ReactiveHandover.create(
                 delivered -> fold.apply(delivered.metadata(), delivered.event()), delivered -> eventKey(delivered.event()),
-                options);
+                options, "projection feed");
     }
 
     /**
@@ -260,6 +260,10 @@ public final class CatchupProjectionFeed<E> {
      * Call once, the same as {@link #catchUp()}. A second call on the same feed does not error, but does nothing: it
      * tries to subscribe this feed's live sink a second time, which the sink rejects because it accepts only one
      * subscriber ever, and nothing surfaces that rejection to the caller.
+     * <p>
+     * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. The de-dup
+     * cache only suppresses the overlap between a replay and the live feed, and there is no replay on this path, so
+     * it is not a guard against your broker redelivering a message.
      *
      * @return A {@link Mono} that completes once the feed is live.
      */

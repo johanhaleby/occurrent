@@ -54,6 +54,67 @@ class DomainEventFeedTest {
     }
 
     @Test
+    void feeding_an_event_before_a_projection_is_registered_is_refused() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, counterConverter(), Counted::eventId);
+
+        // Returning normally is what a listener reads as "handled", so it would acknowledge the message and the
+        // broker would discard an event nothing received. Under occurrent.subscription.mode=manual registration is
+        // deferred, so a listener that starts consuming before startAll() lands exactly here, and refusing is what
+        // makes the broker hold the backlog instead. That is ADR 86's withheld-not-lost guarantee on a push stack.
+        Throwable thrown = catchThrowable(() -> feed.accept(new Counted("1")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("has no projection registered")
+                .hasMessageContaining("refused rather than accepted");
+    }
+
+    @Test
+    void feeding_an_event_with_metadata_before_a_projection_is_registered_is_refused() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, counterConverter(), Counted::eventId);
+
+        Throwable thrown = catchThrowable(() -> feed.accept(EventMetadata.empty(), new Counted("1")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered");
+    }
+
+    @Test
+    void catching_up_a_feed_with_no_projection_is_refused() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, counterConverter(), Counted::eventId);
+
+        // It used to be a no-op, so a feed nobody had registered on reported a successful catch-up and then silently
+        // fed nothing. catchUp(String) already refused, so this is the pair of them agreeing.
+        Throwable thrown = catchThrowable(feed::catchUpAll);
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered");
+    }
+
+    @Test
+    void a_feed_reports_whether_a_projection_is_registered() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, counterConverter(), Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+
+        assertThat(feed.hasProjection()).isFalse();
+
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        assertThat(feed.hasProjection()).isTrue();
+    }
+
+    @Test
+    void stopping_a_catch_up_on_a_feed_with_no_projection_does_nothing() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, counterConverter(), Counted::eventId);
+
+        // A shutdown verb, unlike the two above. One that throws because there was nothing to shut down is a nuisance
+        // in a context-close path, not a safeguard.
+        assertThat(catchThrowable(feed::stopCatchUp)).isNull();
+    }
+
+    @Test
     void registering_two_projections_with_the_same_id_throws() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
