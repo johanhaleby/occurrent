@@ -1,6 +1,6 @@
 # Upgrading to Occurrent 0.32.0
 
-Three things break, and only if you use the features they belong to.
+Four things break, and only if you use the features they belong to.
 
 **At compile time**, if you write reactive subscriptions, one type was renamed. The reactor `SubscriptionModel` is now
 `FluxSubscriptionModel`. The recipe below rewrites it for you. Read
@@ -10,16 +10,21 @@ Three things break, and only if you use the features they belong to.
 yourself, one method gained a parameter. Almost nobody does, since the model Occurrent ships implements it for you. Read
 [section 4](#4-a-synchronous-subscription-no-longer-stops-at-the-first-failing-handler).
 
+**Also at compile time**, if you use `NativeMongoLeaseCompetingConsumerStrategy`, it moved packages. The same recipe
+rewrites it. Read
+[section 9](#9-nativemongoleasecompetingconsumerstrategy-moves-to-the-native-driver-package).
+
 **At startup**, a push sink now feeds exactly one projection or saga, so an application that shared one between several
 refuses to start. If you use a push source, read
 [section 3](#3-a-push-sink-feeds-exactly-one-projection-or-saga) first.
 
-Nine things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+Ten things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
 `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
 first failing handler, the reactor subscription primitive was renamed, a durable reactor model refuses a composition it
 used to accept, a paused MongoDB subscription now delivers what was written while it was paused, a push catch-up
-replays on its own thread, and `CompetingConsumerSubscriptionModel` refuses two calls it used to accept.
+replays on its own thread, `NativeMongoLeaseCompetingConsumerStrategy` moved to the package every other
+native-driver subscription type uses, and `CompetingConsumerSubscriptionModel` refuses two calls it used to accept.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -508,7 +513,45 @@ whatever reads the state. The reactor failure path is not new, it always arrived
 replay meant the state happened to be complete by the time you could ask, which is exactly the kind of accident this
 change removes.
 
-## 9. `CompetingConsumerSubscriptionModel` refuses two calls it used to accept
+## 9. `NativeMongoLeaseCompetingConsumerStrategy` moves to the native-driver package
+
+`org.occurrent.subscription.mongodb.spring.blocking.NativeMongoLeaseCompetingConsumerStrategy` is renamed to
+`org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoLeaseCompetingConsumerStrategy`. Nothing about the
+class changes, only where it lives.
+
+It took a `MongoCollection<BsonDocument>` from the native Java driver and never touched Spring, but shipped under the
+`spring.blocking` package that the three Spring competing-consumer artifacts own for real. Every other native-driver
+subscription type, `NativeMongoSubscriptionModel` and `NativeMongoCheckpointStorage` among them, lives under
+`nativedriver.blocking`, so this class was the one outlier, and its import line read as though an application that
+deliberately avoided Spring depended on it anyway. It also meant `occurrent-subscription-mongodb-native-blocking-competing-consumer-strategy`
+shipped a `package-info.class` identical to the one the three Spring artifacts ship for the package they actually own,
+so an application using all four modules together carried four copies of the same class file. Resolves
+[#534](https://github.com/johanhaleby/occurrent/issues/534).
+
+### Run the recipe
+
+The same `org.occurrent.UpgradeToOccurrent_0_32` recipe from
+[section 1](#1-occurrentsubscriptionenabled-becomes-occurrentsubscriptionmode) rewrites this too, including the
+qualified `NativeMongoLeaseCompetingConsumerStrategy.Builder` construction and the `withDefaults(..)` static factory
+call. If you already ran it for section 1 or section 5, you already have this change.
+
+### By hand
+
+Change the import:
+
+```java
+// Before
+import org.occurrent.subscription.mongodb.spring.blocking.NativeMongoLeaseCompetingConsumerStrategy;
+```
+
+```java
+// After
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoLeaseCompetingConsumerStrategy;
+```
+
+The class name, its `Builder`, and every method are unchanged, so nothing else in your code needs to move.
+
+## 10. `CompetingConsumerSubscriptionModel` refuses two calls it used to accept
 
 Nothing to change in your code unless you make one of these two calls, and both of them were already doing something
 other than what they looked like they were doing. There is no recipe, because nothing about the call shape changes,

@@ -22,9 +22,15 @@ description: >-
   FluxSubscriptionModel. The old name is taken over by a new interface meaning the same thing the blocking
   SubscriptionModel means, a named lifecycle-managed subscription model, so the rename is what keeps existing
   references pointing at the type they were written against. Only the reactor type moves; the blocking
-  org.occurrent.subscription.api.blocking.SubscriptionModel is untouched.
+  org.occurrent.subscription.api.blocking.SubscriptionModel is untouched. Also moves
+  NativeMongoLeaseCompetingConsumerStrategy out of the Spring package it was mistakenly published under and into the
+  native-driver package every other native subscription type uses.
 recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.SubscriptionModel
       newFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.FluxSubscriptionModel
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.mongodb.spring.blocking.NativeMongoLeaseCompetingConsumerStrategy
+      newFullyQualifiedTypeName: org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoLeaseCompetingConsumerStrategy
       ignoreDefinition: true
