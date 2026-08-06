@@ -24,9 +24,9 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      * such a model has no state between "everything is stopped" and "the gate is open, and each subscription's own
      * paused/running flag decides whether it uses it". Do not read a {@code true} {@link #isRunning()} after a
      * partial resume as "every subscription that was running before {@code stop()} is delivering again" on such a
-     * model; check each one individually with {@link #isRunning(String)}. A model that layers its own gate on top of
-     * a delegate, like {@link ManualStartSubscriptionModel}, is not bound by this and documents its own
-     * {@link #isRunning()} answer.
+     * model, check each one individually with {@link #isRunning(String)}. {@link ManualStartSubscriptionModel} answers
+     * the same way, even though it holds registrations back on top of the model it wraps. Resuming one subscription
+     * after {@code stop()} makes its {@link #isRunning()} report {@code true} again.
      */
     void stop();
 
@@ -75,11 +75,10 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      * to write events to an event store and you want a particular subscription to receive these events (but you may have paused
      * others).
      * <p>
-     * On a model that owns a single running/stopped flag, resuming a subscription that {@link #stop()} paused reopens
-     * the model-wide gate: {@link #isRunning()} reports {@code true} again, even though every other subscription
-     * {@code stop()} paused is left exactly as {@code stop()} left it, individually paused and not running, until it
-     * too is resumed or {@link #start} is called. See {@link #stop()} for why such a model has no state in between,
-     * and for the one documented exception.
+     * Resuming a subscription that {@link #stop()} paused makes {@link #isRunning()} report {@code true} again, even
+     * though every other subscription {@code stop()} paused is left exactly as {@code stop()} left it, individually
+     * paused and not running, until it too is resumed or {@link #start} is called. See {@link #stop()} for why a
+     * model has no state in between.
      *
      * @param subscriptionId The id of the subscription to resume.
      * @throws IllegalArgumentException If subscription is not paused

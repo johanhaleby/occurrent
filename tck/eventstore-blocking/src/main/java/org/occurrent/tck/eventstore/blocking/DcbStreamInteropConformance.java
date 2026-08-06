@@ -41,7 +41,7 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.*;
 
 /**
- * What a store owes when it has both capabilities at once: DCB reads see DCB events and nothing else, while the
+ * What a store owes when it has both capabilities at once. DCB reads see DCB events and nothing else, while the
  * general query API sees everything, because both modes share one CloudEvent store.
  * <p>
  * This is separate from {@link DcbEventStoreConformance} rather than folded into it because these assertions need

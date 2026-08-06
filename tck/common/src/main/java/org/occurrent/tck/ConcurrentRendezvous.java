@@ -37,10 +37,10 @@ import static java.util.Objects.requireNonNull;
  * here is returned as a value, in the order the tasks were submitted, so a suite can count winners and losers
  * instead of inspecting shared state that the race itself corrupts.
  * <p>
- * Every wait here is bounded, and {@linkplain #collide every task is joined before this method returns or throws},
- * so a hung task cannot leave a sibling still running in the background after the assertion that was supposed to
- * observe it has already happened. That ordering is precisely what was fixed in
- * {@code MongoEventStoreDcbConcurrencyTest} shortly before this class was written; the same bug is easy to
+ * Every wait here has a timeout, and {@linkplain #collide every task is joined before this method returns or
+ * throws}, so a hung task cannot leave a sibling still running in the background after the assertion that was
+ * supposed to observe it has already happened. That ordering is precisely what was fixed in
+ * {@code MongoEventStoreDcbConcurrencyTest} shortly before this class was written. The same bug is easy to
  * reintroduce by returning as soon as one task's result is known.
  */
 @NullMarked
@@ -48,7 +48,7 @@ public final class ConcurrentRendezvous {
 
     /**
      * How long a task may wait at the barrier for its siblings. Generous relative to submitting a handful of tasks to
-     * a thread pool, so a wedged task is reported by this specific bounded wait rather than by a test's
+     * a thread pool, so a wedged task is reported by this wait's own timeout rather than by a test's
      * {@code @Timeout} killing the whole run without saying why.
      */
     public static final Duration DEFAULT_BARRIER_TIMEOUT = Duration.ofSeconds(10);
@@ -128,7 +128,7 @@ public final class ConcurrentRendezvous {
     }
 
     /**
-     * What one task did: either the value it returned, or the throwable it raised. Exactly one of {@link #value()} or
+     * What one task did, either the value it returned or the throwable it raised. Exactly one of {@link #value()} or
      * {@link #failure()} is non-null, which is why both are exposed as accessors rather than as a class a caller
      * would need to instanceof against.
      */

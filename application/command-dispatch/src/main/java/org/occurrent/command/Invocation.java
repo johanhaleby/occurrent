@@ -22,8 +22,8 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A command that carries its own handling logic: a stream id, and the function to run against that stream's events.
- * Dispatch it with {@link CommandDispatchers#invocation(org.occurrent.application.service.blocking.ApplicationService)}.
+ * A command that carries its own handling logic. It holds a stream id, and the function to run against that stream's
+ * events. Dispatch it with {@link CommandDispatchers#invocation(org.occurrent.application.service.blocking.ApplicationService)}.
  * <p>
  * In a saga, the command type becomes {@code Invocation<E>} and no command records are needed at all:
  * <pre>{@code

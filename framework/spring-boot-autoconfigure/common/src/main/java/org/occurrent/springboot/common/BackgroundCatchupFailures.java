@@ -27,16 +27,16 @@ import java.util.Optional;
  * The catch-up failures of {@code @Projection(source = PUSH, startupMode = BACKGROUND)} projections, so an application
  * can see them.
  * <p>
- * Under {@code BACKGROUND} the whole point is that nobody waits for the replay, so a failure has nowhere to be thrown:
- * the context refreshed long before it happened. The projection is left with no history folded and no live events, and
+ * Under {@code BACKGROUND} the whole point is that nobody waits for the replay, so a failure has nowhere to be thrown.
+ * The context refreshed long before it happened. The projection is left with no history applied and no live events, and
  * the application starts healthy on top of an empty read model. That is the trade {@code BACKGROUND} makes, and this
- * is what makes it observable rather than silent. The failure is also logged at {@code ERROR}, which stays the
- * backstop for an application that injects nothing.
+ * is what makes it observable rather than silent. The failure is also logged at {@code ERROR}, so an application that
+ * never injects this bean still sees it in the logs.
  * <p>
  * Written by the annotation processor and read by the application, the same shape as the blocking starter's
  * {@code ManualStartPushSources}. Inject it and check it from a health indicator or a readiness probe. It only ever
  * holds ids that were started in the background, so an empty result means either that every background catch-up is
- * still running or succeeded, or that there were none: it is not by itself a statement that a projection is caught up.
+ * still running or succeeded, or that there were none. By itself that is not a statement that a projection is caught up.
  * <p>
  * One class for both stacks, since a background catch-up failure means the same thing on each and the bean carries
  * nothing stack-specific. Each starter contributes it, so an application on either one injects the same type.

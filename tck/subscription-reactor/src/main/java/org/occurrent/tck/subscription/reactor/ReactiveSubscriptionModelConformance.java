@@ -39,10 +39,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Everything about what a model delivers, pauses, resumes and reports is asserted once, by the blocking suites running
  * over {@link BlockingSubscriptionOverReactive}, rather than described a second time in terms of {@code Mono}. What
- * that cannot reach is the two publishers the reactor API actually has: the {@code Mono<Void>} an action returns,
- * which the <em>model</em> is the subscriber of, and {@link Subscription#waitUntilStarted()}. A model can get both
- * wrong and still pass every bridged suite, because the bridge's own action does its work as a side effect of
- * assembly-time capture and the bridge always blocks.
+ * that cannot reach is the reactor API's two publishers, the {@code Mono<Void>} an action returns, which the
+ * <em>model</em> subscribes to, and {@link Subscription#waitUntilStarted()}. A model can get both wrong and still
+ * pass every bridged suite, because the bridge's own action has already run by the time it hands back a {@code Mono},
+ * whether or not anything subscribes to it, and the bridge blocks either way.
  * <p>
  * Why each of them matters to somebody using the model:
  * <ul>
@@ -53,13 +53,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       fixture declares as retry-or-propagate. A model that lets it detonate somewhere unrelated, or that stops
  *       itself, turns one failed delivery into an outage.</li>
  *   <li>{@link Subscription#waitUntilStarted()} is promised to answer, and callers gate application startup on it. One
- *       that never completes hangs the caller; one that consumes its answer on first use answers the second caller
- *       never.</li>
+ *       that never completes hangs the caller. One that consumes its answer on first use never answers a second
+ *       caller.</li>
  *   <li>Disposing a wait is a caller giving up on waiting, not on the subscription. A model that tears anything down
  *       on that disposal punishes an ordinary timeout pattern.</li>
  * </ul>
  * <p>
- * Every wait here is bounded, and no test installs an action that fails forever: a retrying model would retry it for
+ * Every wait here has a timeout, and no test installs an action that fails forever. A retrying model would retry it for
  * the rest of the timeout, so failures are always fail-once.
  */
 @NullMarked

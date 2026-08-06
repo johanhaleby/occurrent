@@ -42,8 +42,8 @@ import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static org.occurrent.tck.ConformanceEvents.*;
 
 /**
- * The stream half of the event-store contract: reading and writing a stream, paging a read, stream existence,
- * {@link WriteResult}, duplicate detection, reading through a {@link StreamReadFilter}, and the whole
+ * The stream half of the event-store contract. It covers reading and writing a stream, paging a read, stream
+ * existence, {@link WriteResult}, duplicate detection, reading through a {@link StreamReadFilter}, and the whole
  * {@link WriteCondition} family with its exact failure messages.
  * <p>
  * An implementation runs this by extending it and supplying a fixture:
@@ -60,7 +60,7 @@ import static org.occurrent.tck.ConformanceEvents.*;
  * <ul>
  *     <li><strong>The cause and message of a {@link DuplicateCloudEventException}.</strong> The MongoDB stores wrap a
  *     driver exception and append its raw text to {@code getDetails()}, which lands in the message, while the
- *     in-memory store detects the duplicate itself and has neither. So the suite pins the exception type,
+ *     in-memory store detects the duplicate itself and has neither. So the suite asserts the exception type,
  *     {@code getId()}, {@code getSource()} and that nothing was written, which is what a caller can act on, and
  *     leaves {@code getDetails()} to each store.</li>
  *     <li><strong>Read skew.</strong> Whether a concurrent writer can be observed mid-write is an isolation property

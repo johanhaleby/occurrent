@@ -24,8 +24,8 @@ import org.springframework.context.annotation.ConditionContext;
 import org.springframework.core.type.AnnotatedTypeMetadata;
 
 /**
- * Matches unless subscriptions are {@link SubscriptionMode#DISABLED}. Gates every subscription bean, so
- * {@link SubscriptionMode#MANUAL} keeps them all while leaving them stopped.
+ * Matches unless subscriptions are {@link SubscriptionMode#DISABLED}. Applies to every subscription bean, so
+ * {@link SubscriptionMode#MANUAL} still creates them all, just stopped.
  */
 public class OnSubscriptionsNotDisabledCondition implements Condition {
 

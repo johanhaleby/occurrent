@@ -44,8 +44,8 @@ final class PayloadConditions {
      * Returns {@code filter} with every condition on a {@code data} payload field replaced by one that matches
      * anything, so the rest of the filter still decides.
      * <p>
-     * Replaced rather than removed, which is the part worth reading twice. Removing a payload condition from an
-     * {@code OR} would change what the filter means: {@code type = X OR data.amount = 42} would become
+     * Replaced rather than removed. Removing a payload condition from an
+     * {@code OR} would change what the filter means. {@code type = X OR data.amount = 42} would become
      * {@code type = X} and discard an event that matched only on the amount. Matching anything is correct under both
      * {@code AND} and {@code OR}.
      */

@@ -23,9 +23,9 @@ import java.util.*;
 /**
  * Holds the startup work a {@code source = PUSH} registration would otherwise have run at boot, withheld because
  * {@code occurrent.subscription.mode} is {@code manual}. That covers a {@code @Projection(source = PUSH)} and a
- * {@code @Saga(source = PUSH)} alike: both are fed by a {@code PushSubscriptionModel} or {@code DomainEventFeed} bean
+ * {@code @Saga(source = PUSH)} alike. Both are fed by a {@code PushSubscriptionModel} or {@code DomainEventFeed} bean
  * the application supplies, not by the framework's own {@code SubscriptionModel}, so the withholding that mode applies
- * to that bean never reaches them. This registry is what withholds them instead: inject it and bring one up with
+ * to that bean never reaches them. This registry is what withholds them instead. Inject it and bring one up with
  * {@link #start(String)}, or every withheld one with {@link #startAll()}, once the application is ready to run them.
  * <p>
  * One registry rather than one per annotation, because the reason a registration lands here is the push feed and not
