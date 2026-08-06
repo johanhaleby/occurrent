@@ -15,6 +15,6 @@
  */
 
 @NullMarked
-package org.occurrent.subscription.mongodb.spring.blocking;
+package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import org.jspecify.annotations.NullMarked;

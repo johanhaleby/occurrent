@@ -1,4 +1,4 @@
-package org.occurrent.subscription.mongodb.spring.blocking;
+package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
