@@ -203,7 +203,14 @@ class SpringRedisCheckpointStorageTest {
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
-        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        // Distinct ids rather than a size, because the first event can arrive more than once (#522). Its handler
+        // threw, so the model hands it over again when it restarts, and the replacement model hands it over too if it
+        // starts before that redelivery has been checkpointed. Every event still has to arrive, and in order.
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state.stream().map(CloudEvent::getId).distinct())
+                .containsExactly(nameDefined1.eventId(), nameDefined2.eventId(), nameWasChanged1.eventId()));
+        // An upper bound too, so a model replaying the whole stream on every restart could not pass quietly. Four is
+        // the three events plus one extra copy of the first, the only one whose handler throws.
+        assertThat(state).hasSizeLessThanOrEqualTo(4);
     }
 
     @RepeatedIfExceptionsTest(repeats = 2)
