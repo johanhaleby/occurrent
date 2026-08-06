@@ -148,9 +148,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
             // wiring its handlers can resume them one at a time.
             if (!running) {
                 pausedSubscriptions.add(subscriptionId);
+                return new RegisteredSubscription(subscriptionId, false);
             }
         }
-        return new AlreadyStartedSubscription(subscriptionId);
+        return new RegisteredSubscription(subscriptionId, true);
     }
 
     @Override
@@ -215,7 +216,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
         running = true;
         pausedSubscriptions.remove(subscriptionId);
-        return new AlreadyStartedSubscription(subscriptionId);
+        return new RegisteredSubscription(subscriptionId, true);
     }
 
     @Override
@@ -336,11 +337,13 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
     }
 
-    private record AlreadyStartedSubscription(String id) implements Subscription {
+    // Answers for the one registration it was created for. There is no background thread to wait for, so registering
+    // on a running model starts the subscription there and then, and registering on a stopped model does not.
+    // A subscription started later takes its handle from resumeSubscription.
+    private record RegisteredSubscription(String id, boolean started) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
-            // There is no background thread to wait for: registration completes synchronously in subscribe.
-            return true;
+            return started;
         }
     }
 }

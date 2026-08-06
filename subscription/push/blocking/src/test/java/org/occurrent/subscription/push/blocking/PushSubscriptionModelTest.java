@@ -171,6 +171,24 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void registering_on_a_stopped_model_answers_not_started_and_the_handle_from_resuming_it_answers_started() {
+        // RegisteringSubscribable has no background thread to wait for. Registering on a running model starts the
+        // subscription there and then, and registering on a stopped one leaves it paused, so the handle it returns
+        // must say so rather than claim success it has not delivered on yet.
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        model.stop();
+
+        var registered = model.subscribe("sub", cloudEvent -> {
+        });
+
+        assertThat(registered.waitUntilStarted(Duration.ofMillis(1))).isFalse();
+
+        var started = model.resumeSubscription("sub");
+
+        assertThat(started.waitUntilStarted(Duration.ofMillis(1))).isTrue();
+    }
+
+    @Test
     void can_be_used_as_a_plain_cloud_event_consumer() {
         PushSubscriptionModel model = new PushSubscriptionModel();
         List<String> received = new ArrayList<>();

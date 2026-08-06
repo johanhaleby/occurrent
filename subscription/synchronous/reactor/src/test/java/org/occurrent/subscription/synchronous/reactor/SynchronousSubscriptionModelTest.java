@@ -107,6 +107,24 @@ class SynchronousSubscriptionModelTest {
     }
 
     @Test
+    void registering_on_a_stopped_model_answers_not_started_and_the_handle_from_resuming_it_answers_started() {
+        // RegisteringSubscribable has no background thread to wait for. Registering on a running model starts the
+        // subscription there and then, and registering on a stopped one leaves it paused, so the handle it returns
+        // must say so rather than claim success it has not delivered on yet.
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+        model.stop();
+
+        var registered = model.subscribe("sub", cloudEvent -> Mono.empty());
+
+        assertThat(model.isPaused("sub")).isTrue();
+        StepVerifier.create(registered.waitUntilStarted(Duration.ofMillis(50))).expectNext(false).verifyComplete();
+
+        var started = model.resumeSubscription("sub");
+
+        StepVerifier.create(started.waitUntilStarted()).verifyComplete();
+    }
+
+    @Test
     void a_stopped_model_dispatches_to_nobody_and_the_mono_still_completes() {
         SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
         List<String> received = new ArrayList<>();

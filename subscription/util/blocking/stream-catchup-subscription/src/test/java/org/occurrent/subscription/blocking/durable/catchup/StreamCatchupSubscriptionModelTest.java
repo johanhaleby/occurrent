@@ -45,7 +45,6 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -180,25 +179,19 @@ class StreamCatchupSubscriptionModelTest {
 
         Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
 
-        // Five seconds is a bound on a replay that fails on its first call into the model, not a wait for anything, so
-        // it is only ever paid in full by a test that was going to fail anyway.
-        assertThat(started.waitUntilStarted(Duration.ofSeconds(5)))
-                .as("the caller has to be told the subscription did not start, since a catch-up that cannot hand over "
-                        + "has no live delivery to fall back to")
-                .isFalse();
+        // A start that failed and will not be retried throws rather than answering false, since false is reserved for a
+        // subscription nothing has started yet but still could, and this one never will. Five seconds is a bound on a
+        // replay that fails on its first call into the model, not a wait for anything, so it is only ever paid in
+        // full by a test that was going to fail anyway.
+        assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("the reason has to reach whoever reads the log, or an operator sees a subscription that simply "
+                        + "never started")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no resume token");
         assertThat(received)
                 .as("and nothing may be replayed, because delivering the history and then silently never going live is "
                         + "worse than refusing: the read model would look up to date and stop moving")
                 .isEmpty();
-        // Bounded, because waitUntilStarted answering false does not prove the replay finished: it answers false on a
-        // timeout too. An unbounded get() would then wait for a replay that never ends, and a regression that blocks
-        // instead of throwing would hang the whole run rather than failing this test.
-        assertThatThrownBy(() -> ((CatchupSubscription) started).delegatedSubscription().get(5, TimeUnit.SECONDS))
-                .as("the reason has to reach whoever reads the log, or an operator sees a subscription that simply "
-                        + "never started")
-                .hasRootCauseInstanceOf(IllegalStateException.class)
-                .rootCause()
-                .hasMessageContaining("no resume token");
     }
 
     @Test

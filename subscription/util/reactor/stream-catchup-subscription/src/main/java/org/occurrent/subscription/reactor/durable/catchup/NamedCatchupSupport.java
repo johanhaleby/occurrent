@@ -68,9 +68,9 @@ import static java.util.Objects.requireNonNull;
  * which abandons a stop-interrupted replay outright. The blocking composition never notices, because its durable
  * model parks subscriptions before the catch-up model sees them, a gate the delegating path here does not run
  * through. Cancelling or shutting down aborts in-flight replays. Waiting on a subscription that was cancelled before
- * its handover completes successfully, matching the blocking {@code CancelledSubscription} contract that there is
- * nothing left to start. Model-wide calls forward to the wrapped model, so give each composition its own wrapped
- * model rather than sharing one.
+ * its handover fails, since that subscription never started and nothing will start it, and the blocking
+ * {@code CancelledSubscription} answers {@code false} for the same case. Model-wide calls forward to the wrapped
+ * model, so give each composition its own wrapped model rather than sharing one.
  */
 @NullMarked
 final class NamedCatchupSupport {
@@ -323,9 +323,10 @@ final class NamedCatchupSupport {
                     replaying.dispose();
                 }
                 if (!state.handedOver.get()) {
-                    // The id never reached the wrapped model, so there is nothing to cancel there. Completing the
-                    // started signal successfully is the blocking CancelledSubscription contract: nothing left to start.
-                    state.started.tryEmitEmpty();
+                    // The id never reached the wrapped model, so there is nothing to cancel there. Waiters are failed
+                    // rather than completed, since completing would claim the subscription started and doing nothing
+                    // would hang them. The blocking twin answers false, which a Mono<Void> has no room for.
+                    state.started.tryEmitError(new IllegalStateException("Subscription " + subscriptionId + " was cancelled before it started."));
                     return;
                 }
             }
