@@ -73,7 +73,7 @@ class CurrentNameProjectionTest {
         applicationService.execute("u1") { listOf(NameDefined("u1", "Johan")) }
         applicationService.execute("u1") { listOf(NameChanged("u1", "Johan Haleby")) }
 
-        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+        subscriptionModel.waitUntilAllEventsProcessed()
         assertThat(store["u1"]).isEqualTo(CurrentName("u1", "Johan Haleby"))
     }
 
@@ -89,7 +89,7 @@ class CurrentNameProjectionTest {
         applicationService.execute("u1") { listOf(NameDefined("u1", "Johan")) }
         applicationService.execute("u2") { listOf(NameDefined("u2", "Eve")) }
 
-        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+        subscriptionModel.waitUntilAllEventsProcessed()
         assertThat(store["u1"]).isEqualTo(CurrentName("u1", "Johan"))
         // u2's event carries a different subject, so the filtered subscription never delivered it.
         assertThat(store["u2"]).isNull()

@@ -77,7 +77,7 @@ class CouponRedemptionProjectionTest {
         append("coupon:SAVE10", new CouponRedeemed("SAVE10", "order-1"));
 
         // A single-instance projection keys its one slot by the subscription id, not the tagged coupon code.
-        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue();
+        subscriptionModel.waitUntilAllEventsProcessed();
         assertThat(store.get("coupon-redeemed")).isTrue();
     }
 

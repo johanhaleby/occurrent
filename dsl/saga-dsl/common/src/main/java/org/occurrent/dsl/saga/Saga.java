@@ -178,23 +178,20 @@ public interface Saga<E, S extends @Nullable Object, C> {
          * checks the timers and ignores the commands.
          * <p>
          * Starting a timer, starting one at a given time, and cancelling one all arrive here together, because they
-         * carry different values and it reads better to match on them than to have three methods. Computed on each
-         * call, and unmodifiable.
+         * carry different values and it reads better to match on them than to have three methods. The element type is
+         * {@link SagaEffect.TimerEffect}, so this list cannot statically hold a command any more than
+         * {@link #issuedCommands()} can hold a timer. Computed on each call, and unmodifiable.
          */
-        public List<SagaEffect<C>> timerEffects() {
-            List<SagaEffect<C>> timers = new ArrayList<>(effects.size());
+        public List<SagaEffect.TimerEffect<C>> timerEffects() {
+            List<SagaEffect.TimerEffect<C>> timers = new ArrayList<>(effects.size());
             for (SagaEffect<C> effect : effects) {
-                // Matched exhaustively rather than as "not a command", so a new SagaEffect variant stops compiling here
-                // and has to be classified deliberately. A negation would silently report a new non-timer variant as a
-                // timer, and only SagaExecutionSupport.applyEffects would object.
-                boolean isTimerEffect = switch (effect) {
-                    case SagaEffect.IssueCommand<C> ignored -> false;
-                    case SagaEffect.StartTimeout<C> ignored -> true;
-                    case SagaEffect.StartTimeoutAt<C> ignored -> true;
-                    case SagaEffect.CancelTimeout<C> ignored -> true;
-                };
-                if (isTimerEffect) {
-                    timers.add(effect);
+                // Matched exhaustively over the sealed partition rather than as "not a command", so a new SagaEffect
+                // variant that is neither a command nor a timer stops compiling here and has to be classified
+                // deliberately. A negation would silently report such a variant as a timer.
+                switch (effect) {
+                    case SagaEffect.IssueCommand<C> ignored -> {
+                    }
+                    case SagaEffect.TimerEffect<C> timer -> timers.add(timer);
                 }
             }
             return List.copyOf(timers);
