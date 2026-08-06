@@ -36,12 +36,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.tck.ConformanceEvents.event;
 
 /**
- * The global sequence position contract, stated in ADR 84: a position is positive, unique, and strictly increasing,
+ * The global sequence position contract, stated in ADR 84. A position is positive, unique, and strictly increasing,
  * and is comparable across separate appends without being contiguous. A rejected write reserves and abandons a
  * position block, so gaps between two writes are expected, not a defect.
  * <p>
  * {@code DcbAppendResult} additionally documents that the very first position a store ever hands out is 1, but this
- * suite does not assert that: a fixture cannot guarantee its store's underlying position counter has never been used
+ * suite does not assert that. A fixture cannot guarantee its store's underlying position counter has never been used
  * before this test, only that the store contains no events. Nothing here asserts a literal position value or
  * contiguity. Every bound this suite reads a range with is derived from a position it read back off a written event,
  * never from a literal such as 1 or 2.

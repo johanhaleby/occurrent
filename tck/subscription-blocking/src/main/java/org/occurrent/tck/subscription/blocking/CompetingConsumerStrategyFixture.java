@@ -27,7 +27,7 @@ import java.time.Duration;
  * A fixture is created fresh for every test method, and the storage behind it <strong>must hold no locks</strong>. How
  * that is achieved is the implementation's business, and the suite never cleans up on an implementation's behalf.
  * <p>
- * Two things the suite cannot get from the interface, and both are here for the same reason: contention between
+ * Two things the suite cannot get from the interface, and both are here for the same reason. Contention between
  * competing consumers is external. A strategy coordinates with rivals it never holds a reference to, through storage
  * the interface does not mention, on a schedule the interface does not report.
  */
@@ -43,12 +43,12 @@ public interface CompetingConsumerStrategyFixture {
      * Another strategy contending over the same storage as {@link #competingConsumerStrategy()}, holding no locks of its
      * own.
      * <p>
-     * This is a factory rather than a second accessor because a single call is not enough: the suite needs a rival for
+     * This is a factory rather than a second accessor because a single call is not enough. The suite needs a rival for
      * the strategy under test, and some of what it asserts needs a third instance that outlives a rival it deliberately
      * shuts down. Every call must hand back a <em>new</em> strategy contending over the same storage.
      * <p>
      * Constructing several strategies over one storage is therefore an explicit constraint on an implementor rather
-     * than an accident of how Occurrent's own strategies happen to be built: nothing on {@code CompetingConsumerStrategy}
+     * than an accident of how Occurrent's own strategies happen to be built. Nothing on {@code CompetingConsumerStrategy}
      * lets one instance reach another, so a contract about who holds a lock cannot be asserted from one reference.
      * <p>
      * The suite shuts down every strategy it obtains here, so the fixture does not have to track them.
@@ -67,7 +67,7 @@ public interface CompetingConsumerStrategyFixture {
      * <p>
      * <strong>This is a bound, not a delay.</strong> The suite waits for the condition to hold and stops as soon as it
      * does, so a generous bound costs a passing run nothing and is only paid in full by a test that was going to fail
-     * anyway. Declare it comfortably above the implementation's worst case rather than tightly: a bound too small turns
+     * anyway. Declare it comfortably above the implementation's worst case rather than tightly. A bound too small turns
      * a loaded machine into a red build, while a bound too large slows down only failures. Occurrent's MongoDB
      * strategies are lease based, so their worst case is one lease plus one refresh period, and their fixtures declare
      * several times that.

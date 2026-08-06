@@ -38,13 +38,13 @@ import static org.occurrent.tck.ConformanceEvents.event;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
 
 /**
- * Two threads (or more) writing to the same stream at the same time: what a conditional write does when exactly one
- * of them can win, and what an unconditional write does when none of them can lose.
+ * Two or more threads write to the same stream at the same time. This checks what a conditional write does when
+ * exactly one of them can win, and what an unconditional write does when none of them can lose.
  * <p>
- * This is the replacement for issue 467: five tests existed for this already, in {@code MongoEventStoreTest}'s
+ * This replaces issue 467. Five tests existed for this already, in {@code MongoEventStoreTest}'s
  * {@code ParallelWritesToEventStoreReturns}, but every one of them was {@code @EnabledOnOs(MAC)} while every CI run
  * is Linux, so none of them had run anywhere in a long time. They also decided their outcome by having both racing
- * threads write into a single shared {@code AtomicReference}, which is itself a race: whichever thread wrote to the
+ * threads write into a single shared {@code AtomicReference}, which is itself a race. Whichever thread wrote to the
  * reference last is what the assertion saw, independent of which write actually reached the store first. This suite
  * uses {@link ConcurrentRendezvous} instead, which returns each thread's own outcome as a value, so counting winners
  * and losers does not depend on the order two threads happen to finish in.
@@ -60,7 +60,7 @@ public abstract class StreamConcurrencyConformance extends EventStoreConformance
 
     private static final String DEFINED = "NameDefined";
 
-    /** Repetitions per test method. A single race proves little; this is how many independent races each test runs. */
+    /** Repetitions per test method. A single race proves little, so each test runs this many independent races. */
     private static final int ITERATIONS = 5;
 
     @Override
