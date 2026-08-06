@@ -92,7 +92,9 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
 
     // Guards every replay read and the live subscription this model performs so a DCB-tagged event is never delivered
     // to a stream subscriber, even on a store that has both capabilities enabled (see ADR 50).
-    private static final Filter STREAM_CAPABILITY_FILTER = Filter.capability(EventStoreCapability.STREAM);
+    // Package-private rather than private so the ReactorCatchupSubscriptionModel dispatcher, which builds both the
+    // stream-scoped and the capability-agnostic instance, can name the scope it wants.
+    static final Filter STREAM_CAPABILITY_FILTER = Filter.capability(EventStoreCapability.STREAM);
 
     /**
      * Default number of positions read per replay window.
@@ -119,6 +121,9 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     // for a capability-agnostic subscription, which then filters only by the caller's plain Filter and so delivers
     // events of every capability.
     private final @Nullable Filter capabilityScope;
+    // The class a caller's StartAt.dynamic sees. This model's own class when it is used directly, and the dispatcher's
+    // class when ReactorCatchupSubscriptionModel wraps it, so a caller matching on the type it holds keeps working.
+    private final Class<?> subscriptionModelContextType;
 
     public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader) {
         this(subscriptionModel, positionOrderedReader, null, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
@@ -148,8 +153,21 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
      *                        the caller's plain {@link Filter}.
      */
     public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize, @Nullable Filter capabilityScope) {
+        this(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, capabilityScope, ReactorStreamCatchupSubscriptionModel.class);
+    }
+
+    /**
+     * @param subscriptionModelContextType The class a caller-supplied {@code StartAt.dynamic} sees as
+     *                                     {@code SubscriptionModelContext#subscriptionModelType()}. The
+     *                                     {@code ReactorCatchupSubscriptionModel} dispatcher passes its own class here
+     *                                     so a caller that pattern-matches on the public dispatcher type keeps working
+     *                                     regardless of which mode-specific model runs the catch-up. Mirrors the
+     *                                     blocking {@code StreamCatchupSubscriptionModel}.
+     */
+    ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize, @Nullable Filter capabilityScope, Class<?> subscriptionModelContextType) {
         this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
-        this.namedSubscriptions = new NamedCatchupSupport(subscriptionModel, ReactorStreamCatchupSubscriptionModel.class);
+        this.subscriptionModelContextType = requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
+        this.namedSubscriptions = new NamedCatchupSupport(subscriptionModel, subscriptionModelContextType);
         this.positionOrderedReader = requireNonNull(positionOrderedReader, PositionOrderedReader.class.getSimpleName() + " cannot be null");
         this.defaultFilter = defaultFilter;
         this.capabilityScope = capabilityScope;
@@ -216,7 +234,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && matchesLocally.test(cloudEvent);
         SubscriptionFilter liveFilter = StreamSubscriptionFilter.filter(scoped);
 
-        StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorStreamCatchupSubscriptionModel.class));
+        StartAt resolved = startAt.get(new SubscriptionModelContext(subscriptionModelContextType));
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             return namedSubscriptions.subscribeStraightToLive(subscriptionId, liveFilter, livePredicate, resolved == null ? startAt : resolved, action);
         }
@@ -267,6 +285,12 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         namedSubscriptions.cancelSubscription(subscriptionId);
     }
 
+    // Whether a replay for this id is in flight here, so this model is the only one that can answer for it. Lets a
+    // dispatcher over several catch-up models find the one that owns an id instead of picking one of them.
+    boolean isCatchingUp(String subscriptionId) {
+        return namedSubscriptions.isCatchingUp(subscriptionId);
+    }
+
     @Override
     public void shutdown() {
         namedSubscriptions.shutdown();
@@ -297,7 +321,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         // the store applied the real condition to have delivered the event (ADR 92).
         Predicate<CloudEvent> matchesLocally = FilterMatcher.matcherIgnoringPayloadConditions(filter);
 
-        StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorStreamCatchupSubscriptionModel.class));
+        StartAt resolved = startAt.get(new SubscriptionModelContext(subscriptionModelContextType));
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             // Not a catch-up position, so go straight to live. Filter in-process too, so a backend that does not
             // honor the filter server-side still only delivers matching events, and skip events without a position.
