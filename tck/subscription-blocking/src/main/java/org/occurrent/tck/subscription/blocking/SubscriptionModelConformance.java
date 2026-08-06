@@ -30,7 +30,9 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.ConformanceEvents;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -550,6 +552,50 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
                     .as("starting a stopped model brings its subscriptions back")
                     .containsExactly(afterStart.getId());
+        }
+
+        /**
+         * A model whose {@code stop()}/{@code start()} walk a map of running or paused subscriptions while
+         * pausing/resuming each one moves it to the other map can get away with it when there is only one or two
+         * subscriptions to move, the way the rest of this class tests it. This one uses several, so an
+         * implementation that visits an entry that has already moved, or misses one that has not, has enough of
+         * them to make that visible instead of happening to land on the entries it iterates correctly.
+         */
+        @Test
+        void stop_pauses_and_start_resumes_every_one_of_several_running_subscriptions() {
+            if (!fixture().acceptsSeveralSubscriptions()) {
+                return;
+            }
+            Map<String, RecordedEvents> subscriptions = new LinkedHashMap<>();
+            for (int i = 0; i < 6; i++) {
+                String id = subscriptionId();
+                subscriptions.put(id, subscribeAndWait(id));
+            }
+
+            subscriptionModel().stop();
+
+            assertThat(subscriptions.keySet())
+                    .as("stop() must leave every one of them paused")
+                    .allSatisfy(id -> {
+                        assertThat(subscriptionModel().isPaused(id)).as("%s is paused", id).isTrue();
+                        assertThat(subscriptionModel().isRunning(id)).as("%s is not running", id).isFalse();
+                    });
+
+            subscriptionModel().start();
+
+            assertThat(subscriptions.keySet())
+                    .as("start() must resume every one of them, for the same reason")
+                    .allSatisfy(id -> {
+                        assertThat(subscriptionModel().isRunning(id)).as("%s is running again", id).isTrue();
+                        assertThat(subscriptionModel().isPaused(id)).as("%s is not paused", id).isFalse();
+                    });
+
+            CloudEvent afterStart = ConformanceEvents.event("1", "NameDefined");
+            publish(afterStart);
+            subscriptions.values().forEach(recorded ->
+                    assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+                            .as("and each one actually delivers again, not just reports running")
+                            .containsExactly(afterStart.getId()));
         }
 
         @Test

@@ -50,6 +50,7 @@ import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
 
+import java.util.ArrayList;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -380,7 +381,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     public synchronized void stop() {
         if (!shutdown) {
             running = false;
-            runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
+            // Snapshot the keys before iterating: pauseSubscription moves each id from runningSubscriptions to
+            // pausedSubscriptions as it goes, and forEach over a map that its own callback mutates can visit an
+            // entry that has already moved, or miss one that has not. Mirrors ReactorDurableSubscriptionModel.
+            new ArrayList<>(runningSubscriptions.keySet()).forEach(this::pauseSubscription);
         }
     }
 
@@ -389,7 +393,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         if (!shutdown) {
             running = true;
             if (resumeSubscriptionsAutomatically) {
-                pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId));
+                // Same snapshot reasoning as stop(): resumeSubscription moves each id out of pausedSubscriptions as
+                // it goes, so iterating the live map here would be exposed to the same hazard.
+                new ArrayList<>(pausedSubscriptions.keySet()).forEach(this::resumeSubscription);
             }
         }
     }
