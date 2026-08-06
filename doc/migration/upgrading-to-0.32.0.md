@@ -473,7 +473,7 @@ startup path, which is the reason for the change.
 Two things follow for a direct caller.
 
 **On the blocking stack, a replay failure moves.** It used to be thrown out of `subscribe(...)`. It is now rethrown
-from `waitUntilStarted(...)`, so a `try`/`catch` around `subscribe(...)` alone no longer catches anything, and the
+from `waitUntilStarted()`, so a `try`/`catch` around `subscribe(...)` alone no longer catches anything, and the
 projection behind it starts silently empty. Move the handling to the wait:
 
 ```java
@@ -495,8 +495,9 @@ try {
 }
 ```
 
-The wait tells the outcomes apart: an exception means the replay failed, `false` means the timeout you passed expired
-or the model was stopped, and `true` means the projection is caught up and live. After a failure the subscription's
+The wait tells the outcomes apart. An exception means the replay failed, `false` means the model was stopped (or that
+the timeout expired, if you passed one with `waitUntilStarted(Duration)`), and `true` means the projection is caught up
+and live. After a failure the subscription's
 registration on the live feed has been released, so it receives nothing until you subscribe it again, and that fresh
 `subscribe(...)` replays the whole history, because nothing was recorded as caught up.
 
