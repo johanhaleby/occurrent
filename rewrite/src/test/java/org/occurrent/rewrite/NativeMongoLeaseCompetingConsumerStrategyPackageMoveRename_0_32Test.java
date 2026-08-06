@@ -121,14 +121,22 @@ class NativeMongoLeaseCompetingConsumerStrategyPackageMoveRename_0_32Test implem
 
                         import org.occurrent.subscription.mongodb.spring.blocking.NativeMongoLeaseCompetingConsumerStrategy
 
-                        class Foo(val strategy: NativeMongoLeaseCompetingConsumerStrategy)
+                        class Foo(val strategy: NativeMongoLeaseCompetingConsumerStrategy) {
+                            fun build(db: Any): NativeMongoLeaseCompetingConsumerStrategy {
+                                return NativeMongoLeaseCompetingConsumerStrategy.withDefaults(db)
+                            }
+                        }
                         """,
                         """
                         package com.example
 
                         import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoLeaseCompetingConsumerStrategy
 
-                        class Foo(val strategy: NativeMongoLeaseCompetingConsumerStrategy)
+                        class Foo(val strategy: NativeMongoLeaseCompetingConsumerStrategy) {
+                            fun build(db: Any): NativeMongoLeaseCompetingConsumerStrategy {
+                                return NativeMongoLeaseCompetingConsumerStrategy.withDefaults(db)
+                            }
+                        }
                         """
                 )
         );
