@@ -38,6 +38,12 @@
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- FailureNamesTheTestClass is a JUnit extension the suites register, so a consumer running them needs this
+             on its compile path just as it needs it for the suites themselves. See ADR 77. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>
@@ -48,6 +54,11 @@
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-testkit</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

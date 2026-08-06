@@ -20,9 +20,11 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
+import org.occurrent.tck.FailureNamesTheTestClass;
 
 import java.util.EnumSet;
 import java.util.Set;
@@ -51,6 +53,7 @@ import static java.util.Objects.requireNonNull;
  * somebody.
  */
 @NullMarked
+@ExtendWith(FailureNamesTheTestClass.class)
 public abstract class EventStoreConformance {
 
     private @Nullable EventStoreFixture fixture;

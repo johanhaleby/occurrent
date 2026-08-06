@@ -20,10 +20,12 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.tck.FailureNamesTheTestClass;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -68,6 +70,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("the checkpoint storage contract")
 @Timeout(60)
+@ExtendWith(FailureNamesTheTestClass.class)
 public abstract class CheckpointStorageConformance {
 
     private @Nullable CheckpointStorageFixture fixture;

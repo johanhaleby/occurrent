@@ -21,9 +21,11 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.reactor.*;
 import org.occurrent.filter.Filter;
+import org.occurrent.tck.FailureNamesTheTestClass;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -70,6 +72,7 @@ import static org.occurrent.tck.ConformanceEvents.event;
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("the reactive contract a blocking bridge cannot see")
+@ExtendWith(FailureNamesTheTestClass.class)
 public abstract class ReactiveEventStoreConformance {
 
     /**
