@@ -18,6 +18,15 @@
 - A sweep tick that finds work in a ready-for-Johan state (a PR ready to land, a held branch ready to push, a gate
   ready to run) must surface it as an AskUserQuestion in that same tick, not as a status line (2026-08-06 correction).
   "Ready" is a decision point, and prose status does not reach him the way a structured ask does.
+- Orchestrator-spawned sessions follow the /orchestrator skill's conventions from the first chip (2026-08-06
+  correction). Titles are `⌁[<theme>/<unit>#<issue>] <imperative summary>` so the fleet groups in the session list,
+  and every session brief OPENS with a MODEL/EFFORT recommendation line, decided per unit at planning time in the
+  meta-plan, not re-derived at dispatch. Retitle mis-titled spawned sessions via session tooling; hand Johan the
+  orchestrator session's own title, since a session cannot rename itself.
+- One failed lookup command is not evidence of absence (2026-08-06 correction). An `ls` of a skill's SKILL.md
+  returned a false negative and the conclusion "no orchestrator skill" was acted on for a whole dispatch round.
+  Before asserting a skill or file does not exist, list the parent directory. The user naming a thing is a strong
+  prior that it exists.
 - Release execution is Johan's manual act (2026-08-06 correction). Never plan or route changelog version stamping,
   `mvn_release.sh`, tagging, docs held-branch merges, the docs version bump, or post-release checks as agent-executed
   work. Plan up to a release-readiness gate and stop there; keep the release-day steps as a reference checklist only.
