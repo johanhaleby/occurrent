@@ -27,6 +27,11 @@
   returned a false negative and the conclusion "no orchestrator skill" was acted on for a whole dispatch round.
   Before asserting a skill or file does not exist, list the parent directory. The user naming a thing is a strong
   prior that it exists.
+- Coordination cadences are derived, not hardcoded (2026-08-06 correction). A tick interval written as a
+  constant should instead be recomputed at every re-arm from the dominant wait class, the way pr-fix paces
+  its polls: ci-wait paced on observed check durations with a ~3x stuck threshold, worker-wait and
+  human-wait on a long heartbeat because end-of-session notifications arrive event-driven, action-ready
+  acted on immediately. Only ceilings stay as numbers; the rule lives in the /orchestrator skill.
 - Release execution is Johan's manual act (2026-08-06 correction). Never plan or route changelog version stamping,
   `mvn_release.sh`, tagging, docs held-branch merges, the docs version bump, or post-release checks as agent-executed
   work. Plan up to a release-readiness gate and stop there; keep the release-day steps as a reference checklist only.
