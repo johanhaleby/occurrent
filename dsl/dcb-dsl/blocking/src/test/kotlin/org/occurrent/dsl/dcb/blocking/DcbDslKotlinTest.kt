@@ -16,10 +16,6 @@
 
 package org.occurrent.dsl.dcb.blocking
 
-import org.occurrent.dsl.dcb.DcbEventMetadata
-import org.occurrent.dsl.dcb.dcbTags
-import org.occurrent.dsl.dcb.typeOf
-
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.cloudevents.CloudEvent
 import org.assertj.core.api.Assertions.assertThat
@@ -32,11 +28,14 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter
+import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
+import org.occurrent.dsl.dcb.DcbEventMetadata
+import org.occurrent.dsl.dcb.dcbTags
+import org.occurrent.dsl.dcb.typeOf
 import org.occurrent.dsl.query.blocking.DomainEventQueries
-import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.subscription.blocking.subscriptions
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbCriteria

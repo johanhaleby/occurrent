@@ -24,10 +24,6 @@ import org.occurrent.example.domain.mastermind.KeyPeg.Black
 import org.occurrent.example.domain.mastermind.KeyPeg.White
 import org.occurrent.example.domain.mastermind.MasterMindState.Ended
 import org.occurrent.example.domain.mastermind.MasterMindState.Started
-import kotlin.collections.component1
-import kotlin.collections.component2
-import kotlin.collections.component3
-import kotlin.collections.component4
 
 
 fun main() {

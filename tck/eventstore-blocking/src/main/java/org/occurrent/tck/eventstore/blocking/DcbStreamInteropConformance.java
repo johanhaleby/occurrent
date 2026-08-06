@@ -38,10 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.tck.ConformanceEvents.event;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tag;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEvent;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.typesOf;
+import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.*;
 
 /**
  * What a store owes when it has both capabilities at once: DCB reads see DCB events and nothing else, while the

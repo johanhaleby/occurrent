@@ -28,9 +28,10 @@ import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.occurrent.condition.Condition;
 import org.occurrent.domain.*;
-import org.occurrent.eventstore.api.*;
+import org.occurrent.eventstore.api.DuplicateCloudEventException;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.reactor.EventStream;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -68,8 +69,8 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.condition.Condition.*;
-import static org.occurrent.filter.Filter.*;
+import static org.occurrent.condition.Condition.lt;
+import static org.occurrent.filter.Filter.time;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 
 @SuppressWarnings("SameParameterValue")

@@ -16,22 +16,17 @@
 
 package org.occurrent.dsl.saga.docs
 
+// The reified initiating<T>() is a top-level extension in org.occurrent.dsl.saga.flow, so a file in another package
+// imports it by name like any extension. ReceivedEvents also has a no-arg initiating() member, and a member wins over
+// an extension, so the type argument has to be explicit: without it the member is chosen instead. That member is also
+// why omitting the import reports "No type arguments expected" rather than an unresolved reference.
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.DisplayName
-import org.junit.jupiter.api.DisplayNameGeneration
-import org.junit.jupiter.api.DisplayNameGenerator
-import org.junit.jupiter.api.Nested
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertAll
+import org.junit.jupiter.api.*
 import org.occurrent.dsl.saga.Saga
 import org.occurrent.dsl.saga.SagaEffect
 import org.occurrent.dsl.saga.SagaInput
 import org.occurrent.dsl.saga.SagaTimeout
 import org.occurrent.dsl.saga.flow.FlowState
-// The reified initiating<T>() is a top-level extension in org.occurrent.dsl.saga.flow, so a file in another package
-// imports it by name like any extension. ReceivedEvents also has a no-arg initiating() member, and a member wins over
-// an extension, so the type argument has to be explicit: without it the member is chosen instead. That member is also
-// why omitting the import reports "No type arguments expected" rather than an unresolved reference.
 import org.occurrent.dsl.saga.flow.initiating
 import org.occurrent.dsl.saga.flow.saga
 import java.time.Duration

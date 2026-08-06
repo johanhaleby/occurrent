@@ -21,11 +21,7 @@ import org.bson.Document;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Empties a MongoDB database between tests by deleting documents, leaving the collections and their indexes in place.

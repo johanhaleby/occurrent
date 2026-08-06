@@ -49,7 +49,6 @@ import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import java.net.URI
 import java.time.LocalDateTime
-import java.util.Date
 
 /**
  * Proves issue #194's tag-scoped uniqueness projection on the reactor DCB stack, via the on-demand pull path: a

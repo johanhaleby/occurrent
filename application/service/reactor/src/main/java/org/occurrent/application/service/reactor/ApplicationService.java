@@ -22,11 +22,10 @@ import org.occurrent.application.service.ExecuteFilter;
 import org.occurrent.eventstore.api.WriteResult;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
-import java.util.List;
-import java.util.stream.Stream;
 
 /**
  * The reactive counterpart of the blocking {@code ApplicationService}. It loads the events for a stream, applies them to

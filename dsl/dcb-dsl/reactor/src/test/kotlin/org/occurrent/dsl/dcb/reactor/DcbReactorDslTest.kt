@@ -40,13 +40,7 @@ import org.occurrent.dsl.decider.decider
 import org.occurrent.dsl.query.reactor.DomainEventQueries
 import org.occurrent.eventstore.api.EventStoreCapability.DCB
 import org.occurrent.eventstore.api.EventStoreCapability.STREAM
-import org.occurrent.eventstore.api.dcb.DcbAppendCondition
-import org.occurrent.eventstore.api.dcb.DcbAppendResult
-import org.occurrent.eventstore.api.dcb.DcbCloudEvents
-import org.occurrent.eventstore.api.dcb.DcbEventStream
-import org.occurrent.eventstore.api.dcb.DcbCriteria
-import org.occurrent.eventstore.api.dcb.DcbReadOptions
-import org.occurrent.eventstore.api.dcb.Tag
+import org.occurrent.eventstore.api.dcb.*
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore

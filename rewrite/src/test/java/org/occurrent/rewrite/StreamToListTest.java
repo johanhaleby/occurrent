@@ -19,9 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.openrewrite.test.RecipeSpec;
 import org.openrewrite.test.RewriteTest;
 
-import static org.occurrent.rewrite.StreamWriteStubs.CLOUD_EVENT;
-import static org.occurrent.rewrite.StreamWriteStubs.EVENT_STORE;
-import static org.occurrent.rewrite.StreamWriteStubs.STUB_ONLY_VALIDATION;
+import static org.occurrent.rewrite.StreamWriteStubs.*;
 import static org.openrewrite.java.Assertions.java;
 
 class StreamToListTest implements RewriteTest {

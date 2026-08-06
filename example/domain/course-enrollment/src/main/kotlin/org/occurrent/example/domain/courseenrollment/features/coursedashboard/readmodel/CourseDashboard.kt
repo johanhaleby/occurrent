@@ -20,7 +20,7 @@ import org.occurrent.dsl.view.ViewStateRepository
 import org.occurrent.example.domain.courseenrollment.common.CourseId
 import org.occurrent.example.domain.courseenrollment.common.StudentId
 import org.springframework.stereotype.Component
-import java.util.Optional
+import java.util.*
 import java.util.concurrent.atomic.AtomicReference
 
 /** A course as shown on the dashboard. Enrolled students are a set so replay stays idempotent and order-tolerant. */

@@ -28,9 +28,9 @@ import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.blocking.ProjectionRunner;
-import org.occurrent.example.projection.dsl.streamjava.OrderStatusProjection.OrderStatusView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.example.projection.dsl.streamjava.OrderStatusProjection.OrderStatusView;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import tools.jackson.databind.ObjectMapper;
 
@@ -38,7 +38,6 @@ import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.example.projection.dsl.streamjava.OrderStatusProjection.orderStatusProjection;

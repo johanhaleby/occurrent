@@ -18,8 +18,8 @@ package org.occurrent.subscription.api.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import reactor.core.publisher.Mono;
 
 /**

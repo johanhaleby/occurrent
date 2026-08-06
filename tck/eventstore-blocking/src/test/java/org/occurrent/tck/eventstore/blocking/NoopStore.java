@@ -17,23 +17,9 @@
 package org.occurrent.tck.eventstore.blocking;
 
 import io.cloudevents.CloudEvent;
-import org.occurrent.eventstore.api.PositionRange;
-import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.StreamReadFilter;
-import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.WriteResult;
-import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.eventstore.api.blocking.EventStoreOperations;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.eventstore.api.blocking.EventStream;
-import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
-import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
-import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
-import org.occurrent.eventstore.api.dcb.DcbAppendResult;
-import org.occurrent.eventstore.api.dcb.DcbCriteria;
-import org.occurrent.eventstore.api.dcb.DcbEventStore;
-import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.eventstore.api.*;
+import org.occurrent.eventstore.api.blocking.*;
+import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.filter.Filter;
 
 import java.net.URI;

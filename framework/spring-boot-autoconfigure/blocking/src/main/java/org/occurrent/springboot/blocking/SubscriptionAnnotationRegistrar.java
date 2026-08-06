@@ -19,11 +19,7 @@ package org.occurrent.springboot.blocking;
 
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
-import org.occurrent.annotation.DcbSubscription;
-import org.occurrent.annotation.ResumeBehavior;
-import org.occurrent.annotation.StreamSubscription;
-import org.occurrent.annotation.Subscription;
-import org.occurrent.annotation.SynchronousSubscription;
+import org.occurrent.annotation.*;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.DcbEventMetadata;

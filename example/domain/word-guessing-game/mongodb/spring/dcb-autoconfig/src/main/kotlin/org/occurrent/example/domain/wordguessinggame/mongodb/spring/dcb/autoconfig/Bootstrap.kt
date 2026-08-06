@@ -28,7 +28,6 @@ import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconf
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameEventTagGenerator
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.WordGuessingGameCommand
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.WordGuessingGameState
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.wordGuessingGameDecider as createWordGuessingGameDecider
 import org.occurrent.springboot.mongo.blocking.EnableOccurrent
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
@@ -40,6 +39,7 @@ import tools.jackson.databind.ObjectMapper
 import java.net.URI
 import java.time.ZoneOffset.UTC
 import java.time.temporal.ChronoUnit.MILLIS
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.wordGuessingGameDecider as createWordGuessingGameDecider
 
 @SpringBootApplication
 @ComponentScan(

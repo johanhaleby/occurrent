@@ -24,7 +24,6 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.EnumSource
 import org.junit.jupiter.params.provider.ValueSource
-import org.occurrent.example.domain.rps.pragmatic.model.*
 import org.occurrent.example.domain.rps.pragmatic.model.HandShape.*
 
 @DisplayName("Rock Paper Scissors")

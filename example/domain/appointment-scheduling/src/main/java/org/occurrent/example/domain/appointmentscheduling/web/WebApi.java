@@ -24,11 +24,7 @@ import org.occurrent.example.domain.appointmentscheduling.application.Scheduling
 import org.occurrent.example.domain.appointmentscheduling.application.SchedulingQueries.AppointmentView;
 import org.occurrent.example.domain.appointmentscheduling.application.SchedulingQueries.Overview;
 import org.occurrent.example.domain.appointmentscheduling.application.SchedulingQueries.SlotView;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.BookAppointment;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.CancelAppointment;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.DefineSlot;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.RegisterClinician;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.RegisterPatient;
+import org.occurrent.example.domain.appointmentscheduling.model.Commands.*;
 
 import java.net.URLEncoder;
 import java.time.LocalDateTime;
@@ -36,25 +32,10 @@ import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 
+import static j2html.TagCreator.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
-import static j2html.TagCreator.a;
-import static j2html.TagCreator.body;
-import static j2html.TagCreator.button;
-import static j2html.TagCreator.div;
-import static j2html.TagCreator.each;
-import static j2html.TagCreator.form;
-import static j2html.TagCreator.h1;
-import static j2html.TagCreator.h2;
-import static j2html.TagCreator.input;
-import static j2html.TagCreator.label;
-import static j2html.TagCreator.li;
-import static j2html.TagCreator.option;
-import static j2html.TagCreator.p;
-import static j2html.TagCreator.select;
-import static j2html.TagCreator.span;
-import static j2html.TagCreator.ul;
 
 public final class WebApi {
     private WebApi() {

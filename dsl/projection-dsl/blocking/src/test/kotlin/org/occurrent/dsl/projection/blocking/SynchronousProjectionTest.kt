@@ -32,8 +32,7 @@ import org.occurrent.dsl.view.viewStateRepository
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel
 import java.net.URI
-import java.util.Date
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 /**

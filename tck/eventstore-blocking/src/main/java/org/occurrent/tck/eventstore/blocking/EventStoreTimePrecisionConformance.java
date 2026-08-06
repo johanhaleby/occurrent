@@ -34,11 +34,7 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.condition.Condition.and;
-import static org.occurrent.condition.Condition.gt;
-import static org.occurrent.condition.Condition.gte;
-import static org.occurrent.condition.Condition.lt;
-import static org.occurrent.condition.Condition.lte;
+import static org.occurrent.condition.Condition.*;
 import static org.occurrent.filter.Filter.time;
 import static org.occurrent.tck.ConformanceEvents.eventAt;
 

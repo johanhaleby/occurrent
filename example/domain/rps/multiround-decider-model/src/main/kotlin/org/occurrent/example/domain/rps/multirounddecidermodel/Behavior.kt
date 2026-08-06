@@ -21,7 +21,6 @@ import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.rps.multirounddecidermodel.GameLogic.handleHandGesture
 import org.occurrent.example.domain.rps.multirounddecidermodel.GameLogic.initiateNewGame
 import org.occurrent.example.domain.rps.multirounddecidermodel.GameStatus.*
-import org.occurrent.example.domain.rps.multirounddecidermodel.GameStatus.Ended
 import org.occurrent.example.domain.rps.multirounddecidermodel.HandGesture.*
 import org.occurrent.example.domain.rps.multirounddecidermodel.InitiateNewGame.NumberOfRounds.*
 import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.DecisionState.*

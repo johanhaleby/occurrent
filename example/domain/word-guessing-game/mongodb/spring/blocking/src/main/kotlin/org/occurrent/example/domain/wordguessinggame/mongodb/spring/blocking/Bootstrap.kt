@@ -15,8 +15,6 @@
  */
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking
 
-import tools.jackson.databind.ObjectMapper
-import tools.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.dsl.query.blocking.DomainEventQueries
@@ -28,14 +26,14 @@ import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.emailwinner.SendEmailToWinner
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.api.blocking.CheckpointStorage
+import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
@@ -46,6 +44,8 @@ import org.springframework.data.mongodb.core.MongoTemplate
 import org.springframework.retry.annotation.EnableRetry
 import org.springframework.web.servlet.config.annotation.ViewControllerRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.net.URI
 import org.occurrent.application.service.blocking.ApplicationService as OccurrentApplicationService
 

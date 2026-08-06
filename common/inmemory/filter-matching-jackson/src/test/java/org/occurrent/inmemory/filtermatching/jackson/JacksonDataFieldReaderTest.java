@@ -18,10 +18,10 @@ package org.occurrent.inmemory.filtermatching.jackson;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.jspecify.annotations.Nullable;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;

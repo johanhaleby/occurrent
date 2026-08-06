@@ -17,10 +17,10 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.views.endedgamesoverview
 
 import org.occurrent.annotation.StreamSubscription
-import org.occurrent.dsl.dcb.dcbTags
+import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForSequence
-import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbQueries
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbTags
@@ -29,7 +29,7 @@ import org.occurrent.example.domain.wordguessinggame.readmodel.LostGameOverview
 import org.occurrent.example.domain.wordguessinggame.readmodel.WonGameOverview
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.stereotype.Component
-import java.util.UUID
+import java.util.*
 
 @Component
 class WhenGameIsEndedThenAddGameToEndedGamesOverview(

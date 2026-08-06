@@ -29,7 +29,7 @@ import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.math.BigDecimal
 import java.net.URI
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 
 class DynamicProductPriceTest {
 

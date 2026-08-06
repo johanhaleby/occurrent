@@ -16,17 +16,15 @@
 
 package se.occurrent.dsl.module.blocking
 
-import com.fasterxml.jackson.databind.ObjectMapper
-import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
-import org.occurrent.domain.DomainEventConverter
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
 import se.occurrent.dsl.module.blocking.em.eventModel
-import se.occurrent.dsl.module.blocking.hotel.*
+import se.occurrent.dsl.module.blocking.hotel.HotelCommand
+import se.occurrent.dsl.module.blocking.hotel.HotelEvent
+import se.occurrent.dsl.module.blocking.hotel.Inventory
 import se.occurrent.dsl.module.blocking.hotel.InventoryCommand.AddRoom
-import se.occurrent.dsl.module.blocking.hotel.InventoryEvent.RoomAdded
 import java.util.concurrent.CopyOnWriteArrayList
 
 

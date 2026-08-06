@@ -16,16 +16,11 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
-import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
 import org.bson.Document;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
 import org.occurrent.dsl.snapshot.Snapshot;
+import org.occurrent.dsl.snapshot.mongodb.spring.blocking.SpringMongoSnapshotStore;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

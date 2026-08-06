@@ -18,9 +18,9 @@ package org.occurrent.subscription.api.blocking.internal;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.util.ArrayDeque;
 import java.util.Iterator;

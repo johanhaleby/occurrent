@@ -16,11 +16,11 @@
 
 package org.occurrent.subscription.reactor.durable;
 
-import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Mono;
 
 import java.util.Set;

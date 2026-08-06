@@ -27,11 +27,7 @@ import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.subscription.Checkpoint;
-import org.occurrent.subscription.GlobalCheckpoint;
-import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.StringBasedCheckpoint;
-import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 

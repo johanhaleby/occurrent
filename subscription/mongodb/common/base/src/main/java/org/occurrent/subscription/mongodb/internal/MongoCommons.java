@@ -18,11 +18,11 @@ package org.occurrent.subscription.mongodb.internal;
 
 import org.bson.*;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
-import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 

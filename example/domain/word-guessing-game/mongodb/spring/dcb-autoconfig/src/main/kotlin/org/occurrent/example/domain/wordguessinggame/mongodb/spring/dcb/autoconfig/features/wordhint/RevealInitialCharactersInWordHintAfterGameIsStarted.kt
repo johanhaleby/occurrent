@@ -17,8 +17,8 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autocon
 
 import org.occurrent.annotation.StreamSubscription
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
-import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
@@ -29,7 +29,7 @@ import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintData
 import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Component
-import java.util.UUID
+import java.util.*
 
 @Component
 class RevealInitialCharactersInWordHintAfterGameIsStarted(

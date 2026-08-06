@@ -24,8 +24,8 @@ import org.occurrent.dsl.subscription.agnosticSubscriptionFilterFromEventTypes
 import org.occurrent.dsl.subscription.subscriptionFilterFromEventTypes
 import org.occurrent.filter.Filter
 import org.occurrent.subscription.AgnosticSubscriptionFilter
-import org.occurrent.subscription.StreamSubscriptionFilter
 import org.occurrent.subscription.StartAt
+import org.occurrent.subscription.StreamSubscriptionFilter
 import org.occurrent.subscription.api.reactor.Subscribable
 import org.occurrent.subscription.api.reactor.Subscription
 import reactor.core.publisher.Mono

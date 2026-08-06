@@ -16,8 +16,6 @@
 
 package org.occurrent.dsl.dcb.blocking;
 
-import org.occurrent.dsl.dcb.DcbDomainEventStream;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,18 +24,13 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
+import org.occurrent.dsl.dcb.DcbDomainEventStream;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
-import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
-import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
-import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
-import org.occurrent.eventstore.api.dcb.DcbCriteria;
-import org.occurrent.eventstore.api.dcb.DcbReadOptions;
-import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 

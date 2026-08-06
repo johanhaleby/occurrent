@@ -21,12 +21,7 @@ import org.occurrent.dsl.dcb.DcbCriteriaBuilder;
 import org.occurrent.dsl.dcb.DcbDomainEventStream;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.eventstore.api.dcb.DcbEventStore;
-import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbCriteria;
-import org.occurrent.eventstore.api.dcb.DcbCriterion;
-import org.occurrent.eventstore.api.dcb.DcbReadOptions;
-import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.*;
 
 import java.util.Arrays;
 import java.util.List;

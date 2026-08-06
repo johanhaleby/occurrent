@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbCriteria.*;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 /**
  * The tests remaining in this class document the position gap a failed append leaves behind (ADR 84), which is a

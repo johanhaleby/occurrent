@@ -21,7 +21,6 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 
 import java.time.Instant;

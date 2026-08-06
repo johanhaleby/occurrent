@@ -16,7 +16,6 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.reactor.transactional;
 
-import tools.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.domain.DomainEvent;
@@ -27,6 +26,7 @@ import org.occurrent.time.TimeConversion;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 import java.util.List;

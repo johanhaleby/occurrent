@@ -17,6 +17,7 @@
 package org.occurrent.example.eventstore.mongodb.spring.transactional;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.occurrent.domain.DomainEvent;
@@ -27,9 +28,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -39,7 +40,6 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
-import org.junit.jupiter.api.extension.ExtendWith;
 
 @SpringBootTest(classes = TransactionalProjectionsWithSpringAndMongoDBApplication.class)
 @Testcontainers

@@ -26,12 +26,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
-import org.occurrent.eventstore.api.dcb.Tag;
-import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
-import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
-import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -48,7 +43,6 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -58,10 +52,10 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
-import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
+import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 /**
  * Reproduction for the read-watermark overshoot lost-conflict bug (finding 2).

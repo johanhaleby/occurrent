@@ -20,13 +20,13 @@ import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -38,12 +38,11 @@ import java.util.List;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.*;
-
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
  * An in-memory subscription model

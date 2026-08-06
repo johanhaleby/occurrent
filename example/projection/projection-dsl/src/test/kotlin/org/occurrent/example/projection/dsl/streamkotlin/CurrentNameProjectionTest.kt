@@ -34,7 +34,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
 import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.net.URI
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 @DisplayNameGeneration(ReplaceUnderscores::class)

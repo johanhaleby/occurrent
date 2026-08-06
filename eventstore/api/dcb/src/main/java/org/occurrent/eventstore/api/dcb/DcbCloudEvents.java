@@ -21,12 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.EventStoreCloudEventExtensions;
 
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.joining;

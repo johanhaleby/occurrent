@@ -21,10 +21,9 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.service.dcb.TagGenerator;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
-import java.util.List;
-import java.util.stream.Stream;
 
 /**
  * Options used when executing a command through a reactive {@link DcbApplicationService}.

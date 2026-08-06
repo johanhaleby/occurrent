@@ -18,6 +18,7 @@
 package org.occurrent.springboot.reactor;
 
 import io.cloudevents.CloudEvent;
+import kotlin.jvm.functions.Function2;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -43,7 +44,6 @@ import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 import reactor.core.publisher.Mono;
-import kotlin.jvm.functions.Function2;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;

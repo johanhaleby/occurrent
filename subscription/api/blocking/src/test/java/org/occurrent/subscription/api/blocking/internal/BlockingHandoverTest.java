@@ -19,17 +19,15 @@ package org.occurrent.subscription.api.blocking.internal;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.internal.HandoverMessages;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.assertj.core.api.Assertions.*;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class BlockingHandoverTest {

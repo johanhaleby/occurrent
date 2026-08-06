@@ -18,16 +18,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autocon
 
 import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.eventstore.api.dcb.Tag
-import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
-import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
-import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
-import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
-import org.occurrent.example.domain.wordguessinggame.event.NumberOfGuessesWasExhaustedForPlayer
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerWasAwardedPointsForGuessingTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerWasNotAwardedAnyPointsForGuessingTheRightWord
+import org.occurrent.example.domain.wordguessinggame.event.*
 
 internal class GameEventTagGenerator : TagGenerator<GameEvent> {
     override fun tags(event: GameEvent): Set<Tag> = buildSet {

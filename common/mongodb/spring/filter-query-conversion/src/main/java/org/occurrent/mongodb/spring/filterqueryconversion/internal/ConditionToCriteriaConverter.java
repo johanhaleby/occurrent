@@ -21,7 +21,6 @@ import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.springframework.data.mongodb.core.query.Criteria;
 
-import java.util.Collection;
 import java.util.List;
 
 /**

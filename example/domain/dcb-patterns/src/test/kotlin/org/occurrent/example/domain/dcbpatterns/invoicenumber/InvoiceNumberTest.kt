@@ -22,17 +22,12 @@ import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
-import org.occurrent.eventstore.api.dcb.DcbAppendCondition
-import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException
-import org.occurrent.eventstore.api.dcb.DcbCloudEvents
-import org.occurrent.eventstore.api.dcb.DcbCriteria
-import org.occurrent.eventstore.api.dcb.DcbReadOptions
-import org.occurrent.eventstore.api.dcb.Tag
+import org.occurrent.eventstore.api.dcb.*
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.net.URI
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 
 class InvoiceNumberTest {
 

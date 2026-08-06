@@ -26,14 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
-import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
-import org.occurrent.eventstore.api.dcb.DcbAppendResult;
-import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
-import org.occurrent.eventstore.api.dcb.DcbCriteria;
-import org.occurrent.eventstore.api.dcb.DcbCriterion;
-import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbReadOptions;
+import org.occurrent.eventstore.api.dcb.*;
 
 import java.util.List;
 import java.util.Set;
@@ -42,14 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.wholeStoreLock;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tag;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEvent;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithJsonData;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tagsOf;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tagsOn;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.typesOf;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.untaggedDcbEvent;
+import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.*;
 
 /**
  * The Dynamic Consistency Boundary contract: which events a criteria selects, what the read options do to the

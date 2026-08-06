@@ -19,8 +19,8 @@ package org.occurrent.command.annotation;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.command.StreamIdResolver;
 import org.occurrent.annotation.TargetStreamId;
+import org.occurrent.command.StreamIdResolver;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

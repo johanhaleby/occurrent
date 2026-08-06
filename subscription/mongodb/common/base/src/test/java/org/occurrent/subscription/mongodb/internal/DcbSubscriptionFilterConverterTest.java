@@ -22,7 +22,6 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
-import org.occurrent.eventstore.api.dcb.DcbCriterion;
 
 import java.util.List;
 import java.util.Set;

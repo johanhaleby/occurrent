@@ -21,10 +21,9 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
 
 import java.util.function.Predicate;
-
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;

@@ -18,11 +18,7 @@ package org.occurrent.tck.eventstore.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.eventstore.api.blocking.EventStoreOperations;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
-import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
+import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 
 import java.time.temporal.ChronoUnit;

@@ -27,22 +27,17 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
-import org.occurrent.application.service.blocking.ExecuteFilters
-import org.occurrent.application.service.blocking.ExecuteOptions
-import org.occurrent.application.service.blocking.filter
-import org.occurrent.application.service.blocking.options
-import org.occurrent.application.service.blocking.sideEffect
+import org.occurrent.application.service.blocking.*
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.DomainEventConverter
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
-import org.occurrent.eventstore.api.StreamReadFilter
 import org.occurrent.eventstore.api.StreamReadFilter.type
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.net.URI
 import java.time.LocalDateTime
 import java.time.ZoneOffset
-import java.util.UUID
+import java.util.*
 
 @DisplayName("generic application service - kotlin")
 class GenericApplicationServiceKotlinTest {

@@ -15,8 +15,6 @@
  */
 package org.occurrent.example.domain.uno.es.spring.blocking
 
-import tools.jackson.databind.ObjectMapper
-import tools.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException
@@ -27,8 +25,8 @@ import org.occurrent.example.domain.uno.Event
 import org.occurrent.example.domain.uno.GameId
 import org.occurrent.example.domain.uno.es.UnoCloudEventConverter
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.api.blocking.CheckpointStorage
+import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
 import org.occurrent.subscription.redis.spring.blocking.SpringRedisCheckpointStorage
@@ -50,6 +48,8 @@ import org.springframework.retry.policy.SimpleRetryPolicy
 import org.springframework.retry.support.RetryTemplate
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.service.blocking.ApplicationService as OccurrentApplicationService
 
 

@@ -16,40 +16,26 @@
 
 package org.occurrent.example.saga.orderfulfillment.core;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
+import org.occurrent.command.CommandDispatcher;
+import org.occurrent.command.CommandDispatchers;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.decider.DeciderApplicationService;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaStateStore;
-import org.occurrent.command.CommandDispatcher;
-import org.occurrent.command.CommandDispatchers;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
-import org.occurrent.example.saga.orderfulfillment.CancelOrder;
-import org.occurrent.example.saga.orderfulfillment.OrderCancelled;
-import org.occurrent.example.saga.orderfulfillment.OrderCommand;
-import org.occurrent.example.saga.orderfulfillment.OrderEvent;
-import org.occurrent.example.saga.orderfulfillment.OrderPlaced;
-import org.occurrent.example.saga.orderfulfillment.OrderShipped;
-import org.occurrent.example.saga.orderfulfillment.PaymentReservationRequested;
-import org.occurrent.example.saga.orderfulfillment.PaymentReserved;
-import org.occurrent.example.saga.orderfulfillment.ReservePayment;
-import org.occurrent.example.saga.orderfulfillment.ShipOrder;
+import org.occurrent.example.saga.orderfulfillment.*;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import tools.jackson.databind.ObjectMapper;
 

@@ -19,9 +19,9 @@ package org.occurrent.subscription.api.reactor;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.Checkpoint;
 import reactor.core.publisher.Flux;
 
 /**

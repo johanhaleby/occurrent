@@ -27,11 +27,11 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.CatchupThenLiveOptions;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 

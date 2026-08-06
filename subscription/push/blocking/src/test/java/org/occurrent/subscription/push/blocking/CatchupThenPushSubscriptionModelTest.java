@@ -23,15 +23,14 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.eventstore.api.dcb.DcbCriteria;
-import org.occurrent.subscription.CatchupThenLiveOptions;
-import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
-
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
 import java.time.Duration;

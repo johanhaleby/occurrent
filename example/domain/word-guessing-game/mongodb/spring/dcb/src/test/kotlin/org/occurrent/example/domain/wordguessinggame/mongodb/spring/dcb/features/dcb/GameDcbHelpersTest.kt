@@ -21,20 +21,9 @@ import org.junit.jupiter.api.Test
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbCriterion
 import org.occurrent.eventstore.api.dcb.Tag
-import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
-import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
-import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
-import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
-import org.occurrent.example.domain.wordguessinggame.event.NumberOfGuessesWasExhaustedForPlayer
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerWasAwardedPointsForGuessingTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerWasNotAwardedAnyPointsForGuessingTheRightWord
+import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
-import org.occurrent.example.domain.wordguessinggame.event.eventType
-import java.util.Date
-import java.util.UUID
+import java.util.*
 
 class GameDcbHelpersTest {
 

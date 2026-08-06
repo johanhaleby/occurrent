@@ -17,9 +17,9 @@
 
 package org.occurrent.deadline.jobrunr.internal;
 
-import org.jspecify.annotations.Nullable;
 import org.jobrunr.jobs.lambdas.JobRequest;
 import org.jobrunr.jobs.lambdas.JobRequestHandler;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.deadline.jobrunr.JobRunrDeadlineConsumerRegistry;
 
 import java.util.Objects;

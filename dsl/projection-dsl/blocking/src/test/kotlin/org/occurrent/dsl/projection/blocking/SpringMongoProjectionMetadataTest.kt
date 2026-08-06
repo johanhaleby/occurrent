@@ -48,8 +48,7 @@ import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.mongodb.MongoDBContainer
 import java.net.URI
-import java.util.Date
-import java.util.UUID
+import java.util.*
 
 @Document(collection = "stream-keyed-name")
 data class StreamKeyedName(@Id val streamId: String, val name: String, val streamVersion: Long)

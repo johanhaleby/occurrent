@@ -18,12 +18,12 @@
 package org.occurrent.example.domain.rps.decidermodel.web
 
 import org.occurrent.example.domain.rps.decidermodel.web.common.loggerFor
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.boot.devtools.restart.RestartScope
 import org.springframework.boot.fromApplication
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.boot.with
-import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.context.annotation.Bean
 import org.testcontainers.mongodb.MongoDBContainer
 

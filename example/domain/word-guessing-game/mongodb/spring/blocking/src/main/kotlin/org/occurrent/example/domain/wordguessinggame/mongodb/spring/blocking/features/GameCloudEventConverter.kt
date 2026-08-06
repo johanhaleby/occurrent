@@ -16,9 +16,6 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features
 
-import tools.jackson.databind.ObjectMapper
-import tools.jackson.module.kotlin.convertValue
-import tools.jackson.module.kotlin.readValue
 import io.cloudevents.CloudEvent
 import io.cloudevents.CloudEventData
 import io.cloudevents.core.builder.CloudEventBuilder
@@ -28,6 +25,9 @@ import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
 import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
 import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.convertValue
+import tools.jackson.module.kotlin.readValue
 import java.net.URI
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit

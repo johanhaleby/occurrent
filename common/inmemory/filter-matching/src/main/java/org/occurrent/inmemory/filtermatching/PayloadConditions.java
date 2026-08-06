@@ -21,10 +21,7 @@ import org.occurrent.filter.Filter;
 
 import java.util.List;
 
-import static org.occurrent.filter.Filter.All;
-import static org.occurrent.filter.Filter.CapabilityFilter;
-import static org.occurrent.filter.Filter.CompositionFilter;
-import static org.occurrent.filter.Filter.SingleConditionFilter;
+import static org.occurrent.filter.Filter.*;
 
 /**
  * Rewrites a {@link Filter} so that a condition on a field inside an event's {@code data} payload is treated as already

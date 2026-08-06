@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.ModelAttribute
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import reactor.core.publisher.Mono
-import java.util.UUID
+import java.util.*
 
 /** Form-backed command. On WebFlux, @RequestParam reads only query params, so form bodies bind via @ModelAttribute. */
 data class DefineRoomForm(var roomNumber: String = "")

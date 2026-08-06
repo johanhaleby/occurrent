@@ -22,9 +22,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.occurrent.springboot.common.SubscriptionMode.AUTO;
-import static org.occurrent.springboot.common.SubscriptionMode.DISABLED;
-import static org.occurrent.springboot.common.SubscriptionMode.MANUAL;
+import static org.occurrent.springboot.common.SubscriptionMode.*;
 
 /**
  * Covers how {@code occurrent.subscription.mode} and the deprecated {@code occurrent.subscription.enabled} combine.

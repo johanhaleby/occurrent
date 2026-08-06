@@ -18,8 +18,8 @@ package org.occurrent.subscription.api.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 
 /**
  * A {@link SubscriptionModel} that produces {@link CheckpointAwareCloudEvent} compatible {@link CloudEvent}'s.

@@ -16,12 +16,12 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 
-import tools.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEventAttributes;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.functional.CheckedFunction;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 import java.util.stream.Stream;

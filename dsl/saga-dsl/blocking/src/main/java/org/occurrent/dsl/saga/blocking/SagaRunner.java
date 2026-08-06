@@ -16,11 +16,11 @@
 
 package org.occurrent.dsl.saga.blocking;
 
-import org.occurrent.command.CommandDispatcher;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaStateStore;

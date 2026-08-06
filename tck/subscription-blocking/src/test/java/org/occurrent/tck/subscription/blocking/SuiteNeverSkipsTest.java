@@ -16,6 +16,7 @@
 
 package org.occurrent.tck.subscription.blocking;
 
+import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -23,7 +24,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.platform.engine.TestExecutionResult;
 import org.junit.platform.testkit.engine.EngineTestKit;
 import org.junit.platform.testkit.engine.Events;
-import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;

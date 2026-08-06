@@ -30,7 +30,6 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
-import org.occurrent.tck.subscription.blocking.RestartConformance;
 import org.occurrent.tck.subscription.blocking.RestartableSubscriptionModelFixture;
 import org.occurrent.tck.subscription.blocking.StartAtVariant;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;

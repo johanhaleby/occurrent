@@ -1,8 +1,6 @@
 package org.occurrent.application.service.blocking
 
 import org.occurrent.application.service.ExecuteFilter
-
-import kotlin.jvm.JvmName
 import kotlin.reflect.KClass
 
 /**

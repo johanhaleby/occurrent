@@ -17,8 +17,8 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.views.ongoinggamesoverview
 
 import org.occurrent.annotation.StreamSubscription
-import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
@@ -32,7 +32,7 @@ import org.springframework.data.mongodb.core.query.Query.query
 import org.springframework.data.mongodb.core.query.isEqualTo
 import org.springframework.data.mongodb.core.remove
 import org.springframework.stereotype.Component
-import java.util.UUID
+import java.util.*
 
 @Component
 class AddedOrRemoveGameFromOngoingGamesOverview(private val mongo: MongoOperations) {

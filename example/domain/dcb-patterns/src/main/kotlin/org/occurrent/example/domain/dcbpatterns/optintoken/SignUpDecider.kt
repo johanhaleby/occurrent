@@ -22,7 +22,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.Tag
 import java.time.Duration
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 
 /**
  * Pattern: double opt-in with a consume-once, expiring token. [SignUpInitiated] carries the one-time password and

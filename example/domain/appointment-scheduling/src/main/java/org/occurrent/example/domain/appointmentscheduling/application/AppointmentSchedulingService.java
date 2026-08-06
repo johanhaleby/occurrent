@@ -24,12 +24,7 @@ import org.occurrent.dsl.dcb.blocking.DcbDeciderApplicationService;
 import org.occurrent.example.domain.appointmentscheduling.event.DomainEvent;
 import org.occurrent.example.domain.appointmentscheduling.model.Appointment;
 import org.occurrent.example.domain.appointmentscheduling.model.Clinician;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.AppointmentCommand;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.BookAppointment;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.CancelAppointment;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.DefineSlot;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.RegisterClinician;
-import org.occurrent.example.domain.appointmentscheduling.model.Commands.RegisterPatient;
+import org.occurrent.example.domain.appointmentscheduling.model.Commands.*;
 import org.occurrent.example.domain.appointmentscheduling.model.Patient;
 import org.occurrent.example.domain.appointmentscheduling.model.Slot;
 

@@ -19,8 +19,8 @@ package org.occurrent.subscription.api.blocking;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.filter.Filter;
-import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 
 import java.util.function.Consumer;
 

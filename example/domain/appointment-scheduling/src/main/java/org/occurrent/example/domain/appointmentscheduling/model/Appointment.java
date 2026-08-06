@@ -18,23 +18,13 @@ package org.occurrent.example.domain.appointmentscheduling.model;
 
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
-import org.occurrent.example.domain.appointmentscheduling.event.AppointmentBooked;
-import org.occurrent.example.domain.appointmentscheduling.event.AppointmentCancelled;
-import org.occurrent.example.domain.appointmentscheduling.event.ClinicianRegistered;
-import org.occurrent.example.domain.appointmentscheduling.event.DomainEvent;
-import org.occurrent.example.domain.appointmentscheduling.event.PatientRegistered;
-import org.occurrent.example.domain.appointmentscheduling.event.SlotDefined;
+import org.occurrent.example.domain.appointmentscheduling.event.*;
 import org.occurrent.example.domain.appointmentscheduling.model.Commands.AppointmentCommand;
 import org.occurrent.example.domain.appointmentscheduling.model.Commands.BookAppointment;
 import org.occurrent.example.domain.appointmentscheduling.model.Commands.CancelAppointment;
 
 import java.time.OffsetDateTime;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 import static java.time.ZoneOffset.UTC;
 

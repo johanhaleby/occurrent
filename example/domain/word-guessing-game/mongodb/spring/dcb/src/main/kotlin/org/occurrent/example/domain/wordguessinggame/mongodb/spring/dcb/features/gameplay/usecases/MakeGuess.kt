@@ -19,11 +19,7 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb.GameDcbQueries
-import org.occurrent.example.domain.wordguessinggame.writemodel.GameId
-import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
-import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
-import org.occurrent.example.domain.wordguessinggame.writemodel.Word
-import org.occurrent.example.domain.wordguessinggame.writemodel.guessWord
+import org.occurrent.example.domain.wordguessinggame.writemodel.*
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable

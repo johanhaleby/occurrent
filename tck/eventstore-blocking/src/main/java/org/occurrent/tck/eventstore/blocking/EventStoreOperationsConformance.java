@@ -35,9 +35,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.tck.ConformanceEvents.SOURCE;
-import static org.occurrent.tck.ConformanceEvents.event;
-import static org.occurrent.tck.ConformanceEvents.idsOf;
+import static org.occurrent.tck.ConformanceEvents.*;
 
 /**
  * The {@link org.occurrent.eventstore.api.blocking.EventStoreOperations} contract: deleting a whole stream, deleting a

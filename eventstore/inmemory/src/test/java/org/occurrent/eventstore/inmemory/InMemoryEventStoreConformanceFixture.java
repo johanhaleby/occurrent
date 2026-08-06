@@ -17,11 +17,7 @@
 package org.occurrent.eventstore.inmemory;
 
 import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.eventstore.api.blocking.EventStoreOperations;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
-import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
+import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.tck.eventstore.blocking.DcbAppendConditionModel;

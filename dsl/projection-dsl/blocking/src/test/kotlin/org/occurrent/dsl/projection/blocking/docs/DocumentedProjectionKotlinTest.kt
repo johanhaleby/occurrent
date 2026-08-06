@@ -16,15 +16,11 @@
 
 package org.occurrent.dsl.projection.blocking.docs
 
+// The on-demand fold is an extension on DomainEventQueries declared in org.occurrent.dsl.projection.blocking. This test
+// sits in a subpackage of that, and Kotlin does not inherit extensions from a parent package, so it must be imported.
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.DisplayName
-import org.junit.jupiter.api.DisplayNameGeneration
-import org.junit.jupiter.api.DisplayNameGenerator
-import org.junit.jupiter.api.Nested
-import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.*
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson.jacksonCloudEventConverter
 import org.occurrent.application.service.blocking.TransactionExecutor
@@ -33,19 +29,16 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.projection.Projection
-import org.occurrent.dsl.projection.projection
 import org.occurrent.dsl.projection.blocking.ProjectionRunner
-// The on-demand fold is an extension on DomainEventQueries declared in org.occurrent.dsl.projection.blocking. This test
-// sits in a subpackage of that, and Kotlin does not inherit extensions from a parent package, so it must be imported.
 import org.occurrent.dsl.projection.blocking.project
+import org.occurrent.dsl.projection.projection
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.view.viewStateRepository
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
 import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel
 import java.net.URI
-import java.util.Date
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 /**

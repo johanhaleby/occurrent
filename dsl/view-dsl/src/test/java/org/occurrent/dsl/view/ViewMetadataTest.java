@@ -18,8 +18,8 @@ package org.occurrent.dsl.view;
 
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.util.HashMap;
 import java.util.List;

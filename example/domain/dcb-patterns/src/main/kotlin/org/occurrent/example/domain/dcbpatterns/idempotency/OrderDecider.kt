@@ -22,7 +22,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.Tag
 import java.math.BigDecimal
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 
 /**
  * Pattern: prevent record duplication with an idempotency token. A client that retries a request (say, after a

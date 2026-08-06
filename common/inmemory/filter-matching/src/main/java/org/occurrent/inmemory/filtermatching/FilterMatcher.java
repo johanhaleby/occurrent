@@ -20,13 +20,12 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.EventStoreCloudEventExtensions;
 import org.occurrent.filter.Filter;
+import org.occurrent.filter.Filter.All;
+import org.occurrent.filter.Filter.CapabilityFilter;
 import org.occurrent.filter.Filter.CompositionFilter;
+import org.occurrent.filter.Filter.SingleConditionFilter;
 
 import java.util.function.Predicate;
-
-import static org.occurrent.filter.Filter.All;
-import static org.occurrent.filter.Filter.CapabilityFilter;
-import static org.occurrent.filter.Filter.SingleConditionFilter;
 
 /**
  * Check if a cloud event matching a given filter

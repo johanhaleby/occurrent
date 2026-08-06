@@ -22,7 +22,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbCriterion
 import org.occurrent.eventstore.api.dcb.Tag
-import java.util.Objects
+import java.util.*
 import kotlin.reflect.KClass
 
 /**

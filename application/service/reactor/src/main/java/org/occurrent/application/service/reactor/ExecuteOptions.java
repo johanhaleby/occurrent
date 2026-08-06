@@ -22,10 +22,9 @@ import org.occurrent.application.service.ExecuteFilter;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import reactor.core.publisher.Mono;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
-import java.util.List;
-import java.util.stream.Stream;
 
 /**
  * Options used when executing a command through a reactive {@link ApplicationService}.

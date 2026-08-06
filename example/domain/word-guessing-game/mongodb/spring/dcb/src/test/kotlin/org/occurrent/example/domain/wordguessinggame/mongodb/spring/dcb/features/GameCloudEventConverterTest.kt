@@ -19,21 +19,11 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator
 import org.junit.jupiter.api.Test
-import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
-import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
-import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
-import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
-import org.occurrent.example.domain.wordguessinggame.event.NumberOfGuessesWasExhaustedForPlayer
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerWasAwardedPointsForGuessingTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerWasNotAwardedAnyPointsForGuessingTheRightWord
+import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
 import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.net.URI
-import java.util.Date
-import java.util.UUID
+import java.util.*
 
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class GameCloudEventConverterTest {

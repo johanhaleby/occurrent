@@ -23,7 +23,7 @@ import org.occurrent.eventstore.api.dcb.Tag
 import java.math.BigDecimal
 import java.time.Duration
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 
 /**
  * Pattern: honor a displayed price for a short grace period after it changes. A shopper who loaded the product page

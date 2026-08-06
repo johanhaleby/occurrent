@@ -17,7 +17,6 @@
 package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
-import org.occurrent.dsl.saga.flow.FlowState;
 
 import java.time.Instant;
 

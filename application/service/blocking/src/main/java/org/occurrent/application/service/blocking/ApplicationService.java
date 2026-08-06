@@ -1,11 +1,9 @@
 package org.occurrent.application.service.blocking;
 
-import org.occurrent.application.service.ExecuteFilter;
-
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.eventstore.api.StreamReadFilter;
+import org.occurrent.application.service.ExecuteFilter;
 import org.occurrent.eventstore.api.WriteResult;
 
 import java.util.List;

@@ -33,7 +33,6 @@ import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
 import java.net.URI
 import java.time.LocalDateTime
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.stream.Stream
 
 @DisplayNameGeneration(ReplaceUnderscores::class)
 class DefaultSubscriptionIdTest {

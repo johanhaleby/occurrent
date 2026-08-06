@@ -19,18 +19,13 @@ import org.assertj.core.api.Assertions.assertThat
 import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
+import org.occurrent.cloudevents.OccurrentCloudEventExtension
 import org.occurrent.cloudevents.OccurrentExtensionGetter
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForList
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbEventStore
-import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
-import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
-import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerWasAwardedPointsForGuessingTheRightWord
+import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.Bootstrap
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.TestBootstrap
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb.GameDcbQueries
@@ -44,9 +39,7 @@ import org.occurrent.example.domain.wordguessinggame.writemodel.WordList
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import java.time.Duration
-import java.util.Date
-import java.util.UUID
-import org.occurrent.cloudevents.OccurrentCloudEventExtension
+import java.util.*
 
 @SpringBootTest(classes = [Bootstrap::class, TestBootstrap::class])
 class GameplayUsecasesAndPoliciesTest {

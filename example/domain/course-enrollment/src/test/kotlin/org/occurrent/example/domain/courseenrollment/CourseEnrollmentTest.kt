@@ -29,13 +29,13 @@ import org.occurrent.example.domain.courseenrollment.features.enrollment.model.E
 import org.occurrent.example.domain.courseenrollment.features.enrollment.usecases.enrollStudent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.usecases.deregisterStudent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.usecases.registerStudent
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.test.annotation.DirtiesContext
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.testcontainers.mongodb.MongoDBContainer
 import java.util.*
 import java.util.concurrent.Callable

@@ -30,7 +30,9 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.*;
-import org.occurrent.eventstore.api.*;
+import org.occurrent.eventstore.api.DuplicateCloudEventException;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -62,7 +64,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.condition.Condition.*;
-import static org.occurrent.filter.Filter.*;
+import static org.occurrent.filter.Filter.time;
 
 @SuppressWarnings("SameParameterValue")
 @Testcontainers

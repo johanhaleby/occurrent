@@ -19,18 +19,13 @@ package org.occurrent.subscription.reactor.durable.catchup;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
-import org.occurrent.subscription.DcbStartAt;
-import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.GlobalCheckpoint;
-import org.occurrent.subscription.CheckpointAwareCloudEvent;
-import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
-import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
@@ -39,7 +34,6 @@ import reactor.core.publisher.Mono;
 
 import java.util.function.Function;
 import java.util.function.Predicate;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.util.Objects.requireNonNull;
 

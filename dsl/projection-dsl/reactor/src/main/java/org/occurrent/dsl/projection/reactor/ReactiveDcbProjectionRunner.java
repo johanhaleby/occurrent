@@ -25,8 +25,8 @@ import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.subscription.DcbStartAt;
-import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
+import org.occurrent.subscription.api.reactor.Subscription;
 import reactor.core.publisher.Mono;
 
 import java.util.function.BiFunction;

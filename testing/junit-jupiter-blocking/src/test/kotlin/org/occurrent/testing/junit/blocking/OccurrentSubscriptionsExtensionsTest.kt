@@ -30,7 +30,7 @@ import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
 import java.lang.reflect.Proxy
 import java.net.URI
 import java.time.OffsetDateTime
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
 
 @DisplayNameGeneration(ReplaceUnderscores::class)

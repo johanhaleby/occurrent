@@ -31,13 +31,13 @@ import org.occurrent.example.domain.hotelbooking.features.guestmanagement.usecas
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.usecases.registerGuest
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.usecases.closeRoom
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.usecases.defineRoom
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.test.annotation.DirtiesContext
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer
 import org.testcontainers.mongodb.MongoDBContainer
 import reactor.core.publisher.Mono
 import java.time.LocalDate

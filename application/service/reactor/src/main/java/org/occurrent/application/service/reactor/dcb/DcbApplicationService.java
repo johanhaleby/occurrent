@@ -21,9 +21,8 @@ import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import reactor.core.publisher.Mono;
 
-import java.util.function.Function;
 import java.util.List;
-import java.util.stream.Stream;
+import java.util.function.Function;
 
 /**
  * Reactive counterpart of the blocking DCB application service. It runs domain decisions against events selected by a

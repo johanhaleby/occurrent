@@ -17,14 +17,9 @@
 package org.occurrent.example.domain.dcbpatterns.invoicenumber
 
 import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.eventstore.api.dcb.DcbAppendCondition
-import org.occurrent.eventstore.api.dcb.DcbCloudEvents
-import org.occurrent.eventstore.api.dcb.DcbCriteria
-import org.occurrent.eventstore.api.dcb.DcbEventStore
-import org.occurrent.eventstore.api.dcb.DcbReadOptions
-import org.occurrent.eventstore.api.dcb.Tag
+import org.occurrent.eventstore.api.dcb.*
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 
 private const val INVOICE_CREATED_TYPE = "InvoiceCreated"
 

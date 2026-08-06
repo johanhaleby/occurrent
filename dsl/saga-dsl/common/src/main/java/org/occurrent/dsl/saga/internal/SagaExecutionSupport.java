@@ -17,22 +17,14 @@
 package org.occurrent.dsl.saga.internal;
 
 import org.jspecify.annotations.Nullable;
-import org.occurrent.dsl.saga.Saga;
-import org.occurrent.dsl.saga.SagaEffect;
-import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaStatus;
-import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
-import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.saga.*;
+import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * The pure, stack-agnostic decision step of the saga executor: given the current envelope (or {@code null} for a new

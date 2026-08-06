@@ -22,10 +22,9 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
-
-import java.time.Duration;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;

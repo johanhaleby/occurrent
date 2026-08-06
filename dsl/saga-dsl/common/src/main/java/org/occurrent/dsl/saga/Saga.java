@@ -17,15 +17,10 @@
 package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
-import org.occurrent.dsl.saga.internal.TypeDispatch;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.saga.internal.TypeDispatch;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;

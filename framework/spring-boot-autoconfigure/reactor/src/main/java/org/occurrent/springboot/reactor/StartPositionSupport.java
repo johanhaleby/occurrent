@@ -17,9 +17,9 @@
 
 package org.occurrent.springboot.reactor;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.springboot.common.OccurrentProperties;

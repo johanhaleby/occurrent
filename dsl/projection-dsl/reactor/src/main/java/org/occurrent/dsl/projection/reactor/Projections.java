@@ -18,12 +18,12 @@ package org.occurrent.dsl.projection.reactor;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.ProjectionKeys;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
-import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;

@@ -19,8 +19,8 @@ package org.occurrent.subscription.api.blocking;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StartAt;
 
 /**
  * A {@code CheckpointStorage} provides means to read and write the checkpoint to storage.

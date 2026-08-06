@@ -17,8 +17,8 @@
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy;
 
 import org.occurrent.annotation.StreamSubscription;
-import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy.NumberGuessingGameCompleted.GuessedNumber;
 import org.slf4j.Logger;

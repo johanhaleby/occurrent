@@ -36,9 +36,9 @@ import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
-import org.springframework.transaction.reactive.TransactionalOperator;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -67,7 +67,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbCriteria.*;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.all;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)

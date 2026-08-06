@@ -18,9 +18,9 @@ package org.occurrent.tck.subscription.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;

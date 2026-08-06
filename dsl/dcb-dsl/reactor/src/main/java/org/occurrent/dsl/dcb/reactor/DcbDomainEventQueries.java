@@ -20,12 +20,12 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.dsl.dcb.DcbCriteriaBuilder;
 import org.occurrent.dsl.dcb.DcbDomainEventStream;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
-import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbCriterion;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
+import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 

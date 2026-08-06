@@ -21,13 +21,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.View;
 import org.occurrent.filter.Filter;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 import java.util.function.Function;

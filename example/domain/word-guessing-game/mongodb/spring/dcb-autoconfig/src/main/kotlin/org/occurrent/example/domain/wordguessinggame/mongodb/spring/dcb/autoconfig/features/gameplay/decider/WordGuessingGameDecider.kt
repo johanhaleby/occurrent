@@ -18,21 +18,9 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autocon
 
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
-import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
-import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
-import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
-import org.occurrent.example.domain.wordguessinggame.event.NumberOfGuessesWasExhaustedForPlayer
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
-import org.occurrent.example.domain.wordguessinggame.writemodel.GameId
-import org.occurrent.example.domain.wordguessinggame.writemodel.MaxNumberOfGuessesPerPlayer
-import org.occurrent.example.domain.wordguessinggame.writemodel.MaxNumberOfGuessesTotal
-import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
-import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
-import org.occurrent.example.domain.wordguessinggame.writemodel.Word
-import org.occurrent.example.domain.wordguessinggame.writemodel.WordCategory
-import java.util.UUID
+import org.occurrent.example.domain.wordguessinggame.event.*
+import org.occurrent.example.domain.wordguessinggame.writemodel.*
+import java.util.*
 
 fun wordGuessingGameDecider(): Decider<WordGuessingGameCommand, WordGuessingGameState, GameEvent> =
     decider(

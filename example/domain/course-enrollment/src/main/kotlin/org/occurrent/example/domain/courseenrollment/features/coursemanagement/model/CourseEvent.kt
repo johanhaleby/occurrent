@@ -1,7 +1,7 @@
 package org.occurrent.example.domain.courseenrollment.features.coursemanagement.model
 
-import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.common.CourseId
+import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import java.time.Instant
 import java.util.*
 

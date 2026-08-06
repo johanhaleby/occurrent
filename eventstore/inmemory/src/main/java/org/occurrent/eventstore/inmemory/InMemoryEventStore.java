@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
 import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
+import org.occurrent.inmemory.filtermatching.DataFieldReader;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
@@ -61,8 +62,6 @@ import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERS
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
-
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 
 /**

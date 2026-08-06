@@ -16,7 +16,6 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking;
 
-import tools.jackson.databind.ObjectMapper;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.GameEvent;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.NumberGuessGameCloudEventConverter;
@@ -26,6 +25,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.retry.annotation.EnableRetry;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 

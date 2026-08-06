@@ -17,12 +17,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.feature
 
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.subscription.blocking.Subscriptions
-import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerWasAwardedPointsForGuessingTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerWasNotAwardedAnyPointsForGuessingTheRightWord
+import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb.GameDcbQueries
 import org.occurrent.example.domain.wordguessinggame.writemodel.BasisForPointAwarding
 import org.occurrent.example.domain.wordguessinggame.writemodel.PointAwarding

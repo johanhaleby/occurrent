@@ -34,30 +34,18 @@ import org.occurrent.tck.ConformanceEvents;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.stream.Stream;
 import java.util.Set;
+import java.util.stream.Stream;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.condition.Condition.and;
-import static org.occurrent.condition.Condition.eq;
-import static org.occurrent.condition.Condition.gt;
-import static org.occurrent.condition.Condition.gte;
-import static org.occurrent.condition.Condition.in;
-import static org.occurrent.condition.Condition.lt;
-import static org.occurrent.condition.Condition.lte;
-import static org.occurrent.condition.Condition.ne;
-import static org.occurrent.condition.Condition.not;
+import static org.occurrent.condition.Condition.*;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Objects.requireNonNull;
-import static org.occurrent.tck.ConformanceEvents.SOURCE;
-import static org.occurrent.tck.ConformanceEvents.TIME;
-import static org.occurrent.tck.ConformanceEvents.event;
-import static org.occurrent.tck.ConformanceEvents.eventAt;
-import static org.occurrent.tck.ConformanceEvents.idsOf;
+import static org.occurrent.tck.ConformanceEvents.*;
 
 /**
  * The {@link org.occurrent.eventstore.api.blocking.EventStoreQueries} contract: reading across streams with a

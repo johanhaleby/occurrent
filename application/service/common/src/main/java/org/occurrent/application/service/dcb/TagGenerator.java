@@ -19,12 +19,7 @@ package org.occurrent.application.service.dcb;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.Tag;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Derives DCB {@link Tag tags} from domain events before they are stored as CloudEvents.

@@ -9,7 +9,7 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import java.time.LocalDateTime
-import java.util.UUID
+import java.util.*
 
 @DisplayName("DcbExecuteOptions extensions")
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)

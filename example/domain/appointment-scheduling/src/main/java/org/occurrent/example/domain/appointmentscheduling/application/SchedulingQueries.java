@@ -18,21 +18,11 @@ package org.occurrent.example.domain.appointmentscheduling.application;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
-import org.occurrent.example.domain.appointmentscheduling.event.AppointmentBooked;
-import org.occurrent.example.domain.appointmentscheduling.event.AppointmentCancelled;
-import org.occurrent.example.domain.appointmentscheduling.event.ClinicianRegistered;
-import org.occurrent.example.domain.appointmentscheduling.event.DomainEvent;
-import org.occurrent.example.domain.appointmentscheduling.event.PatientRegistered;
-import org.occurrent.example.domain.appointmentscheduling.event.SlotDefined;
+import org.occurrent.example.domain.appointmentscheduling.event.*;
 import org.occurrent.example.domain.appointmentscheduling.model.Tags;
 
 import java.time.OffsetDateTime;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**

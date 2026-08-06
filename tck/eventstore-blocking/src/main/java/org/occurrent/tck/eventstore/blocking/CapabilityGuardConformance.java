@@ -42,12 +42,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.tck.ConformanceEvents.SOURCE;
-import static org.occurrent.tck.ConformanceEvents.event;
-import static org.occurrent.tck.ConformanceEvents.idsOf;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tag;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEvent;
-import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.typesOf;
+import static org.occurrent.tck.ConformanceEvents.*;
+import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.*;
 
 /**
  * What a store does when asked for a capability it was not built with.

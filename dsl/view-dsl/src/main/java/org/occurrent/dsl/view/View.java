@@ -23,8 +23,8 @@ import org.occurrent.cloudevents.EventMetadata;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Iterator;
+import java.util.List;
 import java.util.function.BiFunction;
 import java.util.stream.Stream;
 

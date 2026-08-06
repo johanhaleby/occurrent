@@ -18,14 +18,7 @@ package org.occurrent.example.saga.orderfulfillment.core;
 
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
-import org.occurrent.example.saga.orderfulfillment.CancelOrder;
-import org.occurrent.example.saga.orderfulfillment.OrderCommand;
-import org.occurrent.example.saga.orderfulfillment.OrderEvent;
-import org.occurrent.example.saga.orderfulfillment.OrderPlaced;
-import org.occurrent.example.saga.orderfulfillment.PaymentFailed;
-import org.occurrent.example.saga.orderfulfillment.PaymentReserved;
-import org.occurrent.example.saga.orderfulfillment.ReservePayment;
-import org.occurrent.example.saga.orderfulfillment.ShipOrder;
+import org.occurrent.example.saga.orderfulfillment.*;
 
 import java.time.Duration;
 import java.util.List;

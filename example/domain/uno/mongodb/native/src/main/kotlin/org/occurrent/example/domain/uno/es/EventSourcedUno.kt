@@ -16,7 +16,6 @@
 
 package org.occurrent.example.domain.uno.es
 
-import tools.jackson.module.kotlin.jacksonObjectMapper
 import com.mongodb.client.MongoClients
 import org.occurrent.application.composition.command.partial
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
@@ -32,6 +31,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.retry.RetryStrategy
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel
 import org.slf4j.LoggerFactory
+import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.lang.Thread.sleep
 import java.util.concurrent.Executors
 import kotlin.system.exitProcess

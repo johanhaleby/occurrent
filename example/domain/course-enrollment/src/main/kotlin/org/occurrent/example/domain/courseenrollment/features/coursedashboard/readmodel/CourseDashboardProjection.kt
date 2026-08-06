@@ -20,7 +20,6 @@ import org.occurrent.annotation.Mode
 import org.occurrent.annotation.Projection
 import org.occurrent.annotation.ResumeBehavior
 import org.occurrent.annotation.StartPosition
-import org.occurrent.dsl.projection.Projection as ProjectionModel
 import org.occurrent.dsl.projection.singletonProjection
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
@@ -30,6 +29,7 @@ import org.occurrent.example.domain.courseenrollment.features.enrollment.model.S
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
 import org.springframework.stereotype.Component
+import org.occurrent.dsl.projection.Projection as ProjectionModel
 
 /**
  * Registers the `course-dashboard` [Projection] that feeds [CourseDashboard], which also serves as its

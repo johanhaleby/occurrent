@@ -30,12 +30,9 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
-import org.occurrent.subscription.Checkpoint;
-import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
 import reactor.test.StepVerifier;
 
 import java.net.URI;

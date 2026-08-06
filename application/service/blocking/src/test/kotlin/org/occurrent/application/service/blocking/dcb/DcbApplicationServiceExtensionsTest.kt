@@ -31,7 +31,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria.tags
 import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.time.LocalDateTime
-import java.util.UUID
+import java.util.*
 
 @DisplayNameGeneration(ReplaceUnderscores::class)
 class DcbApplicationServiceExtensionsTest {

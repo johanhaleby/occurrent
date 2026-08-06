@@ -19,13 +19,16 @@ package org.occurrent.eventstore.inmemory;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.dcb.*;
+import org.occurrent.eventstore.api.dcb.DcbAppendResult;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
+import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
@@ -38,7 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbCriteria.*;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.all;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class InMemoryEventStoreDcbTest {

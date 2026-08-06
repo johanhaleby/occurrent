@@ -28,9 +28,7 @@ import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscrip
 import org.springframework.context.support.GenericApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-import static org.mockito.Mockito.withSettings;
+import static org.mockito.Mockito.*;
 
 /**
  * Guards the invariant that ties the neutral replay probe to this starter's wiring: whenever the probe reports that

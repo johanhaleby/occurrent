@@ -35,11 +35,7 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;

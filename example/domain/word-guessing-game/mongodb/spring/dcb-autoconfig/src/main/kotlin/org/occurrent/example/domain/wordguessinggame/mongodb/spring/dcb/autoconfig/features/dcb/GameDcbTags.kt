@@ -17,7 +17,7 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb
 
 import org.occurrent.eventstore.api.dcb.Tag
-import java.util.UUID
+import java.util.*
 
 internal object GameDcbTags {
     fun game(gameId: UUID): Tag = Tag.of("game", gameId.toString())

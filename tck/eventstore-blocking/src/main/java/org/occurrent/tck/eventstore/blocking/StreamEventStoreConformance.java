@@ -24,12 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
-import org.occurrent.eventstore.api.DuplicateCloudEventException;
-import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.StreamReadFilter;
-import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
-import org.occurrent.eventstore.api.WriteResult;
+import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.tck.ConformanceEvents;
 
@@ -41,21 +36,10 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.condition.Condition.and;
-import static org.occurrent.condition.Condition.eq;
-import static org.occurrent.condition.Condition.gt;
-import static org.occurrent.condition.Condition.gte;
-import static org.occurrent.condition.Condition.in;
-import static org.occurrent.condition.Condition.lt;
-import static org.occurrent.condition.Condition.lte;
-import static org.occurrent.condition.Condition.ne;
-import static org.occurrent.condition.Condition.not;
-import static org.occurrent.condition.Condition.or;
+import static org.occurrent.condition.Condition.*;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
-import static org.occurrent.tck.ConformanceEvents.SOURCE;
-import static org.occurrent.tck.ConformanceEvents.event;
-import static org.occurrent.tck.ConformanceEvents.idsOf;
+import static org.occurrent.tck.ConformanceEvents.*;
 
 /**
  * The stream half of the event-store contract: reading and writing a stream, paging a read, stream existence,

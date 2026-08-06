@@ -16,10 +16,10 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 
-import tools.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.occurrent.domain.DomainEvent;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.ObjectMapper;
 
 import static org.occurrent.functional.CheckedFunction.unchecked;
 

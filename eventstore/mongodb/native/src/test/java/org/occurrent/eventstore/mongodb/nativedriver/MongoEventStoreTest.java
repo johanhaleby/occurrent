@@ -33,9 +33,10 @@ import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.*;
-import org.occurrent.eventstore.api.*;
+import org.occurrent.eventstore.api.DuplicateCloudEventException;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStream;
-import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -60,11 +61,9 @@ import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
-import static org.occurrent.condition.Condition.*;
-import static org.occurrent.domain.Composition.chain;
+import static org.occurrent.condition.Condition.lt;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
-import static org.occurrent.filter.Filter.*;
+import static org.occurrent.filter.Filter.time;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("SameParameterValue")

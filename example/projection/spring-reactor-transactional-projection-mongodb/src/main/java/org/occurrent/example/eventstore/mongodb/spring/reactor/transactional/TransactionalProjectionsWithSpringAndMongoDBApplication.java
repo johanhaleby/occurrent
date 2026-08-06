@@ -16,7 +16,6 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.reactor.transactional;
 
-import tools.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
@@ -30,6 +29,7 @@ import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableReactiveMongoRepositories;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Bootstrap the application

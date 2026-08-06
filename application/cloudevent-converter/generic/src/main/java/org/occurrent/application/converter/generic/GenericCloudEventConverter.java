@@ -16,8 +16,8 @@
 
 package org.occurrent.application.converter.generic;
 
-import org.jspecify.annotations.Nullable;
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeGetter;
 

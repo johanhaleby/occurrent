@@ -17,8 +17,8 @@
 package org.occurrent.subscription.api.reactor;
 
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StartAt;
 import reactor.core.publisher.Mono;
 
 

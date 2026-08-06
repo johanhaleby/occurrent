@@ -16,8 +16,6 @@
 
 package org.occurrent.example.domain.uno.es
 
-import tools.jackson.databind.ObjectMapper
-import tools.jackson.module.kotlin.readValue
 import io.cloudevents.CloudEvent
 import io.cloudevents.core.builder.CloudEventBuilder
 import org.occurrent.application.converter.CloudEventConverter
@@ -25,6 +23,8 @@ import org.occurrent.example.domain.uno.*
 import org.occurrent.example.domain.uno.Card.*
 import org.occurrent.example.domain.uno.Color.*
 import org.occurrent.example.domain.uno.Digit.*
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.readValue
 import java.net.URI
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit.MILLIS

@@ -16,7 +16,6 @@
 
 package org.occurrent.dsl.projection.blocking;
 
-import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -28,11 +27,11 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.internal.HandoverMessages;
-import org.occurrent.subscription.CatchupThenLiveOptions;
 
 import java.util.Objects;
 import java.util.function.Function;

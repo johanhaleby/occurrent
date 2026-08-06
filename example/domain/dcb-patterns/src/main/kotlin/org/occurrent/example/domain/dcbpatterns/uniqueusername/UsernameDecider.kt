@@ -22,7 +22,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.Tag
 import java.time.Duration
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 
 /**
  * Pattern: global uniqueness with a retention period. A username can only be held by one account at a time, and once

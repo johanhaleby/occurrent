@@ -39,7 +39,6 @@ import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.example.projection.dsl.dcbjava.CouponRedemption.isCouponRedeemedProjection;

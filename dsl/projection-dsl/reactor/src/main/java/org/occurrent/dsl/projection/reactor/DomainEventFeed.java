@@ -19,8 +19,8 @@ package org.occurrent.dsl.projection.reactor;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.dsl.projection.Projection;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
@@ -31,8 +31,8 @@ import reactor.core.publisher.Mono;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * The reactor counterpart of the blocking {@code DomainEventFeed}: a register-only sink the application owns and feeds

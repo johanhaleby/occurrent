@@ -30,19 +30,16 @@ import org.occurrent.domain.DomainEventConverter;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import org.occurrent.eventstore.api.dcb.Tag;
 import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)

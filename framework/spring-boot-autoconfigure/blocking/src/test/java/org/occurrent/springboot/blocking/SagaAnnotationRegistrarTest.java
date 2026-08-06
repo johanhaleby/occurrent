@@ -39,7 +39,6 @@ import org.springframework.context.ConfigurableApplicationContext;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.util.HashSet;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
