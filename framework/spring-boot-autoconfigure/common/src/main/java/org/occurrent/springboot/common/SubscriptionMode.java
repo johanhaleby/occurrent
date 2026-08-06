@@ -19,7 +19,8 @@ package org.occurrent.springboot.common;
 import org.jspecify.annotations.Nullable;
 
 /**
- * How much of the subscription machinery an application wants, set with {@code occurrent.subscription.mode}.
+ * Controls which subscription beans Occurrent creates and whether they start automatically, set with
+ * {@code occurrent.subscription.mode}.
  */
 public enum SubscriptionMode {
     /**
@@ -33,7 +34,7 @@ public enum SubscriptionMode {
      * with {@code start()} or one at a time with {@code resumeSubscription(id)}. Use this to bring subscriptions up
      * behind a leader election or a health check, or in a test that chooses which subscriptions run.
      * <p>
-     * A synchronous subscription is affected too, and that is worth knowing before you use this in production: a write
+     * A synchronous subscription is affected too, and that is worth knowing before you use this in production. A write
      * succeeds while its synchronous projection does not run, because the projection is stopped rather than deferred.
      */
     MANUAL,

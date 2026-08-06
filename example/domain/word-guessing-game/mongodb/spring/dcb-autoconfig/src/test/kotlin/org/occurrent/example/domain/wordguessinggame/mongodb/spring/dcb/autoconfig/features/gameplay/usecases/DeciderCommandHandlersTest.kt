@@ -39,6 +39,9 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @SpringBootTest(classes = [Bootstrap::class])
 @Import(TestBootstrap::class)
@@ -65,7 +68,6 @@ class DeciderCommandHandlersTest {
         val startedBy = UUID.randomUUID()
 
         startGame(gameId, Date(1), startedBy, wordList())
-        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), 1)
 
         val cloudEvents = readGameplayCloudEvents(gameId)
         val events = cloudEvents.toDomainEvents()
@@ -87,10 +89,8 @@ class DeciderCommandHandlersTest {
         val gameId = UUID.randomUUID()
         val playerId = UUID.randomUUID()
         startGame(gameId, Date(1), UUID.randomUUID(), wordList())
-        val initialHints = eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), 1)
 
         makeGuess(gameId, Date(2), playerId, Word("wrong"))
-        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), initialHints.size + 1)
         makeGuess(gameId, Date(3), playerId, Word("wrong"))
 
         val events = readGameplayCloudEvents(gameId).toDomainEvents()
@@ -108,7 +108,6 @@ class DeciderCommandHandlersTest {
         val gameId = UUID.randomUUID()
         val playerId = UUID.randomUUID()
         startGame(gameId, Date(1), UUID.randomUUID(), wordList())
-        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), 1)
         val wordToGuess = readGameplayCloudEvents(gameId).toDomainEvents().filterIsInstance<GameWasStarted>().single().wordToGuess
 
         makeGuess(gameId, Date(2), playerId, Word(wordToGuess))
@@ -127,6 +126,38 @@ class DeciderCommandHandlersTest {
         }
     }
 
+    // Every game event carries the game tag, so these commands and the word hint policy share a conflict marker and
+    // MongoDB rejects one of their transactions with a WriteConflict. Nothing here serializes the writers, so that
+    // collision is what the test is for. All four still commit because the append is retried, by the store while it
+    // owns the transaction and by MakeGuess itself. Remove both retries and this test fails. See ADR 74.
+    @Test
+    fun `concurrent guesses on one game all commit while the word hint policy writes to it`() {
+        val gameId = UUID.randomUUID()
+        startGame(gameId, Date(1), UUID.randomUUID(), wordList())
+        val players = List(4) { UUID.randomUUID() }
+
+        val startTogether = CyclicBarrier(players.size)
+        val pool = Executors.newFixedThreadPool(players.size)
+        try {
+            players.mapIndexed { index, playerId ->
+                pool.submit {
+                    startTogether.await(30, TimeUnit.SECONDS)
+                    makeGuess(gameId, Date(2L + index), playerId, Word("wrong"))
+                }
+            }.forEach { it.get(60, TimeUnit.SECONDS) }
+        } finally {
+            pool.shutdownNow()
+        }
+
+        val guesses = readGameplayCloudEvents(gameId).toDomainEvents().filterIsInstance<PlayerGuessedTheWrongWord>()
+        assertThat(guesses).extracting("playerId").containsExactlyInAnyOrderElementsOf(players)
+
+        // Starting the game reveals two characters and a wrong guess reveals a third, so a third reveal is the
+        // proof that the policy wrote while the guesses were in flight. Without this the test would still pass
+        // with the policy switched off, and then nothing would have contended.
+        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintCriteria(gameId), 3)
+    }
+
     private fun readGameplayCloudEvents(gameId: UUID) = dcbEventStore.read(GameDcbQueries.gameplay(gameId)).events()
 
     private fun List<io.cloudevents.CloudEvent>.toDomainEvents(): List<GameEvent> =
@@ -137,18 +168,19 @@ class DeciderCommandHandlersTest {
             assertThat(events<E>(criteria)).hasSize(1)
         }.let { events<E>(criteria).single() }
 
-    private inline fun <reified E : GameEvent> eventuallyAtLeast(criteria: DcbCriteria, size: Int): List<E> =
+    private inline fun <reified E : GameEvent> eventuallyAtLeast(criteria: DcbCriteria, size: Int) =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
             assertThat(events<E>(criteria)).hasSizeGreaterThanOrEqualTo(size)
-        }.let { events<E>(criteria) }
+        }
 
     private inline fun <reified E : GameEvent> events(criteria: DcbCriteria): List<E> =
         domainEventQueries.queryForList(criteria).filterIsInstance<E>()
 
     // Every word needs at least five characters. The domain keeps two characters obfuscated, so a wrong guess
-    // reveals nothing once only two remain, and this test waits for a reveal after a wrong guess. StartGame draws
-    // the word at random and WordList requires at least four words, so the draw cannot be removed - keeping every
-    // word the same length makes it irrelevant instead. See WordHintCharacterRevelationEdgeCasesTest for the rule.
+    // reveals nothing once only two remain, and the contention test needs the policy to actually write something for
+    // the command to contend with. StartGame draws the word at random and WordList requires at least four words, so
+    // the draw cannot be removed - keeping every word the same length makes it irrelevant instead. See
+    // WordHintCharacterRevelationEdgeCasesTest for the rule.
     private fun wordList(): WordList = WordList(
         WordCategory("test"),
         listOf(Word("apple"), Word("grape"), Word("mango"), Word("peach"))

@@ -24,7 +24,6 @@ import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.api.reactor.Subscribable;
-import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -93,8 +92,15 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // snapshot.
     @Override
     public void afterSingletonsInstantiated() {
-        if (applicationContext.getBeanProvider(Subscribable.class).getIfAvailable() == null
-                && applicationContext.getBeanProvider(SynchronousSubscriptionModel.class).getIfAvailable() == null) {
+        // A presence check, not a resolution: getBeanProvider(...).getIfAvailable() throws NoUniqueBeanDefinitionException
+        // the moment two Subscribable beans exist (an application's own asynchronous model plus the register-only
+        // SynchronousSubscriptionModel this starter always contributes), which starts failing every context the
+        // instant subscriptions are enabled, whether or not any bean here uses an annotation at all. This only needs
+        // to know whether at least one candidate exists, so getBeanNamesForType (which never throws on ambiguity) is
+        // the right tool; which one is meant is resolved later, per annotation, by the actual registrars.
+        // SynchronousSubscriptionModel is itself a Subscribable (it extends RegisteringSubscribable), so it is
+        // already covered by the check below and needs no check of its own.
+        if (applicationContext.getBeanNamesForType(Subscribable.class).length == 0) {
             return;
         }
         List<Object[]> projectionMethods = new ArrayList<>();

@@ -41,14 +41,14 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tag;
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
 
 /**
- * What a DCB append condition is actually for: two writers deciding against the same consistency boundary at the same
- * time, where letting both through corrupts the invariant each of them checked.
+ * What a DCB append condition is actually for. Two writers decide against the same consistency boundary at the same
+ * time, and letting both through corrupts the invariant each of them checked.
  * <p>
  * Write skew is the case worth having tests for. Two writers read boundaries that are not obviously the same, decide
  * independently, and each appends an event the other's boundary would have matched. Both writers are individually
- * correct and the result is wrong, so a store has to reject one of them, and the interesting part is that the two
- * boundaries are described differently: one by type and one by tag, or two overlapping type sets. This suite drives
- * each of those into a real race rather than reasoning about it.
+ * correct and the result is wrong, so a store has to reject one of them. The interesting part is that the two
+ * boundaries are described differently, one by type and one by tag, or as two overlapping type sets. This suite
+ * drives each of those into a real race rather than reasoning about it.
  * <p>
  * Nothing here is fixture-declared, {@link EventStoreFixture#appendConditionModel()} included. Both models exist to
  * be sound, and soundness is exactly what safety under a race means, so a store failing anything below has a real
@@ -69,7 +69,7 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
     private static final String RESERVED = "SeatReserved";
     private static final String RELEASED = "SeatReleased";
 
-    /** Repetitions per test method. A single race proves little; this is how many independent races each test runs. */
+    /** Repetitions per test method. A single race proves little, so this is how many independent races each test runs. */
     private static final int ITERATIONS = 5;
 
     @Override

@@ -31,7 +31,7 @@ import static java.util.Objects.requireNonNull;
  * thing it asserts on.
  * <p>
  * It waits by blocking on a queue rather than by polling, the same shape {@link RecordedEvents} uses for delivered
- * events and for the same reason: a lock change is pushed to a listener, so a wait can wake on arrival instead of
+ * events and for the same reason. A lock change is pushed to a listener, so a wait can wake on arrival instead of
  * paying a poll interval. Where the suite has no listener to wait on it polls {@code hasLock} instead, because that is
  * the whole of what a strategy without a listener reports.
  * <p>
@@ -81,7 +81,7 @@ public final class RecordedLockChanges implements CompetingConsumerListener {
 
     /**
      * Waits until {@code count} changes have arrived, or the timeout expires, and returns everything that arrived. A
-     * short return is not an error here: the caller asserts on the list, so "expected a grant, got nothing" is a
+     * short return is not an error here. The caller asserts on the list, so "expected a grant, got nothing" is a
      * comparison of two lists rather than a bare timeout. Anything else already there comes back too, so a strategy
      * reporting the same change twice is caught by the caller's assertion.
      */

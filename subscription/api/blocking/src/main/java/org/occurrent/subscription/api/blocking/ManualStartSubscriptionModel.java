@@ -47,9 +47,9 @@ import static java.util.Objects.requireNonNull;
  * <b>Where a subscription starts from.</b> A subscription that has run before resumes from its stored checkpoint and
  * loses nothing. One that has never run has no checkpoint to resume from, and would otherwise start wherever the
  * wrapped model's default points at the moment it is started, silently skipping everything written since. Give this
- * model a position source and a checkpoint storage and it pins that position when the subscription is registered
- * instead, so starting late withholds events rather than losing them. Without them, a first run starts from the moment
- * it is started.
+ * model a position source and a checkpoint storage and it saves that position as the checkpoint when the subscription
+ * is registered, instead of waiting until it starts. That way, starting a subscription late still delivers the events
+ * written since registration instead of skipping them. Without them, a first run starts from the moment it is started.
  *
  * @see #stoppedByDefault(SubscriptionModel)
  */
@@ -65,7 +65,11 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     // whatever order the map happens to iterate.
     private final List<String> registrationOrder = new CopyOnWriteArrayList<>();
 
-    private volatile boolean deferring = true;
+    // NOT_STARTED and STOPPED both withhold a new registration, but only STOPPED is undone by resuming a
+    // subscription. A model that has never been started keeps withholding the rest, which is what this class is for.
+    private enum State {NOT_STARTED, RUNNING, STOPPED}
+
+    private volatile State state = State.NOT_STARTED;
     private volatile boolean shutdown = false;
 
     private ManualStartSubscriptionModel(SubscriptionModel delegate, @Nullable CheckpointAwareSubscriptionModel positionSource,
@@ -79,7 +83,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      * A model that registers subscriptions without starting them. A subscription running for the first time will start
      * from wherever {@code delegate} starts by default at the moment it is started, so events written between
      * registration and that moment do not reach it. Use
-     * {@link #stoppedByDefault(SubscriptionModel, CheckpointAwareSubscriptionModel, CheckpointStorage)} to pin the
+     * {@link #stoppedByDefault(SubscriptionModel, CheckpointAwareSubscriptionModel, CheckpointStorage)} to record the
      * position at registration instead.
      *
      * @param delegate The subscription model to register with once a subscription is started.
@@ -89,12 +93,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     }
 
     /**
-     * A model that registers subscriptions without starting them, and pins where a subscription running for the first
-     * time will start from, so that starting it later withholds events rather than losing them.
+     * A model that registers subscriptions without starting them, and records where a subscription running for the
+     * first time will start from, so that starting it later still delivers the events written since registration
+     * instead of skipping them.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
-     * @param positionSource    Supplies the position to pin. Typically the innermost model, the one reading the feed.
-     * @param checkpointStorage Where the pinned position is written, which must be the storage the wrapped models read.
+     * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
+     * @param checkpointStorage Where the recorded position is written, which must be the storage the wrapped models read.
      */
     public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, CheckpointAwareSubscriptionModel positionSource,
                                                                 CheckpointStorage checkpointStorage) {
@@ -105,7 +110,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
 
     /**
      * Register a subscription. While this model is withholding, nothing is passed to the wrapped model and the returned
-     * {@link Subscription} is a placeholder standing for the registration: its {@code waitUntilStarted} returns
+     * {@link Subscription} is a placeholder standing for the registration. Its {@code waitUntilStarted} returns
      * immediately, because registering is all that has been asked for. Once the subscription is started,
      * {@link #resumeSubscription(String)} returns the wrapped model's own subscription.
      *
@@ -122,7 +127,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
 
         claim(subscriptionId);
         try {
-            if (deferring) {
+            if (state != State.RUNNING) {
                 registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action, capturePositionToPin()));
                 return new DeferredSubscription(subscriptionId);
             }
@@ -138,6 +143,11 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     /**
      * Start a registered subscription, or resume one the wrapped model has paused. Returns the wrapped model's
      * subscription, so waiting on it waits for the real thing.
+     * <p>
+     * After {@link #stop()}, resuming one subscription also makes {@link #isRunning()} report {@code true} again, and
+     * a subscription registered after that is started rather than withheld. Every other subscription {@code stop()}
+     * paused stays paused until it too is resumed. On a model that has never been started, resuming one subscription
+     * starts only that one and the rest keep waiting.
      *
      * @throws IllegalArgumentException If the subscription is neither registered here nor paused in the wrapped model.
      */
@@ -145,7 +155,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     public Subscription resumeSubscription(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         if (!(registrations.get(subscriptionId) instanceof Registration.Deferred deferred)) {
-            return delegate.resumeSubscription(subscriptionId);
+            Subscription subscription = delegate.resumeSubscription(subscriptionId);
+            reopenAfterStop();
+            return subscription;
         }
         // Claim it before touching the wrapped model, so two threads starting the same subscription cannot both subscribe.
         if (!registrations.replace(subscriptionId, deferred, Registration.STARTING)) {
@@ -161,6 +173,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
                 subscription = delegate.resumeSubscription(subscriptionId);
             }
             registrations.put(subscriptionId, new Registration.Live(subscription));
+            reopenAfterStop();
             return subscription;
         } catch (RuntimeException e) {
             // Put it back so a subscription that failed to start can be started again.
@@ -193,11 +206,11 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
 
     /**
      * Stop the wrapped model, and withhold again, so a subscription registered after this point also waits to be
-     * started.
+     * started, until {@link #start(boolean)} or {@link #resumeSubscription(String)} is called.
      */
     @Override
     public void stop() {
-        deferring = true;
+        state = State.STOPPED;
         delegate.stop();
     }
 
@@ -209,7 +222,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
         if (!delegate.isRunning()) {
             delegate.start(resumeSubscriptionsAutomatically);
         }
-        deferring = false;
+        state = State.RUNNING;
         if (resumeSubscriptionsAutomatically) {
             // Fails on the first subscription that cannot start, leaving the rest registered. A partially started model
             // is the honest outcome, and swallowing the failure to start the others would hide a broken subscription.
@@ -222,12 +235,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     }
 
     /**
-     * @return {@code false} while this model is withholding, even though the wrapped model may be running, because no
-     * subscription of its own is delivering.
+     * @return {@code false} until this model is started, even though the wrapped model may be running, because nothing
+     * of its own has been handed to it yet, and {@code false} again after {@link #stop()} until {@link #start(boolean)}
+     * or {@link #resumeSubscription(String)} is called.
      */
     @Override
     public boolean isRunning() {
-        return !deferring && delegate.isRunning();
+        return state == State.RUNNING && delegate.isRunning();
     }
 
     /**
@@ -283,8 +297,16 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
 
     @Override
     public String toString() {
-        return ManualStartSubscriptionModel.class.getSimpleName() + "[delegate=" + delegate + ", deferring=" + deferring
+        return ManualStartSubscriptionModel.class.getSimpleName() + "[delegate=" + delegate + ", state=" + state
                 + ", registrations=" + registrations + ", pinsStartPosition=" + (positionSource != null) + "]";
+    }
+
+    // Resuming a subscription makes the wrapped model report itself running again, so this one must not disagree
+    // while one of its own subscriptions is delivering. Nothing to undo when it was never started.
+    private void reopenAfterStop() {
+        if (state == State.STOPPED) {
+            state = State.RUNNING;
+        }
     }
 
     private void claim(String subscriptionId) {

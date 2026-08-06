@@ -35,22 +35,20 @@ import java.util.function.Consumer;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Presents a reactive subscription model as a blocking one, so the blocking conformance suites can be run against it
- * unchanged instead of being written a second time in terms of {@code Mono} and {@code Flux}.
+ * Presents a reactive subscription model as a blocking one, so the blocking conformance suites can run against it
+ * unchanged instead of being rewritten a second time in terms of {@code Mono} and {@code Flux}.
  * <p>
- * This is a test bridge and nothing more. It is not a general-purpose adapter and must not be used in production:
- * every wait blocks the calling thread, which is exactly what a reactive model exists to avoid.
+ * This is a test bridge only. It is not a general-purpose adapter and must not be used in production. Every wait
+ * blocks the calling thread, which is exactly what a reactive model exists to avoid.
  * <p>
- * The translation is small because reactor {@code SubscriptionModelLifeCycle} already returns plain values, a
- * deliberate choice its own javadoc records. What actually differs is the action type,
- * {@code Function<CloudEvent, Mono<Void>>} against {@code Consumer<CloudEvent>}, and the two waits: this bridge wraps
- * the consumer in {@code Mono.fromRunnable(..)} so the handler runs when the model subscribes to the returned
- * {@code Mono}, and blocks on {@code waitUntilStarted(Duration)}.
+ * The bridge wraps each {@code Consumer<CloudEvent>} action in {@code Mono.fromRunnable(..)}, so the handler runs
+ * when the model subscribes to the returned {@code Mono}. It blocks on {@code waitUntilStarted(Duration)} to turn
+ * the reactive wait into a blocking one.
  * <p>
- * A bridge cannot see everything. Whether the model subscribes to the action's {@code Mono} rather than merely
- * assembling it, whether {@code waitUntilStarted()} answers, and what disposing a wait does are invisible once a
- * result has been blocked on. Those are the reactive contract, not the behavioural one, and they belong to
- * {@link ReactiveSubscriptionModelConformance} rather than here.
+ * A bridge cannot see everything. Whether the model actually subscribes to the action's {@code Mono} rather than
+ * just assembling it, whether {@code waitUntilStarted()} answers, and what disposing a wait does are invisible
+ * once a result has been blocked on. Those parts of the contract are tested separately, by
+ * {@link ReactiveSubscriptionModelConformance}.
  */
 @NullMarked
 public class BlockingSubscriptionOverReactive implements SubscriptionModel, IntrospectableSubscriptionModel {
@@ -66,8 +64,8 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
     /**
      * Bound on blocking for {@code globalCheckpoint()}. The blocking method the bridge implements has no timeout
      * parameter, so the bound has to live here, and an unbounded {@code block()} would hang a suite instead of
-     * failing it. Twenty seconds copies the reactive-only suite's budget: the answer is a single command against the
-     * store, so a model that has not answered by then is not going to.
+     * failing it. Twenty seconds matches the reactive-only suite's budget. The answer is a single command against
+     * the store, so a model that has not answered by then is not going to.
      */
     private static final Duration CHECKPOINT_TIMEOUT = Duration.ofSeconds(20);
 
@@ -101,13 +99,13 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
     /**
      * Bridges a model that can also report where the event feed is, so
      * {@code CheckpointAwareSubscriptionModelConformance} can run against it. This is a separate factory rather than
-     * behaviour of the plain bridge on purpose: that suite treats implementing the blocking
+     * behaviour of the plain bridge on purpose. That suite treats implementing the blocking
      * {@link CheckpointAwareSubscriptionModel} as the declaration itself, so a bridge that implemented it
      * unconditionally would drag every bridged model through a suite only checkpoint-aware ones can answer.
      * <p>
      * A reactor model that completes {@code globalCheckpoint()} empty is mapped to the blocking {@code null}, which
      * the blocking interface documents as "an unresolvable problem" and the suite asserts on both branches. That
-     * empty completion is a real answer in the wild, not a hypothetical: see issue #517.
+     * empty completion is a real answer in the wild, not a hypothetical. See issue #517.
      */
     public static <T extends org.occurrent.subscription.api.reactor.SubscriptionModel
             & org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel

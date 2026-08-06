@@ -50,8 +50,8 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.*;
  * <p>
  * A capability is a construction-time argument, and a store implements every interface either way, so there is always
  * an object to call and nothing on it announces that the call will not work. The contract is that such a call refuses
- * with an {@link UnsupportedOperationException} naming the missing capability. Refusing matters more than it looks:
- * quietly answering "no events" to a DCB read on a store that never enabled DCB is indistinguishable from an empty
+ * with an {@link UnsupportedOperationException} naming the missing capability. Refusing matters more than it looks.
+ * Quietly answering "no events" to a DCB read on a store that never enabled DCB is indistinguishable from an empty
  * store, so a decider would append against a boundary it never actually checked.
  * <p>
  * The suite needs two extra stores, one per direction, which the fixture builds through
@@ -187,9 +187,10 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
     /**
      * Asserts that a call refuses because {@code capability} is not enabled.
      * <p>
-     * The type is pinned and the message is only required to name the capability. The stores shipping with Occurrent
-     * word it as "DCB capability is not enabled for this MongoEventStore", which carries the implementing class and so
-     * cannot be cross-store law, the same line {@code DuplicateCloudEventException.getDetails()} sits on. A subclass of
+     * This check requires an exact exception type, but only requires the message to name the capability. The stores
+     * shipping with Occurrent word it as "DCB capability is not enabled for this MongoEventStore", which carries the
+     * implementing class and so cannot be cross-store law, the same line
+     * {@code DuplicateCloudEventException.getDetails()} sits on. A subclass of
      * {@link UnsupportedOperationException} passes, since choosing a more specific type is not a contract violation.
      */
     private static void assertRefuses(EventStoreCapability capability, ThrowingCallable call) {

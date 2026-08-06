@@ -45,8 +45,8 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * <p>
  * A model that cannot report a position declines this suite by not extending it. There is no declaration, because
  * {@link CheckpointAwareSubscriptionModel} is itself the declaration, and the position is asked rather than declared for
- * the reason {@code PositionOrderedReader.writesPosition()} set on the event-store side: a declaration can go stale
- * while a runtime answer cannot.
+ * the same reason {@code PositionOrderedReader.writesPosition()} does on the event-store side. A declaration can go
+ * stale while a runtime answer cannot.
  * <p>
  * <strong>What this suite deliberately does not assert.</strong> {@code globalCheckpoint()} documents null as
  * "an unresolvable problem", and the honest consequence is that such a model cannot sit behind catch-up at all.

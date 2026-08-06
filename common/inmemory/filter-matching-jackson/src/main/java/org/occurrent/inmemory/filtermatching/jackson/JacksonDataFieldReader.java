@@ -30,9 +30,9 @@ import java.util.Optional;
 /**
  * A {@link DataFieldReader} that parses the event payload as JSON using Jackson.
  * <p>
- * Only a payload the event itself claims is JSON gets parsed, the same rule MongoDB follows: a missing
+ * Only a payload the event itself claims is JSON gets parsed. That follows the same rule MongoDB uses. A missing
  * {@code datacontenttype} means JSON per the CloudEvents spec, and a content type naming {@code json} (for example
- * {@code application/json} or a {@code +json} suffix) means JSON. Anything else, for example {@code text/plain}, is
+ * {@code application/json} or a {@code +json} suffix) also means JSON. Anything else, for example {@code text/plain}, is
  * left alone even if the bytes happen to look like JSON, so a plain-text payload that happens to contain braces never
  * matches a data filter here when it would not match on MongoDB either.
  * <p>
