@@ -20,6 +20,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
@@ -48,6 +49,7 @@ import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -810,6 +812,120 @@ class CompetingConsumerSubscriptionModelTest {
         await().untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
     }
 
+
+    @Test
+    void refuses_a_subscription_id_that_this_instance_is_already_subscribed_to() {
+        // Given
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        String subscriptionId = "MySubscription";
+        competingConsumerSubscriptionModel1.subscribe("subscriberId1", subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
+        }).waitUntilStarted();
+
+        // When
+        Throwable throwable = catchThrowable(() -> competingConsumerSubscriptionModel1.subscribe("subscriberId2", subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
+        }));
+
+        // Then
+        assertThat(throwable)
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Subscription " + subscriptionId + " is already defined.");
+    }
+
+    @Test
+    void refuses_a_subscription_id_that_this_instance_is_already_subscribed_to_when_no_subscriber_id_is_given() {
+        // Given
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        String subscriptionId = "MySubscription";
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId, __ -> {
+        }).waitUntilStarted();
+
+        // When
+        Throwable throwable = catchThrowable(() -> competingConsumerSubscriptionModel1.subscribe(subscriptionId, __ -> {
+        }));
+
+        // Then
+        assertThat(throwable)
+                .as("the overload that mints a subscriber id of its own must not turn a duplicate id into a second consumer")
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Subscription " + subscriptionId + " is already defined.");
+    }
+
+    @Test
+    void accepts_a_subscription_id_that_another_instance_is_already_subscribed_to() {
+        // Given
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate));
+        String subscriptionId = "MySubscription";
+        competingConsumerSubscriptionModel1.subscribe("subscriberId1", subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
+        }).waitUntilStarted();
+
+        // When
+        Throwable throwable = catchThrowable(() -> competingConsumerSubscriptionModel2.subscribe("subscriberId2", subscriptionId, null, StartAt.subscriptionModelDefault(), __ -> {
+        }));
+
+        // Then
+        assertThat(throwable)
+                .as("two instances subscribing to one subscription id is the competing consumer pattern, so the refusal above must never reach across them")
+                .isNull();
+    }
+
+    @Test
+    void a_cancelled_subscription_id_can_be_subscribed_to_again_when_the_competing_consumer_model_was_opted_out_of() {
+        // Given
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        String subscriptionId = "MySubscription";
+        // Resolving to null is how a subscription says it does not want competing consumption, so this one is only
+        // ever known to the wrapper by subscription id, never as a competing consumer.
+        StartAt optedOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(CompetingConsumerSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId, optedOut, __ -> {
+        }).waitUntilStarted();
+        competingConsumerSubscriptionModel1.cancelSubscription(subscriptionId);
+
+        // When
+        Throwable throwable = catchThrowable(() -> competingConsumerSubscriptionModel1.subscribe(subscriptionId, optedOut, __ -> {
+        }));
+
+        // Then
+        assertThat(throwable)
+                .as("cancelling releases the subscription id, whichever of the two collections was holding it")
+                .isNull();
+    }
+
+    @Test
+    void a_subscription_id_stays_free_when_the_delegate_refuses_the_subscription() {
+        // Given
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        String subscriptionId = "MySubscription";
+        StartAt optedOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(CompetingConsumerSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        SubscriptionFilter unrecognised = new SubscriptionFilter() {
+        };
+        Throwable refusedByDelegate = catchThrowable(() -> competingConsumerSubscriptionModel1.subscribe(subscriptionId, unrecognised, optedOut, __ -> {
+        }));
+        assertThat(refusedByDelegate).isInstanceOf(IllegalArgumentException.class);
+
+        // When
+        Throwable throwable = catchThrowable(() -> competingConsumerSubscriptionModel1.subscribe(subscriptionId, optedOut, __ -> {
+        }));
+
+        // Then
+        assertThat(throwable)
+                .as("a subscription the delegate refused never existed, so its id must not stay occupied")
+                .isNull();
+    }
+
+    @Test
+    void refuses_to_pause_a_subscription_it_does_not_have() {
+        // Given
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+
+        // When
+        Throwable throwable = catchThrowable(() -> competingConsumerSubscriptionModel1.pauseSubscription("neverSubscribed"));
+
+        // Then
+        assertThat(throwable)
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Subscription neverSubscribed is not running");
+    }
 
     private List<CloudEvent> serialize(DomainEvent e) {
         return List.of(CloudEventBuilder.v1()
