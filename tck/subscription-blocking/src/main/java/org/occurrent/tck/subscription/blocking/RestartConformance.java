@@ -34,28 +34,28 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
 import static org.occurrent.tck.subscription.blocking.SubscriptionModelConformance.DELIVERY_TIMEOUT;
 
 /**
- * What a model owes a subscription that outlives the model itself: an event published while nothing was running is
- * either still delivered afterwards, or it is gone, and which of the two is a promise the model makes rather than
- * something a caller finds out the hard way.
+ * What a model owes a subscription that outlives the model itself. An event published while nothing was running is
+ * either still delivered afterwards, or it is gone, and which of the two happens is a promise the model makes rather
+ * than something a caller finds out the hard way.
  * <p>
  * This is the half of the contract {@link SubscriptionModelConformance} deliberately leaves alone, because it needs
  * state that survives the model. A model whose events arrive by being handed to it has none, and no way to be handed
- * one while it is down, so it declines this suite by not extending it. That absence is visible and greppable, which is
- * the mechanism ADR 77 rule (d) already relies on, and it is the right one here: the alternative, a declaration on the
- * base fixture, would have a branch that asserts nothing at all for those models, and a declaration that is free on one
- * branch is a switch for turning off the only test of a property.
+ * one while it is down, so it declines this suite by not extending it. That absence is visible and searchable, which
+ * is the mechanism ADR 77 rule (d) already relies on, and it is the right one here. The alternative, a declaration on
+ * the base fixture, would have a branch that asserts nothing at all for those models, and a declaration that is free
+ * on one branch is a switch for turning off the only test of a property.
  * <p>
  * A model that <em>can</em> answer still gets to say which way it goes, through
  * {@link RestartableSubscriptionModelFixture#resumesAfterARestart()}, because two models with identical durable state
- * underneath them genuinely differ: a change-stream model reads from wherever the server is now, and the same model
+ * underneath them genuinely differ. A change-stream model reads from wherever the server is now, and the same model
  * wrapped in one that keeps a checkpoint reads from where the checkpoint says. Both branches are asserted.
  * <p>
  * <strong>Delivery here is at-least-once, not exactly-once.</strong> A model resuming from the last position it stored
  * rather than from just after it hands that event over a second time, and nothing in Occurrent promises otherwise, so
  * these assertions are about what must arrive and never about what must not repeat.
  * <p>
- * The 60 second class timeout is the same number the other suites use, and the margin here is thinner than it looks:
- * the longest test chains three {@code DELIVERY_TIMEOUT} waits at 10 seconds each, and between them it tears a model
+ * The 60 second class timeout is the same number the other suites use, and the margin here is thinner than it looks.
+ * The longest test chains three {@code DELIVERY_TIMEOUT} waits at 10 seconds each, and between them it tears a model
  * down and builds another one, which against a real store means closing a change stream and opening a fresh one. That
  * leaves about 30 seconds for two rebuilds. Raise this before raising {@code DELIVERY_TIMEOUT}, since a wait that
  * outlives the class timeout reports a {@code TimeoutException} instead of naming the event that never arrived.

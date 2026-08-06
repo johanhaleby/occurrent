@@ -49,7 +49,7 @@ public interface ReactiveSubscriptionModelFixture {
      * <strong>This is allowed to throw.</strong> On a model that propagates a failed action rather than retrying it,
      * delivery happens inside this call, so an action whose {@code Mono} errors comes back out of here. The suite
      * accepts either, because which of the two a model does is the blocking fixture's declaration and is asserted
-     * there; here only the model's survival is asserted.
+     * there. Here only the model's survival is asserted.
      *
      * @param events The events to feed in, in order. Never empty, and no id is ever repeated within a test.
      */
