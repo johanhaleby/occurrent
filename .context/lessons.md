@@ -5,6 +5,9 @@
 - Questions to Johan go through the AskUserQuestion tool, always with a recommended option marked (2026-08-06
   correction). Never leave a decision as a prose question at the end of a report; the structured prompt is what he acts
   on.
+- A sweep tick that finds work in a ready-for-Johan state (a PR ready to land, a held branch ready to push, a gate
+  ready to run) must surface it as an AskUserQuestion in that same tick, not as a status line (2026-08-06 correction).
+  "Ready" is a decision point, and prose status does not reach him the way a structured ask does.
 - Release execution is Johan's manual act (2026-08-06 correction). Never plan or route changelog version stamping,
   `mvn_release.sh`, tagging, docs held-branch merges, the docs version bump, or post-release checks as agent-executed
   work. Plan up to a release-readiness gate and stop there; keep the release-day steps as a reference checklist only.
