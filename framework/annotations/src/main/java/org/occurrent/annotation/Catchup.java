@@ -24,7 +24,7 @@ package org.occurrent.annotation;
  */
 public enum Catchup {
     /**
-     * The default. It replays the event store from the beginning once, then hands over to the live feed, so a
+     * By default it replays the event store from the beginning once, then hands over to the live feed, so a
      * subscription that has never run works through the stored history before it starts reacting to live events. The
      * replay reads the local event store, so that store has to hold the events the feed carries. It records that it
      * finished, so a restart skips it and lets the broker resume.

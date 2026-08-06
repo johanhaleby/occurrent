@@ -47,8 +47,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * over {@link BlockingSubscriptionOverReactive}, rather than described a second time in terms of {@code Mono}. What
  * that cannot reach is the reactor API's two publishers, the {@code Mono<Void>} an action returns, which the
  * <em>model</em> subscribes to, and {@link Subscription#waitUntilStarted()}. A model can get both wrong and still
- * pass every bridged suite, because the bridge's own action does its work as a side effect of assembly-time capture
- * and the bridge always blocks.
+ * pass every bridged suite, because the bridge's own action has already run by the time it hands back a {@code Mono},
+ * whether or not anything subscribes to it, and the bridge blocks either way.
  * <p>
  * Why each of them matters to somebody using the model:
  * <ul>
