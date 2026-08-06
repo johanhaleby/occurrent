@@ -28,11 +28,13 @@ import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
@@ -111,7 +113,11 @@ class SagaAnnotationRegistrar {
         }
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
-        Subscribable subscribable = push ? pushFeed(annotation, id) : applicationContext.getBean(Subscribable.class);
+        // Resolved through AsynchronousSubscribables rather than a bare getBean(Subscribable.class): that also
+        // matches the register-only SynchronousSubscriptionModel, which is ambiguous the moment an application
+        // supplies its own asynchronous model without marking it @Primary (see AsynchronousSubscribables, and #541).
+        Subscribable subscribable = push ? pushFeed(annotation, id)
+                : AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class);
         SagaStateStore<S> stateStore = resolveSagaStateStore(annotation, method, id);
         CommandDispatcher<C> commandDispatcher = resolveCommandDispatcher(annotation, id);
         // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
