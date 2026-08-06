@@ -460,6 +460,14 @@ instance or about the id everywhere, and the suite currently assumes the former.
 passes was never an option: four models honour it today, and the one test of the property would have been turned off
 for all of them to accommodate the fifth.
 
+**Amended 2026-08-06: #553 is answered, and the answer is the reading the suite assumed.** Uniqueness is per model
+instance, and the model moved rather than the suite, so the held-back wiring ships as
+`CompetingConsumerSubscriptionModelConformanceTest`. What settles it is that a node *is* an instance, in the Spring
+wiring and in every test that simulates contention, and that two consumers for one id inside one instance could never
+have worked: the wrapper resolves a consumer by subscription id alone, so the second one was unreachable through
+cancel, pause and resume alike. Reasoning in
+[ADR 102](0102-a-subscription-id-is-unique-per-subscription-model-instance.md).
+
 **And a claim in this ADR was wrong, so it is corrected here rather than left to rot.** Above, under what is a
 per-model capability, it says `StreamSubscriptionModel` and `DcbSubscriptionModel` "are one shared adapter reached
 through `from(SubscriptionModel)`, so a suite per model would test the same code five times". What they share is
