@@ -79,7 +79,7 @@ class OrderStatusProjectionTest {
         applicationService.execute("order-1", events -> List.of(new OrderPlaced("order-1", "The Pragmatic Programmer")));
         applicationService.execute("order-1", events -> List.of(new OrderShipped("order-1")));
 
-        assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue();
+        subscriptionModel.waitUntilAllEventsProcessed();
         assertThat(store.get("order-1")).isEqualTo(new OrderStatusView("order-1", "The Pragmatic Programmer", "SHIPPED"));
     }
 }

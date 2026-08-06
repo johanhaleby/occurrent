@@ -25,10 +25,14 @@ import static java.util.Objects.requireNonNull;
  * What a saga wants to happen once an input has been applied, expressed as data. A {@link Saga#react(Object, SagaInput)}
  * returns a list of these, and an executor interprets them in order. The saga itself never performs an effect, which is what
  * keeps it a pure, unit-testable function.
+ * <p>
+ * The hierarchy is a two-way partition: an effect either issues a command ({@link IssueCommand}) or touches a timer
+ * ({@link TimerEffect}). {@link Saga.Step#issuedCommands()} and {@link Saga.Step#timerEffects()} read the two halves,
+ * and their return types say so.
  *
  * @param <C> the command type the saga issues
  */
-public sealed interface SagaEffect<C> {
+public sealed interface SagaEffect<C> permits SagaEffect.IssueCommand, SagaEffect.TimerEffect {
 
     /**
      * Issue {@code command}. An executor hands it to a command dispatcher, typically a lambda over an
@@ -42,12 +46,23 @@ public sealed interface SagaEffect<C> {
     }
 
     /**
+     * An effect that starts or cancels a timer rather than issuing a command, the other half of the partition from
+     * {@link IssueCommand}. It carries no {@code C}, so {@link Saga.Step#timerEffects()} can return these without
+     * statically admitting a command, and a caller matching on one has three cases rather than four.
+     * <p>
+     * The {@code permits} clause is explicit so a new effect has to be classified here, as a timer effect or as
+     * something else, rather than joining the union by merely being declared in this file.
+     */
+    sealed interface TimerEffect<C> extends SagaEffect<C> permits StartTimeout, StartTimeoutAt, CancelTimeout {
+    }
+
+    /**
      * Start (or, if one with the same {@code timerName} already runs, restart) a timer that fires {@code after} the given
      * duration. The duration is relative and resolved against the clock by the executor when it stores the timer, not
      * here: building an absolute time inside the pure {@code react} would read the clock and make the same reaction
      * produce different effect values on each call.
      */
-    record StartTimeout<C>(String timerName, Duration after) implements SagaEffect<C> {
+    record StartTimeout<C>(String timerName, Duration after) implements TimerEffect<C> {
         public StartTimeout {
             requireNonNull(timerName, "timerName cannot be null");
             requireNonNull(after, "after cannot be null");
@@ -59,7 +74,7 @@ public sealed interface SagaEffect<C> {
      * derived from data (for example an auction's end time). Compute {@code at} from event data, never from the current
      * clock inside {@code react}.
      */
-    record StartTimeoutAt<C>(String timerName, Instant at) implements SagaEffect<C> {
+    record StartTimeoutAt<C>(String timerName, Instant at) implements TimerEffect<C> {
         public StartTimeoutAt {
             requireNonNull(timerName, "timerName cannot be null");
             requireNonNull(at, "at cannot be null");
@@ -67,7 +82,7 @@ public sealed interface SagaEffect<C> {
     }
 
     /** Cancel the timer named {@code timerName} if it is running, a no-op otherwise. */
-    record CancelTimeout<C>(String timerName) implements SagaEffect<C> {
+    record CancelTimeout<C>(String timerName) implements TimerEffect<C> {
         public CancelTimeout {
             requireNonNull(timerName, "timerName cannot be null");
         }
@@ -78,18 +93,22 @@ public sealed interface SagaEffect<C> {
         return new IssueCommand<>(command);
     }
 
+    // The three timer factories are typed as TimerEffect rather than SagaEffect so a value built here can be compared
+    // straight against Saga.Step.timerEffects() without a cast. Every use as a plain effect still works, since a
+    // reaction's List<SagaEffect<C>> is the target type the elements are inferred against.
+
     /** Start (or restart) a timer firing once the duration {@code after} has elapsed. */
-    static <C> SagaEffect<C> startTimeout(String timerName, Duration after) {
+    static <C> TimerEffect<C> startTimeout(String timerName, Duration after) {
         return new StartTimeout<>(timerName, after);
     }
 
     /** Start (or restart) a timer firing at {@code at}. */
-    static <C> SagaEffect<C> startTimeoutAt(String timerName, Instant at) {
+    static <C> TimerEffect<C> startTimeoutAt(String timerName, Instant at) {
         return new StartTimeoutAt<>(timerName, at);
     }
 
     /** Cancel the timer named {@code timerName}. */
-    static <C> SagaEffect<C> cancelTimeout(String timerName) {
+    static <C> TimerEffect<C> cancelTimeout(String timerName) {
         return new CancelTimeout<>(timerName);
     }
 }
