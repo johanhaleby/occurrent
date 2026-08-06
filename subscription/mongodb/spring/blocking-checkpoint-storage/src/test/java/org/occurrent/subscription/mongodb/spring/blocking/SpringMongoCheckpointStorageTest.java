@@ -429,7 +429,16 @@ public class SpringMongoCheckpointStorageTest {
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
-        await().atMost(4, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        // Distinct ids rather than a size, because the first event can arrive more than once (#522). Its handler
+        // threw, so the model hands it over again when it restarts, and the replacement model hands it over too if it
+        // starts before that redelivery has been checkpointed. Every event still has to arrive, and in order.
+        await().atMost(4, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state.stream().map(CloudEvent::getId).distinct())
+                .containsExactly(nameDefined1.eventId(), nameDefined2.eventId(), nameWasChanged1.eventId()));
+        // An upper bound too, so a model replaying the whole stream on every restart could not pass quietly. Six is
+        // three events times the two models that run over this subscription id, since a restart the first model had
+        // already begun can outlive the shutdown that follows it. Each resumes from a position that only moves
+        // forward, so neither can hand over the same event twice.
+        assertThat(state).hasSizeLessThanOrEqualTo(6);
     }
 
     @RepeatedIfExceptionsTest(repeats = 2, suspend = 500)

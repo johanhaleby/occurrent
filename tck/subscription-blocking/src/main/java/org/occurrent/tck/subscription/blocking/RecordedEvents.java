@@ -51,7 +51,7 @@ public final class RecordedEvents implements Consumer<CloudEvent> {
 
     /**
      * Waits until {@code count} events have arrived, or the timeout expires, and returns everything that arrived. A
-     * short return is not an error here: the caller asserts on the list, so "expected 3, got 1" is a comparison of two
+     * short return is not an error here. The caller asserts on the list, so "expected 3, got 1" is a comparison of two
      * lists rather than a bare timeout. Anything else already there comes back too, so an over-delivering model is
      * caught by the caller's assertion.
      */
@@ -61,9 +61,10 @@ public final class RecordedEvents implements Consumer<CloudEvent> {
 
     /**
      * Waits until what has arrived satisfies {@code condition}, or the timeout expires, and returns everything that
-     * arrived. Use this over {@link #awaitAtLeast(int, Duration)} when the assertion is about arrival ORDER: a model
-     * with a slow delivery seam can satisfy a count while a later-ordered event is still in flight, so the wait must
-     * be for the very thing the assertion needs. A short return is not an error here either: the caller asserts on
+     * arrived. Use this over {@link #awaitAtLeast(int, Duration)} when the assertion is about arrival order. A model
+     * that hands delivery off between two mechanisms, such as a replay handing over to a live feed, can satisfy a
+     * count while a later-ordered event is still crossing that handover, so the wait must be for the very thing the
+     * assertion needs. A short return is not an error here either. The caller asserts on
      * the list, so a model that never satisfies the condition fails that assertion on the full list.
      */
     public List<CloudEvent> awaitUntil(Predicate<List<CloudEvent>> condition, Duration timeout) {

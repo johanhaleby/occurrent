@@ -36,7 +36,7 @@ import static java.util.Objects.requireNonNull;
  * subpackage mirrors how {@code org.occurrent.subscription.api.blocking} and {@code org.occurrent.subscription.api.reactor}
  * already name their halves.
  * <p>
- * Every returned {@code Mono} is cold: nothing is read, stored or deleted until it is subscribed to. Arguments are
+ * Every returned {@code Mono} is cold, so nothing is read, stored, or deleted until it is subscribed to. Arguments are
  * still validated eagerly, so a {@code null} fails the calling code and not a subscriber far away.
  */
 @NullMarked

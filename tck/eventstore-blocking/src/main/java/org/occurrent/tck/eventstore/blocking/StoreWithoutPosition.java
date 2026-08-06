@@ -24,7 +24,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * An event store built with its global position turned off, presented as both of the interfaces the position-disabled
- * suite needs: it writes events through the {@link EventStore} and then asks the {@link PositionOrderedReader} what
+ * suite needs. It writes events through the {@link EventStore} and then asks the {@link PositionOrderedReader} what
  * the store reports and what it refuses.
  * <p>
  * Both views are handed over explicitly because {@link EventStore} does not extend {@link PositionOrderedReader}. An

@@ -32,9 +32,10 @@ import static java.util.Objects.requireNonNull;
  * Waiting on things that arrive, for the two recording handlers in this package.
  * <p>
  * {@link RecordedEvents} records delivered events and {@link RecordedLockChanges} records lock changes, and they wait
- * the same way: block on a queue until enough has arrived or a deadline passes, then take whatever else is already
- * there so an implementation delivering more than it should is caught by the caller's assertion rather than leaving
- * its extra items in the queue unnoticed. Package-private, so neither class grows a base type an implementor would see.
+ * the same way. Both block on a queue until enough has arrived or a deadline passes, then take whatever else is
+ * already there so an implementation delivering more than it should is caught by the caller's assertion rather than
+ * leaving its extra items in the queue unnoticed. Package-private, so neither class grows a base type an implementor
+ * would see.
  */
 @NullMarked
 final class Arrivals {
@@ -44,7 +45,7 @@ final class Arrivals {
 
     /**
      * Waits until {@code count} things have arrived, or the timeout expires, and returns everything that arrived. A
-     * short return is not an error: the caller asserts on the list, so "expected 3, got 1" is a comparison of two
+     * short return is not an error. The caller asserts on the list, so "expected 3, got 1" is a comparison of two
      * lists rather than a bare timeout.
      *
      * @param what what one item is, for the two messages this can produce
@@ -75,11 +76,11 @@ final class Arrivals {
 
     /**
      * Waits until everything that has arrived satisfies {@code condition}, or the timeout expires, and returns
-     * everything that arrived. For an assertion about arrival ORDER a plain count is the wrong thing to wait on: a
-     * model with a slow delivery seam (a catch-up replay handing over to a live feed, say) reaches the count while a
-     * later-ordered item is still in flight, and the assertion reads a list that was still growing. Waiting on the
-     * condition the caller is about to assert removes that race without changing what is asserted: a model that never
-     * satisfies it still comes back at the deadline, and the caller's assertion then fails on the full list.
+     * everything that arrived. For an assertion about arrival ORDER a plain count is the wrong thing to wait on. A
+     * model that hands a slow catch-up replay over to a live feed can reach the count while a later-ordered item is
+     * still in flight, and the assertion would then read a list that was still growing. Waiting on the condition the
+     * caller is about to assert removes that race without changing what is asserted. A model that never satisfies it
+     * still comes back at the deadline, and the caller's assertion then fails on the full list.
      */
     static <T> List<T> awaitUntil(BlockingQueue<T> arrived, Predicate<List<T>> condition, Duration timeout, String what) {
         requireNonNull(condition, "condition cannot be null");

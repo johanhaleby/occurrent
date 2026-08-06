@@ -61,7 +61,7 @@ public final class DcbConformanceEvents {
      * An event with an explicit id and the supplied DCB tags, which the duplicate-detection and delete-by-id
      * assertions need so they can hand the same id back.
      * <p>
-     * Named apart from {@link #taggedEvent(String, String...)} rather than overloading it: with a trailing varargs of
+     * Named apart from {@link #taggedEvent(String, String...)} rather than overloading it. With a trailing varargs of
      * the same type, {@code taggedEvent("NameDefined", "name:1")} would match both and the compiler would say so at
      * every call site.
      */

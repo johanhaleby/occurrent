@@ -31,8 +31,9 @@ import java.util.List;
  * the application context, so a test can autowire the extension instead of constructing it from the subscription
  * models it first has to inject itself.
  * <p>
- * Every such bean, not just one: a context can hold more than one life-cycle bearing model, for example a durable
- * model and a {@code SynchronousSubscriptionModel}, and deny-by-default means none of them run until a test asks.
+ * It wires every such bean, not just one, because a context can hold more than one life-cycle bearing model, for
+ * example a durable model and a {@code SynchronousSubscriptionModel}, and deny-by-default means none of them run
+ * until a test asks.
  *
  * @see EnableOccurrentTesting
  */

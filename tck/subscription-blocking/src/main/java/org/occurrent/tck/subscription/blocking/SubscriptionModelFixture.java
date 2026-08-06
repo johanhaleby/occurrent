@@ -38,7 +38,7 @@ import java.util.Set;
  *     a subscription is open.</strong> Dropping either kills a live change stream, so a fixture that cleans up that way
  *     leaves the next test watching a stream that will never deliver. Delete documents instead.</li>
  *     <li><strong>Never let the suite publish the same event id twice.</strong> The suites never do, and a fixture must
- *     not make one up either: a store-backed model refuses a duplicate id through a unique index while an in-process
+ *     not make one up either. A store-backed model refuses a duplicate id through a unique index while an in-process
  *     model delivers it twice.</li>
  * </ul>
  */
@@ -53,8 +53,8 @@ public interface SubscriptionModelFixture {
     /**
      * Hands the events to whatever feeds this model, in order.
      * <p>
-     * What that is differs completely between implementations, which is exactly why the suite is not allowed to know:
-     * a store-backed model needs a write its change stream observes, and an in-process model is handed the events
+     * What that is differs completely between implementations, which is exactly why the suite is not allowed to know.
+     * A store-backed model needs a write its change stream observes, and an in-process model is handed the events
      * directly. The suite only ever asks for them to arrive.
      * <p>
      * <strong>This is allowed to throw.</strong> On a model that propagates a handler exception rather than retrying,
@@ -82,7 +82,7 @@ public interface SubscriptionModelFixture {
      * Whether a handler that throws is called again, or the exception reaches whoever published the event.
      * <p>
      * Both answers cost something to give. A retrying model owes a second call to the handler, and a propagating model
-     * owes the exception out of {@link #publish(List)}. Occurrent's models split on this: the three that deliver
+     * owes the exception out of {@link #publish(List)}. Occurrent's models split on this. The three that deliver
      * asynchronously wrap the handler in a {@code RetryStrategy}, and the two that deliver on the publishing thread
      * let the exception through.
      * <p>
@@ -94,7 +94,7 @@ public interface SubscriptionModelFixture {
     /**
      * Whether the model accepts more than one subscription at a time.
      * <p>
-     * Answering {@code false} is a real design position rather than a limitation: a sink driven by an external broker
+     * Answering {@code false} is a real design position rather than a limitation. A sink driven by an external broker
      * delivers one message under one acknowledgement, so a second consumer on it would mean one failing consumer
      * holding up the rest. A model answering {@code false} owes a refusal of the second {@code subscribe}, and one
      * answering {@code true} owes two subscriptions that receive independently.
@@ -115,7 +115,7 @@ public interface SubscriptionModelFixture {
      * <p>
      * Accepting a variant is not the same as acting on it. A model that dispatches events as they arrive has no
      * position to start from and its own javadoc says it ignores the one it is given, which is still an accepted
-     * variant here: what the suite holds it to is that the subscription works, not that the position moved anything.
+     * variant here. What the suite holds it to is that the subscription works, not that the position moved anything.
      * A model that cannot honour a position and refuses it instead owes the refusal, which is what
      * {@code CatchupThenPushSubscriptionModel} does with every variant but
      * {@link StartAtVariant#SUBSCRIPTION_MODEL_DEFAULT}, since it replays a whole history and has nothing to apply a
@@ -135,14 +135,14 @@ public interface SubscriptionModelFixture {
      * from {@code globalCheckpoint()}, which is the position a catch-up handover would use. A model that ignores the
      * start position may answer with anything, and {@code GlobalCheckpoint.of(0)} is the obvious nothing.
      * <p>
-     * Asked of the fixture rather than of the model because {@code SubscriptionModel} has no member that reports one:
-     * only the checkpoint-aware models do, and this suite runs against the rest as well.
+     * Asked of the fixture rather than of the model because {@code SubscriptionModel} has no member that reports one.
+     * Only the checkpoint-aware models do, and this suite runs against the rest as well.
      */
     Checkpoint aCheckpointToStartFrom();
 
     /**
-     * The answer for a model that reports a position but is allowed to answer null, which most of them are: hand back
-     * what it reported, or the global position zero when it reported nothing.
+     * For a model that reports a position but is allowed to answer null, which most of them are, hand back what it
+     * reported, or the global position zero when it reported nothing.
      * <p>
      * A convenience rather than a default on {@link #aCheckpointToStartFrom()}, which stays abstract on purpose. A
      * default would let a model that really does read a position inherit "position zero" by forgetting to override,
@@ -159,7 +159,7 @@ public interface SubscriptionModelFixture {
      * <p>
      * Both answers are asserted. Answering {@code false}, which every change-stream and in-process model does, owes a
      * new subscription that does <em>not</em> receive what was published before it existed. Answering {@code true} owes
-     * exactly the opposite, and it is a real contract rather than an accident of implementation: a model whose whole
+     * exactly the opposite, and it is a real contract rather than an accident of implementation. A model whose whole
      * job is to bring a read model up to date replays first and goes live after, which is why it also refuses a
      * caller-supplied start position in {@link #acceptedStartAtVariants()}.
      * <p>
