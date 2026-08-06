@@ -19,8 +19,8 @@ package org.occurrent.springboot.common;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Resolves the asynchronous {@code Subscribable} bean the subscription DSLs bind to, on either stack.
@@ -56,15 +56,17 @@ public final class AsynchronousSubscribables {
      *                                                                            container's own by-type resolution
      */
     public static <S> S resolve(ApplicationContext applicationContext, Class<S> subscribableType, Class<?> registeringMarkerType) {
-        Map<String, S> candidates = new LinkedHashMap<>();
+        // isTypeMatch decides from bean-definition metadata, not by instantiating the bean, so a candidate this
+        // starter does not end up choosing (or one declared @Lazy or prototype-scoped) is never eagerly created just
+        // to be filtered out here.
+        List<String> candidates = new ArrayList<>();
         for (String name : applicationContext.getBeanNamesForType(subscribableType)) {
-            S bean = applicationContext.getBean(name, subscribableType);
-            if (!registeringMarkerType.isInstance(bean)) {
-                candidates.put(name, bean);
+            if (!applicationContext.isTypeMatch(name, registeringMarkerType)) {
+                candidates.add(name);
             }
         }
         if (candidates.size() == 1) {
-            return candidates.values().iterator().next();
+            return applicationContext.getBean(candidates.get(0), subscribableType);
         }
         if (candidates.isEmpty()) {
             throw new NoSuchBeanDefinitionException(subscribableType,
