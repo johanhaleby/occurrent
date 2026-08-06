@@ -43,34 +43,34 @@ import static java.util.Objects.requireNonNull;
 /**
  * The named-subscription half of a reactive catch-up model, shared by the stream and DCB models and the routing
  * dispatcher so the replay logic exists once. The cold {@code Flux} path keeps using {@link PositionCatchupPipeline}
- * directly; this class composes the same replay with a <em>delegated</em> live half instead of a cold one: the live
+ * directly. This class composes the same replay with a <em>delegated</em> live half instead of a cold one. The live
  * subscription is handed to the wrapped model's own named {@code subscribe(..)}, so everything the wrapped model does
- * for a named subscription is inherited, the retry of a failing action and the synchronous refusal of an unsupported
- * filter included. That is the point of the promotion (issues #547 and #550).
+ * for a named subscription is inherited, including the retry of a failing action and the synchronous refusal of an
+ * unsupported filter. That is the point of the promotion (issues #547 and #550).
  * <p>
- * A failing action during the replay is deliberately not retried: the blocking catch-up models do not retry there
+ * A failing action during the replay is deliberately not retried. The blocking catch-up models do not retry there
  * either, and the replay failure reaches whoever waits on {@link Subscription#waitUntilStarted()} rather than being
  * logged and swallowed. Live delivery, where retry matters, is the wrapped model's.
  * <p>
  * The wrapped model must itself manage named subscriptions (implement {@link SubscriptionModel}). A catch-up model
  * over a cold-only wrapped model refuses the named {@code subscribe} paths loudly, because the alternative is a
  * second copy of the named-over-cold driver that {@code ReactorDurableSubscriptionModel} already owns. The model-wide
- * life-cycle calls stay safe on such a composition (no-ops, {@code isRunning()} answering {@code false}): a Spring
- * context close calls {@code shutdown()} and a health check calls {@code isRunning()} regardless of whether the
- * application ever subscribed by name, and a late {@link IllegalStateException} there would fail an application for
- * a capability it never used.
+ * life-cycle calls stay safe on such a composition, with no-ops and {@code isRunning()} answering {@code false}. A
+ * Spring context close calls {@code shutdown()} and a health check calls {@code isRunning()} regardless of whether
+ * the application ever subscribed by name, and a late {@link IllegalStateException} there would fail an application
+ * for a capability it never used.
  * <p>
- * Life-cycle semantics for a subscription still replaying: a pause does not abort the replay, the subscription hands
+ * Life-cycle semantics for a subscription still replaying. A pause does not abort the replay, the subscription hands
  * over to the wrapped model paused (blocking parity). A stop aborts the replay WITHOUT handing over, and parks the
- * subscription; {@code start(..)} relaunches the replay from its original start position, so replayed events may be
+ * subscription. {@code start(..)} relaunches the replay from its original start position, so replayed events may be
  * delivered again (the composition is at-least-once anyway). A subscription created while the model is stopped parks
  * the same way and replays only once the model starts. This is deliberately safer than the blocking catch-up model,
- * which abandons a stop-interrupted replay outright; the blocking COMPOSITION never notices because its durable model
- * parks subscriptions before the catch-up model sees them, a gate the delegating path here does not run through.
- * Cancelling or shutting down aborts in-flight replays; waiting on a subscription cancelled before its handover
- * completes successfully, the blocking {@code CancelledSubscription} contract: there is nothing left to start.
- * Model-wide calls forward to the wrapped model, so give each composition its own wrapped model rather than sharing
- * one.
+ * which abandons a stop-interrupted replay outright. The blocking composition never notices, because its durable
+ * model parks subscriptions before the catch-up model sees them, a gate the delegating path here does not run
+ * through. Cancelling or shutting down aborts in-flight replays. Waiting on a subscription that was cancelled before
+ * its handover completes successfully, matching the blocking {@code CancelledSubscription} contract that there is
+ * nothing left to start. Model-wide calls forward to the wrapped model, so give each composition its own wrapped
+ * model rather than sharing one.
  */
 @NullMarked
 final class NamedCatchupSupport {
@@ -113,9 +113,9 @@ final class NamedCatchupSupport {
     }
 
     /**
-     * Subscribe with a catch-up phase: replay from {@code startPosition} through {@code reader}, applying the caller's
-     * {@code action} to each replayed event without retry, then hand the live half to the wrapped model's named
-     * {@code subscribe(..)} resuming from a token captured before the replay, deduped against the replayed ids.
+     * Subscribes with a catch-up phase. It replays from {@code startPosition} through {@code reader}, applies the
+     * caller's {@code action} to each replayed event without retry, then hands the live half to the wrapped model's
+     * named {@code subscribe(..)} resuming from a token captured before the replay, deduped against the replayed ids.
      */
     Subscription subscribeWithCatchup(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                       CatchupReader reader, long windowSize, int handoverCacheSize, long startPosition,
@@ -175,9 +175,9 @@ final class NamedCatchupSupport {
     }
 
     /**
-     * Subscribe with no catch-up phase: pure delegation to the wrapped model's named {@code subscribe(..)}, filtered
-     * in-process by {@code livePredicate} so a backend that does not honor the filter server-side still only delivers
-     * matching events.
+     * Subscribes with no catch-up phase. It is pure delegation to the wrapped model's named {@code subscribe(..)},
+     * filtered in-process by {@code livePredicate} so a backend that does not honor the filter server-side still
+     * only delivers matching events.
      */
     Subscription subscribeStraightToLive(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                          StartAt startAt, Function<CloudEvent, Mono<Void>> action) {

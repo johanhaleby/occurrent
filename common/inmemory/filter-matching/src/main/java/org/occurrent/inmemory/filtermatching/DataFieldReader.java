@@ -25,19 +25,19 @@ import java.util.Optional;
  * Reads a field out of a CloudEvent's {@code data} payload, so an in-process store can answer
  * {@link org.occurrent.filter.Filter#data(String, org.occurrent.condition.Condition)}.
  * <p>
- * This is a seam rather than a built-in because reading a payload means parsing it, and the matching module has no
- * parser and no opinion about which one you use. Occurrent ships a Jackson-backed implementation. A store handed no
- * reader keeps refusing a data filter, which is what {@link #refusing()} does.
+ * This is a pluggable interface rather than a built-in parser because reading a payload means parsing it, and the
+ * matching module has no parser and no opinion about which one you use. Occurrent ships a Jackson-backed
+ * implementation. A store handed no reader keeps refusing a data filter, which is what {@link #refusing()} does.
  * <p>
  * <strong>The path is a dotted path, the same one MongoDB resolves.</strong> {@code Filter.data("person.city", ..)}
  * arrives here as {@code person.city}, without the leading {@code data.}. An implementation should return:
  * <ul>
- *     <li>the value at that path, as a plain Java value: a {@link String}, a {@link Number}, a {@link Boolean}, or a
- *     {@link java.util.List} when the field holds an array</li>
+ *     <li>the value at that path, as a plain Java value, for example a {@link String}, a {@link Number}, a
+ *     {@link Boolean}, or a {@link java.util.List} when the field holds an array</li>
  *     <li>{@link Optional#empty()} when the path reaches nothing, including a payload that is not a JSON object, a
  *     field that is absent, and a path that continues past a value that has no fields</li>
  * </ul>
- * Returning the list rather than a match decision is deliberate: the matcher compares an array field by asking whether
+ * Returning the list rather than a match decision is deliberate. The matcher compares an array field by asking whether
  * any element satisfies the condition, the way MongoDB does, and it can only do that if it sees the elements.
  * <p>
  * A value must not be converted to text on the way out. A payload holding {@code {"amount":42}} answers with a number,

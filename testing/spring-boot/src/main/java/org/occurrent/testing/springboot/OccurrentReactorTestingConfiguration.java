@@ -27,7 +27,7 @@ import org.springframework.context.annotation.Scope;
 import java.util.List;
 
 /**
- * The reactive counterpart of {@link OccurrentTestingConfiguration}: exposes a reactive
+ * The reactive counterpart of {@link OccurrentTestingConfiguration}. It exposes a reactive
  * {@link OccurrentSubscriptionsExtension} over every reactive {@link SubscriptionModelLifeCycle} bean in the
  * application context.
  * <p>
@@ -42,7 +42,7 @@ public class OccurrentReactorTestingConfiguration {
     /**
      * The extension that stops every reactive subscription model before and after each test.
      * <p>
-     * It is a prototype bean for the same reason the blocking one is: the extension accumulates the subscription ids a
+     * It is a prototype bean for the same reason the blocking one is. The extension accumulates the subscription ids a
      * test told it about, and a test class registering it with {@code @RegisterExtension} should not inherit the ids
      * another test class named.
      *

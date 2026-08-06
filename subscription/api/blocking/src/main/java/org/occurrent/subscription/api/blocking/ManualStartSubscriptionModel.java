@@ -47,9 +47,9 @@ import static java.util.Objects.requireNonNull;
  * <b>Where a subscription starts from.</b> A subscription that has run before resumes from its stored checkpoint and
  * loses nothing. One that has never run has no checkpoint to resume from, and would otherwise start wherever the
  * wrapped model's default points at the moment it is started, silently skipping everything written since. Give this
- * model a position source and a checkpoint storage and it pins that position when the subscription is registered
- * instead, so starting late withholds events rather than losing them. Without them, a first run starts from the moment
- * it is started.
+ * model a position source and a checkpoint storage and it saves that position as the checkpoint when the subscription
+ * is registered, instead of waiting until it starts. That way, starting a subscription late still delivers the events
+ * written since registration instead of skipping them. Without them, a first run starts from the moment it is started.
  *
  * @see #stoppedByDefault(SubscriptionModel)
  */
@@ -79,7 +79,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      * A model that registers subscriptions without starting them. A subscription running for the first time will start
      * from wherever {@code delegate} starts by default at the moment it is started, so events written between
      * registration and that moment do not reach it. Use
-     * {@link #stoppedByDefault(SubscriptionModel, CheckpointAwareSubscriptionModel, CheckpointStorage)} to pin the
+     * {@link #stoppedByDefault(SubscriptionModel, CheckpointAwareSubscriptionModel, CheckpointStorage)} to record the
      * position at registration instead.
      *
      * @param delegate The subscription model to register with once a subscription is started.
@@ -89,12 +89,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     }
 
     /**
-     * A model that registers subscriptions without starting them, and pins where a subscription running for the first
-     * time will start from, so that starting it later withholds events rather than losing them.
+     * A model that registers subscriptions without starting them, and records where a subscription running for the
+     * first time will start from, so that starting it later still delivers the events written since registration
+     * instead of skipping them.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
-     * @param positionSource    Supplies the position to pin. Typically the innermost model, the one reading the feed.
-     * @param checkpointStorage Where the pinned position is written, which must be the storage the wrapped models read.
+     * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
+     * @param checkpointStorage Where the recorded position is written, which must be the storage the wrapped models read.
      */
     public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, CheckpointAwareSubscriptionModel positionSource,
                                                                 CheckpointStorage checkpointStorage) {
@@ -105,7 +106,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
 
     /**
      * Register a subscription. While this model is withholding, nothing is passed to the wrapped model and the returned
-     * {@link Subscription} is a placeholder standing for the registration: its {@code waitUntilStarted} returns
+     * {@link Subscription} is a placeholder standing for the registration. Its {@code waitUntilStarted} returns
      * immediately, because registering is all that has been asked for. Once the subscription is started,
      * {@link #resumeSubscription(String)} returns the wrapped model's own subscription.
      *

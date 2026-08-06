@@ -25,8 +25,8 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The fixture lifecycle every subscription-model suite shares: created before each test, closed after each test even
- * when the test failed, and reachable only from inside a test.
+ * Every subscription-model suite shares this fixture lifecycle. A fixture is created before each test and closed
+ * after each test, even when the test failed, and it is reachable only from inside a test.
  * <p>
  * Package-private, so it adds nothing to what an implementation sees. It extends nothing and is extended only by the
  * three suites in this package, which is the same shape {@code EventStoreConformance} gives the event-store leaf.

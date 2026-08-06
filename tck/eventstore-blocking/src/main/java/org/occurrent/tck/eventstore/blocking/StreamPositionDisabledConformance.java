@@ -38,11 +38,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.tck.ConformanceEvents.event;
 
 /**
- * The documented behaviour of a store built with its global position turned off: {@link EventStoreFixture#storeWithoutPosition()}.
+ * The documented behaviour of a store built with its global position turned off, as returned by
+ * {@link EventStoreFixture#storeWithoutPosition()}.
  * <p>
  * Not every implementation can build one. {@link EventStoreFixture#storeWithoutPosition()} defaults to
  * {@link java.util.Optional#empty()} for exactly that reason, and this suite treats an empty answer as a test failure
- * rather than something to skip past: see {@link #storeWithoutPosition()} below. The TCK bans {@code Assumptions}
+ * rather than something to skip past. See {@link #storeWithoutPosition()} below. The TCK bans {@code Assumptions}
  * everywhere else for the same reason, and an {@code Optional} accessor is not an exemption from it.
  */
 @NullMarked
@@ -108,7 +109,7 @@ public abstract class StreamPositionDisabledConformance extends EventStoreConfor
      * <p>
      * {@link EventStoreFixture#storeWithoutPosition()} answers {@link java.util.Optional#empty()} when an
      * implementation cannot build one, which is a legitimate answer for a fixture to give. It is not, however, a
-     * legitimate reason for this suite to pass or to skip: every test above needs the store to make its assertion,
+     * legitimate reason for this suite to pass or to skip. Every test above needs the store to make its assertion,
      * so an empty answer fails loudly here, naming the fixture that owes an override, exactly as
      * {@link EventStoreFixture}'s own {@code notOverridden(..)} fails loudly for a capability declared but not wired
      * up. A store that declines this behaviour is expected to say so by never reaching this failure in the first

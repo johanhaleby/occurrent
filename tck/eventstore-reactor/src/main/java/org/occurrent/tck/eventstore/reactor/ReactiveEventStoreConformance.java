@@ -44,10 +44,10 @@ import static org.occurrent.tck.ConformanceEvents.event;
  * <p>
  * Everything about what a store reads and writes is asserted once, by the blocking suites running over
  * {@link BlockingEventStoreOverReactive}, rather than described a second time in terms of {@code Mono} and {@code Flux}.
- * What that cannot reach is the shape of the publishers themselves: whether the work waits for a subscriber, whether a
+ * What that cannot reach is the shape of the publishers themselves. Whether the work waits for a subscriber, whether a
  * failure travels through the publisher or is thrown while assembling it, whether a {@code Mono} documented to always
- * emit ever completes empty, and what cancelling a read does. A store can get every one of those wrong and still pass
- * every blocking suite.
+ * emit ever completes empty, and what cancelling a read does, all fall outside it. A store can get every one of those
+ * wrong and still pass every blocking suite.
  * <p>
  * Why each of them matters to somebody using the store:
  * <ul>
@@ -59,7 +59,7 @@ import static org.occurrent.tck.ConformanceEvents.event;
  *       operator supplies. {@code count()} silently reads zero rather than failing.</li>
  * </ul>
  * <p>
- * Every wait here is bounded. The event-store CI shards have no rerun backstop, so a store that never completes has to
+ * Every wait here has a timeout. The event-store CI shards have no rerun backstop, so a store that never completes has to
  * fail the test rather than hang the build.
  * <p>
  * STREAM only, and with no capability declaration. Every reactive store shipping with Occurrent supports STREAM, and

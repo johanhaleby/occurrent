@@ -25,8 +25,8 @@ import java.util.List;
  * What a model hands {@link RestartConformance}, on top of everything {@link SubscriptionModelFixture} already asks
  * for.
  * <p>
- * Only a fixture that can do both halves of a restart supplies this: build the model a second time over whatever it
- * left behind, and feed events in while no model is running. A model whose events arrive by being handed to it has
+ * Only a fixture that can do both halves of a restart supplies this. It must build the model a second time over
+ * whatever it left behind, and feed events in while no model is running. A model whose events arrive by being handed to it has
  * neither, since there is nowhere for an event to wait, which is why declining is done by not extending the suite
  * rather than by answering a declaration.
  */
@@ -37,8 +37,8 @@ public interface RestartableSubscriptionModelFixture extends SubscriptionModelFi
      * Shuts the current model down and builds a fresh one over the same durable state, the way restarting the
      * application would.
      * <p>
-     * Rebuild rather than restart in place: {@code SubscriptionModelLifeCycle.shutdown()} is documented as not
-     * reversible, and starting the same instance again would prove nothing about state outliving a process.
+     * This rebuilds rather than restarts in place, because {@code SubscriptionModelLifeCycle.shutdown()} is documented
+     * as not reversible, and starting the same instance again would prove nothing about state outliving a process.
      * <p>
      * After this call {@link #subscriptionModel()} must answer with the new model, so {@link #close()} shuts down the
      * one that is actually running, and {@link #publish(List)} must feed the new model too.
