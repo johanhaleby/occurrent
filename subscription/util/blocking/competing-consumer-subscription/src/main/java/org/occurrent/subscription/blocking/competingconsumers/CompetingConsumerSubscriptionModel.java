@@ -96,11 +96,13 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
         final Subscription subscription;
         if (startAt.get(new SubscriptionModelContext(CompetingConsumerSubscriptionModel.class)) == null) {
-            nonCompetingConsumersSubscriptions.add(subscriptionId);
             // Not allowed to start the competing consumer subscription, delegate to parent instead. One case: a
             // non-durable in-memory subscription started on multiple nodes, where every node should receive every
             // event, so competing consumption is not wanted.
             subscription = getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+            // Recorded only once the delegate has accepted it. Recording first would leave the id occupied by a
+            // subscription that was refused, and the check above would then refuse it for good.
+            nonCompetingConsumersSubscriptions.add(subscriptionId);
         } else {
             subscription = startCompetingConsumerSubscription(subscriberId, subscriptionId, filter, startAt, action);
         }

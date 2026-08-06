@@ -20,6 +20,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
@@ -887,6 +888,28 @@ class CompetingConsumerSubscriptionModelTest {
         // Then
         assertThat(throwable)
                 .as("cancelling releases the subscription id, whichever of the two collections was holding it")
+                .isNull();
+    }
+
+    @Test
+    void a_subscription_id_stays_free_when_the_delegate_refuses_the_subscription() {
+        // Given
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        String subscriptionId = "MySubscription";
+        StartAt optedOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(CompetingConsumerSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        SubscriptionFilter unrecognised = new SubscriptionFilter() {
+        };
+        Throwable refusedByDelegate = catchThrowable(() -> competingConsumerSubscriptionModel1.subscribe(subscriptionId, unrecognised, optedOut, __ -> {
+        }));
+        assertThat(refusedByDelegate).isInstanceOf(IllegalArgumentException.class);
+
+        // When
+        Throwable throwable = catchThrowable(() -> competingConsumerSubscriptionModel1.subscribe(subscriptionId, optedOut, __ -> {
+        }));
+
+        // Then
+        assertThat(throwable)
+                .as("a subscription the delegate refused never existed, so its id must not stay occupied")
                 .isNull();
     }
 
