@@ -36,7 +36,7 @@ import static java.util.Objects.requireNonNull;
  * CloudEvents for the conformance suites to write and read back.
  * <p>
  * These are deliberately self-contained. The TCK is published, so it cannot depend on the unpublished
- * {@code test-support} module, and it does not pull in a JSON library just to build a payload: the data is a small
+ * {@code test-support} module, and it does not pull in a JSON library just to build a payload. The data is a small
  * hand-written JSON object. Nothing here is MongoDB-specific or Occurrent-specific beyond the CloudEvents
  * specification itself.
  * <p>
@@ -141,7 +141,7 @@ public final class ConformanceEvents {
 
     /**
      * An event carrying the supplied JSON body, for a suite that needs a payload shape the other factories do not
-     * build: a nested object, a number, an array, or a body whose root is not an object at all.
+     * build, such as a nested object, a number, an array, or a body whose root is not an object at all.
      *
      * @param json the body verbatim, so a caller can write the exact shape it means to test
      */

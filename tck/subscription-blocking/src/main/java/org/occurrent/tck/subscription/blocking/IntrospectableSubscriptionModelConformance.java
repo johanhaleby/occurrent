@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * any other suite. There is no declaration for it, because {@link IntrospectableSubscriptionModel} is itself the
  * declaration.
  * <p>
- * Worth having rather than assumed: both of Occurrent's MongoDB subscription models implement {@code subscriptionIds()}
+ * Worth having rather than assumed. Both of Occurrent's MongoDB subscription models implement {@code subscriptionIds()}
  * and neither had a test for it before this suite.
  */
 @NullMarked

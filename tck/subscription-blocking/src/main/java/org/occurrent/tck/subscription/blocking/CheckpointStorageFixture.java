@@ -26,9 +26,9 @@ import java.util.List;
  * What a {@link CheckpointStorage} implementation hands the conformance suite.
  * <p>
  * A fixture is created fresh for every test method, and the storage it hands back <strong>must hold no checkpoints</strong>.
- * How that is achieved is the implementation's business: dropping a collection, flushing a database, or constructing a
- * new instance. The suite never cleans up on an implementation's behalf, because what needs cleaning is exactly the part
- * a contract cannot describe.
+ * How that is achieved is the implementation's business, whether dropping a collection, flushing a database, or
+ * constructing a new instance. The suite never cleans up on an implementation's behalf, because what needs cleaning
+ * is exactly the part a contract cannot describe.
  * <p>
  * There is one thing the suite has to be told rather than ask, and it is {@link #preservesCheckpointType(Checkpoint)}.
  * Every storage round-trips the value, but they disagree about whether the {@link Checkpoint} that comes back is the

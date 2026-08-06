@@ -29,7 +29,7 @@ import java.time.Duration;
 import java.util.*;
 
 /**
- * The reactive counterpart of the blocking {@code OccurrentSubscriptionsExtension}: stops every subscription model
+ * The reactive counterpart of the blocking {@code OccurrentSubscriptionsExtension}. It stops every subscription model
  * before and after each test, so a test only runs the subscriptions it names with {@link #start(String)}. A test that
  * writes events then cannot race a subscription it never asked for.
  * <p>
@@ -139,7 +139,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
      * earlier test left it and receives events that test wrote.
      * <p>
      * Clearing the events alone does not achieve this. A stored checkpoint is what decides where a resumed subscription
-     * starts, so it has to go too, and it is not necessarily stored next to the events: a MongoDB event store keeping
+     * starts, so it has to go too, and it is not necessarily stored next to the events. A MongoDB event store keeping
      * its checkpoints in Redis is an ordinary setup.
      *
      * @param checkpointStorage the storage holding the checkpoints, must not be {@code null}

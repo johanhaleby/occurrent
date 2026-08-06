@@ -26,7 +26,7 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The DCB twin of {@link org.occurrent.command.Invocation}: a command that carries its own handling logic, bounded by
+ * The DCB twin of {@link org.occurrent.command.Invocation}. It carries its own handling logic, scoped by
  * a {@link DcbCriteria} read boundary instead of a stream id. Dispatch it with
  * {@link DcbCommandDispatchers#invocation(org.occurrent.application.service.blocking.dcb.DcbApplicationService)}.
  * <p>
@@ -37,7 +37,8 @@ import static java.util.Objects.requireNonNull;
  * As with the stream form, two invocations are equal only when they hold the same boundary and the very same function
  * instance, so assert on what {@link #decision()} does rather than on the value.
  *
- * @param criteria     the read boundary to fold, and the condition the decided events are appended under
+ * @param criteria     the read boundary whose events {@code decision} runs over, and the condition the decided events
+ *                     are appended under
  * @param tagGenerator tags for the decided events, or {@code null} to use the application service's global generator
  * @param decision     a <i>pure</i> function from the events inside the boundary to the events to append
  * @param <E>          the event type of the write model
