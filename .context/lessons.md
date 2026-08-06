@@ -10,6 +10,11 @@
   The reliable signal is the WORK ITEM: when a PR's observable state (rollup, unresolved-thread count) is unchanged
   across two consecutive sweep ticks while its session keeps cycling, read that session's tail; a human-gated hold
   says so in its last message and needs a decision routed, not more waiting.
+- Every sweep tick ends with a delivered summary (2026-08-06 correction). Prose written before the re-arming
+  ScheduleWakeup call renders collapsed in Johan's view, so a tick that only writes text effectively reports nothing.
+  Send the tick summary through a channel that displays: a PushNotification (what merged, what moved, what needs him)
+  before re-arming, or the AskUserQuestion that the tick's decision already requires. Silence is only acceptable for a
+  tick where literally nothing changed, and even then say so in the push.
 - A sweep tick that finds work in a ready-for-Johan state (a PR ready to land, a held branch ready to push, a gate
   ready to run) must surface it as an AskUserQuestion in that same tick, not as a status line (2026-08-06 correction).
   "Ready" is a decision point, and prose status does not reach him the way a structured ask does.
