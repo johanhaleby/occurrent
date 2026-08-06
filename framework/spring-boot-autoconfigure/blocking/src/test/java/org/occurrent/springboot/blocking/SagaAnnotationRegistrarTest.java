@@ -83,7 +83,11 @@ class SagaAnnotationRegistrarTest {
         // registerSagaInstancesSingleton take its "cannot publish" branch instead of registering the bean.
         ApplicationContext applicationContext = mock(ApplicationContext.class);
         when(applicationContext.getBean(CloudEventConverter.class)).thenReturn(converter());
-        when(applicationContext.getBean(Subscribable.class)).thenReturn(subscribable);
+        // The non-push branch resolves through AsynchronousSubscribables rather than a bare getBean(Subscribable.class)
+        // (see #563), so the mock has to answer the same by-name lookup that resolution performs.
+        when(applicationContext.getBeanNamesForType(Subscribable.class)).thenReturn(new String[]{"subscribable"});
+        when(applicationContext.isTypeMatch("subscribable", org.occurrent.subscription.api.blocking.RegisteringSubscribable.class)).thenReturn(false);
+        when(applicationContext.getBean("subscribable", Subscribable.class)).thenReturn(subscribable);
         when(applicationContext.getBeanNamesForType(SagaStateStore.class)).thenReturn(new String[]{"sagaStateStore"});
         when(applicationContext.getBean("sagaStateStore")).thenReturn(stateStore);
         when(applicationContext.getBeanNamesForType(CommandDispatcher.class)).thenReturn(new String[]{"dispatcher"});

@@ -32,6 +32,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.BackgroundCatchupFailures;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
@@ -41,6 +42,7 @@ import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
+import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.push.reactor.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
@@ -181,7 +183,11 @@ class ProjectionAnnotationRegistrar {
                 ReactiveProjectionRunner<E> runner = ReactiveProjectionRunner.agnostic(applicationContext.getBean(SynchronousSubscriptionModel.class), converter);
                 projectAgnosticOrStream(runner, id, projection, resolveStore(annotation, id), null);
             } else {
-                Subscribable subscribable = applicationContext.getBean(Subscribable.class);
+                // Resolved through AsynchronousSubscribables rather than a bare getBean(Subscribable.class): that
+                // also matches the register-only SynchronousSubscriptionModel, which is ambiguous the moment an
+                // application supplies its own asynchronous model without marking it @Primary (see
+                // AsynchronousSubscribables, and #541).
+                Subscribable subscribable = AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class);
                 ReactiveProjectionRunner<E> runner = stream ? ReactiveProjectionRunner.stream(subscribable, converter) : ReactiveProjectionRunner.agnostic(subscribable, converter);
                 boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
                 if (replaysHistory && stream && !startPositionSupport.streamHistoryReplaySupported()) {
