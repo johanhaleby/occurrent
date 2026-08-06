@@ -39,12 +39,12 @@ public final class CommandGrouping {
      * contractually in order, so {@code [a, b, a]} is three runs rather than two.
      * <p>
      * {@code keyOf} is applied to every item up front, exactly once each, before {@code action} runs for the first
-     * time. That is load-bearing rather than an optimisation. Resolving a key can fail (a missing
-     * {@code @TargetStreamId}, a decider that does not recognise a command), and resolving lazily would throw partway
-     * through, after earlier runs had already been written. Doing it up front means such a batch fails having written
-     * nothing. It also keeps a key derivation that allocates, or is otherwise not free, to one call per item.
+     * time. Resolving a key can fail (a missing {@code @TargetStreamId}, a decider that does not recognise a
+     * command), and resolving lazily would throw partway through, after earlier runs had already been written. Doing
+     * it up front instead means such a batch fails having written nothing. It also keeps a key derivation that
+     * allocates, or is otherwise not free, to one call per item.
      * <p>
-     * An empty list does nothing. Callers rely on that: a saga reaction that only arms a timer still reaches
+     * An empty list does nothing. Callers rely on that. A saga reaction that only arms a timer still reaches
      * {@code dispatchAll} with an empty list.
      *
      * @param items  the batch to split, must not contain null

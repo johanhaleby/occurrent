@@ -46,7 +46,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Not extending a suite is how an implementation declines a capability. That is deliberately a visible, greppable
  * absence rather than a runtime skip, because a suite that skips silently is worse than no suite at all. For the same
- * reason nothing in this TCK calls {@code Assumptions}: where behaviour legitimately differs, the fixture declares
+ * reason nothing in this TCK calls {@code Assumptions}. Where behaviour legitimately differs, the fixture declares
  * which way it goes and the suite asserts the documented outcome for that answer, so both branches are checked by
  * somebody.
  */

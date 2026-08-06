@@ -290,6 +290,44 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void resuming_a_subscription_on_a_stopped_model_reopens_it_for_later_registrations() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        model.start(false);
+        model.subscribe("first", null, StartAt.now(), __ -> {
+        });
+        model.stop();
+
+        model.resumeSubscription("first");
+        model.subscribe("second", null, StartAt.now(), __ -> {
+        });
+
+        assertThat(model.isRunning())
+                .as("the wrapped model reports itself running again after a resume, and this one must not disagree "
+                        + "while one of its own subscriptions is delivering")
+                .isTrue();
+        assertThat(delegate.subscribeCalls).extracting(SubscribeCall::subscriptionId).containsExactly("first", "second");
+    }
+
+    @Test
+    void resuming_a_subscription_that_was_never_started_leaves_the_rest_waiting() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        model.subscribe("first", null, StartAt.now(), __ -> {
+        });
+
+        model.resumeSubscription("first");
+        model.subscribe("second", null, StartAt.now(), __ -> {
+        });
+
+        assertThat(model.isRunning())
+                .as("starting one subscription is not the same as starting a model that has never been started")
+                .isFalse();
+        assertThat(delegate.subscribeCalls).extracting(SubscribeCall::subscriptionId).containsExactly("first");
+        assertThat(model.isPaused("second")).isTrue();
+    }
+
+    @Test
     void starting_the_model_starts_every_registered_subscription_in_registration_order() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
@@ -459,6 +497,9 @@ class ManualStartSubscriptionModelTest {
                 throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
             }
             resumeCalls.add(subscriptionId);
+            // Every real model reports itself running again after a resume rather than limiting the resume to that
+            // one subscription.
+            running = true;
             subscribeCalls.stream().filter(call -> call.subscriptionId().equals(subscriptionId)).forEach(call -> actions.add(call.action()));
             return subscriptions.get(subscriptionId);
         }
@@ -483,11 +524,18 @@ class ManualStartSubscriptionModelTest {
         public void stop() {
             stopCalls++;
             running = false;
+            // Stopping pauses what was running rather than cancelling it, so a single subscription can be resumed
+            // afterwards.
+            paused.addAll(subscriptions.keySet());
+            actions.clear();
         }
 
         @Override
         public void start(boolean resumeSubscriptionsAutomatically) {
             running = true;
+            if (resumeSubscriptionsAutomatically) {
+                Set.copyOf(paused).forEach(this::resumeSubscription);
+            }
         }
 
         @Override
