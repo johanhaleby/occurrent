@@ -20,9 +20,11 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.tck.ConformanceEvents;
+import org.occurrent.tck.FailureNamesTheTestClass;
 import org.occurrent.tck.subscription.blocking.RecordedEvents;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
@@ -65,6 +67,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("the reactive contract a blocking bridge cannot see")
+@ExtendWith(FailureNamesTheTestClass.class)
 public abstract class ReactiveSubscriptionModelConformance {
 
     /**

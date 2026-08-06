@@ -20,7 +20,9 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.tck.FailureNamesTheTestClass;
 
 import static java.util.Objects.requireNonNull;
 
@@ -32,6 +34,7 @@ import static java.util.Objects.requireNonNull;
  * three suites in this package, which is the same shape {@code EventStoreConformance} gives the event-store leaf.
  */
 @NullMarked
+@ExtendWith(FailureNamesTheTestClass.class)
 abstract class SubscriptionModelSuite {
 
     private @Nullable SubscriptionModelFixture fixture;

@@ -20,7 +20,9 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.tck.FailureNamesTheTestClass;
 import org.occurrent.tck.subscription.blocking.RecordedLockChanges.Kind;
 import org.occurrent.tck.subscription.blocking.RecordedLockChanges.LockChange;
 
@@ -57,6 +59,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("the competing consumer strategy contract")
 @Timeout(60)
+@ExtendWith(FailureNamesTheTestClass.class)
 public abstract class CompetingConsumerStrategyConformance {
 
     private static final String HOLDER = "the-holder";
