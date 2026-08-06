@@ -86,6 +86,9 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     private final @Nullable DcbCriteria defaultCriteria;
     private final long windowSize;
     private final int handoverCacheSize;
+    // The class a caller's StartAt.dynamic sees. This model's own class when it is used directly, and the dispatcher's
+    // class when ReactorCatchupSubscriptionModel wraps it, so a caller matching on the type it holds keeps working.
+    private final Class<?> subscriptionModelContextType;
 
     public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore) {
         this(subscriptionModel, dcbEventStore, null, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
@@ -106,8 +109,21 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     }
 
     public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultCriteria, long windowSize, int handoverCacheSize) {
+        this(subscriptionModel, dcbEventStore, defaultCriteria, windowSize, handoverCacheSize, ReactorDcbCatchupSubscriptionModel.class);
+    }
+
+    /**
+     * @param subscriptionModelContextType The class a caller-supplied {@code StartAt.dynamic} sees as
+     *                                     {@code SubscriptionModelContext#subscriptionModelType()}. The
+     *                                     {@link ReactorCatchupSubscriptionModel} dispatcher passes its own class here
+     *                                     so a caller that pattern-matches on the public dispatcher type keeps working
+     *                                     regardless of which mode-specific model runs the catch-up. Mirrors the
+     *                                     blocking {@code DcbCatchupSubscriptionModel}.
+     */
+    ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultCriteria, long windowSize, int handoverCacheSize, Class<?> subscriptionModelContextType) {
         this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
-        this.namedSubscriptions = new NamedCatchupSupport(subscriptionModel, ReactorDcbCatchupSubscriptionModel.class);
+        this.subscriptionModelContextType = requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
+        this.namedSubscriptions = new NamedCatchupSupport(subscriptionModel, subscriptionModelContextType);
         this.dcbEventStore = requireNonNull(dcbEventStore, DcbEventStore.class.getSimpleName() + " cannot be null");
         this.defaultCriteria = defaultCriteria;
         if (windowSize <= 0) {
@@ -170,7 +186,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         Predicate<CloudEvent> livePredicate = cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria);
         SubscriptionFilter liveFilter = DcbSubscriptionFilter.filter(criteria);
 
-        StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorDcbCatchupSubscriptionModel.class));
+        StartAt resolved = startAt.get(new SubscriptionModelContext(subscriptionModelContextType));
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             return namedSubscriptions.subscribeStraightToLive(subscriptionId, liveFilter, livePredicate, resolved == null ? startAt : resolved, action);
         }
@@ -221,6 +237,12 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         namedSubscriptions.cancelSubscription(subscriptionId);
     }
 
+    // Whether a replay for this id is in flight here, so this model is the only one that can answer for it. Lets a
+    // dispatcher over several catch-up models find the one that owns an id instead of picking one of them.
+    boolean isCatchingUp(String subscriptionId) {
+        return namedSubscriptions.isCatchingUp(subscriptionId);
+    }
+
     @Override
     public void shutdown() {
         namedSubscriptions.shutdown();
@@ -246,7 +268,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
-        StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorDcbCatchupSubscriptionModel.class));
+        StartAt resolved = startAt.get(new SubscriptionModelContext(subscriptionModelContextType));
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             // Not a DCB catch-up position, so go straight to live. Apply the same in-process DCB floor the replay-to-live
             // path and the DcbSubscriptionModel adapter apply, so a backend that does not honor the filter server-side

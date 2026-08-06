@@ -96,6 +96,15 @@ final class NamedCatchupSupport {
         return named != null;
     }
 
+    /**
+     * Whether a replay for {@code subscriptionId} is in flight on this model, so it is a subscription only this model
+     * can answer for: the wrapped model does not know the id until the handover. A dispatcher over several catch-up
+     * models uses this to find the one that owns an id rather than picking one of them.
+     */
+    boolean isCatchingUp(String subscriptionId) {
+        return catchingUp.containsKey(subscriptionId);
+    }
+
     private SubscriptionModel requireNamed() {
         if (named == null) {
             throw new IllegalStateException(modelClass.getSimpleName() + " can only manage named subscriptions when the model it wraps manages them itself (implements " + SubscriptionModel.class.getSimpleName() + "). The wrapped " + wrapped.getClass().getName() + " only offers the plain (cold) subscribe(filter, startAt) primitive, so use that primitive directly, or wrap a model that manages named subscriptions.");

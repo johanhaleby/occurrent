@@ -32,6 +32,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
@@ -51,6 +52,10 @@ import static java.util.Objects.requireNonNull;
  * own named {@code subscribe(..)}, so retry and synchronous filter refusal are inherited. A durable model wrapping
  * this one therefore delegates to it rather than driving the cold primitive itself. The life cycle forwards to the
  * wrapped model, so give each composition its own wrapped model rather than sharing one.
+ * <p>
+ * A subscription routed through this model reports <em>this</em> class to a caller's {@link StartAt#dynamic(Function)},
+ * on both the cold and the named path, so a start position that branches on the subscription model type matches the
+ * type the caller holds rather than the mode-specific model that happens to run the catch-up.
  */
 @NullMarked
 public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
@@ -71,9 +76,9 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     }
 
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
-        this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), positionOrderedReader, defaultFilter, windowSize, handoverCacheSize);
+        this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, ReactorStreamCatchupSubscriptionModel.STREAM_CAPABILITY_FILTER, ReactorCatchupSubscriptionModel.class);
         this.dcbCatchupSubscriptionModel = null;
-        this.agnosticCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, null);
+        this.agnosticCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, null, ReactorCatchupSubscriptionModel.class);
     }
 
     /**
@@ -85,7 +90,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, long windowSize, int handoverCacheSize) {
         this.streamCatchupSubscriptionModel = null;
-        this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), dcbEventStore, defaultQuery, windowSize, handoverCacheSize);
+        this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), dcbEventStore, defaultQuery, windowSize, handoverCacheSize, ReactorCatchupSubscriptionModel.class);
         this.agnosticCatchupSubscriptionModel = null;
     }
 
@@ -97,9 +102,9 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
      */
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
         requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
-        this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize);
-        this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, defaultQuery, windowSize, handoverCacheSize);
-        this.agnosticCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, null);
+        this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, ReactorStreamCatchupSubscriptionModel.STREAM_CAPABILITY_FILTER, ReactorCatchupSubscriptionModel.class);
+        this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, defaultQuery, windowSize, handoverCacheSize, ReactorCatchupSubscriptionModel.class);
+        this.agnosticCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, null, ReactorCatchupSubscriptionModel.class);
     }
 
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, @Nullable Filter defaultFilter) {
@@ -176,7 +181,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         SubscriptionModel routed = (SubscriptionModel) route(filter, startAt);
         // Claim the owner slot before subscribing, so a life-cycle call racing the subscribe reaches the model that
-        // owns the replay rather than falling back to an arbitrary inner model; roll the claim back if the subscribe
+        // owns the replay before that model has registered the replay itself; roll the claim back if the subscribe
         // refuses, so the id stays free.
         if (subscriptionOwners.putIfAbsent(subscriptionId, routed) != null) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
@@ -192,16 +197,35 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Which inner model a named subscription was routed to, so a per-subscription life-cycle call reaches the model
-    // that may still be replaying it. All inner models forward to the same wrapped model, so an id this map does not
-    // know (never subscribed through this dispatcher) is answered by any inner model.
+    // that may still be replaying it. Also the atomic duplicate-id guard across the inner models: an id replaying on
+    // one of them is invisible to the wrapped model until the handover, so the inner models cannot see each other's.
     private final ConcurrentMap<String, SubscriptionModel> subscriptionOwners = new ConcurrentHashMap<>();
 
+    // Routes a per-subscription life-cycle call, in three steps, none of which is a guess. The record above answers
+    // for every id this dispatcher created. An id it did not create may still be replaying on an inner model, which is
+    // the one state the wrapped model cannot answer for, so ask each inner model whether it holds that replay. What is
+    // left is an id no replay owns, and since every inner model forwards to the same wrapped model, any of them gives
+    // that model's own answer. Going through an inner model rather than to the wrapped model directly is what keeps
+    // the documented behaviour over a cold-only wrapped model, which has no life cycle to forward to.
     private SubscriptionModel ownerOf(String subscriptionId) {
         SubscriptionModel owner = subscriptionOwners.get(subscriptionId);
         if (owner != null) {
             return owner;
         }
-        return anyInnerModel();
+        return innerModelCatchingUp(subscriptionId).orElseGet(this::anyInnerModel);
+    }
+
+    private Optional<SubscriptionModel> innerModelCatchingUp(String subscriptionId) {
+        if (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isCatchingUp(subscriptionId)) {
+            return Optional.of(streamCatchupSubscriptionModel);
+        }
+        if (dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.isCatchingUp(subscriptionId)) {
+            return Optional.of(dcbCatchupSubscriptionModel);
+        }
+        if (agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.isCatchingUp(subscriptionId)) {
+            return Optional.of(agnosticCatchupSubscriptionModel);
+        }
+        return Optional.empty();
     }
 
     private SubscriptionModel anyInnerModel() {
