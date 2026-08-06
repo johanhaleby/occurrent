@@ -97,9 +97,8 @@ final class NamedCatchupSupport {
     }
 
     /**
-     * Whether a replay for {@code subscriptionId} is in flight on this model, so it is a subscription only this model
-     * can answer for: the wrapped model does not know the id until the handover. A dispatcher over several catch-up
-     * models uses this to find the one that owns an id rather than picking one of them.
+     * Whether a replay for {@code subscriptionId} is in flight here. Only this model can answer for such a
+     * subscription, because the wrapped model does not know the id until the handover.
      */
     boolean isCatchingUp(String subscriptionId) {
         return catchingUp.containsKey(subscriptionId);

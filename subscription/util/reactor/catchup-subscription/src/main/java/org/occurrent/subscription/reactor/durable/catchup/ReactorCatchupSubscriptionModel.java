@@ -32,7 +32,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
@@ -197,37 +196,38 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Which inner model a named subscription was routed to, so a per-subscription life-cycle call reaches the model
-    // that may still be replaying it. Also the atomic duplicate-id guard across the inner models: an id replaying on
-    // one of them is invisible to the wrapped model until the handover, so the inner models cannot see each other's.
+    // that may still be replaying it. It is also the duplicate-id guard across the inner models, which cannot see each
+    // other's replays because an id stays invisible to the wrapped model until the handover.
     private final ConcurrentMap<String, SubscriptionModel> subscriptionOwners = new ConcurrentHashMap<>();
 
-    // Routes a per-subscription life-cycle call, in three steps, none of which is a guess. The record above answers
-    // for every id this dispatcher created. An id it did not create may still be replaying on an inner model, which is
-    // the one state the wrapped model cannot answer for, so ask each inner model whether it holds that replay. What is
-    // left is an id no replay owns, and since every inner model forwards to the same wrapped model, any of them gives
-    // that model's own answer. Going through an inner model rather than to the wrapped model directly is what keeps
-    // the documented behaviour over a cold-only wrapped model, which has no life cycle to forward to.
+    // Routes a per-subscription life-cycle call. The record above answers for every id this dispatcher created, and a
+    // replay still in flight is the one state the wrapped model cannot answer for, so the inner models are asked next.
+    // Anything left belongs to the wrapped model, and every inner model forwards there, so one of them gives its answer.
     private SubscriptionModel ownerOf(String subscriptionId) {
         SubscriptionModel owner = subscriptionOwners.get(subscriptionId);
         if (owner != null) {
             return owner;
         }
-        return innerModelCatchingUp(subscriptionId).orElseGet(this::anyInnerModel);
+        SubscriptionModel replaying = innerModelCatchingUp(subscriptionId);
+        return replaying != null ? replaying : anyInnerModel();
     }
 
-    private Optional<SubscriptionModel> innerModelCatchingUp(String subscriptionId) {
+    private @Nullable SubscriptionModel innerModelCatchingUp(String subscriptionId) {
         if (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isCatchingUp(subscriptionId)) {
-            return Optional.of(streamCatchupSubscriptionModel);
+            return streamCatchupSubscriptionModel;
         }
         if (dcbCatchupSubscriptionModel != null && dcbCatchupSubscriptionModel.isCatchingUp(subscriptionId)) {
-            return Optional.of(dcbCatchupSubscriptionModel);
+            return dcbCatchupSubscriptionModel;
         }
         if (agnosticCatchupSubscriptionModel != null && agnosticCatchupSubscriptionModel.isCatchingUp(subscriptionId)) {
-            return Optional.of(agnosticCatchupSubscriptionModel);
+            return agnosticCatchupSubscriptionModel;
         }
-        return Optional.empty();
+        return null;
     }
 
+    // Any inner model, which is not an arbitrary choice for a life-cycle call, since they all forward to the same
+    // wrapped model. Going through one of them rather than to that model directly keeps the documented behaviour over
+    // a cold-only wrapped model, which has no life cycle to forward to.
     private SubscriptionModel anyInnerModel() {
         return streamCatchupSubscriptionModel != null ? streamCatchupSubscriptionModel : requireNonNull(dcbCatchupSubscriptionModel);
     }
