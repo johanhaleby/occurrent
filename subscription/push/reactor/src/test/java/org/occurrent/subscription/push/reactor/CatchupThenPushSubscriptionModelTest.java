@@ -33,6 +33,7 @@ import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.time.Duration;
@@ -158,7 +159,9 @@ class CatchupThenPushSubscriptionModelTest {
         awaitLatch(firstFolded);
         model.stop();
         releaseFold.countDown();
-        subscription.waitUntilStarted().block(Duration.ofSeconds(5));
+        // Completes rather than errors, which is the "a stop is not a failure" half of ADR 104. Blocking without
+        // asserting would let a stop start reporting itself as a failed catch-up without this test noticing.
+        StepVerifier.create(subscription.waitUntilStarted()).verifyComplete();
 
         // This is what used to be impossible: the registration was cancelled on the stopped path, so start() brought
         // back only the live feed and the subscription never came back. A stop is not a failure (ADR 104).
