@@ -14,11 +14,12 @@ yourself, one method gained a parameter. Almost nobody does, since the model Occ
 refuses to start. If you use a push source, read
 [section 3](#3-a-push-sink-feeds-exactly-one-projection-or-saga) first.
 
-Seven things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+Eight things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
 `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
 first failing handler, the reactor subscription primitive was renamed, a durable reactor model refuses a composition it
-used to accept, and a paused MongoDB subscription now delivers what was written while it was paused.
+used to accept, a paused MongoDB subscription now delivers what was written while it was paused, and a push catch-up
+replays on its own thread.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -452,3 +453,57 @@ They are not equally bad. A lost event is unrecoverable and violates the isolati
 a repeat is absorbed by an idempotent handler, and every wrapper above these models already delivers at least once.
 [ADR 94](../architecture/decisions/0094-the-subscription-tck-declares-three-differences-and-waits-deterministically.md)
 records the measurement this was decided against, including the competing-consumer case where it costs the most.
+
+## 8. A push catch-up replays on its own thread
+
+Only relevant if you call `subscribe(...)` on `CatchupThenPushSubscriptionModel` yourself, on either stack. Nothing
+changes if the model is bound for you by `@Projection(source = PUSH)` or `@Saga(source = PUSH)`, or if you go through
+the projection DSL: the registrars and runners call `waitUntilStarted` on your behalf, so under the default
+`startupMode` a replay failure still fails your application's startup exactly as it did before.
+
+The model replays a projection's history from the event store before handing over to the live push feed. That replay
+used to run before `subscribe(...)` returned: on the blocking stack it ran on the calling thread, and on the reactor
+stack the model subscribed its own replay pipeline inline, so with a synchronous reader the history had been applied by
+the time you held the handle. It now runs off that thread on both stacks, on a virtual thread of its own on the
+blocking one and on `boundedElastic` on the reactor one, and `waitUntilStarted()` on the returned subscription is the
+only thing that joins it. That is what lets `startupMode = BACKGROUND` keep the largest replay Occurrent runs off the
+startup path, which is the reason for the change.
+[ADR 91](../architecture/decisions/0091-a-push-catch-up-replays-off-the-startup-path.md) has the full reasoning.
+
+Two things follow for a direct caller.
+
+**On the blocking stack, a replay failure moves.** It used to be thrown out of `subscribe(...)`. It is now rethrown
+from `waitUntilStarted()`, so a `try`/`catch` around `subscribe(...)` alone no longer catches anything, and the
+projection behind it starts silently empty. Move the handling to the wait:
+
+```java
+// Before
+try {
+    catchupModel.subscribe("orders", this::updateOrderView);
+} catch (RuntimeException e) {
+    // react to the replay failure
+}
+```
+
+```java
+// After
+Subscription subscription = catchupModel.subscribe("orders", this::updateOrderView);
+try {
+    subscription.waitUntilStarted();
+} catch (RuntimeException e) {
+    // react to the replay failure
+}
+```
+
+The wait tells the outcomes apart. An exception means the replay failed, `false` means the model was stopped (or that
+the timeout expired, if you passed one with `waitUntilStarted(Duration)`), and `true` means the projection is caught up
+and live. After a failure the subscription's
+registration on the live feed has been released, so it receives nothing until you subscribe it again, and that fresh
+`subscribe(...)` replays the whole history, because nothing was recorded as caught up.
+
+**On both stacks, the state is not there yet when `subscribe(...)` returns.** Code that read the projected state
+straight after subscribing was reading a finished replay before and is racing one now. Call `waitUntilStarted()` first
+on the blocking stack, and on the reactor stack compose the returned subscription's `waitUntilStarted()` `Mono` before
+whatever reads the state. The reactor failure path is not new, it always arrived through that `Mono`, but the inline
+replay meant the state happened to be complete by the time you could ask, which is exactly the kind of accident this
+change removes.

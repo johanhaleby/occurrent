@@ -236,20 +236,34 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      * The capability-agnostic subscription DSL, used by the {@code @Subscription} annotation. On a store with both the
      * {@code STREAM} and {@code DCB} capabilities it delivers both stream-written and DCB-appended events, filtered only
      * by event type.
+     * <p>
+     * Resolved through {@link #occurrentAsynchronousSubscribable(ApplicationContext)} rather than injected by type: a
+     * {@code Subscribable} parameter would also match the register-only {@link SynchronousSubscriptionModel}, which is
+     * ambiguous the moment an application supplies its own asynchronous model without marking it {@code @Primary} (see
+     * {@link AsynchronousSubscribables}).
      */
     @Bean
     @Primary
     @ConditionalOnMissingBean(Subscriptions.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public Subscriptions<E> occurrentSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
-        return new Subscriptions<>(subscribable, cloudEventConverter);
+    public Subscriptions<E> occurrentSubscriptions(ApplicationContext applicationContext, CloudEventConverter<E> cloudEventConverter) {
+        return new Subscriptions<>(occurrentAsynchronousSubscribable(applicationContext), cloudEventConverter);
     }
 
+    /**
+     * The stream subscription DSL, used by the {@code @StreamSubscription} annotation. See
+     * {@link #occurrentSubscriptions(ApplicationContext, CloudEventConverter)} for why the asynchronous model is
+     * resolved rather than injected by type.
+     */
     @Bean
     @ConditionalOnMissingBean(StreamSubscriptions.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public StreamSubscriptions<E> occurrentStreamSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
-        return new StreamSubscriptions<>(subscribable, cloudEventConverter);
+    public StreamSubscriptions<E> occurrentStreamSubscriptions(ApplicationContext applicationContext, CloudEventConverter<E> cloudEventConverter) {
+        return new StreamSubscriptions<>(occurrentAsynchronousSubscribable(applicationContext), cloudEventConverter);
+    }
+
+    private static Subscribable occurrentAsynchronousSubscribable(ApplicationContext applicationContext) {
+        return AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class);
     }
 
     /**
