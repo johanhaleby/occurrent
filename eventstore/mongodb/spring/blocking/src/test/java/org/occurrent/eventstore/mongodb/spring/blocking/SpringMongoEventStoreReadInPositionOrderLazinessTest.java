@@ -26,6 +26,7 @@ import com.mongodb.event.CommandSucceededEvent;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -77,7 +78,9 @@ class SpringMongoEventStoreReadInPositionOrderLazinessTest {
     private static final URI SOURCE = URI.create("urn:test");
     private static final String EVENT_COLLECTION = "events";
     private static final int STREAMS = 5;
-    private static final int EVENTS_PER_STREAM = 100;
+    // Well above the server's first-batch document cap (101 for a plain find), so the property holds regardless of
+    // how a future driver or server version sizes its default batch.
+    private static final int EVENTS_PER_STREAM = 400;
     private static final int TOTAL_EVENTS = STREAMS * EVENTS_PER_STREAM;
 
     @Container
@@ -89,12 +92,13 @@ class SpringMongoEventStoreReadInPositionOrderLazinessTest {
 
     private final CursorTraffic cursorTraffic = new CursorTraffic(EVENT_COLLECTION);
 
+    private MongoClient mongoClient;
     private SpringMongoEventStore eventStore;
 
     @BeforeEach
     void create_event_store_with_a_history_worth_paging() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".position_order_laziness");
-        MongoClient mongoClient = MongoClients.create(MongoClientSettings.builder()
+        mongoClient = MongoClients.create(MongoClientSettings.builder()
                 .applyConnectionString(connectionString)
                 .addCommandListener(cursorTraffic)
                 .build());
@@ -110,6 +114,11 @@ class SpringMongoEventStoreReadInPositionOrderLazinessTest {
 
         IntStream.range(0, STREAMS).forEach(stream -> eventStore.write("stream:" + stream, WriteCondition.anyStreamVersion(),
                 IntStream.range(0, EVENTS_PER_STREAM).mapToObj(__ -> event("NameDefined")).toList()));
+    }
+
+    @AfterEach
+    void close_mongo_client() {
+        mongoClient.close();
     }
 
     @Test
