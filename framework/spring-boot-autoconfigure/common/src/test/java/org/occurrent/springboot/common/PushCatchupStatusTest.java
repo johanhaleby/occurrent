@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class PushCatchupStatusTest {
 
-    private final PushCatchupStatus status = new PushCatchupStatus();
+    private final PushCatchupStatusImpl status = new PushCatchupStatusImpl();
 
     @Nested
     class An_id_backed_by_a_subscription_model {
@@ -113,6 +113,26 @@ class PushCatchupStatusTest {
             // flight live.
             status.register("orders", () -> true, () -> true);
 
+            assertThat(status.of("orders")).isEqualTo(new CatchingUp("orders"));
+        }
+    }
+
+    @Nested
+    class A_duplicate_registration {
+
+        @Test
+        void is_refused_rather_than_replacing_the_first() {
+            // The load-bearing case for a dual-stack context: the blocking and reactor post-processors each keep
+            // their own id set, so nothing but this check stops both from registering the same id against the one
+            // PushCatchupStatus bean they share, which would otherwise answer of(id) for whichever registered last
+            // while the other kept running unreported.
+            status.register("orders", () -> true, () -> true);
+
+            assertThatThrownBy(() -> status.register("orders", () -> false, () -> false))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("orders");
+
+            // The first registration is untouched.
             assertThat(status.of("orders")).isEqualTo(new CatchingUp("orders"));
         }
     }

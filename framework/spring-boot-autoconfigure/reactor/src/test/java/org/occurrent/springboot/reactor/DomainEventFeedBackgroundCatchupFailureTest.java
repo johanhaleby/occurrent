@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.PushCatchupStatus;
+import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -90,8 +91,8 @@ class DomainEventFeedBackgroundCatchupFailureTest {
     static class FailingDomainFeedConfiguration {
 
         @Bean
-        PushCatchupStatus pushCatchupStatus() {
-            return new PushCatchupStatus();
+        PushCatchupStatusImpl pushCatchupStatus() {
+            return new PushCatchupStatusImpl();
         }
 
         // A DomainEventFeed is not itself a Subscribable, unlike PushSubscriptionModel, so without this bean
