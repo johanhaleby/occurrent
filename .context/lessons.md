@@ -33,6 +33,13 @@
   returned a false negative and the conclusion "no orchestrator skill" was acted on for a whole dispatch round.
   Before asserting a skill or file does not exist, list the parent directory. The user naming a thing is a strong
   prior that it exists.
+- A fleet sweep tracks UNITS, not PRs (2026-08-07 correction). A unit whose current deliverable has no
+  open PR (a second PR owed, an unconcluded planning round) drops out of PR-keyed monitoring exactly when
+  it needs watching, so C1 sat idle 13 hours with an undelivered half and no tick flagged it. Every open
+  unit gets a state line in every tick summary, and idle-with-obligation triggers the no-progress read.
+  Also from the same correction: side effects issued in a tick (reruns, merges) are verified to have
+  taken before the tick ends, or named as unverified, since a rerun can race the very merge that was
+  meant to fix its base (72 seconds, #597 vs #595).
 - Coordination cadences are derived, not hardcoded (2026-08-06 correction). A tick interval written as a
   constant should instead be recomputed at every re-arm from the dominant wait class, the way pr-fix paces
   its polls: ci-wait paced on observed check durations with a ~3x stuck threshold, worker-wait and
