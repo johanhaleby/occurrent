@@ -1,7 +1,7 @@
 schema_version: 1
 epic: archrev
-revision: 1
-updated_at: '2026-08-07T15:10:00+00:00'
+revision: 2
+updated_at: '2026-08-07T15:35:00+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (epic registration)
 baseline:
   repo: johanhaleby/occurrent
@@ -86,14 +86,14 @@ units:
   T4:
     issue: 619
     goal: DataFieldReader SPI window (bulk-read shape or written no-change conclusion)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 626
       met: false
       evidence: null
     - check: issue_closed
@@ -101,11 +101,17 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: spawn chip (Sonnet/medium)
-    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
-    observed: {}
-    assessment: SPI unreleased until the tag, widening free now; a written no-change
-      conclusion also satisfies the unit
+    next_action: CAS-merge PR 626 on green with threads handled
+    last_meaningful_progress_at: '2026-08-07T15:35:00+00:00'
+    observed:
+      pr_626:
+        head: e9ad6eaae
+        rollup: 26 checks spawning
+        mergeable: MERGEABLE
+        via: gh pr view + monitor
+        at: '2026-08-07T15:35:00+00:00'
+    assessment: chose outcome (a), the default readAll widening; delivered within
+      minutes of the chip click
   T5:
     issue: 620
     goal: PushCatchupStatus hardening (duplicate rejection + read/recorder split)
