@@ -243,7 +243,7 @@ class NamedCatchupPathTest {
     }
 
     @Test
-    void cancelling_mid_replay_leaves_the_wrapped_model_untouched_and_reports_started() throws Exception {
+    void cancelling_mid_replay_leaves_the_wrapped_model_untouched_and_fails_the_started_signal() throws Exception {
         publish("e1", "e2", "e3");
         List<String> delivered = new CopyOnWriteArrayList<>();
         CountDownLatch firstReplayedEventReached = new CountDownLatch(1);
@@ -263,8 +263,12 @@ class NamedCatchupPathTest {
         cancelled.countDown();
 
         // The id never reached the wrapped model, so it must not know it; and per the blocking contract
-        // (CancelledSubscription), waiting on a cancelled catch-up completes successfully: nothing left to start.
-        subscription.waitUntilStarted().block(TIMEOUT);
+        // (CancelledSubscription answers false), the started signal errors rather than completing, since nothing here
+        // ever started, and completing would have claimed otherwise.
+        assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(streamId)
+                .hasMessageContaining("was cancelled before it started");
         await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                 assertThat(mongoModel.subscriptionIds()).doesNotContain(streamId));
     }

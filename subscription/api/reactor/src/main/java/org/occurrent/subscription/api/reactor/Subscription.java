@@ -42,6 +42,18 @@ public interface Subscription {
     String id();
 
     /**
+     * This handle answers for the one start it was created for, and it completes once nothing further is required of
+     * you for the subscription to deliver. That is not a claim about the present moment. A subscription that has
+     * started can afterwards be paused or stopped, and this stays completed. Ask the subscription model's
+     * {@code isRunning(id)} and {@code isPaused(id)} about the present.
+     * <p>
+     * A subscription you still have to start yourself has not started, so this does not complete. That covers one
+     * registered while its model was stopped, one whose replay was parked because the model was not running, and a
+     * replay that {@code stop()} interrupted. Unlike the blocking stack, a parked replay that a later
+     * {@code start(..)} relaunches does complete here, because the relaunch runs through this same signal.
+     * <p>
+     * A start that failed and will not be retried errors the {@link Mono} rather than leaving it incomplete.
+     *
      * @return A {@link Mono} that completes once the subscription has started.
      */
     Mono<Void> waitUntilStarted();

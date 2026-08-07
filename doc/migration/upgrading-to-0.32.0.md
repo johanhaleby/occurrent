@@ -20,17 +20,18 @@ refuses to start. If you use a push source, read
 
 **At runtime**, if you feed a `DomainEventFeed` from your own listener, `accept(..)` now throws when no projection is
 registered instead of returning normally, so the message goes unacknowledged rather than being discarded. Read
-[section 11](#11-domaineventfeed-refuses-an-event-when-no-projection-is-registered).
+[section 12](#12-domaineventfeed-refuses-an-event-when-no-projection-is-registered).
 
-Eleven things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+Twelve things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
 `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
 first failing handler, the reactor subscription primitive was renamed, a durable reactor model refuses a composition it
 used to accept, a paused MongoDB subscription now delivers what was written while it was paused, a push catch-up
 replays on its own thread and no longer discards events after a failed replay,
 `NativeMongoLeaseCompetingConsumerStrategy` moved to the package every other native-driver subscription type uses,
-`CompetingConsumerSubscriptionModel` refuses two calls it used to accept, and a domain-event feed refuses an event when
-no projection is registered.
+`CompetingConsumerSubscriptionModel` refuses two calls it used to accept, a second `start()` is allowed while
+`waitUntilStarted` stops saying yes when it means no, and a domain-event feed refuses an event when no projection is
+registered.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -629,8 +630,75 @@ The reasoning, including why uniqueness is scoped to the instance rather than to
 behaviours were found by the subscription TCK, whose general subscription-model suite now runs against this model for
 the first time.
 
+## 11. `start()` twice is allowed, and `waitUntilStarted` stops saying yes when it means no
 
-## 11. `DomainEventFeed` refuses an event when no projection is registered
+No call shape changes here either, so there is no recipe. What changes is the answer you get back.
+
+### A second `start()` no longer throws
+
+```java
+model.start();
+model.start(); // used to be IllegalStateException on CompetingConsumerSubscriptionModel, now accepted
+```
+
+`CompetingConsumerSubscriptionModel` was the only subscription model on either stack that refused this, and it is the
+one the Spring Boot starter gives you by default, so the model most applications hold was the one with the odd answer.
+If you wrote a guard to work around it, you can drop it.
+
+```java
+if (!model.isRunning()) { // no longer needed
+    model.start();
+}
+```
+
+Starting a model is now a goal rather than a transition. `start(true)` leaves the model running with every subscription
+it can bring up brought up, including one you paused yourself with `pauseSubscription(id)`. If you were relying on a
+paused subscription surviving a `start()`, pause it again afterwards or use `start(false)` and resume by id.
+
+### `waitUntilStarted` answers `false` for a subscription that has not started
+
+Three released cases change, and all three used to answer `true` or hide a failure.
+
+```java
+pushModel.stop();
+Subscription subscription = pushModel.subscribe("my-projection", event -> ...);
+subscription.waitUntilStarted(ofSeconds(5)); // was true, now false
+```
+
+A `PushSubscriptionModel` or `SynchronousSubscriptionModel` that is stopped drops what it is handed rather than holding
+it, so a subscription registered on one has not started. Start the model, or take the handle `resumeSubscription(id)`
+gives you, which is the started one.
+
+```java
+Subscription subscription = catchupModel.subscribe("my-projection", event -> ...);
+subscription.waitUntilStarted(ofSeconds(5)); // a failed replay now throws instead of returning false
+```
+
+The blocking stream and DCB catch-up models used to log a failed replay at WARN and answer `false`, which meant an
+application that ignored the return value carried on with an empty read model and no trace of why. The failure now
+reaches you, the same way the push catch-up already reported it. If you call `waitUntilStarted` on one of those models,
+put it in a `try`/`catch` or let it stop your startup. The same handle also returns its delegate's answer now instead of
+a fixed `true`, so a delegate that did not start within your timeout is reported as `false`.
+
+A catch-up cancelled or shut down before it went live answers `false` rather than `true`, and on the reactive stack the
+`Mono` fails instead of completing.
+
+### What did not change
+
+A subscription that has started keeps answering `true` afterwards, even once it is paused, or stopped, or waiting for
+another node to release its competing consumer lock. That last one matters if you run competing consumers with
+`@Subscription(startupMode = WAIT_UNTIL_STARTED)`, because a node that has not won the lock still starts up rather than
+blocking. Use `isRunning(id)` and `isPaused(id)` when you want to know what is happening right now.
+
+### Why
+
+[ADR 105](../architecture/decisions/0105-starting-a-model-twice-is-allowed-and-a-subscription-that-has-not-started-says-so.md)
+has the reasoning, including why a lock-waiting competing consumer counts as started and a registration you still have
+to start yourself does not. `SubscriptionModelConformance` asserts the `start()` half, so every model has to agree on it
+now.
+
+
+## 12. `DomainEventFeed` refuses an event when no projection is registered
 
 Only relevant if you declare a `DomainEventFeed` bean and feed it from a listener yourself, on either stack.
 

@@ -142,6 +142,23 @@ class PushSubscriptionModelTest {
         StepVerifier.create(subscription.waitUntilStarted(Duration.ofSeconds(5))).expectNext(true).verifyComplete();
     }
 
+    @Test
+    void registering_on_a_stopped_model_answers_not_started_and_the_handle_from_resuming_it_answers_started() {
+        // RegisteringSubscribable has no background thread to wait for. Registering on a running model starts the
+        // subscription there and then, and registering on a stopped one leaves it paused, so the handle it returns
+        // must say so rather than claim success it has not delivered on yet.
+        PushSubscriptionModel model = new PushSubscriptionModel();
+        model.stop();
+
+        var registered = model.subscribe("sub", cloudEvent -> Mono.empty());
+
+        StepVerifier.create(registered.waitUntilStarted(Duration.ofMillis(50))).expectNext(false).verifyComplete();
+
+        var started = model.resumeSubscription("sub");
+
+        StepVerifier.create(started.waitUntilStarted()).verifyComplete();
+    }
+
     private static CloudEvent cloudEvent(String id, String type) {
         return CloudEventBuilder.v1()
                 .withId(id)

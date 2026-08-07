@@ -76,8 +76,6 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  *     may be several events behind the other at any moment. Only order within one subscription is a promise.</li>
  *     <li><strong>Order by the {@code position} extension.</strong> A position is reserved outside the write
  *     transaction, so a lower position can commit after a higher one. Arrival order is the promise, not position order.</li>
- *     <li><strong>That {@code start()} is idempotent.</strong> One model refuses a second {@code start()} and the rest
- *     accept it, and nothing says which is right.</li>
  *     <li><strong>At-least-once delivery, and resuming after a restart.</strong> Neither is a promise of this contract.
  *     Both need durable state that survives the model, which only some models have. {@link RestartConformance} covers
  *     them, and a model that cannot be rebuilt over the state it left behind declines it by not extending it.</li>
@@ -551,6 +549,41 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             publish(afterStart);
             assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
                     .as("starting a stopped model brings its subscriptions back")
+                    .containsExactly(afterStart.getId());
+        }
+
+        @Test
+        void start_on_a_model_that_is_already_started_is_accepted() {
+            String id = subscriptionId();
+            RecordedEvents recorded = subscribeAndWait(id);
+
+            subscriptionModel().start();
+
+            assertThat(subscriptionModel().isRunning()).isTrue();
+            CloudEvent afterStart = ConformanceEvents.event("1", "NameDefined");
+            publish(afterStart);
+            assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+                    .as("starting a model that is already started neither fails nor disturbs a running subscription")
+                    .containsExactly(afterStart.getId());
+        }
+
+        /**
+         * {@code start(true)} resumes all subscriptions, so it reaches one that was paused on its own and not by
+         * {@code stop()}. This is what makes {@code start()} safe for a caller that cannot see the current state.
+         */
+        @Test
+        void start_on_a_running_model_resumes_a_subscription_paused_on_its_own() {
+            String id = subscriptionId();
+            RecordedEvents recorded = subscribeAndWait(id);
+            subscriptionModel().pauseSubscription(id);
+
+            subscriptionModel().start();
+
+            assertThat(subscriptionModel().isRunning(id)).isTrue();
+            CloudEvent afterStart = ConformanceEvents.event("1", "NameDefined");
+            publish(afterStart);
+            assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+                    .as("the subscription delivers again after start() resumed it")
                     .containsExactly(afterStart.getId());
         }
 

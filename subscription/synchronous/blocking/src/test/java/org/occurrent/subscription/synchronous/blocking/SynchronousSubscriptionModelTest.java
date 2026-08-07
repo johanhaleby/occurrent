@@ -87,10 +87,14 @@ class SynchronousSubscriptionModelTest {
         List<String> received = new ArrayList<>();
 
         model.stop();
-        model.subscribe("registered-while-stopped", cloudEvent -> received.add(cloudEvent.getId()));
+        var registered = model.subscribe("registered-while-stopped", cloudEvent -> received.add(cloudEvent.getId()));
 
         assertThat(model.isPaused("registered-while-stopped")).isTrue();
-        model.resumeSubscription("registered-while-stopped");
+        assertThat(registered.waitUntilStarted(java.time.Duration.ofMillis(1)))
+                .as("nothing has started yet: the registration only reserved the id and left it paused")
+                .isFalse();
+        var started = model.resumeSubscription("registered-while-stopped");
+        assertThat(started.waitUntilStarted(java.time.Duration.ofMillis(1))).isTrue();
         model.dispatch(List.of(cloudEvent("1", "NameDefined")));
         assertThat(received).containsExactly("1");
     }
