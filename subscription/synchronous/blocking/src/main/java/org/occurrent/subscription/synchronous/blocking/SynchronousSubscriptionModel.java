@@ -22,7 +22,6 @@ import org.occurrent.application.service.blocking.SynchronousEventDispatcher;
 import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.List;
 import java.util.function.Consumer;
@@ -40,7 +39,7 @@ import java.util.function.Consumer;
  * every handler rather than stopping at the first failure, because nothing rolls back on that path.
  * <p>
  * Unlike the asynchronous {@code SubscriptionModel}s, this model has no start position, checkpoint, catch-up, or
- * replay. It only ever reacts to events fed to it here and now. It is a full {@link SubscriptionModel}, so
+ * replay. It only ever reacts to events fed to it here and now. It is a full {@link org.occurrent.subscription.api.blocking.SubscriptionModel}, so
  * stopping it, or pausing a subscription, drops rather than defers events that arrive in the meantime (ADR 85).
  * Dispatch happens inside the write, so a stopped model here still lets the write succeed. Only the projection
  * behind it does not run, so stopping subscriptions and then accepting traffic leaves writes landing with no

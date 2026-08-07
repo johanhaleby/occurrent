@@ -23,7 +23,6 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Pushable;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.function.Consumer;
 
@@ -48,7 +47,7 @@ import java.util.function.Consumer;
  * reconstruct it on the listener side.
  * <p>
  * Like {@code SynchronousSubscriptionModel}, it has no start position, checkpoint, catch-up, or replay. It only
- * ever reacts to events fed to it here and now. It is a full {@link SubscriptionModel}, so stopping it, or pausing
+ * ever reacts to events fed to it here and now. It is a full {@link org.occurrent.subscription.api.blocking.SubscriptionModel}, so stopping it, or pausing
  * a subscription, drops rather than defers events that arrive in the meantime (ADR 85). {@link #accept(CloudEvent)}
  * returns normally either way, so a listener that acknowledges on return acknowledges those events too, and
  * stopping this model while the push feed keeps running loses them for good. For catch-up from the event store
