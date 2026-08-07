@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 15
-updated_at: '2026-08-07T11:18:51+00:00'
+revision: 16
+updated_at: '2026-08-07T11:22:30+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
 baseline:
   repo: johanhaleby/occurrent
@@ -325,7 +325,7 @@ units:
   B2:
     issue: 587
     goal: payload-read short-circuit
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -339,11 +339,22 @@ units:
       ref: 587
       met: false
       evidence: null
-    blocking_on: []
-    next_action: working
+    blocking_on:
+    - what: 'second half (Map short-circuit) touches the read() method A5/#607 is
+        rewriting; parked per collision brief until #607 merges'
+      since: '2026-08-07T09:11:00+00:00'
+      recheck_after: 'on #607 merge (monitor event)'
+    next_action: 'on #607 merge: session rebases, finishes Map short-circuit, opens
+      single PR'
     last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
-    observed: {}
-    assessment: ''
+    observed:
+      branch:
+        ref: worktree-apirev-b2-587
+        pushed: aa6b9af4b
+        half_done: streaming parser, 5-6x alloc win, JMH baseline for Mongo shape
+        via: session tail read
+        at: '2026-08-07T11:22:30+00:00'
+    assessment: healthy deliberate park at the collision boundary, exactly per brief
   B3:
     issue: 588
     goal: handover lock measurement
