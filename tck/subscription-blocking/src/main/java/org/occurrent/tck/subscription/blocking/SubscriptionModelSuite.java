@@ -24,6 +24,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.FailureNamesTheTestClass;
 
+import java.time.Duration;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -58,8 +60,19 @@ abstract class SubscriptionModelSuite {
         // rather than halfway through a test that looks like a delivery failure.
         requireNonNull(created.subscriptionModel(),
                 created.getClass().getName() + " returned null from subscriptionModel()");
+        checkDeliveryTimeout(created);
         checkFixtureCanAnswerThisSuite(created);
         this.fixture = created;
+    }
+
+    private static void checkDeliveryTimeout(SubscriptionModelFixture fixture) {
+        Duration declared = requireNonNull(fixture.deliveryTimeout(),
+                fixture.getClass().getName() + " returned null from deliveryTimeout()");
+        if (declared.isZero() || declared.isNegative()) {
+            throw new IllegalArgumentException(fixture.getClass().getName() + " declared a deliveryTimeout() of "
+                    + declared + ". Every wait in these suites is bounded by it, so a budget that is not positive "
+                    + "makes each of them give up before looking.");
+        }
     }
 
     @AfterEach
@@ -83,5 +96,16 @@ abstract class SubscriptionModelSuite {
 
     protected final SubscriptionModel subscriptionModel() {
         return fixture().subscriptionModel();
+    }
+
+    /**
+     * The budget every wait in every suite here is given, as {@link SubscriptionModelFixture#deliveryTimeout()}
+     * declares it. Checked for null and positive before the first assertion.
+     * <p>
+     * It lives here rather than as a constant on one suite because five suites wait on it and three of them used to
+     * reach across to a constant on a fourth to get at it.
+     */
+    protected final Duration deliveryTimeout() {
+        return fixture().deliveryTimeout();
     }
 }

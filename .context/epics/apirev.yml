@@ -1,13 +1,14 @@
 schema_version: 1
 epic: apirev
-revision: 10
-updated_at: '2026-08-07T08:42:14+00:00'
+revision: 13
+updated_at: '2026-08-07T09:38:54+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
-authority: see .context/orchestrator-policy.yml (standing merge, sibling leniency,
-  reasoned-decline-open; granted 2026-08-06/07); prose history in ORCHESTRATOR.md
+authority: 'see .context/orchestrator-policy.yml (standing merge, sibling leniency,
+  reasoned-decline-open; granted 2026-08-06/07); prose history in ORCHESTRATOR.md;
+  spun-off adoption is the epic default (granted 2026-08-07, structured ask on #604)'
 milestone: 1
 pending_actions:
 - id: act-020
@@ -138,7 +139,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 608
       met: false
       evidence: null
     - check: issue_closed
@@ -146,10 +147,15 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip spawned (task_cf3a9a18, Opus/high) - decision dependency met,
-      PR-merge dependency tracked via depends_on
-    last_meaningful_progress_at: null
-    observed: {}
+    next_action: merge on green (planning gate concluded in-session)
+    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    observed:
+      pr_608:
+        head: 5b8a7d6a8
+        rollup: 2 green 1 queued
+        threads_open: 0
+        via: gh pr list + graphql
+        at: '2026-08-07T09:38:54+00:00'
     assessment: ''
   A5:
     issue: 582
@@ -163,7 +169,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 607
       met: false
       evidence: null
     - check: issue_closed
@@ -171,9 +177,15 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip spawned (task_66486ded, Sonnet/high) with in-flight #603 warning'
-    last_meaningful_progress_at: null
-    observed: {}
+    next_action: merge on green; 1 thread to watch
+    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    observed:
+      pr_607:
+        head: ef67ee312
+        rollup: 6 green 20 queued
+        threads_open: 1
+        via: gh pr list + graphql
+        at: '2026-08-07T09:38:54+00:00'
     assessment: ''
   A6:
     issue: 583
@@ -194,7 +206,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch after A4's planning round (one round at a time)
+    next_action: chip spawned (task_725759fd, Opus/medium)
     last_meaningful_progress_at: null
     observed: {}
     assessment: ''
@@ -304,11 +316,11 @@ units:
   B2:
     issue: 587
     goal: payload-read short-circuit
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_8347fd08-d21f-424f-9fb6-f48c63fc13b6
     deliverables:
     - check: pr_merged
       ref: null
@@ -319,21 +331,21 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip anytime (Wave B trails the tag)
-    last_meaningful_progress_at: null
+    next_action: working
+    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
     observed: {}
     assessment: ''
   B3:
     issue: 588
     goal: handover lock measurement
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_0c9bd4c6-1b76-4abf-af82-506f449fce32
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 606
       met: false
       evidence: null
     - check: issue_closed
@@ -341,18 +353,25 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip anytime; measure before deciding
-    last_meaningful_progress_at: null
-    observed: {}
+    next_action: merge on green; VERIFY at merge time that the concurrency-contract
+      ADR came with the fix and Johan approved the contract change in-session
+    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    observed:
+      pr_606:
+        head: 3263095b9
+        rollup: 2 green 5 queued
+        threads_open: 1
+        via: gh pr list + graphql
+        at: '2026-08-07T09:38:54+00:00'
     assessment: ''
   B4:
     issue: 589
     goal: replay observability
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_19e7ff47-f894-49f8-a06a-5f4418900184
     deliverables:
     - check: pr_merged
       ref: null
@@ -363,31 +382,38 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip anytime
-    last_meaningful_progress_at: null
+    next_action: working
+    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
     observed: {}
     assessment: ''
   B5:
     issue: 590
     goal: parity and hygiene sweep
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 605
+      met: true
+      evidence: CAS-MERGED 2026-08-07T09:38:54+00:00 at 8c8b96a1e, 26/26 green, 0
+        threads
     - check: issue_closed
       ref: 590
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #590'
     blocking_on: []
-    next_action: chip anytime
-    last_meaningful_progress_at: null
-    observed: {}
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    observed:
+      pr_605:
+        head: 8c8b96a1e
+        rollup: 2 green, 2 running
+        threads_open: 0
+        via: gh pr list + graphql
+        at: '2026-08-07T09:11:26+00:00'
     assessment: ''
   C1:
     issue: 591
@@ -451,3 +477,32 @@ units:
         via: gh pr list + graphql
         at: '2026-08-07T07:17:50+00:00'
     assessment: adopted by Johan via structured ask 2026-08-07; issue number pending
+  C2:
+    issue: null
+    goal: stale no-lifecycle javadoc fix (adopted spin-off)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_a083cdac-7324-4193-ac1e-7b50fc3f8dd3
+    deliverables:
+    - check: pr_merged
+      ref: 604
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: session files issue + handles 1 thread; markdown-only so no checks;
+      merge on threads-handled
+    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
+    observed:
+      pr_604:
+        head: c14ebe73e
+        rollup: no checks (markdown-only, by design)
+        threads_open: 1
+        via: gh pr list + graphql
+        at: '2026-08-07T09:11:26+00:00'
+    assessment: adopted 2026-08-07; third spin-off, adoption now epic default

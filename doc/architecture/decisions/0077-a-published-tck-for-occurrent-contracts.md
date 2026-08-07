@@ -211,3 +211,12 @@ four models under-tested indefinitely.
 The anti-silent-skip rules mean a missing suite subclass is discoverable by grep rather than by a
 green build that quietly tested nothing, and any behavioral divergence the suites find is routed to
 #396 as an issue rather than papered over in the shared assertion.
+
+> **Amended on 2026-08-07 by [ADR 107](0107-what-a-tck-version-promises.md).** This ADR decided that the TCK is a
+> published artifact and settled its layout, naming, publishing and anti-skip rules, and said nothing about what a
+> version of it promises, which is the first question a downstream implementer asks of any published artifact. ADR 107
+> answers it while the answer is still free, before the first tag that carries these modules. A minor may add suites
+> and tighten assertions, the fixture SPI does not break at source level in a minor, there are no `@since` tags, and
+> rules (b) and (d) above stay the whole of the skip story rather than being softened into a hatch. It also makes a
+> suite's wait budget something the fixture declares, which supersedes the "fixture-supplied multiplier" this ADR
+> sketched in the async-waiting paragraph and ADR 94 never built.

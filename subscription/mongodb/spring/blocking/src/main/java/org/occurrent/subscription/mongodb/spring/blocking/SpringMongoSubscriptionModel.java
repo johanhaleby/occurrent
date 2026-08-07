@@ -60,6 +60,7 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Objects;
 import java.util.Set;
 import java.util.StringJoiner;
@@ -375,7 +376,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         if (!shutdown) {
             messageListenerContainer.start();
             if (resumeSubscriptionsAutomatically) {
-                pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId).waitUntilStarted());
+                // Snapshot the keys before iterating: resumeSubscription moves each id out of pausedSubscriptions as it
+                // goes, and forEach over a map that its own callback mutates can visit an entry that has already
+                // moved, or miss one that has not. Mirrors the reactor twin.
+                new ArrayList<>(pausedSubscriptions.keySet()).forEach(subscriptionId -> resumeSubscription(subscriptionId).waitUntilStarted());
             }
         }
     }
@@ -384,7 +388,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     public synchronized void stop() {
         logDebug("Stopping subscription model (shutdown={})", shutdown);
         if (!shutdown) {
-            runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
+            // Snapshot the keys before iterating: pauseSubscription moves each id from runningSubscriptions to
+            // pausedSubscriptions as it goes, and forEach over a map that its own callback mutates can visit an entry
+            // that has already moved, or miss one that has not. Mirrors the reactor twin.
+            new ArrayList<>(runningSubscriptions.keySet()).forEach(this::pauseSubscription);
             stopMessageListenerContainer();
         }
     }
