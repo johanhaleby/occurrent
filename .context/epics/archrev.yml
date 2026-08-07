@@ -1,7 +1,7 @@
 schema_version: 1
 epic: archrev
-revision: 3
-updated_at: '2026-08-07T15:55:00+00:00'
+revision: 4
+updated_at: '2026-08-07T16:10:00+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (epic registration)
 baseline:
   repo: johanhaleby/occurrent
@@ -17,14 +17,14 @@ units:
     issue: 616
     goal: projection materializer safety (RetryStrategy seam, migration-guide fix,
       lost-update regression test)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 628
       met: false
       evidence: null
     - check: issue_closed
@@ -32,7 +32,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: spawn chip (Opus/high, plan-first with downshift)
+    next_action: CAS-merge PR 628 on green with threads handled
     last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
     observed: {}
     assessment: 'verified: hazard reachable since ADR 108, materializer shipped racy
@@ -64,14 +64,14 @@ units:
   T3:
     issue: 618
     goal: reactive metadata overloads (2 Java + 2 Kotlin delegations)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 627
       met: false
       evidence: null
     - check: issue_closed
@@ -79,7 +79,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: spawn chip (Sonnet/medium)
+    next_action: CAS-merge PR 627 on green with threads handled
     last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
     observed: {}
     assessment: additive, private path exists, DCB sibling is the template
