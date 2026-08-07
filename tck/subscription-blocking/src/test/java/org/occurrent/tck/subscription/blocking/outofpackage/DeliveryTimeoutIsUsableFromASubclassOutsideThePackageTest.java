@@ -26,6 +26,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
+import org.occurrent.tck.subscription.blocking.WorkingSubscriptionModel;
 
 import java.time.Duration;
 import java.util.List;
@@ -40,9 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the declaring package, so this class lives in a different package on purpose and calls all three from its own
  * body.
  * <p>
- * It also extends {@link SubscriptionModelConformance} for real, so the whole 24 test suite runs here as an ordinary
- * Surefire test against {@link OutOfPackageWorkingSubscriptionModel}, a model written in this package rather than the
- * package private {@code WorkingSubscriptionModel}. A class that merely compiled would prove the access is legal.
+ * It also extends {@link SubscriptionModelConformance} for real, so the whole suite runs here as an ordinary Surefire
+ * test against {@link WorkingSubscriptionModel}. A class that merely compiled would prove the access is legal.
  * Running the whole suite green proves it is usable, so an implementer outside
  * {@code org.occurrent.tck.subscription.blocking} can satisfy the conformance suite using only what this package can
  * see.
@@ -76,7 +76,7 @@ class DeliveryTimeoutIsUsableFromASubclassOutsideThePackageTest extends Subscrip
 
         static final Duration DELIVERY_TIMEOUT = Duration.ofSeconds(5);
 
-        private final OutOfPackageWorkingSubscriptionModel model = new OutOfPackageWorkingSubscriptionModel();
+        private final WorkingSubscriptionModel model = new WorkingSubscriptionModel();
 
         @Override
         public SubscriptionModel subscriptionModel() {

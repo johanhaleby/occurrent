@@ -46,7 +46,7 @@ import java.util.function.Predicate;
  * exercises those two branches of the fixture's declarations. The opposite branches are exercised by Occurrent's own
  * models.
  */
-class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, CheckpointAwareSubscriptionModel {
+public class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, CheckpointAwareSubscriptionModel {
 
     private final Map<String, Registration> registrations = new ConcurrentHashMap<>();
     private final Set<String> paused = ConcurrentHashMap.newKeySet();
@@ -54,7 +54,7 @@ class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubsc
 
     private volatile boolean running = true;
 
-    WorkingSubscriptionModel() {
+    public WorkingSubscriptionModel() {
         this(Duration.ZERO);
     }
 
@@ -65,7 +65,7 @@ class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubsc
      *                      model: with no delay a pool thread sometimes finishes before the assertion reads the list,
      *                      and that run would pass by luck every so often.
      */
-    WorkingSubscriptionModel(Duration deliveryDelay) {
+    public WorkingSubscriptionModel(Duration deliveryDelay) {
         this.deliveryDelay = deliveryDelay;
     }
 
@@ -102,7 +102,7 @@ class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubsc
      * order assertion about one time in ten. Every real model has one cursor or one queue per subscription, so a double
      * that fans out per event is the wrong shape rather than merely unlucky.
      */
-    void feed(List<CloudEvent> cloudEvents) {
+    public void feed(List<CloudEvent> cloudEvents) {
         if (!running) {
             return;
         }
