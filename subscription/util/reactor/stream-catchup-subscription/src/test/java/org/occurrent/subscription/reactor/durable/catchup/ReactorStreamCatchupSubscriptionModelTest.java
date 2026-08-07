@@ -27,12 +27,41 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorStreamCatchupSubscriptionModelTest {
+
+    @Test
+    void cancelling_a_named_subscription_before_its_replay_hands_over_fails_the_started_signal_instead_of_completing_it() {
+        NamedRecordingSubscriptionModel wrapped = new NamedRecordingSubscriptionModel();
+        // The reader never finishes its first window, so the replay is still in flight (no handover) when cancel()
+        // runs below, which is exactly the race NamedCatchupSupport.cancelSubscription's "not yet handed over" branch covers.
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new StuckPositionOrderedReader());
+
+        Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
+        catchup.cancelSubscription("sub");
+
+        StepVerifier.create(subscription.waitUntilStarted())
+                .verifyErrorSatisfies(throwable -> assertThat(throwable)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("sub")
+                        .hasMessageContaining("was cancelled before it started"));
+        assertThat(wrapped.subscribeCalls)
+                .as("the id never reached the wrapped model, so cancelling here must not either")
+                .isEmpty();
+    }
 
     @Test
     void a_replay_start_fails_loudly_when_the_model_reports_no_resume_token() {
@@ -115,6 +144,98 @@ class ReactorStreamCatchupSubscriptionModelTest {
         @Override
         public boolean writesPosition() {
             return true;
+        }
+    }
+
+    // Head sits ahead of the replay's start position, so there is a window to read, and that window never completes:
+    // Flux.never() registers a subscriber and then neither emits nor terminates. subscribe() itself still returns
+    // immediately (registering a subscriber is not blocking), so the calling thread is never stuck, and the replay
+    // is simply left in flight, exactly as if a slow store had not answered the first page yet.
+    private static final class StuckPositionOrderedReader implements PositionOrderedReader {
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            return Flux.never();
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return Mono.just(10L);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
+    }
+
+    // A named subscription model with a resolvable checkpoint, so a catch-up wrapping it can capture a live token
+    // and start replaying. Records every named subscribe/cancel it is asked to do, so a test can assert the wrapped
+    // model was never told about a subscription whose replay never handed over.
+    private static final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
+        final List<String> subscribeCalls = new CopyOnWriteArrayList<>();
+        final List<String> cancelCalls = new CopyOnWriteArrayList<>();
+
+        @Override
+        public Mono<Checkpoint> globalCheckpoint() {
+            return Mono.just(new StringBasedCheckpoint("token"));
+        }
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            return Flux.error(new AssertionError("The cold primitive must not be used by the named catch-up path"));
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            subscribeCalls.add(subscriptionId);
+            return new Subscription() {
+                @Override
+                public String id() {
+                    return subscriptionId;
+                }
+
+                @Override
+                public Mono<Void> waitUntilStarted() {
+                    return Mono.empty();
+                }
+            };
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            cancelCalls.add(subscriptionId);
+        }
+
+        @Override
+        public void stop() {
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+        }
+
+        @Override
+        public boolean isRunning() {
+            return false;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            throw new AssertionError("resumeSubscription must not be called in this test");
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
         }
     }
 }

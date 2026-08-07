@@ -35,6 +35,9 @@ public interface Subscription {
 
     /**
      * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started.
+     * <p>
+     * This overload waits forever and throws away the answer, so a subscription that never started looks exactly like
+     * one that did. Use {@link #waitUntilStarted(Duration)} when you need to know which happened.
      */
     default void waitUntilStarted() {
         waitUntilStarted(ChronoUnit.FOREVER.getDuration());
@@ -43,6 +46,17 @@ public interface Subscription {
     /**
      * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started or
      * {@link Duration timeout} exceeds.
+     * <p>
+     * This handle answers for the one start it was created for, and it reports started once nothing further is
+     * required of you for the subscription to deliver. That is not a claim about the present moment. A subscription
+     * that has started can afterwards be paused, be stopped, or be waiting for another node to release a competing
+     * consumer lock, and this keeps answering {@code true}. Ask the subscription model's {@code isRunning(id)} and
+     * {@code isPaused(id)} about the present.
+     * <p>
+     * A subscription you still have to start yourself has not started, so it answers {@code false}. That covers one
+     * registered while its model was stopped, one withheld under {@code occurrent.subscription.mode=manual}, and a
+     * catch-up replay that {@code stop()} interrupted. A start that failed and will not be retried throws rather than
+     * answering.
      *
      * @param timeout must not be <code>null</code>
      * @return <code>true</code> if the subscription was started within the given Duration, <code>false</code> otherwise.

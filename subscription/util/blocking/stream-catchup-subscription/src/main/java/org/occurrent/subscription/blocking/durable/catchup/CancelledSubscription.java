@@ -23,7 +23,8 @@ import java.time.Duration;
 
 /**
  * A {@link Subscription} handle for a catch-up that was cancelled or shut down before it could hand over to the
- * live delegate. {@link #waitUntilStarted(Duration)} is a no-op success since there is nothing left to start.
+ * live delegate. {@link #waitUntilStarted(Duration)} answers {@code false}, since this subscription never started and
+ * nothing will start it.
  */
 @NullMarked
 record CancelledSubscription(String subscriptionId) implements Subscription {
@@ -35,6 +36,6 @@ record CancelledSubscription(String subscriptionId) implements Subscription {
 
     @Override
     public boolean waitUntilStarted(Duration timeout) {
-        return true;
+        return false;
     }
 }
