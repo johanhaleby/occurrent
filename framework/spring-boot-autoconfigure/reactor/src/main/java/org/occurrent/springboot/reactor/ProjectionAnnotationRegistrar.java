@@ -272,12 +272,13 @@ class ProjectionAnnotationRegistrar {
             pushModels.add(model);
             // Asked rather than recorded, so a model that is stopped and started again, replaying a second time,
             // reports catching up again instead of staying at whatever it reached the first time.
-            withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id)));
+            withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
             subscribable = model;
         } else {
-            // catchup = NONE has no history to replay, so it is live from the start. Leaving it unknown would make a
-            // readiness probe useless for exactly the projection that is always ready.
-            withPushCatchupStatus(status -> status.recordLive(id));
+            // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because
+            // occurrent.subscription.mode = manual defers the subscription, and a recorded Live would tell a readiness
+            // probe that a projection nobody has started yet is ready to serve.
+            withPushCatchupStatus(status -> status.register(id, () -> false, () -> pushModel.isRunning(id)));
             subscribable = pushModel;
         }
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;

@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.springboot.common.PushCatchupStatus.CatchingUp;
 import org.occurrent.springboot.common.PushCatchupStatus.Failed;
 import org.occurrent.springboot.common.PushCatchupStatus.Live;
+import org.occurrent.springboot.common.PushCatchupStatus.NotStarted;
 import org.occurrent.springboot.common.PushCatchupStatus.Unknown;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,7 +42,7 @@ class PushCatchupStatusTest {
         @Test
         void is_catching_up_while_the_model_says_its_replay_is_in_flight() {
             AtomicBoolean replaying = new AtomicBoolean(true);
-            status.register("orders", replaying::get);
+            status.register("orders", replaying::get, () -> true);
 
             assertThat(status.of("orders")).isEqualTo(new CatchingUp("orders"));
             assertThat(status.isCaughtUp("orders")).isFalse();
@@ -50,7 +51,7 @@ class PushCatchupStatusTest {
         @Test
         void is_live_once_the_model_says_the_replay_handed_over() {
             AtomicBoolean replaying = new AtomicBoolean(true);
-            status.register("orders", replaying::get);
+            status.register("orders", replaying::get, () -> true);
 
             replaying.set(false);
 
@@ -61,12 +62,56 @@ class PushCatchupStatusTest {
         @Test
         void reports_catching_up_again_when_the_model_replays_a_second_time() {
             AtomicBoolean replaying = new AtomicBoolean(true);
-            status.register("orders", replaying::get);
+            status.register("orders", replaying::get, () -> true);
             replaying.set(false);
 
             // What a stop() followed by start(true) does: the model relaunches the replay. Derived rather than
             // recorded is what makes this readable at all, since nothing tells this bean the replay restarted.
             replaying.set(true);
+
+            assertThat(status.of("orders")).isEqualTo(new CatchingUp("orders"));
+        }
+    }
+
+    @Nested
+    class An_id_whose_subscription_has_not_started {
+
+        @Test
+        void is_not_started_rather_than_live() {
+            // What occurrent.subscription.mode = manual leaves a push projection as. Nothing is replaying, so asking
+            // isCatchingUp alone would report it live and tell a readiness probe it is ready to serve.
+            status.register("orders", () -> false, () -> false);
+
+            assertThat(status.of("orders")).isEqualTo(new NotStarted("orders"));
+            assertThat(status.isCaughtUp("orders")).isFalse();
+        }
+
+        @Test
+        void becomes_live_once_the_application_starts_it() {
+            AtomicBoolean running = new AtomicBoolean(false);
+            status.register("orders", () -> false, running::get);
+
+            running.set(true);
+
+            assertThat(status.of("orders")).isEqualTo(new Live("orders"));
+        }
+
+        @Test
+        void goes_back_to_not_started_when_the_model_is_stopped() {
+            AtomicBoolean running = new AtomicBoolean(true);
+            status.register("orders", () -> false, running::get);
+
+            running.set(false);
+
+            assertThat(status.of("orders")).isEqualTo(new NotStarted("orders"));
+            assertThat(status.isCaughtUp("orders")).isFalse();
+        }
+
+        @Test
+        void is_still_catching_up_while_replaying_even_though_a_replay_also_reports_running() {
+            // A model reports a replay as running, so resolving running before catching up would call a replay in
+            // flight live.
+            status.register("orders", () -> true, () -> true);
 
             assertThat(status.of("orders")).isEqualTo(new CatchingUp("orders"));
         }
@@ -104,7 +149,7 @@ class PushCatchupStatusTest {
         void wins_over_what_the_model_would_say() {
             // The load-bearing case. A model forgets a replay that failed, so its isCatchingUp answers false
             // afterwards, and resolving the model first would report a broken projection as ready to serve.
-            status.register("orders", () -> false);
+            status.register("orders", () -> false, () -> true);
 
             status.recordFailure("orders", new RuntimeException("replay boom"));
 
@@ -144,7 +189,7 @@ class PushCatchupStatusTest {
 
         @Test
         void is_reported_in_registration_order() {
-            status.register("first", () -> true);
+            status.register("first", () -> true, () -> true);
             status.recordLive("second");
             status.recordFailure("third", new RuntimeException("boom"));
 
@@ -157,7 +202,7 @@ class PushCatchupStatusTest {
         @Test
         void reflects_a_model_that_has_since_handed_over() {
             AtomicBoolean replaying = new AtomicBoolean(true);
-            status.register("orders", replaying::get);
+            status.register("orders", replaying::get, () -> true);
 
             replaying.set(false);
 
@@ -176,8 +221,9 @@ class PushCatchupStatusTest {
 
         @Test
         void are_refused_eagerly() {
-            assertThatThrownBy(() -> status.register(null, () -> true)).isInstanceOf(NullPointerException.class);
-            assertThatThrownBy(() -> status.register("orders", null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> status.register(null, () -> true, () -> true)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> status.register("orders", null, () -> true)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> status.register("orders", () -> true, null)).isInstanceOf(NullPointerException.class);
             assertThatThrownBy(() -> status.recordFailure("orders", null)).isInstanceOf(NullPointerException.class);
             assertThatThrownBy(() -> status.of(null)).isInstanceOf(NullPointerException.class);
         }

@@ -259,9 +259,10 @@ class SagaAnnotationRegistrar {
             throw new IllegalArgumentException("@Saga '%s' with source=PUSH resolved a %s, which is not a PushSubscriptionModel.".formatted(id, feedBean.getClass().getName()));
         }
         if (annotation.catchup() == org.occurrent.annotation.Catchup.NONE) {
-            // No history to replay, so it is live from the start. Leaving it unknown would make a readiness probe
-            // useless for exactly the saga that is always ready.
-            withPushCatchupStatus(status -> status.recordLive(id));
+            // No history to replay, so it is live as soon as it is running. Asked rather than recorded because
+            // occurrent.subscription.mode = manual withholds a push saga, and a recorded Live would tell a readiness
+            // probe that a saga nobody has started yet is ready to serve.
+            withPushCatchupStatus(status -> status.register(id, () -> false, () -> pushModel.isRunning(id)));
             return pushModel;
         }
         PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", PositionOrderedReader.class, id);
@@ -270,7 +271,7 @@ class SagaAnnotationRegistrar {
                 ProjectionAnnotationRegistrar.catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
         // Asked rather than recorded, so a model that is stopped and started again, replaying a second time, reports
         // catching up again instead of staying at whatever it reached the first time.
-        withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id)));
+        withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
         return model;
     }
 

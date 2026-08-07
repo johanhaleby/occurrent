@@ -39,17 +39,18 @@ import java.util.function.BooleanSupplier;
  * switch (status.of("orders")) {
  *     case CatchingUp ignored -> notReadyYet();
  *     case Live ignored       -> ready();
+ *     case NotStarted ignored -> notStartedYet();
  *     case Failed failed      -> unhealthy(failed.cause());
  *     case Unknown ignored    -> notRegisteredHere();
  * }
  * }</pre>
- * Where there is a subscription model to ask, {@link CatchingUp} and {@link Live} are derived from it rather than
- * recorded, so a model that was stopped and started again, replaying its history a second time, reports
+ * Where there is a subscription model to ask, {@link CatchingUp}, {@link Live} and {@link NotStarted} are derived from
+ * it rather than recorded, so a model that was stopped and started again, replaying its history a second time, reports
  * {@link CatchingUp} again rather than staying at whatever it reached the first time. A {@code DomainEventFeed} cannot
  * be asked, so those ids carry a recorded state instead.
  * <p>
- * One class for both stacks, since a push catch-up means the same thing on each. That is why {@link #register} takes a
- * {@link BooleanSupplier} rather than a subscription model type: this module depends on neither stack's subscription
+ * One class for both stacks, since a push catch-up means the same thing on each. That is why {@link #register} takes
+ * {@link BooleanSupplier}s rather than a subscription model type: this module depends on neither stack's subscription
  * API and should not start.
  */
 @NullMarked
@@ -64,6 +65,20 @@ public final class PushCatchupStatus {
          * @return The subscription or projection id this status is about.
          */
         String id();
+    }
+
+    /**
+     * The projection or saga is registered but its subscription has not been started, so it is neither replaying nor
+     * taking live events. That is what {@code occurrent.subscription.mode = manual} leaves it as until the application
+     * starts it, and what a stopped subscription model leaves it as until something starts it again.
+     * <p>
+     * Distinct from {@link Unknown}, which is an id nothing here registered at all, and from {@link CatchingUp}, which
+     * is working through history on its own and will reach {@link Live} without anyone intervening. This one will not.
+     */
+    public record NotStarted(String id) implements CatchupStatus {
+        public NotStarted {
+            Objects.requireNonNull(id, "id cannot be null");
+        }
     }
 
     /**
@@ -112,26 +127,35 @@ public final class PushCatchupStatus {
     private final Object lock = new Object();
     // Ids whose live state can be derived by asking a subscription model. Insertion-ordered so all() reports ids in
     // registration order.
-    private final Map<String, BooleanSupplier> catchingUpSuppliers = new LinkedHashMap<>();
+    private final Map<String, Liveness> liveness = new LinkedHashMap<>();
     // Ids whose state has to be recorded instead: a failure, which no model reports, and the DomainEventFeed path,
     // which has no model to ask.
     private final Map<String, CatchupStatus> recorded = new LinkedHashMap<>();
 
     /**
-     * Track {@code id} by asking {@code catchingUp} whether its replay is still in flight. Public only because the
-     * annotation processors that call it live in the two starter packages rather than this one. Application code reads
-     * this bean, it does not write to it.
+     * Track {@code id} by asking the model it runs on where it is. Public only because the annotation processors that
+     * call it live in the two starter packages rather than this one. Application code reads this bean, it does not
+     * write to it.
+     * <p>
+     * Both answers are needed. {@code catchingUp} alone cannot tell a subscription that has handed over from one that
+     * was never started, since neither is replaying, and reporting the second as {@link Live} would tell a readiness
+     * probe that a projection withheld by {@code occurrent.subscription.mode = manual} is ready to serve.
      *
-     * @param id          The projection or saga id.
-     * @param catchingUp  Answers whether a replay for this id is in flight, normally a subscription model's
-     *                    {@code isCatchingUp(id)}.
+     * @param id         The projection or saga id.
+     * @param catchingUp Answers whether a replay for this id is in flight, normally a subscription model's
+     *                   {@code isCatchingUp(id)}.
+     * @param running    Answers whether this id's subscription is running at all, normally {@code isRunning(id)}.
      */
-    public void register(String id, BooleanSupplier catchingUp) {
+    public void register(String id, BooleanSupplier catchingUp, BooleanSupplier running) {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(catchingUp, "catchingUp cannot be null");
+        Objects.requireNonNull(running, "running cannot be null");
         synchronized (lock) {
-            catchingUpSuppliers.put(id, catchingUp);
+            liveness.put(id, new Liveness(catchingUp, running));
         }
+    }
+
+    private record Liveness(BooleanSupplier catchingUp, BooleanSupplier running) {
     }
 
     /**
@@ -175,7 +199,7 @@ public final class PushCatchupStatus {
      */
     public CatchupStatus of(String id) {
         Objects.requireNonNull(id, "id cannot be null");
-        final BooleanSupplier catchingUp;
+        final Liveness asked;
         synchronized (lock) {
             CatchupStatus recordedStatus = recorded.get(id);
             // A failure wins over anything a model would say. It is terminal, and a model forgets a replay that
@@ -183,14 +207,19 @@ public final class PushCatchupStatus {
             if (recordedStatus instanceof Failed) {
                 return recordedStatus;
             }
-            catchingUp = catchingUpSuppliers.get(id);
-            if (catchingUp == null) {
+            asked = liveness.get(id);
+            if (asked == null) {
                 return recordedStatus == null ? new Unknown(id) : recordedStatus;
             }
         }
-        // Asked outside the lock, since the supplier reads a subscription model and holding this lock across it would
-        // tie every reader of this bean to whatever that model synchronizes on.
-        return catchingUp.getAsBoolean() ? new CatchingUp(id) : new Live(id);
+        // Asked outside the lock, since these read a subscription model and holding this lock across them would tie
+        // every reader of this bean to whatever that model synchronizes on.
+        if (asked.catchingUp().getAsBoolean()) {
+            return new CatchingUp(id);
+        }
+        // Checked after catching up, because a model reports a replay as running: asking this first would report a
+        // replay in flight as live.
+        return asked.running().getAsBoolean() ? new Live(id) : new NotStarted(id);
     }
 
     /**
@@ -208,7 +237,7 @@ public final class PushCatchupStatus {
     public Map<String, CatchupStatus> all() {
         final LinkedHashSet<String> ids;
         synchronized (lock) {
-            ids = new LinkedHashSet<>(catchingUpSuppliers.keySet());
+            ids = new LinkedHashSet<>(liveness.keySet());
             ids.addAll(recorded.keySet());
         }
         // A LinkedHashMap rather than Map.copyOf, which would drop the registration order this promises.
