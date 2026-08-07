@@ -116,6 +116,16 @@ class ConditionMatcherTest {
     }
 
     @Test
+    void eq_and_ne_do_not_throw_on_a_non_finite_double_and_fall_back_to_object_equality() {
+        // BigDecimal.valueOf(double) throws for NaN and an infinity, so the numeric-by-value path steers around
+        // those rather than crashing a query over one bad payload.
+        assertThat(matches(Map.of("amount", Double.NaN), Filter.data("amount", eq(Double.NaN)))).isTrue();
+        assertThat(matches(Map.of("amount", Double.POSITIVE_INFINITY), Filter.data("amount", eq(Double.POSITIVE_INFINITY)))).isTrue();
+        assertThat(matches(Map.of("amount", Double.NaN), Filter.data("amount", eq(42.0)))).isFalse();
+        assertThat(matches(Map.of("amount", Double.NaN), Filter.data("amount", ne(42.0)))).isTrue();
+    }
+
+    @Test
     void a_range_operator_compares_a_whole_number_and_a_fraction_by_value() {
         assertThat(matches(Map.of("amount", 42), Filter.data("amount", gt(10)))).isTrue();
         assertThat(matches(Map.of("amount", 42.5), Filter.data("amount", gt(10)))).isTrue();

@@ -107,10 +107,21 @@ public class ConditionMatcher {
     // same number, which is not the divergence-from-MongoDB's-$eq that a caller asking "does this field equal 42"
     // wants to hit. Two operands that are both numbers compare by value; anything else falls back to Objects.equals.
     private static boolean valuesEqual(Object actual, Object expected) {
-        if (actual instanceof Number actualNumber && expected instanceof Number expectedNumber) {
+        if (actual instanceof Number actualNumber && expected instanceof Number expectedNumber
+                && isFinite(actualNumber) && isFinite(expectedNumber)) {
             return toBigDecimal(actualNumber).compareTo(toBigDecimal(expectedNumber)) == 0;
         }
         return Objects.equals(actual, expected);
+    }
+
+    // BigDecimal.valueOf(double) throws for NaN and an infinity, which Objects.equals handles fine instead (NaN
+    // equals NaN, an infinity equals itself), so a non-finite Double or Float takes that path rather than crashing.
+    private static boolean isFinite(Number number) {
+        return switch (number) {
+            case Double d -> !d.isNaN() && !d.isInfinite();
+            case Float f -> !f.isNaN() && !f.isInfinite();
+            default -> true;
+        };
     }
 
     // A collection value matches a condition if any element does, the same rule MongoDB applies to an array field.
