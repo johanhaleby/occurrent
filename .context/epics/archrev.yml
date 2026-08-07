@@ -1,0 +1,241 @@
+schema_version: 1
+epic: archrev
+revision: 1
+updated_at: '2026-08-07T15:10:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (epic registration)
+baseline:
+  repo: johanhaleby/occurrent
+  branch: main
+authority: 'see .context/orchestrator-policy.yml (standing merge, sibling leniency,
+  reasoned-decline-open, spun-off adoption default); meta-plan approved by Johan
+  2026-08-07 via structured ask (full Wave A gates the 0.32.0 tag, new milestone);
+  plan at /Users/johan/.claude/plans/users-johan-test2-handoff-state-machine-crystalline-llama.md'
+milestone: 2
+pending_actions: []
+units:
+  T1:
+    issue: 616
+    goal: projection materializer safety (RetryStrategy seam, migration-guide fix,
+      lost-update regression test)
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 616
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: spawn chip (Opus/high, plan-first with downshift)
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: 'verified: hazard reachable since ADR 108, materializer shipped racy
+      in 0.31.0, fix seam exists at MaterializedView.updateFromRepository'
+  T2:
+    issue: 617
+    goal: time-filter compatibility shim (two-form eq/in/ne, stale javadoc, mixed-format
+      tests)
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 617
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: spawn chip (Sonnet/high)
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: 'verified: legacy rendering deterministic so two forms close the
+      hole completely, converters handle every emitted node type'
+  T3:
+    issue: 618
+    goal: reactive metadata overloads (2 Java + 2 Kotlin delegations)
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 618
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: spawn chip (Sonnet/medium)
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: additive, private path exists, DCB sibling is the template
+  T4:
+    issue: 619
+    goal: DataFieldReader SPI window (bulk-read shape or written no-change conclusion)
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 619
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: spawn chip (Sonnet/medium)
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: SPI unreleased until the tag, widening free now; a written no-change
+      conclusion also satisfies the unit
+  T5:
+    issue: 620
+    goal: PushCatchupStatus hardening (duplicate rejection + read/recorder split)
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 620
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: spawn chip (Sonnet/medium)
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: three-helper funnel makes the split small; SagaInstancesRegistryImpl
+      is the wiring precedent
+  T6:
+    issue: 621
+    goal: dual-stack occurrentManualStartPushSources bean collision (verify, fix,
+      dual-stack test)
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - T5
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 621
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'spawn after T5 merges (Sonnet/high, verify-first); its dual-stack
+      test must exercise T5''s duplicate guard'
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: new defect found during verification, not in the review; ADR 44
+      blesses the configuration nothing tests
+  B1:
+    issue: 622
+    goal: replay-phase batching contract (ADR-led design, post-release)
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: issue_closed
+      ref: 622
+      met: false
+      evidence: null
+    blocking_on: 
+    - what: the 0.32.0 release (Wave B is post-release by decision)
+      since: '2026-08-07T15:05:00+00:00'
+      recheck_after: '2026-08-10T08:00:00+00:00'
+    next_action: hold until after the 0.32.0 release, then Opus/high planning round
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: interface question (ViewStateRepository batch ops), phase signal,
+      partial-failure semantics all open
+  B2:
+    issue: 623
+    goal: payload-filter memoization (benchmark-first, post-release)
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - B3
+    - T4
+    session: null
+    deliverables:
+    - check: issue_closed
+      ref: 623
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: hold until B3's harness exists and the numbers justify it
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: verification scoped this well below the review's major
+  B3:
+    issue: 624
+    goal: committed JMH harness reproducing the ADR 108 and PR 615 numbers
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: issue_closed
+      ref: 624
+      met: false
+      evidence: null
+    blocking_on: 
+    - what: the 0.32.0 release (Wave B is post-release by decision)
+      since: '2026-08-07T15:05:00+00:00'
+      recheck_after: '2026-08-10T08:00:00+00:00'
+    next_action: hold until after the 0.32.0 release (Sonnet/medium)
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: cited benchmark numbers currently have no re-runnable harness
+  B4:
+    issue: 625
+    goal: saga CAS amplification javadoc qualifiers (doc only)
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: issue_closed
+      ref: 625
+      met: false
+      evidence: null
+    blocking_on: 
+    - what: the 0.32.0 release (Wave B is post-release by decision)
+      since: '2026-08-07T15:05:00+00:00'
+      recheck_after: '2026-08-10T08:00:00+00:00'
+    next_action: may land any time (Haiku-or-Sonnet/low), not gating
+    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    observed: {}
+    assessment: code behavior stays as decided in ADR 63/64/76/81
