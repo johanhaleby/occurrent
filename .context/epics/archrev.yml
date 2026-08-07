@@ -1,7 +1,7 @@
 schema_version: 1
 epic: archrev
-revision: 6
-updated_at: '2026-08-07T17:05:00+00:00'
+revision: 7
+updated_at: '2026-08-07T17:30:00+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (epic registration)
 baseline:
   repo: johanhaleby/occurrent
@@ -19,7 +19,7 @@ pending_actions:
     the RetryStrategy default and changelog placement'
   expected: 'threads answered (fix or reasoned decline), fresh head if code changed,
     PR comment naming the default'
-  status: PENDING
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-07T16:38:00+00:00'
@@ -28,23 +28,24 @@ units:
     issue: 616
     goal: projection materializer safety (RetryStrategy seam, migration-guide fix,
       lost-update regression test)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
       ref: 628
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-07T17:25Z at aaeed3369a (merge 1cacbf51e), all
+        green, 3 Copilot threads answered with fixes (act-001 VERIFIED), RetryStrategy
+        opt-in with unchanged existing overloads, own changelog bullet'
     - check: issue_closed
       ref: 616
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #616, verified by orchestrator'
     blocking_on: []
-    next_action: 'await session answers on the 3 Copilot threads (routed as act-001);
-      then CAS-merge the resulting green head'
+    next_action: none
     last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
     observed: {}
     assessment: 'verified: hazard reachable since ADR 108, materializer shipped racy
@@ -53,14 +54,14 @@ units:
     issue: 617
     goal: time-filter compatibility shim (two-form eq/in/ne, stale javadoc, mixed-format
       tests)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 631
       met: false
       evidence: null
     - check: issue_closed
@@ -68,7 +69,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: spawn chip (Sonnet/high)
+    next_action: CAS-merge PR 631 on green with threads handled
     last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
     observed: {}
     assessment: 'verified: legacy rendering deterministic so two forms close the
