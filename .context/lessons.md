@@ -104,14 +104,16 @@
   merge-routing need no inference, and a multi-repo epic runs one monitor per repository with active
   PR work. The event vocabulary is now shared between the Claude and Codex orchestrators.
 - Whether .context/ is tracked in git is a per-repository decision asked once and recorded
-  (2026-08-07, from Johan about parkster-dev shared repos where he is the only orchestrator user).
-  The policy file's memory_checkpoints setting is the lever, occurrent grants commit+push, a shared
-  repo records the standing local-only answer. Conservative default with no recorded decision:
-  local-only, with ignore rules in .git/info/exclude, never .gitignore, because in a shared repo
-  the ignore file is itself a visible push. The durability trade (no git checkpoint trail, no
-  cross-machine recovery) is named at the ask. The shared contract enum is ask | allowed, so the
-  standing opt-out rides the provenance note; a first-class forbidden value is proposed to Codex,
-  not invented unilaterally.
+  (2026-08-07, from Johan about parkster-dev shared repos where he is the only orchestrator user,
+  corrected same day by the Codex cross-review). Conservative default with no recorded decision:
+  local-only, nothing under .context/ committed, ignore rules in the file git rev-parse --git-path
+  info/exclude resolves (never a literal .git/info/exclude, .git is a file in linked worktrees,
+  and never .gitignore, which is itself a visible push in a shared repo). The local-only decision
+  is recorded in ORCHESTRATOR.md, NOT the policy file, because the shared contract says an
+  untracked policy grants nothing, which also means local-only mode runs on conservative authority
+  defaults with broader authority granted per-session only. The durability trade (no git
+  checkpoint trail, no cross-machine recovery) is named at the ask. A first-class forbidden value
+  enters the policy schema only as an agreed cross-tool change.
 - Worker exits end with a typed DELIVERY_RESULT block (2026-08-07, Johan's design, refined same
   day): PR number, full head SHA, pr-fix outcome as exactly done | attempts_exhausted | blocked |
   not_run, the blocker as its own separate field, and the reason whenever the outcome is not done,
