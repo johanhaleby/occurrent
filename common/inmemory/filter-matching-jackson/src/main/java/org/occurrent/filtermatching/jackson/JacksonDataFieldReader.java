@@ -102,7 +102,13 @@ public class JacksonDataFieldReader implements DataFieldReader {
      */
     private Optional<Object> readByStreaming(byte[] bytes, String[] segments) {
         try (JsonParser parser = objectMapper.getFactory().createParser(bytes)) {
-            parser.nextToken();
+            if (parser.nextToken() != JsonToken.START_OBJECT) {
+                // MongoDB never stores a document whose top level is anything but an object, so there is nothing to
+                // compare a bare array, string or number root against; resolve() below traverses an array it meets
+                // partway through a path (an object field whose value is an array), but the payload root itself is
+                // not that, it is the whole thing being queried, so it is opaque here the same way it is on Mongo.
+                return Optional.empty();
+            }
             return resolve(parser, segments, 0);
         } catch (IOException e) {
             // Malformed JSON, or bytes that are not JSON at all. A single bad payload must not fail a query.

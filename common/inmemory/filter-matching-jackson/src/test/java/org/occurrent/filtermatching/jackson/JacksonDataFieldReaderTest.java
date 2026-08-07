@@ -136,6 +136,15 @@ class JacksonDataFieldReaderTest {
     }
 
     @Test
+    void is_empty_when_the_json_root_is_an_array_of_objects_even_if_an_element_has_the_field() {
+        // The array-of-objects traversal applies to a field reached partway through a path, not to the payload
+        // root itself. MongoDB never stores a document whose top level is anything but an object, so a root array
+        // has nothing to compare against and stays opaque, the same as a bare scalar root.
+        CloudEvent event = eventWithJson("[{\"name\":\"a\"}]");
+        assertThat(reader.read(event, "name")).isEmpty();
+    }
+
+    @Test
     void is_empty_when_the_json_root_is_a_bare_scalar() {
         CloudEvent event = eventWithJson("\"just a string\"");
         assertThat(reader.read(event, "anything")).isEmpty();
