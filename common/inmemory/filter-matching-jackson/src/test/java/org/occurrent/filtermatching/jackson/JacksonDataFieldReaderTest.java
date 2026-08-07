@@ -18,6 +18,7 @@ package org.occurrent.filtermatching.jackson;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.data.PojoCloudEventData;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -193,6 +195,84 @@ class JacksonDataFieldReaderTest {
         // requirement; a full tree parse into a Map would instead keep the last occurrence.
         CloudEvent event = eventWithJson("{\"name\":\"alice\",\"name\":\"bob\"}");
         assertThat(reader.read(event, "name")).contains("alice");
+    }
+
+    @Test
+    void reads_a_top_level_field_directly_from_a_map_backed_event() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("name", "alice");
+        CloudEvent event = eventWithMap(data);
+        assertThat(reader.read(event, "name")).contains("alice");
+    }
+
+    @Test
+    void reads_a_nested_field_directly_from_a_map_backed_event() {
+        Map<String, Object> city = new LinkedHashMap<>();
+        city.put("city", "Malmo");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("person", city);
+        CloudEvent event = eventWithMap(data);
+        assertThat(reader.read(event, "person.city")).contains("Malmo");
+    }
+
+    @Test
+    void a_dotted_path_traverses_an_array_of_maps_in_a_map_backed_event() {
+        Map<String, Object> itemA = new LinkedHashMap<>();
+        itemA.put("sku", "a");
+        Map<String, Object> itemB = new LinkedHashMap<>();
+        itemB.put("sku", "b");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("items", List.of(itemA, itemB));
+        CloudEvent event = eventWithMap(data);
+        Optional<Object> value = reader.read(event, "items.sku");
+        assertThat(value).isPresent();
+        assertThat(value.get()).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST).containsExactly("a", "b");
+    }
+
+    @Test
+    void is_empty_when_the_path_continues_past_a_scalar_in_a_map_backed_event() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("name", "alice");
+        CloudEvent event = eventWithMap(data);
+        assertThat(reader.read(event, "name.deeper")).isEmpty();
+    }
+
+    @Test
+    void falls_back_to_the_bytes_when_a_pojo_cloud_event_data_does_not_wrap_a_map() {
+        // A PojoCloudEventData wrapping something other than a Map, a List for instance, has nothing this reader
+        // can walk without parsing, so it goes through the same byte-sourced path a non-Mongo event would.
+        List<String> data = List.of("red", "blue");
+        PojoCloudEventData<List<String>> wrapped = PojoCloudEventData.wrap(data,
+                list -> ("[\"" + String.join("\",\"", list) + "\"]").getBytes(StandardCharsets.UTF_8));
+        CloudEvent event = CloudEventBuilder.v1()
+                .withId(UUID.randomUUID().toString())
+                .withSource(SOURCE)
+                .withType("Test")
+                .withDataContentType("application/json")
+                .withData(wrapped)
+                .build();
+        assertThat(reader.read(event, "0")).isEmpty();
+    }
+
+    private static CloudEvent eventWithMap(Map<String, Object> data) {
+        PojoCloudEventData<Map<String, Object>> wrapped = PojoCloudEventData.wrap(data, JacksonDataFieldReaderTest::toJsonBytes);
+        return CloudEventBuilder.v1()
+                .withId(UUID.randomUUID().toString())
+                .withSource(SOURCE)
+                .withType("Test")
+                .withDataContentType("application/json")
+                .withData(wrapped)
+                .build();
+    }
+
+    private static byte[] toJsonBytes(Map<String, Object> map) {
+        // Stands in for DocumentCloudEventReader's document.toJson().getBytes(UTF_8): if the map short-circuit did
+        // not fire, this is what the reader would have to fall back to parsing.
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(map);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static CloudEvent eventWithJson(String json) {

@@ -21,12 +21,14 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
+import io.cloudevents.core.data.PojoCloudEventData;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.filtermatching.DataFieldReader;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -72,12 +74,25 @@ public class JacksonDataFieldReader implements DataFieldReader {
             return Optional.empty();
         }
 
-        byte[] bytes = dataBytes(cloudEvent);
-        if (bytes == null) {
+        CloudEventData data = cloudEvent.getData();
+        if (data == null) {
             return Optional.empty();
         }
 
-        return readByStreaming(bytes, path);
+        String[] segments = path.split("\\.");
+
+        if (data instanceof PojoCloudEventData<?> pojoData && pojoData.getValue() instanceof Map<?, ?> map) {
+            // The store (currently MongoDB's DocumentCloudEventReader) already decoded the payload into a Map, so
+            // this walks it directly rather than calling toBytes(), which would serialise that Map back to JSON
+            // text only to have the streaming path below parse the text right back into the same shape of data.
+            return resolveFromMap(map, segments, 0);
+        }
+
+        byte[] bytes = data.toBytes();
+        if (bytes == null) {
+            return Optional.empty();
+        }
+        return readByStreaming(bytes, segments);
     }
 
     /**
@@ -85,8 +100,7 @@ public class JacksonDataFieldReader implements DataFieldReader {
      * the document is irrelevant, and {@link JsonParser#skipChildren()} lets a sibling field's nested object or
      * array pass by without ever being turned into Java objects.
      */
-    private Optional<Object> readByStreaming(byte[] bytes, String path) {
-        String[] segments = path.split("\\.");
+    private Optional<Object> readByStreaming(byte[] bytes, String[] segments) {
         try (JsonParser parser = objectMapper.getFactory().createParser(bytes)) {
             parser.nextToken();
             return resolve(parser, segments, 0);
@@ -94,6 +108,26 @@ public class JacksonDataFieldReader implements DataFieldReader {
             // Malformed JSON, or bytes that are not JSON at all. A single bad payload must not fail a query.
             return Optional.empty();
         }
+    }
+
+    // Same rules as resolve() below, an array traverses element by element without consuming a path segment, a
+    // path continuing past a value with no fields of its own answers empty, but walking a Map/List that already
+    // exists rather than a JsonParser's token stream, since there is nothing left to parse.
+    private static Optional<Object> resolveFromMap(@Nullable Object current, String[] segments, int segmentIndex) {
+        if (segmentIndex == segments.length) {
+            return Optional.ofNullable(current);
+        }
+        if (current instanceof List<?> list) {
+            List<Object> matched = new ArrayList<>();
+            for (Object element : list) {
+                resolveFromMap(element, segments, segmentIndex).ifPresent(matched::add);
+            }
+            return matched.isEmpty() ? Optional.empty() : Optional.of(matched);
+        }
+        if (!(current instanceof Map<?, ?> map)) {
+            return Optional.empty();
+        }
+        return resolveFromMap(map.get(segments[segmentIndex]), segments, segmentIndex + 1);
     }
 
     // A dotted path is resolved one segment at a time, the way MongoDB resolves it, with the parser positioned on
@@ -139,11 +173,6 @@ public class JacksonDataFieldReader implements DataFieldReader {
             parser.skipChildren();
         }
         return false;
-    }
-
-    private static @Nullable byte[] dataBytes(CloudEvent cloudEvent) {
-        CloudEventData data = cloudEvent.getData();
-        return data == null ? null : data.toBytes();
     }
 
     private static boolean isJson(@Nullable String dataContentType) {
