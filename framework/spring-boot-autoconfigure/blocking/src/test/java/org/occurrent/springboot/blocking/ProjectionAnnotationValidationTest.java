@@ -30,7 +30,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
@@ -314,8 +314,8 @@ class ProjectionAnnotationValidationTest {
         }
 
         @Bean
-        BackgroundCatchupFailures backgroundCatchupFailures() {
-            return new BackgroundCatchupFailures();
+        PushCatchupStatus pushCatchupStatus() {
+            return new PushCatchupStatus();
         }
 
         @Bean

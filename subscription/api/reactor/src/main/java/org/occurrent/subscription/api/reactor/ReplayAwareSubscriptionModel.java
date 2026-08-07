@@ -1,0 +1,51 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.api.reactor;
+
+import org.jspecify.annotations.NullMarked;
+
+/**
+ * A reactive subscription model that replays history before it delivers live events, and can say which of its
+ * subscriptions are still in that replay.
+ * <p>
+ * Deliberately not answerable from {@link SubscriptionModelLifeCycle#isRunning(String)}, which is {@code true}
+ * throughout a replay. A caller that needs the handover specifically has to be able to ask for it: a saga fed by such a
+ * model gates its timers on being live, and firing a timeout mid-replay would decide against state that is only half
+ * folded up.
+ * <p>
+ * The answer is a plain {@code boolean} rather than a {@code Mono<Boolean>}, matching every other life-cycle predicate
+ * on this stack: it reads state the model already holds and touches nothing remote.
+ * <p>
+ * Not every reactive subscription model replays, so check the model you hold with {@code instanceof}. The subscription
+ * DSL wrappers do not forward it, so ask the subscription model itself.
+ */
+@NullMarked
+public interface ReplayAwareSubscriptionModel {
+
+    /**
+     * Whether {@code subscriptionId} is still replaying history and has not yet handed over to live delivery.
+     * <p>
+     * {@code false} for an id this model has never seen, so never-subscribed and handed-over read the same way, which
+     * is what a poll wants. {@code false} once a replay has ended, whether it finished, was stopped, or failed: a
+     * failed subscription keeps its registration and refuses events, so ask {@link SubscriptionModelLifeCycle} about
+     * that rather than this.
+     *
+     * @param subscriptionId The subscription to ask about.
+     * @return {@code true} while a replay for this id is in flight.
+     */
+    boolean isCatchingUp(String subscriptionId);
+}

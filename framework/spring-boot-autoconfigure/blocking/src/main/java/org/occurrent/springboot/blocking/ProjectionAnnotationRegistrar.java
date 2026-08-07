@@ -36,7 +36,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
@@ -65,6 +65,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
@@ -145,13 +146,13 @@ class ProjectionAnnotationRegistrar {
     void catchUpCollectedFeeds() {
         for (DomainFeedCatchUp pending : domainFeedsToCatchUp) {
             if (pending.waitUntilStarted()) {
-                pending.feed().catchUpAll();
+                recordingProgress(pending.id(), () -> pending.feed().catchUpAll()).run();
             } else {
                 // startupMode = BACKGROUND. The feed itself deliberately has no background overload, since a caller
                 // that wants the replay off its own thread can run catchUpAll() on a thread it owns. This is that
                 // caller: the registrar is what knows the startupMode, so it is what decides the threading.
                 runInBackground("occurrent-domain-feed-catchup", pending.id(),
-                        () -> pending.feed().catchUpAll(), pending.feed()::stopCatchUp);
+                        recordingProgress(pending.id(), () -> pending.feed().catchUpAll()), pending.feed()::stopCatchUp);
             }
         }
         domainFeedsToCatchUp.clear();
@@ -172,15 +173,32 @@ class ProjectionAnnotationRegistrar {
                         + "no live events until the application is restarted.", id, e);
                 // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the
                 // post processor directly has no reason to, and losing the record is better than losing the log too.
-                BackgroundCatchupFailures failures = applicationContext.getBeanProvider(BackgroundCatchupFailures.class).getIfAvailable();
-                if (failures != null) {
-                    failures.recordFailure(id, e);
-                }
+                withPushCatchupStatus(status -> status.recordFailure(id, e));
             }
             return null;
         });
         backgroundCatchUps.add(new BackgroundCatchUp(task, stop));
         Thread.ofVirtual().name(threadName + "-" + id).start(task);
+    }
+
+    // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the post
+    // processor directly has no reason to, and losing the record is better than losing the log too.
+    private void withPushCatchupStatus(Consumer<PushCatchupStatus> action) {
+        PushCatchupStatus status = applicationContext.getBeanProvider(PushCatchupStatus.class).getIfAvailable();
+        if (status != null) {
+            action.accept(status);
+        }
+    }
+
+    // Wrap a domain-feed replay so an application can see where it is. A DomainEventFeed is not a subscription model,
+    // so unlike the push-model path there is nothing to ask afterwards and the state has to be recorded as it happens.
+    // A replay that throws records neither, leaving runInBackground to record the failure instead.
+    private Runnable recordingProgress(String id, Runnable replay) {
+        return () -> {
+            withPushCatchupStatus(status -> status.recordCatchingUp(id));
+            replay.run();
+            withPushCatchupStatus(status -> status.recordLive(id));
+        };
     }
 
     @SuppressWarnings("unchecked")
@@ -288,8 +306,15 @@ class ProjectionAnnotationRegistrar {
             // Retained so close() can stop it. Its replay runs on its own thread, so a context that closes without
             // stopping it leaves that replay folding into a store that is closing with it.
             pushModels.add(model);
+            // Asked rather than recorded, so a model that is stopped and started again, replaying a second time,
+            // reports catching up again instead of staying at whatever it reached the first time.
+            withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
             subscribable = model;
         } else {
+            // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because
+            // occurrent.subscription.mode = manual defers the subscription, and a recorded Live would tell a readiness
+            // probe that a projection nobody has started yet is ready to serve.
+            withPushCatchupStatus(status -> status.register(id, () -> false, () -> pushModel.isRunning(id)));
             subscribable = pushModel;
         }
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
@@ -368,6 +393,7 @@ class ProjectionAnnotationRegistrar {
             } else {
                 // Nothing to replay, so there is nothing to defer to catchUpCollectedFeeds(): go live right away.
                 feed.goLive(id);
+                withPushCatchupStatus(status -> status.recordLive(id));
             }
         } else {
             // register(...) alone puts the feed into buffering mode immediately, so deferring only the catch-up would
@@ -378,12 +404,13 @@ class ProjectionAnnotationRegistrar {
                 feed.register(id, materializedView, eventFilter);
                 if (!catchesUp) {
                     feed.goLive(id);
+                    withPushCatchupStatus(status -> status.recordLive(id));
                 } else if (waitUntilStarted) {
-                    feed.catchUp(id);
+                    recordingProgress(id, () -> feed.catchUp(id)).run();
                 } else {
                     // Same treatment as auto mode, or startAll() would block for a full replay on a projection that
                     // asked for BACKGROUND.
-                    runInBackground("occurrent-domain-feed-catchup", id, () -> feed.catchUp(id), feed::stopCatchUp);
+                    runInBackground("occurrent-domain-feed-catchup", id, recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
                 }
             });
         }

@@ -26,6 +26,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
@@ -57,7 +58,7 @@ import static java.util.Objects.requireNonNull;
  * type the caller holds rather than the mode-specific model that happens to run the catch-up.
  */
 @NullMarked
-public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
+public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, ReplayAwareSubscriptionModel {
 
     private final @Nullable ReactorStreamCatchupSubscriptionModel streamCatchupSubscriptionModel;
     private final @Nullable ReactorDcbCatchupSubscriptionModel dcbCatchupSubscriptionModel;
@@ -210,6 +211,16 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         }
         SubscriptionModel replaying = innerModelCatchingUp(subscriptionId);
         return replaying != null ? replaying : anyInnerModel();
+    }
+
+    /**
+     * A subscription lives in exactly one of the inner catch-up models, so asking all of them is the same as asking
+     * the one that owns it.
+     */
+    @Override
+    public boolean isCatchingUp(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return innerModelCatchingUp(subscriptionId) != null;
     }
 
     private @Nullable SubscriptionModel innerModelCatchingUp(String subscriptionId) {

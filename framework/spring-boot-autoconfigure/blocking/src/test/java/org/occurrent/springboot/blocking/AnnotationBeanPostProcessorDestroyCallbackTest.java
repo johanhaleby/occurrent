@@ -19,7 +19,7 @@ package org.occurrent.springboot.blocking;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -84,7 +84,7 @@ class AnnotationBeanPostProcessorDestroyCallbackTest {
                 .run(context -> assertThat(context).doesNotHaveBean(OccurrentBlockingAnnotationBeanPostProcessor.class));
     }
 
-    // Both starters moved BackgroundCatchupFailures to org.occurrent.springboot.common, contributed by each of them.
+    // Both starters moved PushCatchupStatus to org.occurrent.springboot.common, contributed by each of them.
     // Without these, deleting the @Bean method from this configuration class would break no test here: the
     // BackgroundCatchupFailureTest declares its own bean in the user configuration, which satisfies
     // @ConditionalOnMissingBean regardless of whether the starter contributes one.
@@ -92,7 +92,7 @@ class AnnotationBeanPostProcessorDestroyCallbackTest {
     void the_background_catchup_failures_bean_is_contributed_by_default() {
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(OccurrentBlockingAnnotationConfiguration.class))
-                .run(context -> assertThat(context).hasSingleBean(BackgroundCatchupFailures.class));
+                .run(context -> assertThat(context).hasSingleBean(PushCatchupStatus.class));
     }
 
     @Test
@@ -100,7 +100,7 @@ class AnnotationBeanPostProcessorDestroyCallbackTest {
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(OccurrentBlockingAnnotationConfiguration.class))
                 .withPropertyValues("occurrent.subscription.enabled=true")
-                .run(context -> assertThat(context).hasSingleBean(BackgroundCatchupFailures.class));
+                .run(context -> assertThat(context).hasSingleBean(PushCatchupStatus.class));
     }
 
     @Test
@@ -108,7 +108,7 @@ class AnnotationBeanPostProcessorDestroyCallbackTest {
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(OccurrentBlockingAnnotationConfiguration.class))
                 .withPropertyValues("occurrent.subscription.enabled=false")
-                .run(context -> assertThat(context).doesNotHaveBean(BackgroundCatchupFailures.class));
+                .run(context -> assertThat(context).doesNotHaveBean(PushCatchupStatus.class));
     }
 
     static class RecordingPostProcessor extends OccurrentBlockingAnnotationBeanPostProcessor {

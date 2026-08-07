@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
@@ -98,7 +99,7 @@ import java.util.stream.Stream;
  * </p>
  */
 @NullMarked
-public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
+public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, ReplayAwareSubscriptionModel {
 
     private static final int DEFAULT_CACHE_SIZE = CatchupSubscriptionModelConfig.DEFAULT_HANDOVER_CACHE_SIZE;
 
@@ -285,6 +286,17 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     public boolean isRunning(String subscriptionId) {
         return presentCatchupModels().anyMatch(model -> model.isRunning(subscriptionId))
                 || getDelegatedSubscriptionModel().isRunning(subscriptionId);
+    }
+
+    /**
+     * A subscription lives in exactly one of the inner catch-up models, so asking all of them is the same as asking
+     * the one that owns it, and the delegate is not asked at all: it only ever sees a subscription that has already
+     * handed over.
+     */
+    @Override
+    public boolean isCatchingUp(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return presentCatchupModels().anyMatch(model -> model.isCatchingUp(subscriptionId));
     }
 
     @Override

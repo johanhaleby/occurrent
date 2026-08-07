@@ -387,6 +387,73 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(model.subscriptionIds()).isEmpty();
     }
 
+    /**
+     * The companion to the above, and the reason {@code isCatchingUp} exists at all: a saga gates its timers on being
+     * live, {@code isRunning(id)} is true for the whole replay, so without a separate signal a timeout could fire
+     * against state that is only half folded up.
+     */
+    @Test
+    void a_subscription_reports_catching_up_while_its_replay_is_still_in_flight() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce ->
+                Mono.fromRunnable(() -> {
+                    replayReached.countDown();
+                    awaitLatch(releaseReplay);
+                }));
+
+        awaitLatch(replayReached);
+
+        assertThat(model.isCatchingUp("proj")).isTrue();
+        // Running throughout, which is exactly why it cannot answer the handover question on its own.
+        assertThat(model.isRunning("proj")).isTrue();
+
+        releaseReplay.countDown();
+        subscription.waitUntilStarted().block();
+
+        assertThat(model.isCatchingUp("proj")).isFalse();
+    }
+
+    @Test
+    void an_id_the_model_has_never_seen_is_not_catching_up() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(Flux::empty, 0);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+
+        assertThat(model.isCatchingUp("never-subscribed")).isFalse();
+    }
+
+    @Test
+    void a_failed_catch_up_is_not_catching_up_but_keeps_the_registration_running() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Throwable replayFailure = catchThrowable(() -> subscription.waitUntilStarted().block());
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        // The replay entry is forgotten on failure, so it no longer answers "catching up", but the registration on the
+        // live feed is kept refusing rather than released (ADR 104), which is why isRunning stays true.
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(model.isRunning("sub")).isTrue();
+    }
+
+    @Test
+    void is_catching_up_rejects_a_null_subscription_id() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(Flux::empty, 0);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+
+        Throwable thrown = catchThrowable(() -> model.isCatchingUp(null));
+
+        assertThat(thrown).isInstanceOf(NullPointerException.class);
+    }
+
     // --- helpers ---
 
     private static Function<CloudEvent, Mono<Void>> recordInto(List<String> delivered) {

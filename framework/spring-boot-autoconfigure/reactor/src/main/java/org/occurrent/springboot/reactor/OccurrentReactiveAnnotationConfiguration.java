@@ -16,7 +16,7 @@
 
 package org.occurrent.springboot.reactor;
 
-import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -55,15 +55,16 @@ public class OccurrentReactiveAnnotationConfiguration {
     }
 
     /**
-     * Lets an application see a {@code @Projection(source = PUSH, startupMode = BACKGROUND)} whose catch-up failed.
-     * Nobody waits for a background replay, so a failure has nowhere to be thrown and the context is long refreshed by
-     * the time it happens. Gated the same way as the post-processor that writes it, and present under every startup
-     * mode so an application can inject it without conditioning its own wiring on the mode.
+     * Lets an application see where every {@code source = PUSH} projection and saga is in its catch-up, and why one
+     * failed. Nobody waits for a {@code startupMode = BACKGROUND} replay, so neither its progress nor its failure has
+     * anywhere to be returned or thrown, and the context is long refreshed by the time either happens. Gated the same
+     * way as the post-processor that writes it, and present under every startup mode so an application can inject it
+     * without conditioning its own wiring on the mode.
      */
     @Bean
-    @ConditionalOnMissingBean(BackgroundCatchupFailures.class)
+    @ConditionalOnMissingBean(PushCatchupStatus.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public BackgroundCatchupFailures occurrentBackgroundCatchupFailures() {
-        return new BackgroundCatchupFailures();
+    public PushCatchupStatus occurrentPushCatchupStatus() {
+        return new PushCatchupStatus();
     }
 }

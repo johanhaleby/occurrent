@@ -42,11 +42,13 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * No-Mongo regression guard: {@link CatchupSubscriptionModel#stop()}/{@code start(boolean)} and {@code isRunning}
- * must reach the catch-up child running the in-flight replay, not just the shared live delegate. Uses a real
- * in-memory event store and a permissive fake delegate, since these tests need an actual replay to observe mid-flight.
+ * No-Mongo regression guard: {@link CatchupSubscriptionModel#stop()}/{@code start(boolean)}, {@code isRunning} and
+ * {@code isCatchingUp} must reach the catch-up child running the in-flight replay, not just the shared live delegate.
+ * Uses a real in-memory event store and a permissive fake delegate, since these tests need an actual replay to
+ * observe mid-flight.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupSubscriptionModelStopPropagationTest {
@@ -104,6 +106,56 @@ class CatchupSubscriptionModelStopPropagationTest {
             releaseReplay.countDown();
         }
         assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+    }
+
+    /**
+     * The reason {@code isCatchingUp} exists as a signal distinct from {@code isRunning}: a caller that gates on
+     * liveness needs to know when the replay has actually handed over, since {@code isRunning(id)} is true for the
+     * entire replay and cannot answer that on its own. On the dispatcher this also proves the answer comes from
+     * whichever inner catch-up model owns the id, not from the shared delegate (see the class javadoc on
+     * {@link CatchupSubscriptionModel#isCatchingUp(String)}: it deliberately never asks the delegate).
+     */
+    @Test
+    void isCatchingUp_reports_true_while_the_owning_inner_models_replay_is_in_flight_and_false_once_it_hands_over() throws InterruptedException {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"));
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(new PermissiveCheckpointAwareSubscriptionModel(), events);
+
+        String subscriptionId = "someId";
+        CountDownLatch firstEventReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        Subscription subscription = catchupSubscriptionModel.subscribe(subscriptionId, StartAtTime.beginningOfTime(), event -> {
+            firstEventReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+
+        assertThat(firstEventReached.await(5, TimeUnit.SECONDS)).isTrue();
+        try {
+            assertThat(catchupSubscriptionModel.isCatchingUp(subscriptionId)).isTrue();
+        } finally {
+            releaseReplay.countDown();
+        }
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        assertThat(catchupSubscriptionModel.isCatchingUp(subscriptionId)).isFalse();
+    }
+
+    @Test
+    void an_id_the_model_has_never_seen_is_not_catching_up() {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"));
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(new PermissiveCheckpointAwareSubscriptionModel(), events);
+
+        assertThat(catchupSubscriptionModel.isCatchingUp("never-subscribed")).isFalse();
+    }
+
+    @Test
+    void is_catching_up_rejects_a_null_subscription_id() {
+        InMemoryEventStoreQueries events = new InMemoryEventStoreQueries(cloudEvent("1"));
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(new PermissiveCheckpointAwareSubscriptionModel(), events);
+
+        Throwable thrown = catchThrowable(() -> catchupSubscriptionModel.isCatchingUp(null));
+
+        assertThat(thrown).isInstanceOf(NullPointerException.class);
     }
 
     private static void awaitLatch(CountDownLatch latch) {

@@ -30,7 +30,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -47,7 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The {@code DomainEventFeed} twin of {@code BackgroundCatchupFailureTest}: a background domain-push catch-up that
- * fails does not fail the context either, and the failure lands in {@link BackgroundCatchupFailures} the same way.
+ * fails does not fail the context either, and the failure lands in {@link PushCatchupStatus} the same way.
  * {@code BackgroundCatchupFailureTest} only exercises the {@code PushSubscriptionModel} flavour, and the domain-feed
  * background path is separate code in {@code ProjectionAnnotationRegistrar} ({@code runInBackground}, reached only
  * through {@code catchUpCollectedFeeds()}), so a regression there would otherwise be uncovered.
@@ -67,18 +67,18 @@ class DomainEventFeedBackgroundCatchupFailureTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
 
-                    BackgroundCatchupFailures failures = context.getBean(BackgroundCatchupFailures.class);
+                    PushCatchupStatus status = context.getBean(PushCatchupStatus.class);
                     // No Awaitility dependency in this module: a manual poll matches the idiom this module's other
-                    // async tests (ProjectionPushStartupModeTest) already use.
+                    // async tests already use.
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                    while (failures.failureFor("domain-feed-push-background-failing").isEmpty() && System.nanoTime() < deadline) {
+                    while (!(status.of("domain-feed-push-background-failing") instanceof PushCatchupStatus.Failed) && System.nanoTime() < deadline) {
                         Thread.sleep(10);
                     }
-                    assertThat(failures.failureFor("domain-feed-push-background-failing")).isPresent();
-                    assertThat(failures.failureFor("domain-feed-push-background-failing").orElseThrow())
-                            .isInstanceOf(RuntimeException.class)
-                            .hasMessage("replay boom");
-                    assertThat(failures.isEmpty()).isFalse();
+                    assertThat(status.of("domain-feed-push-background-failing")).isInstanceOfSatisfying(PushCatchupStatus.Failed.class, failed ->
+                            assertThat(failed.cause()).isInstanceOf(RuntimeException.class).hasMessage("replay boom"));
+                    // A failed catch-up is not ready, which is the whole point of asking rather than checking a
+                    // failure list for emptiness.
+                    assertThat(status.isCaughtUp("domain-feed-push-background-failing")).isFalse();
                 });
     }
 
@@ -87,8 +87,8 @@ class DomainEventFeedBackgroundCatchupFailureTest {
     static class FailingDomainFeedConfiguration {
 
         @Bean
-        BackgroundCatchupFailures backgroundCatchupFailures() {
-            return new BackgroundCatchupFailures();
+        PushCatchupStatus pushCatchupStatus() {
+            return new PushCatchupStatus();
         }
 
         @Bean

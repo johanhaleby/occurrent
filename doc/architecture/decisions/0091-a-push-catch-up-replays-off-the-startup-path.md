@@ -151,7 +151,7 @@ unambiguously per-projection.
 
 **A background failure needs somewhere to go, and an `ERROR` log is not enough on its own.** Under `BACKGROUND` nobody
 waits, so the failure surfaces from nothing: the context refreshed long ago and the projection is left with an empty
-read model on a healthy-looking application. Both starters now contribute a `BackgroundCatchupFailures` bean, written
+read model on a healthy-looking application. Both starters now contribute a `PushCatchupStatus` bean, written
 by the annotation processor and injected by the application, the same shape as `ManualStartPushSources` and
 `SagaInstancesRegistry`. Deliberately not a Spring `ApplicationEvent`: Occurrent publishes none anywhere, and the only
 hits in the repository are inside `example/`. The log stays as the backstop. On the `PushSubscriptionModel` path the
@@ -159,3 +159,45 @@ registrar joins the subscription on a thread of its own purely to record the fai
 on the refresh thread and only the replay may move.
 
 **`DEFAULT` keeps waiting on every one of these paths**, for the reason the original decision gives.
+
+## Amendment (2026-08-07): the same bean answers readiness, not only failure
+
+The bean this decision introduced was `BackgroundCatchupFailures`, and it only ever recorded failures. That turned out
+to be half an answer. Its own javadoc conceded the gap: an empty result cannot tell a replay that is still running from
+one that succeeded from one that never existed, so the one question `BACKGROUND` actually creates, is this read model
+ready to serve, could not be asked at all. The object that could answer, the `CatchupThenPushSubscriptionModel` the
+registrar builds, sat in a private list and was never published as a bean.
+
+It is now `PushCatchupStatus`, a read-only per-id observable with five states: `CatchingUp`, `Live`, `NotStarted`,
+`Failed` carrying the cause, and `Unknown`. Four things about the shape are deliberate.
+
+**The states are a sealed interface rather than an enum plus a separate cause accessor.** Only `Failed` carries a
+`Throwable`, so "a cause exists exactly when it failed" is true by construction rather than by javadoc, and a readiness
+probe switches exhaustively instead of remembering which combinations are possible.
+
+**The live states are derived, not recorded, wherever there is a model to ask.** `register(id, catchingUp, running)` keeps
+handle on the model's `isCatchingUp(id)` (see `ReplayAwareSubscriptionModel`, the capability interface that made this
+askable at all), so a model that is stopped and started again, replaying its history a second time, reports
+`CatchingUp` again rather than staying at whatever it reached the first time. Nothing tells this bean that a replay
+restarted, so a recorded state would silently go stale. A `DomainEventFeed` is not a subscription model and cannot be
+asked, so those ids carry a recorded state instead, which is the one place the staleness argument does not apply
+because the registrar is the only thing that drives that replay.
+
+**A recorded failure wins over what a model would say.** This ordering is load bearing. A model forgets a replay that
+failed while keeping the registration that now refuses events, so its `isCatchingUp` answers false afterwards, and
+resolving the model first would report a broken projection as ready to serve.
+
+The parameters are `BooleanSupplier`s rather than a subscription model type so the class can keep serving both stacks
+from `org.occurrent.springboot.common` without that module depending on either subscription API.
+
+**`NotStarted` exists because asking whether a replay is in flight is not the same as asking whether anything is
+running.** `occurrent.subscription.mode = manual` defers the registration, so nothing is replaying and nothing has
+started, and a status derived from `isCatchingUp` alone called that `Live`. A readiness probe would have been told a
+projection nobody had started was ready to serve. There are five conditions a push id can be in (withheld, replaying,
+live, failed, unregistered) and only four states existed, so `register` takes both answers and resolves catching up
+first, since a model reports a replay as running. That is also why `catchup = NONE` registers a supplier instead of
+recording `Live` at registration time. It never replays, but it is only live once something has started it.
+
+`Unknown` is deliberately distinct from `Live`: a probe asking about a name nothing recognises has not been told yes.
+The rename cost nothing, since none of this had shipped. Resolves
+[#589](https://github.com/johanhaleby/occurrent/issues/589).

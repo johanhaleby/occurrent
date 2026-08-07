@@ -132,7 +132,7 @@ relaunched, which is the case that would fail. The reactor `CatchupProjectionFee
 exactly this, and a test now checks it from the subscription-model side too.
 
 **Under `startupMode = BACKGROUND` the failure signal improves.** Nobody waits, so the failure was previously
-only logged and recorded in `BackgroundCatchupFailures`. Now the queue backs up as well, so the health
+only logged and recorded in `PushCatchupStatus`. Now the queue backs up as well, so the health
 indicator and the transport agree instead of the transport quietly draining.
 
 **The de-dup cache is still not a redelivery guarantee.** It suppresses the replay-to-live overlap and nothing

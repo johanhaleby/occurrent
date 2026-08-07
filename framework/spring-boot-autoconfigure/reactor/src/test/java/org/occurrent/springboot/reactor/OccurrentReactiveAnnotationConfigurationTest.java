@@ -29,7 +29,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
@@ -86,25 +86,25 @@ class OccurrentReactiveAnnotationConfigurationTest {
                 .run(context -> assertThat(context).doesNotHaveBean(OccurrentReactiveAnnotationBeanPostProcessor.class));
     }
 
-    // Both starters moved BackgroundCatchupFailures to org.occurrent.springboot.common, contributed by each of them.
+    // Both starters moved PushCatchupStatus to org.occurrent.springboot.common, contributed by each of them.
     // Without these, deleting the @Bean method from this configuration class would break no test here: the
     // BackgroundCatchupFailureTest declares its own bean in the user configuration, which satisfies
     // @ConditionalOnMissingBean regardless of whether the starter contributes one.
     @Test
     void the_background_catchup_failures_bean_is_contributed_by_default() {
-        runner.run(context -> assertThat(context).hasSingleBean(BackgroundCatchupFailures.class));
+        runner.run(context -> assertThat(context).hasSingleBean(PushCatchupStatus.class));
     }
 
     @Test
     void the_background_catchup_failures_bean_is_contributed_when_subscriptions_are_explicitly_enabled() {
         runner.withPropertyValues("occurrent.subscription.enabled=true")
-                .run(context -> assertThat(context).hasSingleBean(BackgroundCatchupFailures.class));
+                .run(context -> assertThat(context).hasSingleBean(PushCatchupStatus.class));
     }
 
     @Test
     void turning_subscriptions_off_removes_the_background_catchup_failures_bean_entirely() {
         runner.withPropertyValues("occurrent.subscription.enabled=false")
-                .run(context -> assertThat(context).doesNotHaveBean(BackgroundCatchupFailures.class));
+                .run(context -> assertThat(context).doesNotHaveBean(PushCatchupStatus.class));
     }
 
     @Test

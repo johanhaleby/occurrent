@@ -33,7 +33,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.AsynchronousSubscribables;
-import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
@@ -59,6 +59,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static org.occurrent.springboot.common.SubscriptionAnnotations.shouldWaitUntilStarted;
@@ -213,13 +214,13 @@ class ProjectionAnnotationRegistrar {
     void catchUpCollectedFeeds() {
         for (DomainFeedCatchUp pending : domainFeedsToCatchUp) {
             if (pending.waitUntilStarted()) {
-                pending.feed().catchUpAll().block();
+                recordingProgress(pending.id(), pending.feed().catchUpAll()).block();
             } else {
                 // startupMode = BACKGROUND. No thread of our own here, unlike the blocking twin: subscribing without
                 // blocking is all it takes, since the handover runs the replay on boundedElastic.
                 backgroundFeeds.add(pending.feed());
                 // cache() so close() can wait on the same run rather than starting a second one.
-                Mono<Void> catchUp = pending.feed().catchUpAll().cache();
+                Mono<Void> catchUp = recordingProgress(pending.id(), pending.feed().catchUpAll()).cache();
                 backgroundCatchUps.add(catchUp);
                 catchUp.subscribe(ignored -> {
                 }, error -> recordBackgroundFailure(pending.id(), error));
@@ -233,12 +234,25 @@ class ProjectionAnnotationRegistrar {
     private void recordBackgroundFailure(String id, Throwable error) {
         log.error("The background catch-up of projection {} failed. It has folded no history and will receive no live "
                 + "events until the application is restarted.", id, error);
-        // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the post
-        // processor directly has no reason to, and losing the record is better than losing the log too.
-        BackgroundCatchupFailures failures = applicationContext.getBeanProvider(BackgroundCatchupFailures.class).getIfAvailable();
-        if (failures != null) {
-            failures.recordFailure(id, error);
+        withPushCatchupStatus(status -> status.recordFailure(id, error));
+    }
+
+    // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the post
+    // processor directly has no reason to, and losing the record is better than losing the log too.
+    private void withPushCatchupStatus(Consumer<PushCatchupStatus> action) {
+        PushCatchupStatus status = applicationContext.getBeanProvider(PushCatchupStatus.class).getIfAvailable();
+        if (status != null) {
+            action.accept(status);
         }
+    }
+
+    // Wrap a domain-feed replay so an application can see where it is. A DomainEventFeed is not a subscription model,
+    // so unlike the push-model path there is nothing to ask afterwards and the state has to be recorded as it happens.
+    // A replay that errors records neither, leaving the subscriber's error handler to record the failure instead.
+    private Mono<Void> recordingProgress(String id, Mono<Void> replay) {
+        return Mono.<Void>fromRunnable(() -> withPushCatchupStatus(status -> status.recordCatchingUp(id)))
+                .then(replay)
+                .doOnSuccess(ignored -> withPushCatchupStatus(status -> status.recordLive(id)));
     }
 
     // Register a source=PUSH projection whose feed bean is a PushSubscriptionModel (CloudEvents). Wrapped in a
@@ -256,8 +270,15 @@ class ProjectionAnnotationRegistrar {
             // Retained so close() can stop it. Its replay runs on boundedElastic, so a context that closes without
             // stopping it leaves that replay folding into a store that is closing with it.
             pushModels.add(model);
+            // Asked rather than recorded, so a model that is stopped and started again, replaying a second time,
+            // reports catching up again instead of staying at whatever it reached the first time.
+            withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
             subscribable = model;
         } else {
+            // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because
+            // occurrent.subscription.mode = manual defers the subscription, and a recorded Live would tell a readiness
+            // probe that a projection nobody has started yet is ready to serve.
+            withPushCatchupStatus(status -> status.register(id, () -> false, () -> pushModel.isRunning(id)));
             subscribable = pushModel;
         }
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
@@ -310,6 +331,7 @@ class ProjectionAnnotationRegistrar {
             } else {
                 // Nothing to replay, so there is nothing to defer to catchUpCollectedFeeds(): go live right away.
                 feed.goLive(id).block();
+                withPushCatchupStatus(status -> status.recordLive(id));
             }
         } else {
             // register(...) alone puts the feed into buffering mode immediately, so deferring only the catch-up would
@@ -318,7 +340,9 @@ class ProjectionAnnotationRegistrar {
             // running the deferred work leaves the feed in the same state registering it under auto mode would.
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
                 registerOnFeed.run();
-                return catchesUp ? feed.catchUp(id) : feed.goLive(id);
+                return catchesUp
+                        ? recordingProgress(id, feed.catchUp(id))
+                        : feed.goLive(id).doOnSuccess(ignored -> withPushCatchupStatus(status -> status.recordLive(id)));
             });
         }
 

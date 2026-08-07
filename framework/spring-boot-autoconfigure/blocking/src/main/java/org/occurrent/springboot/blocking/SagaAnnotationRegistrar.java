@@ -31,12 +31,14 @@ import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
@@ -57,6 +59,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -168,14 +171,40 @@ class SagaAnnotationRegistrar {
             // and needs no subscription. Withholding it would leave an application that is deciding whether to start
             // this saga unable to look at the instances it already has, which is the decision manual mode exists for.
             publishSagaInstances(id, SagaInstances.of(stateStore));
-            applicationContext.getBean(ManualStartPushSources.class).register(id, () ->
-                    sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted)));
+            applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
+                SagaSubscription deferred = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
+                sagaSubscriptions.add(deferred);
+                watchBackgroundCatchUpIfNobodyElseWill(annotation, id, deferred, waitUntilStarted);
+            });
             return;
         }
 
         SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
+        if (push) {
+            watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
+        }
         publishSagaInstances(id, sagaSubscription.instances());
+    }
+
+    // Under startupMode = BACKGROUND nobody joins the replay, so a failure would reach no one. Worse, the model forgets
+    // a replay that failed while keeping the registration that now refuses events, so isCatchingUp answers false and
+    // the status would report a dead saga as live. Join it on a thread of this registrar's own purely to record it,
+    // the same watch the push projection registrar runs.
+    private void watchBackgroundCatchUpIfNobodyElseWill(org.occurrent.annotation.Saga annotation, String id, SagaSubscription subscription, boolean waitUntilStarted) {
+        if (waitUntilStarted || !catchesUp(annotation)) {
+            return;
+        }
+        Thread.ofVirtual().name("occurrent-saga-catchup-watch-" + id).start(() -> {
+            try {
+                subscription.waitUntilStarted();
+            } catch (RuntimeException | Error e) {
+                log.error("The background catch-up of saga {} failed. It has replayed no history and refuses every "
+                        + "live event, so the source redelivers rather than losing them. Fix the cause, then cancel "
+                        + "the subscription and start it again.", id, e);
+                withPushCatchupStatus(status -> status.recordFailure(id, e));
+            }
+        });
     }
 
     private static boolean catchesUp(org.occurrent.annotation.Saga annotation) {
@@ -186,17 +215,17 @@ class SagaAnnotationRegistrar {
     // occurrent.subscription.mode=manual leaves it as until the application resumes it, and what a saga starting in
     // the background is until its replay hands over. A model with no life cycle cannot answer, so those keep firing
     // timers as before.
-    private static BooleanSupplier timersEnabledFor(Subscribable subscribable, String subscriptionId) {
-        if (subscribable instanceof CatchupThenPushSubscriptionModel catchupThenPush) {
-            // isRunning(id) is true throughout the replay, so it cannot stand in for the handover here. A timeout that
-            // fires mid-replay decides against state that is only half folded up, which is the one thing a saga
-            // catching up before it goes live is meant to avoid.
-            return () -> catchupThenPush.isRunning(subscriptionId) && !catchupThenPush.isCatchingUp(subscriptionId);
+    static BooleanSupplier timersEnabledFor(Subscribable subscribable, String subscriptionId) {
+        if (!(subscribable instanceof SubscriptionModelLifeCycle lifeCycle)) {
+            return () -> true;
         }
-        if (subscribable instanceof SubscriptionModelLifeCycle lifeCycle) {
-            return () -> lifeCycle.isRunning(subscriptionId);
-        }
-        return () -> true;
+        // isRunning(id) is true throughout a replay, so it cannot stand in for the handover here. A timeout that fires
+        // mid-replay decides against state that is only half folded up, which is the one thing a saga catching up
+        // before it goes live is meant to avoid. Asked through the capability rather than a concrete class, so an
+        // event-store catch-up model behind a durable wrapper is held to it too, not only the push one.
+        return ReplayAwareSubscriptionModel.of(subscribable)
+                .<BooleanSupplier>map(replayAware -> () -> lifeCycle.isRunning(subscriptionId) && !replayAware.isCatchingUp(subscriptionId))
+                .orElse(() -> lifeCycle.isRunning(subscriptionId));
     }
 
     /**
@@ -254,6 +283,10 @@ class SagaAnnotationRegistrar {
             throw new IllegalArgumentException("@Saga '%s' with source=PUSH resolved a %s, which is not a PushSubscriptionModel.".formatted(id, feedBean.getClass().getName()));
         }
         if (annotation.catchup() == org.occurrent.annotation.Catchup.NONE) {
+            // No history to replay, so it is live as soon as it is running. Asked rather than recorded because
+            // occurrent.subscription.mode = manual withholds a push saga, and a recorded Live would tell a readiness
+            // probe that a saga nobody has started yet is ready to serve.
+            withPushCatchupStatus(status -> status.register(id, () -> false, () -> pushModel.isRunning(id)));
             return pushModel;
         }
         PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", PositionOrderedReader.class, id);
@@ -264,7 +297,19 @@ class SagaAnnotationRegistrar {
         // it leaves that replay folding into a store that is closing with it, and a saga folding a replayed history is
         // one that issues commands while it does so.
         pushModels.add(model);
+        // Asked rather than recorded, so a model that is stopped and started again, replaying a second time, reports
+        // catching up again instead of staying at whatever it reached the first time.
+        withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
         return model;
+    }
+
+    // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the post
+    // processor directly has no reason to.
+    private void withPushCatchupStatus(Consumer<PushCatchupStatus> action) {
+        PushCatchupStatus status = applicationContext.getBeanProvider(PushCatchupStatus.class).getIfAvailable();
+        if (status != null) {
+            action.accept(status);
+        }
     }
 
     /**

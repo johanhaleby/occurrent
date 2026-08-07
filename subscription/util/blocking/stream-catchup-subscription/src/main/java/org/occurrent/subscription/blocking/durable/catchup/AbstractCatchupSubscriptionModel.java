@@ -23,6 +23,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
@@ -40,7 +41,7 @@ import java.util.function.Function;
  * stream module both modes build against.
  */
 @NullMarked
-abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
+abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, ReplayAwareSubscriptionModel {
 
     protected final CheckpointAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;
@@ -86,6 +87,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     @Override
     public boolean isRunning(String subscriptionId) {
         return runningCatchupSubscriptions.containsKey(subscriptionId) || getDelegatedSubscriptionModel().isRunning(subscriptionId);
+    }
+
+    @Override
+    public boolean isCatchingUp(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return runningCatchupSubscriptions.containsKey(subscriptionId);
     }
 
     @Override

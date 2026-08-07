@@ -26,6 +26,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
@@ -80,7 +81,7 @@ import java.util.stream.Stream;
  * delegated per-subscription to {@link BlockingHandover}, shared with {@code CatchupProjectionFeed}.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, ReplayAwareSubscriptionModel {
 
     private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
 
@@ -356,14 +357,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     /**
-     * Whether {@code subscriptionId} is still replaying history and has not yet handed over to the live feed.
-     * <p>
-     * Deliberately not answerable from {@link #isRunning(String)}, which is {@code true} throughout a replay, matching
-     * what an event-store catch-up model reports. A caller that needs the handover specifically has to be able to ask
-     * for it: a saga fed by this model gates its timers on being live, and firing a timeout mid-replay would decide
-     * against state that is only half folded up. {@code false} for an id this model has never seen, so absence and
-     * handed-over read the same way, which is what a poll wants.
+     * Whether {@code subscriptionId} is still replaying history and has not yet handed over to the live feed. Here
+     * {@link #isRunning(String)} is {@code true} throughout the replay, matching what an event-store catch-up model
+     * reports, which is why the handover needs an answer of its own.
      */
+    @Override
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return replayingSubscriptions.containsKey(subscriptionId);
