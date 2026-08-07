@@ -37,6 +37,10 @@
   recommendation goes IN THE CHIP TITLE (suffix like "· Opus/high"), because the model is chosen at the
   chip and the brief's opening line only displays after launch — a recommendation that renders after its
   decision informs nothing.
+  Second addendum (2026-08-07): plan-first sessions end their planning phase with a downshift
+  recommendation at the plan-approval gate ("implementation is Sonnet/medium, switch before approving"),
+  derived from the approved plan's actual shape — the planning tier is often oversized for what follows,
+  and the approval gate is the one moment the user is present with the model picker at hand.
 - One failed lookup command is not evidence of absence (2026-08-06 correction). An `ls` of a skill's SKILL.md
   returned a false negative and the conclusion "no orchestrator skill" was acted on for a whole dispatch round.
   Before asserting a skill or file does not exist, list the parent directory. The user naming a thing is a strong
