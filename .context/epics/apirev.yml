@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 14
-updated_at: '2026-08-07T11:15:55+00:00'
+revision: 17
+updated_at: '2026-08-07T11:28:19+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
 baseline:
   repo: johanhaleby/occurrent
@@ -161,24 +161,24 @@ units:
     issue: 582
     goal: filter-matching parity (numerics, array traversal, subscribe-time refusal,
       reader rename)
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - A3
     session: null
     deliverables:
     - check: pr_merged
       ref: 607
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED 2026-08-07T11:28:19+00:00 at 2d1220436, all green, 0 threads
     - check: issue_closed
       ref: 582
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #582'
     blocking_on: []
-    next_action: session re-merges main; CAS-merge on fresh green head
-    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T11:28:19+00:00'
     observed:
       pr_607:
         head: ef67ee312
@@ -191,15 +191,15 @@ units:
   A6:
     issue: 583
     goal: saga keyless-redelivery posture
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
     - A4
-    session: null
+    session: local_974c0434-0e46-45e4-be6b-0d0d8a6f5413
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 609
       met: false
       evidence: null
     - check: issue_closed
@@ -207,10 +207,18 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip spawned (task_725759fd, Opus/medium)
-    last_meaningful_progress_at: null
-    observed: {}
-    assessment: ''
+    next_action: session re-merges main; CAS-merge on fresh green head
+    last_meaningful_progress_at: '2026-08-07T11:18:51+00:00'
+    observed:
+      pr_609:
+        head: 975ea82ad
+        rollup: 27/27 green
+        threads_open: 0
+        mergeable: CONFLICTING
+        via: gh pr view + graphql
+        at: '2026-08-07T11:18:51+00:00'
+    assessment: 'decision landed: refuse by default, BEST_EFFORT opt-out for foreign
+      feeds, refused on EVENT_STORE sagas'
   A7:
     issue: 584
     goal: testing-artifact fixes (extension waits, empty clearing, flush builder)
@@ -332,10 +340,17 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: working
-    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
-    observed: {}
-    assessment: ''
+    next_action: 'session rebases over merged #607, finishes Map short-circuit, opens
+      the #587 PR'
+    last_meaningful_progress_at: '2026-08-07T11:28:19+00:00'
+    observed:
+      branch:
+        ref: worktree-apirev-b2-587
+        pushed: aa6b9af4b
+        half_done: streaming parser, 5-6x alloc win, JMH baseline for Mongo shape
+        via: session tail read
+        at: '2026-08-07T11:22:30+00:00'
+    assessment: healthy deliberate park at the collision boundary, exactly per brief
   B3:
     issue: 588
     goal: handover lock measurement
@@ -375,7 +390,7 @@ units:
     session: local_19e7ff47-f894-49f8-a06a-5f4418900184
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 610
       met: false
       evidence: null
     - check: issue_closed
@@ -383,9 +398,15 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: working
-    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
-    observed: {}
+    next_action: session handles 3 threads + re-merges main; then CAS-merge
+    last_meaningful_progress_at: '2026-08-07T11:18:51+00:00'
+    observed:
+      pr_610:
+        head: 57bfedce7
+        rollup: 27/27 green
+        threads_open: 3
+        via: gh pr view + graphql
+        at: '2026-08-07T11:18:51+00:00'
     assessment: ''
   B5:
     issue: 590

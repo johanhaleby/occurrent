@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
@@ -201,10 +202,15 @@ class SynchronousSubscriptionModelTest {
     }
 
     @Test
-    void without_a_transaction_a_filter_that_cannot_be_answered_only_costs_its_own_subscription() {
-        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
+    void without_a_transaction_a_filter_that_throws_while_matching_only_costs_its_own_subscription() {
+        // A model given no reader at all refuses a payload filter at subscribe time (see
+        // SynchronousSubscriptionModelPayloadFilterTest), so this uses a reader that is supplied but itself fails to
+        // read, which subscribe time cannot know in advance. The failure still has to land only on this subscription.
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw new IllegalStateException("reader failed");
+        };
+        SynchronousSubscriptionModel model = new SynchronousSubscriptionModel(throwingReader);
         List<String> handled = new ArrayList<>();
-        // No DataFieldReader was supplied, so this filter throws when it is evaluated rather than when it is registered.
         model.subscribe("payload-filtered", StreamSubscriptionFilter.filter(Filter.data("amount", Condition.eq(42))),
                 cloudEvent -> handled.add("payload-filtered"));
         model.subscribe("plain", cloudEvent -> handled.add("plain"));
@@ -212,7 +218,7 @@ class SynchronousSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> model.dispatch(List.of(cloudEvent("1", "NameDefined")), false));
 
         assertThat(handled).containsExactly("plain");
-        assertThat(thrown).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("cannot query the data field");
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("reader failed");
     }
 
     @Test

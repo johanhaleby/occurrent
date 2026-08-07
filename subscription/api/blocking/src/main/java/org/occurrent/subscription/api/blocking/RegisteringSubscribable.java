@@ -19,7 +19,7 @@ package org.occurrent.subscription.api.blocking;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
@@ -322,8 +322,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                 if (failed.contains(registration) || pausedSubscriptions.contains(registration.id())) {
                     continue;
                 }
-                // The matcher is inside the try, not just the action: a filter on a payload field throws from here when
-                // the model was given no DataFieldReader, and one subscription's filter must not cost the others theirs.
+                // The matcher is inside the try, not just the action: a supplied DataFieldReader that itself fails to
+                // read can still throw from here, and one subscription's filter must not cost the others theirs. A
+                // model given no reader at all refuses a payload filter earlier, at subscribe time.
                 try {
                     if (registration.matcher().test(cloudEvent)) {
                         registration.action().accept(cloudEvent);

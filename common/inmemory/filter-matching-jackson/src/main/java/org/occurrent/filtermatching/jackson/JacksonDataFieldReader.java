@@ -14,15 +14,17 @@
  * limitations under the License.
  */
 
-package org.occurrent.inmemory.filtermatching.jackson;
+package org.occurrent.filtermatching.jackson;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.filtermatching.DataFieldReader;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -82,17 +84,30 @@ public class JacksonDataFieldReader implements DataFieldReader {
             return Optional.empty();
         }
 
-        Object current = root;
-        for (String segment : path.split("\\.")) {
-            if (!(current instanceof Map<?, ?> map)) {
-                // Covers a root that is not an object (an array, a bare number, a bare string, ...) on the first
-                // segment, and a path that continues past a value with no fields of its own on a later one. MongoDB
-                // treats a non-object root the same way: as an opaque value it cannot reach by field.
-                return Optional.empty();
-            }
-            current = map.get(segment);
+        return resolve(root, path.split("\\."), 0);
+    }
+
+    // A dotted path is resolved one segment at a time, the way MongoDB resolves it. A Map is stepped into by key.
+    // An array is stepped into element by element, the same "any element" reading FilterMatcher's anyElementMatches
+    // gives the result, so items.sku against [{"sku":"a"},{"sku":"b"}] reaches into both rather than stopping at the
+    // array. Anything else (a bare number, a bare string, ...) is an opaque value with no field to step into, which
+    // covers a non-object root on the first segment and a path that continues past a value with no fields of its own
+    // on a later one; MongoDB stops the same way, but only for that case, not for the array case above it.
+    private static Optional<Object> resolve(@Nullable Object current, String[] pathSegments, int segmentIndex) {
+        if (segmentIndex == pathSegments.length) {
+            return Optional.ofNullable(current);
         }
-        return Optional.ofNullable(current);
+        if (current instanceof List<?> list) {
+            List<Object> matched = new ArrayList<>();
+            for (Object element : list) {
+                resolve(element, pathSegments, segmentIndex).ifPresent(matched::add);
+            }
+            return matched.isEmpty() ? Optional.empty() : Optional.of(matched);
+        }
+        if (!(current instanceof Map<?, ?> map)) {
+            return Optional.empty();
+        }
+        return resolve(map.get(pathSegments[segmentIndex]), pathSegments, segmentIndex + 1);
     }
 
     private static @Nullable byte[] dataBytes(CloudEvent cloudEvent) {

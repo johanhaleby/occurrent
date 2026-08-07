@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.inmemory.filtermatching.jackson;
+package org.occurrent.filtermatching.jackson;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -82,6 +82,28 @@ class JacksonDataFieldReaderTest {
         assertThat(value).isPresent();
         assertThat(value.get()).isInstanceOf(List.class);
         assertThat(value.get()).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST).containsExactly("red", "blue");
+    }
+
+    @Test
+    void a_dotted_path_traverses_an_array_of_objects_the_way_mongodb_does() {
+        CloudEvent event = eventWithJson("{\"items\":[{\"sku\":\"a\"},{\"sku\":\"b\"}]}");
+        Optional<Object> value = reader.read(event, "items.sku");
+        assertThat(value).isPresent();
+        assertThat(value.get()).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST).containsExactly("a", "b");
+    }
+
+    @Test
+    void a_dotted_path_through_an_array_of_objects_skips_an_element_missing_the_field() {
+        CloudEvent event = eventWithJson("{\"items\":[{\"sku\":\"a\"},{\"other\":\"x\"}]}");
+        Optional<Object> value = reader.read(event, "items.sku");
+        assertThat(value).isPresent();
+        assertThat(value.get()).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.LIST).containsExactly("a");
+    }
+
+    @Test
+    void is_empty_when_a_dotted_path_through_an_array_of_objects_matches_no_element() {
+        CloudEvent event = eventWithJson("{\"items\":[{\"other\":\"x\"}]}");
+        assertThat(reader.read(event, "items.sku")).isEmpty();
     }
 
     @Test

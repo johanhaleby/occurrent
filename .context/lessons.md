@@ -57,6 +57,13 @@
   its polls: ci-wait paced on observed check durations with a ~3x stuck threshold, worker-wait and
   human-wait on a long heartbeat because end-of-session notifications arrive event-driven, action-ready
   acted on immediately. Only ceilings stay as numbers; the rule lives in the /orchestrator skill.
+- The user noticing fleet progress before the orchestrator is a detection defect (2026-08-07
+  correction). Worker sessions that deliver a PR and stay open emit no signal, and chip-start notices
+  can arrive minutes late, so mid-tick deliveries silently waited up to a full heartbeat (A6 and B4 sat
+  delivered for ~45 minutes until Johan asked). The fix is a persistent work-item Monitor armed at epic
+  start, diffing the open-PR set so every delivery, head change, and mergeable flip wakes the loop
+  immediately; the heartbeat then only catches stuck states. Never respond to a missed event by
+  shortening the heartbeat.
 - A merge under authority is compare-and-swap, never a plain merge (2026-08-07, found by the A2 session).
   gh pr merge acts on whatever head the API resolves at execution, so a worker push in the read-to-merge
   window is silently dropped from the squash — #597 lost a follow-up commit this way (it became #601).

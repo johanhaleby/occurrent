@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.inmemory.filtermatching;
+package org.occurrent.filtermatching;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
@@ -55,8 +55,20 @@ public interface DataFieldReader {
     Optional<Object> read(CloudEvent cloudEvent, String path);
 
     /**
-     * A reader that refuses, which is how a store behaves when it was given none. It throws rather than answering
-     * empty, because answering empty would report "no event matched" for a question the store cannot answer.
+     * Whether this reader can actually answer a payload condition. {@link #refusing()} is the only implementation that
+     * answers {@code false}; every other reader, including a caller's own, answers a field and so keeps the default.
+     * <p>
+     * A caller that builds a subscription or a store checks this before the first event arrives, together with
+     * whether the filter it was given contains a condition on a {@code data} field at all, so a filter this reader can
+     * never honor is refused up front rather than on the first event that would have needed it.
+     */
+    default boolean supportsPayloadFields() {
+        return true;
+    }
+
+    /**
+     * A reader that refuses, which is how a store or subscription behaves when it was given none. It throws rather
+     * than answering empty, because answering empty would report "no event matched" for a question it cannot answer.
      * <p>
      * It throws {@link UnsupportedOperationException} rather than an argument exception because no filter the caller
      * passes makes a payload readable: the reader is a construction-time argument, so the fix is to build the store or
@@ -64,10 +76,27 @@ public interface DataFieldReader {
      * with.
      */
     static DataFieldReader refusing() {
-        return (cloudEvent, path) -> {
-            throw new UnsupportedOperationException("This store cannot query the data field, because it was not given a "
-                    + DataFieldReader.class.getSimpleName() + ". Supply one to filter on a payload field, for example "
-                    + "the Jackson-backed reader in occurrent-common-inmemory-filter-matching-jackson.");
+        return new DataFieldReader() {
+            @Override
+            public Optional<Object> read(CloudEvent cloudEvent, String path) {
+                throw unsupportedPayloadFieldException();
+            }
+
+            @Override
+            public boolean supportsPayloadFields() {
+                return false;
+            }
         };
+    }
+
+    /**
+     * The exception a caller with no working {@link DataFieldReader} raises for a condition on a {@code data} field,
+     * whether that is {@link #refusing()} answering a read it cannot perform or a subscription refusing such a filter
+     * before one ever reaches it. Both name the same fix, so both word it identically.
+     */
+    static UnsupportedOperationException unsupportedPayloadFieldException() {
+        return new UnsupportedOperationException("This store cannot query the data field, because it was not given a "
+                + DataFieldReader.class.getSimpleName() + ". Supply one to filter on a payload field, for example "
+                + "the Jackson-backed reader in occurrent-common-inmemory-filter-matching-jackson.");
     }
 }
