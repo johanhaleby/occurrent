@@ -32,6 +32,7 @@ import org.occurrent.retry.RetryStrategy;
 import java.net.URI;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
@@ -115,11 +116,13 @@ class ProjectionsTest {
         repository.save("k", new VersionedCount(0, 0));
         MaterializedView<Tick> view = Projections.materializedView(tickProjection(), repository);
 
-        List<Future<?>> results = runConcurrently(view, "k");
+        List<Future<Void>> results = runConcurrently(view, "k");
 
-        // One of the two folds loses its save silently: it read the same state the other thread read, and the other
-        // thread's save already moved the version on, so its own save overwrites rather than accumulates. Exactly one
-        // of the two futures surfaces the store's conflict, and the stored value reflects only one tick, not two.
+        // One of the two updates is lost. Both threads read the same state, the first save wins, and the second save
+        // conflicts because the store detects the version moved on. This store throws on that conflict, so exactly one
+        // future surfaces the exception, and with no retry strategy that exception is the whole failure, not recovery,
+        // so the stored value reflects only one tick, not two. A store that never detects the conflict would instead
+        // let the second save overwrite the first with no exception at all, losing the update with no signal either.
         long failures = results.stream().filter(ProjectionsTest::failed).count();
         assertThat(failures).isEqualTo(1);
         assertThat(repository.findById("k")).hasValueSatisfying(state -> assertThat(state.value()).isEqualTo(1));
@@ -133,7 +136,7 @@ class ProjectionsTest {
         RetryStrategy retryOnConflict = RetryStrategy.retry().maxAttempts(5).retryIf(ConflictingWriteException.class::isInstance);
         MaterializedView<Tick> view = Projections.materializedView(tickProjection(), repository, retryOnConflict);
 
-        List<Future<?>> results = runConcurrently(view, "k");
+        List<Future<Void>> results = runConcurrently(view, "k");
 
         // Both transitions survive: the losing thread's save conflicts, the retry re-reads what the winner saved,
         // refolds, and saves again, so no future surfaces an exception and the stored value reflects both ticks.
@@ -141,28 +144,23 @@ class ProjectionsTest {
         assertThat(repository.findById("k")).hasValueSatisfying(state -> assertThat(state.value()).isEqualTo(2));
     }
 
-    private static List<Future<?>> runConcurrently(MaterializedView<Tick> view, String key) throws Exception {
+    // invokeAll itself enforces the 5-second bound per task, so a stuck task (a barrier that never fills) fails the
+    // test with a timeout instead of the later failed() calls hanging on an unbounded get().
+    private static List<Future<Void>> runConcurrently(MaterializedView<Tick> view, String key) throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            List<Future<?>> results = List.of(
-                    pool.submit(() -> view.update(new Tick(key))),
-                    pool.submit(() -> view.update(new Tick(key))));
-            for (Future<?> result : results) {
-                try {
-                    result.get(5, TimeUnit.SECONDS);
-                } catch (Exception ignored) {
-                    // Collected below via failed(), not rethrown here, so the sibling future is still awaited.
-                }
-            }
-            return results;
+            List<Callable<Void>> tasks = List.of(
+                    () -> { view.update(new Tick(key)); return null; },
+                    () -> { view.update(new Tick(key)); return null; });
+            return pool.invokeAll(tasks, 5, TimeUnit.SECONDS);
         } finally {
-            pool.shutdown();
+            pool.shutdownNow();
         }
     }
 
     private static boolean failed(Future<?> result) {
         try {
-            result.get();
+            result.get(1, TimeUnit.SECONDS);
             return false;
         } catch (Exception e) {
             return true;

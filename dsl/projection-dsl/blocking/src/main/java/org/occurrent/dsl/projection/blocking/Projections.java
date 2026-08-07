@@ -56,10 +56,12 @@ public final class Projections {
      * {@link #materializedView(Projection, ViewStateRepository, String)} with the single-instance key for those.
      * <p>
      * This does a plain read, fold, and save with no retry of its own, so two threads folding two events for the same
-     * instance can both read the same state and the second save then overwrites the first. That is reachable wherever
-     * a live push sink is fed by more than one thread. Use
-     * {@link #materializedView(Projection, ViewStateRepository, RetryStrategy)} to recover from it, and read what it
-     * says about what retry can and cannot fix.
+     * instance can both read the same state before either saves. What happens to the losing save then depends on the
+     * store. A store with no conflict detection lets the second save overwrite the first with no signal at all. A store
+     * that does detect the conflict (optimistic locking, a unique-key violation) throws instead, and that failure is
+     * still a lost update on this overload, since nothing here retries it. That is reachable wherever a live push sink
+     * is fed by more than one thread. Use {@link #materializedView(Projection, ViewStateRepository, RetryStrategy)} to
+     * recover from it, and read what it says about what retry can and cannot fix.
      */
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         return materializedView(projection, repository, RetryStrategy.none());
