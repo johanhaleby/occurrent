@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 7
-updated_at: '2026-08-07T07:32:41+00:00'
+revision: 8
+updated_at: '2026-08-07T07:40:40+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (a84288ce)
 baseline:
   repo: johanhaleby/occurrent
@@ -9,7 +9,15 @@ baseline:
 authority: see .context/orchestrator-policy.yml (standing merge, sibling leniency,
   reasoned-decline-open; granted 2026-08-06/07); prose history in ORCHESTRATOR.md
 milestone: 1
-pending_actions: []
+pending_actions:
+- id: act-020
+  type: rerun
+  target: 596 Java CI failed jobs at head 1869398b9
+  expected: example-domain java-21 SUCCESS at same head
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-07T07:40:40+00:00'
 units:
   A1:
     issue: 578
@@ -27,28 +35,28 @@ units:
     - check: branch_pushed
       repo: occurrent-org.github.io
       ref: docs/push-delivery-contract
-      met: false
-      evidence: null
+      met: true
+      evidence: docs/push-delivery-contract on remote, ls-remote verified 2026-08-07T07:40:40+00:00
     - check: issue_closed
       ref: 578
       met: false
       evidence: null
     blocking_on: []
-    next_action: session to merge main again (3 siblings landed) and push the missing
-      docs branch; then merge
-    last_meaningful_progress_at: '2026-08-07T07:17:50+00:00'
+    next_action: rerun of failed shard issued at same head; CAS-merge on green
+    last_meaningful_progress_at: '2026-08-07T07:40:40+00:00'
     observed:
       pr_596:
-        head: 6d63a3b74
-        rollup: 24/24 green
+        head: 1869398b9
+        rollup: 26/27 green; example-domain@java-21 FAILED (DependencyResolutionException,
+          infra flake, java-25 sibling green)
         threads_open: 5
-        mergeable: CONFLICTING
-        via: gh pr list + graphql
-        at: '2026-08-07T07:17:50+00:00'
+        mergeable: MERGEABLE
+        via: gh + graphql + run log
+        at: '2026-08-07T07:40:40+00:00'
       docs_branch:
-        exists_on_remote: false
-        via: git ls-remote occurrent-org.github.io docs/*
-        at: 2026-08-07 06:40:00+00:00
+        exists_on_remote: true
+        via: git ls-remote
+        at: '2026-08-07T07:40:40+00:00'
     assessment: 5 open threads are reasoned declines, non-blocking per standing rule;
       shard failures are real (cross-JDK); docs-branch gap newly discovered by this
       file's generation
@@ -96,10 +104,11 @@ units:
     deliverables:
     - check: manual_approval
       ref: Johan rules on sealed-family vs @throws floor
-      met: false
-      evidence: null
+      met: true
+      evidence: decision round concluded in-session (sealed refusal family; after-release
+        docs chip exists)
     - check: pr_merged
-      ref: null
+      ref: 603
       met: false
       evidence: null
     - check: issue_closed
@@ -107,9 +116,15 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: await its structured ask to Johan
-    last_meaningful_progress_at: 2026-08-07 06:26:00+00:00
-    observed: {}
+    next_action: session pr-fix owns the 8 failures; watch via no-progress rule
+    last_meaningful_progress_at: '2026-08-07T07:40:40+00:00'
+    observed:
+      pr_603:
+        head: 3e6c2a882
+        rollup: 19 green, 8 FAILURE, session actively fixing
+        threads_open: null
+        via: gh pr list
+        at: '2026-08-07T07:40:40+00:00'
     assessment: planning active in session zen-hypatia
   A4:
     issue: 581
