@@ -22,6 +22,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.annotation.RedeliveryDetection;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.Saga;
 import org.occurrent.annotation.Source;
@@ -107,6 +108,16 @@ class SagaAnnotationPushValidationTest {
             assertThat(context).hasFailed();
             assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
                     .hasMessageContaining("must be a PushSubscriptionModel for source=PUSH");
+        });
+    }
+
+    @Test
+    void an_event_store_saga_that_relaxes_redelivery_detection_is_told_it_can_always_recognise_one() {
+        runner.withUserConfiguration(EventStoreBestEffortConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .hasMessageContaining("sets redeliveryDetection, which only applies to source=PUSH")
+                    .hasMessageContaining("can always recognise a redelivery");
         });
     }
 
@@ -211,6 +222,21 @@ class SagaAnnotationPushValidationTest {
 
     static class ResumeBehaviorSaga {
         @Saga(id = "push-resume", source = Source.PUSH, resumeBehavior = ResumeBehavior.SAME_AS_START_AT)
+        org.occurrent.dsl.saga.Saga<TestEvent, String, TestCommand> saga() {
+            return testSaga();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class EventStoreBestEffortConfiguration {
+        @Bean
+        EventStoreBestEffortSaga eventStoreBestEffortSaga() {
+            return new EventStoreBestEffortSaga();
+        }
+    }
+
+    static class EventStoreBestEffortSaga {
+        @Saga(id = "event-store-best-effort", redeliveryDetection = RedeliveryDetection.BEST_EFFORT)
         org.occurrent.dsl.saga.Saga<TestEvent, String, TestCommand> saga() {
             return testSaga();
         }

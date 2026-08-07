@@ -1,6 +1,6 @@
 # Upgrading to Occurrent 0.32.0
 
-Five things break, and only if you use the features they belong to.
+Seven things break, and only if you use the features they belong to.
 
 **At compile time**, if you write reactive subscriptions, one type was renamed. The reactor `SubscriptionModel` is now
 `FluxSubscriptionModel`. The recipe below rewrites it for you. Read
@@ -27,7 +27,11 @@ registered instead of returning normally, so the message goes unacknowledged rat
 instead of calls serialised behind a lock. Read
 [section 14](#14-a-live-push-handler-can-now-be-called-concurrently).
 
-Fourteen things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+**Also at runtime**, if you run a saga off a push feed, an event carrying none of the Occurrent stream metadata is now
+refused instead of reacted to, because the saga cannot tell a redelivery of it from a new event. Read
+[section 15](#15-a-saga-refuses-an-event-it-cannot-recognise-a-redelivery-of).
+
+Fifteen things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
 `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
 first failing handler, the reactor subscription primitive was renamed, a durable reactor model refuses a composition it
@@ -36,8 +40,9 @@ replays on its own thread and no longer discards events after a failed replay,
 `NativeMongoLeaseCompetingConsumerStrategy` moved to the package every other native-driver subscription type uses,
 `CompetingConsumerSubscriptionModel` refuses two calls it used to accept, a second `start()` is allowed while
 `waitUntilStarted` stops saying yes when it means no, a domain-event feed refuses an event when no projection is
-registered, every way a subscription model can refuse a call now has its own exception type, and a live push handler
-can be called concurrently instead of queueing behind one lock.
+registered, every way a subscription model can refuse a call now has its own exception type, a live push handler can be
+called concurrently instead of queueing behind one lock, and a saga refuses an event it cannot recognise a redelivery
+of.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -829,3 +834,57 @@ the order `accept` was called.
 
 [ADR 107](../architecture/decisions/0108-a-live-push-handler-runs-outside-the-handover-lock.md) has the reasoning,
 including the benchmark that measured the win before this was decided.
+
+## 15. A saga refuses an event it cannot recognise a redelivery of
+
+Only relevant if you run a saga off a push feed, either with `@Saga(source = PUSH)` or by handing a
+`PushSubscriptionModel` to `SagaRunner` yourself.
+
+A saga tells a redelivered event from a new one by its `streamid` together with its `streamversion`, or by its
+`position`. An event carrying none of those leaves nothing to compare against, so the saga used to react to every
+delivery of it and issue that reaction's commands again each time, having logged one warning about it when the first
+such event arrived. It now throws `SagaRedeliveryDetectionException` before the reaction runs. The exception reaches
+the feed, so the event is not acknowledged and your broker offers it again.
+
+Events read from the event store always carry the metadata, so an event-store saga cannot reach this, and neither can
+the catch-up leg in front of a push feed. It is the live leg that depends on what your listener forwards.
+
+### If your listener drops the extensions
+
+This is the usual cause. A listener that rebuilds a CloudEvent from a broker message, or converts a domain event with
+a `CloudEventConverter` and forwards the result, produces an event with none of the Occurrent extensions on it. Carry
+them across instead:
+
+```java
+@RabbitListener(queues = "orders")
+public void onOrderEvent(CloudEvent incoming) {
+    orderFeed.accept(incoming); // as received, with its streamid and streamversion intact
+}
+```
+
+### If the feed genuinely carries none of them
+
+An application fed by another application's broker often cannot produce that metadata, because whoever writes those
+events is not running Occurrent. Say so, and the saga takes the events with one warning, exactly as it did before:
+
+```java
+@Saga(id = "shipping", source = PUSH, catchup = Catchup.NONE,
+      redeliveryDetection = RedeliveryDetection.BEST_EFFORT)
+Saga<OrderEvent, ShippingState, ShippingCommand> shippingSaga() { ... }
+```
+
+Driving `SagaRunner` yourself, the same choice lives on the configuration:
+
+```java
+SagaRunnerConfig config = SagaRunnerConfig.defaults()
+        .withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT);
+```
+
+Choose this knowing what it costs. Every redelivery runs every reaction of that saga again and issues its commands
+again, so each command has to be safe to receive more than once. Setting it on a `source = EVENT_STORE` saga is
+rejected at startup, since those events always carry the metadata and there would be nothing for it to change.
+
+### Why
+
+[ADR 109](../architecture/decisions/0109-a-saga-refuses-an-event-it-cannot-recognise-a-redelivery-of.md) records the
+decision, including why the opt-out exists rather than the refusal being unconditional.

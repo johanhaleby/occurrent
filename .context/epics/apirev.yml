@@ -1,8 +1,8 @@
 schema_version: 1
 epic: apirev
-revision: 19
-updated_at: '2026-08-07T11:41:00+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (A6 round-2 head up, A11 adopted)
+revision: 20
+updated_at: '2026-08-07T11:58:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (A6 merged, WAVE A COMPLETE, B4 hold lifted)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -191,35 +191,35 @@ units:
   A6:
     issue: 583
     goal: saga keyless-redelivery posture
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - A4
-    session: local_974c0434-0e46-45e4-be6b-0d0d8a6f5413
+    session: null
     deliverables:
     - check: pr_merged
       ref: 609
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED 2026-08-07T11:55Z at 36730abff49 (merge 3a2cca842), 27/27
+        green, 0 threads, changelog placement verified (Changes rewrite + Breaking
+        entry with migration link)
     - check: issue_closed
       ref: 583
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #583, verified by orchestrator'
     blocking_on: []
-    next_action: CAS-merge at 36730abff on green (round-2 rebase delivered; freeze
-      holds until this lands)
-    last_meaningful_progress_at: '2026-08-07T11:41:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T11:55:00+00:00'
     observed:
       pr_609:
-        head: 36730abff
-        rollup: checks running (0 failures so far)
-        threads_open: unrefreshed since round-2 push
-        mergeable: MERGEABLE
-        via: gh pr list + monitor
-        at: '2026-08-07T11:41:00+00:00'
-        note: old head 0100c4e6f finished 26/27 with subscription-mongodb-spring@java-21
-          the sole failure (java-25 green, flaky-suspect); superseded by this head
+        state: MERGED
+        merge_commit: 3a2cca842
+        via: gh pr view post-merge
+        at: '2026-08-07T11:55:00+00:00'
+    assessment: 'refuse-by-default posture shipped (ADR 0109, SagaRedeliveryDetectionException,
+      BEST_EFFORT opt-out); old-head java-21 shard failure died with its head, did
+      not recur; session archived, branch and worktree removed'
     assessment: 'decision landed: refuse by default, BEST_EFFORT opt-out for foreign
       feeds, refused on EVENT_STORE sagas'
   A7:
@@ -401,9 +401,10 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'HOLD merge until A6/#609 lands (anti-cascade priority: A6 is the
-      last tag-gating PR); then threads + rebase + CAS-merge'
-    last_meaningful_progress_at: '2026-08-07T11:18:51+00:00'
+    next_action: 'hold LIFTED (A6 landed); session messaged 11:57Z to answer the 3
+      threads, merge main (cascade includes #609''s saga changes), verify changelog
+      placement, push; orchestrator CAS-merges on green'
+    last_meaningful_progress_at: '2026-08-07T11:57:00+00:00'
     observed:
       pr_610:
         head: 57bfedce7
@@ -553,17 +554,18 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'CAS-merge #614 on green, AFTER #609 lands (freeze order); tag-gating
-      since the push saga feature ships unreleased in 0.32.0'
-    last_meaningful_progress_at: '2026-08-07T11:35:31+00:00'
+    next_action: 'CAS-merge #614 on green (freeze gone with A6; tag-gating since the
+      push saga feature ships unreleased in 0.32.0); check threads at merge time'
+    last_meaningful_progress_at: '2026-08-07T11:58:00+00:00'
     observed:
       pr_614:
         head: efd90e1b2
-        rollup: checks running (0 failures so far)
-        threads_open: unchecked
-        mergeable: MERGEABLE
+        rollup: 2 checks pending, 0 failures
+        threads_open: unchecked (merge-time check)
+        mergeable: 'MERGEABLE, re-verified after the #609 merge (both PRs touch SagaAnnotationRegistrar,
+          no textual conflict)'
         via: gh pr list + monitor
-        at: '2026-08-07T11:41:00+00:00'
+        at: '2026-08-07T11:58:00+00:00'
       session:
         title: Shut down push saga catch-up models on context close
         running: false

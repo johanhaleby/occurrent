@@ -23,6 +23,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.blocking.RedeliveryDetection;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
@@ -114,6 +115,10 @@ class SagaAnnotationRegistrar {
             // Ignoring it would be the expensive kind of silence: someone reaching for catchup=NONE means "don't read
             // the history", and an event-store saga left on its default start position reads all of it.
             throw new IllegalArgumentException("@Saga '%s' sets catchup, which only applies to source=PUSH, where it decides whether the saga replays the event store before going live. An event-store saga chooses its history with startAt instead (startAt = NOW to skip it).".formatted(id));
+        } else if (annotation.redeliveryDetection() != org.occurrent.annotation.RedeliveryDetection.REQUIRED) {
+            // The event store's own events always carry the metadata, so BEST_EFFORT would relax a check that never
+            // fires. Accepting it would read as protection given up, which is not what happens.
+            throw new IllegalArgumentException("@Saga '%s' sets redeliveryDetection, which only applies to source=PUSH. An event-store saga reads events that always carry a streamid with a streamversion, so it can always recognise a redelivery.".formatted(id));
         }
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
@@ -127,7 +132,9 @@ class SagaAnnotationRegistrar {
         // A push model ignores StartAt, and a replay in front of it always starts at the beginning, so there is no
         // start position to compute. rejectStartPositionAttributes has already refused the four that would imply one.
         StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
-        SagaRunnerConfig config = SagaRunnerConfig.defaults().withTimerPollInterval(sagaTimerPollInterval());
+        SagaRunnerConfig config = SagaRunnerConfig.defaults()
+                .withTimerPollInterval(sagaTimerPollInterval())
+                .withRedeliveryDetection(redeliveryDetectionOf(annotation));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
         CompetingConsumerStrategy competingConsumerStrategy = resolveSagaCompetingConsumerStrategy();
@@ -227,6 +234,18 @@ class SagaAnnotationRegistrar {
      * startup path, so {@code BACKGROUND} has something to move off it. With {@code catchup = NONE} there is no replay
      * to wait for, so setting it is rejected rather than ignored.
      */
+    /**
+     * The declarative choice translated for the runner. The two enums are deliberately separate types, because the
+     * annotation module is a leaf that the saga DSL does not depend on, exactly as {@code Catchup} and
+     * {@code StartupMode} are declarative-only and translated here.
+     */
+    private static RedeliveryDetection redeliveryDetectionOf(org.occurrent.annotation.Saga annotation) {
+        return switch (annotation.redeliveryDetection()) {
+            case REQUIRED -> RedeliveryDetection.REQUIRED;
+            case BEST_EFFORT -> RedeliveryDetection.BEST_EFFORT;
+        };
+    }
+
     private void rejectStartPositionAttributes(org.occurrent.annotation.Saga annotation, String id) {
         if (annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT || annotation.startAtGlobalPosition() >= 0
                 || annotation.resumeBehavior() != org.occurrent.annotation.ResumeBehavior.DEFAULT) {
