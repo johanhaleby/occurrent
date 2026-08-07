@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 17
-updated_at: '2026-08-07T11:28:19+00:00'
+revision: 18
+updated_at: '2026-08-07T11:30:11+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
 baseline:
   repo: johanhaleby/occurrent
@@ -207,8 +207,9 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: session re-merges main; CAS-merge on fresh green head
-    last_meaningful_progress_at: '2026-08-07T11:18:51+00:00'
+    next_action: session re-merges main (round 2, cascade); all other epic merges
+      held for it; CAS-merge on green
+    last_meaningful_progress_at: '2026-08-07T11:30:11+00:00'
     observed:
       pr_609:
         head: 975ea82ad
@@ -398,7 +399,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: session handles 3 threads + re-merges main; then CAS-merge
+    next_action: 'HOLD merge until A6/#609 lands (anti-cascade priority: A6 is the
+      last tag-gating PR); then threads + rebase + CAS-merge'
     last_meaningful_progress_at: '2026-08-07T11:18:51+00:00'
     observed:
       pr_610:
