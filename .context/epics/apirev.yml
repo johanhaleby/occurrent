@@ -1,8 +1,8 @@
 schema_version: 1
 epic: apirev
-revision: 23
-updated_at: '2026-08-07T12:45:00+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (B4 merged and swept, only B2 open)
+revision: 24
+updated_at: '2026-08-07T13:00:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (B2 thread routed to session)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -11,6 +11,16 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   spun-off adoption is the epic default (granted 2026-08-07, structured ask on #604)'
 milestone: 1
 pending_actions:
+- id: act-021
+  type: message-session
+  target: 'B2 session local_8347fd08: answer the root-array Copilot thread on #615
+    (verify vs MongoDB, fix if real, reply, push)'
+  expected: 'thread on #615 gets a reply (fix or reasoned decline), fresh head if
+    code changed'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-07T12:58:00+00:00'
 - id: act-020
   type: rerun
   target: 596 Java CI failed jobs at head 1869398b9
@@ -341,16 +351,19 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: CAS-merge on green with threads handled (merge-time check)
-    last_meaningful_progress_at: '2026-08-07T12:20:00+00:00'
+    next_action: 'await session''s thread answer on the root-array parity question
+      (act-021); then CAS-merge on the resulting green head'
+    last_meaningful_progress_at: '2026-08-07T12:58:00+00:00'
     observed:
       pr_615:
         head: f5bc2b0c4
-        rollup: checks running, 0 failures
-        mergeable: UNKNOWN (fresh PR, recompute pending)
+        rollup: all checks green
+        mergeable: MERGEABLE
+        threads_open: 1 (Copilot, unanswered, BLOCKS - root-array traversal may
+          diverge from MongoDB and the class contract)
         title: Read a data filter field without materialising the whole payload
-        via: gh pr view + monitor
-        at: '2026-08-07T12:20:00+00:00'
+        via: gh pr view + graphql + monitor
+        at: '2026-08-07T12:58:00+00:00'
     assessment: 'delivered the #587 PR after the deliberate park; two targeted read
       paths replacing tree-parse-per-condition'
   B3:
