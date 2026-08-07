@@ -159,14 +159,40 @@ class SagaAnnotationRegistrar {
             // and needs no subscription. Withholding it would leave an application that is deciding whether to start
             // this saga unable to look at the instances it already has, which is the decision manual mode exists for.
             publishSagaInstances(id, SagaInstances.of(stateStore));
-            applicationContext.getBean(ManualStartPushSources.class).register(id, () ->
-                    sagaSubscriptions.add(runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted)));
+            applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
+                SagaSubscription deferred = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
+                sagaSubscriptions.add(deferred);
+                watchBackgroundCatchUpIfNobodyElseWill(annotation, id, deferred, waitUntilStarted);
+            });
             return;
         }
 
         SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
+        if (push) {
+            watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
+        }
         publishSagaInstances(id, sagaSubscription.instances());
+    }
+
+    // Under startupMode = BACKGROUND nobody joins the replay, so a failure would reach no one. Worse, the model forgets
+    // a replay that failed while keeping the registration that now refuses events, so isCatchingUp answers false and
+    // the status would report a dead saga as live. Join it on a thread of this registrar's own purely to record it,
+    // the same watch the push projection registrar runs.
+    private void watchBackgroundCatchUpIfNobodyElseWill(org.occurrent.annotation.Saga annotation, String id, SagaSubscription subscription, boolean waitUntilStarted) {
+        if (waitUntilStarted || !catchesUp(annotation)) {
+            return;
+        }
+        Thread.ofVirtual().name("occurrent-saga-catchup-watch-" + id).start(() -> {
+            try {
+                subscription.waitUntilStarted();
+            } catch (RuntimeException | Error e) {
+                log.error("The background catch-up of saga {} failed. It has replayed no history and refuses every "
+                        + "live event, so the source redelivers rather than losing them. Fix the cause, then cancel "
+                        + "the subscription and start it again.", id, e);
+                withPushCatchupStatus(status -> status.recordFailure(id, e));
+            }
+        });
     }
 
     private static boolean catchesUp(org.occurrent.annotation.Saga annotation) {
@@ -177,7 +203,7 @@ class SagaAnnotationRegistrar {
     // occurrent.subscription.mode=manual leaves it as until the application resumes it, and what a saga starting in
     // the background is until its replay hands over. A model with no life cycle cannot answer, so those keep firing
     // timers as before.
-    private static BooleanSupplier timersEnabledFor(Subscribable subscribable, String subscriptionId) {
+    static BooleanSupplier timersEnabledFor(Subscribable subscribable, String subscriptionId) {
         if (!(subscribable instanceof SubscriptionModelLifeCycle lifeCycle)) {
             return () -> true;
         }
