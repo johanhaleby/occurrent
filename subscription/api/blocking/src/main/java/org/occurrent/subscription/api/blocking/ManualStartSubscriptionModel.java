@@ -73,6 +73,11 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     private volatile State state = State.NOT_STARTED;
     private volatile boolean shutdown = false;
 
+    // Orders subscribe's choice between withholding and passing through against the state transitions. Without it,
+    // a registration can be stored as deferred just after start(true) walked past its claimed id, and then nothing
+    // ever starts it.
+    private final Object stateLock = new Object();
+
     private ManualStartSubscriptionModel(SubscriptionModel delegate, @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
                                          @Nullable CheckpointStorage checkpointStorage) {
         this.delegate = requireNonNull(delegate, SubscriptionModel.class.getSimpleName() + " cannot be null");
@@ -131,9 +136,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
 
         claim(subscriptionId);
         try {
-            if (state != State.RUNNING) {
-                registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action, capturePositionToPin()));
-                return new DeferredSubscription(subscriptionId);
+            // Captured before taking the lock, so a slow position source cannot block start(boolean).
+            @Nullable Checkpoint positionToPin = state != State.RUNNING ? capturePositionToPin() : null;
+            synchronized (stateLock) {
+                if (state != State.RUNNING) {
+                    registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action, positionToPin));
+                    return new DeferredSubscription(subscriptionId);
+                }
             }
             Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
             registrations.put(subscriptionId, new Registration.Live(subscription));
@@ -214,7 +223,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      */
     @Override
     public void stop() {
-        state = State.STOPPED;
+        synchronized (stateLock) {
+            state = State.STOPPED;
+        }
         delegate.stop();
     }
 
@@ -226,10 +237,15 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
         if (!delegate.isRunning()) {
             delegate.start(resumeSubscriptionsAutomatically);
         }
-        state = State.RUNNING;
+        synchronized (stateLock) {
+            state = State.RUNNING;
+        }
         if (resumeSubscriptionsAutomatically) {
-            // Fails on the first subscription that cannot start, leaving the rest registered. A partially started model
-            // is the honest outcome, and swallowing the failure to start the others would hide a broken subscription.
+            // Nothing new can be stored as deferred once the transition above is taken, so this walk sees every
+            // deferred registration, and a registration racing this method starts itself when it sees the running
+            // state. Fails on the first subscription that cannot start, leaving the rest registered. A partially
+            // started model is the honest outcome, and swallowing the failure to start the others would hide a
+            // broken subscription.
             for (String subscriptionId : registrationOrder) {
                 if (registrations.get(subscriptionId) instanceof Registration.Deferred) {
                     resumeSubscription(subscriptionId);
@@ -308,8 +324,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     // Resuming a subscription makes the wrapped model report itself running again, so this one must not disagree
     // while one of its own subscriptions is delivering. Nothing to undo when it was never started.
     private void reopenAfterStop() {
-        if (state == State.STOPPED) {
-            state = State.RUNNING;
+        synchronized (stateLock) {
+            if (state == State.STOPPED) {
+                state = State.RUNNING;
+            }
         }
     }
 

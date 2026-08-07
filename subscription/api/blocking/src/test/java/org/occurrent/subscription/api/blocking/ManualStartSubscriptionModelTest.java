@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 
@@ -343,6 +344,39 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_subscription_registered_while_the_model_is_being_started_is_still_started() throws Exception {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        CountDownLatch registrationInProgress = new CountDownLatch(1);
+        CountDownLatch startReturned = new CountDownLatch(1);
+        // Capturing the position to pin happens after the id is claimed but before the deferred registration is
+        // stored, so parking here holds the registering thread in the window a concurrent start(true) can run in.
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> {
+            registrationInProgress.countDown();
+            awaitOrFail(startReturned);
+            return null;
+        };
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Subscription> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            }));
+            assertThat(registrationInProgress.await(10, TimeUnit.SECONDS)).isTrue();
+            model.start(true);
+            startReturned.countDown();
+            registering.get(10, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(model.isRunning(SUBSCRIPTION_ID))
+                .as("start(true) starts everything registered, including a registration in progress while it ran")
+                .isTrue();
+        assertThat(delegate.subscribeCalls).extracting(SubscribeCall::subscriptionId).containsExactly(SUBSCRIPTION_ID);
+    }
+
+    @Test
     void starting_the_model_without_resuming_leaves_registrations_alone_but_lets_later_ones_through() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
@@ -435,6 +469,15 @@ class ManualStartSubscriptionModelTest {
 
     private static CloudEvent cloudEvent(String id) {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test.event").build();
+    }
+
+    private static void awaitOrFail(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private record SubscribeCall(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
