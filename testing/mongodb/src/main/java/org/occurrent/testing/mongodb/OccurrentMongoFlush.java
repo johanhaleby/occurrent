@@ -34,7 +34,12 @@ import java.util.*;
  *         .clearingStateWith(OccurrentMongoFlush.everyCollectionIn(mongoTemplate.getDb()))
  *         .clearingCheckpoints(checkpointStorage);
  * }</pre>
- * A test with no subscriptions to stop can register it on its own with {@code @RegisterExtension} instead.
+ * A test with no subscriptions to stop can register it on its own with {@code @RegisterExtension} instead, but that
+ * reintroduces the ordering hazard {@code clearingStateWith(Runnable)} exists to remove: JUnit runs sibling
+ * {@code @RegisterExtension} fields in declaration order by default, so a subscription model registered as its own
+ * extension could still be running while this flush deletes the documents underneath it. Give the flush field an
+ * explicit {@code @Order} before any subscription-stopping extension, or use {@code clearingStateWith(Runnable)}
+ * instead wherever there is a subscription model to compose with.
  *
  * <h2>Why it deletes rather than drops</h2>
  * Two things break when a test drops a collection or a database, and only one of them is loud.
@@ -122,13 +127,22 @@ public final class OccurrentMongoFlush implements Runnable, BeforeEachCallback {
     }
 
     /**
-     * Keep these collections' documents. Chains onto {@link #everyCollectionIn(MongoDatabase)}.
+     * Keep these collections' documents. Chains onto {@link #everyCollectionIn(MongoDatabase)} or
+     * {@link #collectionsIn(MongoDatabase, String...)}.
      *
      * @param collectionNames the collections to leave alone, must not be {@code null} and must not contain {@code null}
      * @return this flush, so the call can be chained
+     * @throws IllegalStateException if this flush drops the whole database. Dropping takes every collection with it,
+     *                                {@code except(..)} included, so calling it here would compile and then be
+     *                                ignored, silently keeping nothing.
      */
     public OccurrentMongoFlush except(String... collectionNames) {
         Objects.requireNonNull(collectionNames, "collectionNames must not be null");
+        if (dropDatabase) {
+            throw new IllegalStateException("except(..) does nothing on droppingTheDatabaseIn(..): a dropped database "
+                    + "takes every collection with it, so there is nothing left to except. Use "
+                    + "everyCollectionIn(database).except(..) if some collections must survive the flush.");
+        }
         for (String collectionName : collectionNames) {
             except.add(Objects.requireNonNull(collectionName, "collectionNames must not contain null"));
         }
@@ -138,8 +152,10 @@ public final class OccurrentMongoFlush implements Runnable, BeforeEachCallback {
     /**
      * Empties the database now.
      *
-     * @throws IllegalStateException if MongoDB refuses, naming the database, rather than leaving the previous test's
-     *                               data in place without saying so
+     * @throws IllegalStateException if {@code collectionsIn(..)} named collections and {@code except(..)} excluded
+     *                                every one of them, leaving nothing to empty, rather than silently doing nothing;
+     *                                or if MongoDB refuses, naming the database, rather than leaving the previous
+     *                                test's data in place without saying so
      */
     @Override
     public void run() {
@@ -151,6 +167,10 @@ public final class OccurrentMongoFlush implements Runnable, BeforeEachCallback {
                     database.getCollection(collection).deleteMany(EVERYTHING);
                 }
             }
+        } catch (IllegalStateException e) {
+            // Already the builder-contradiction message from collectionsToEmpty(), not a MongoDB failure to describe
+            // in terms of the database, so it passes through instead of being wrapped into a different message.
+            throw e;
         } catch (RuntimeException e) {
             throw new IllegalStateException("Could not empty the MongoDB database '" + database.getName()
                     + "', so this test would have started against whatever the previous one left behind.", e);
@@ -170,7 +190,17 @@ public final class OccurrentMongoFlush implements Runnable, BeforeEachCallback {
     // Read the names before deleting anything, rather than deleting while iterating the server's own cursor.
     private List<String> collectionsToEmpty() {
         if (!only.isEmpty()) {
-            return only.stream().filter(name -> !except.contains(name)).toList();
+            List<String> remaining = only.stream().filter(name -> !except.contains(name)).toList();
+            if (remaining.isEmpty()) {
+                // collectionsIn(db, "events").except("events") compiles and would otherwise flush nothing, silently,
+                // which is exactly the failure this class exists to avoid. everyCollectionIn(db).except(..) is not
+                // checked the same way: an empty result there just means the database has nothing to flush yet, which
+                // is a legitimate outcome rather than a contradiction between the two calls.
+                throw new IllegalStateException("collectionsIn(database, " + only + ") named only collections that "
+                        + "except(" + except + ") then excluded, leaving nothing to empty. Remove the overlap, or use "
+                        + "everyCollectionIn(database).except(..) if the intent is to empty everything but those.");
+            }
+            return remaining;
         }
         List<String> names = new ArrayList<>();
         for (Document collection : database.listCollections()) {

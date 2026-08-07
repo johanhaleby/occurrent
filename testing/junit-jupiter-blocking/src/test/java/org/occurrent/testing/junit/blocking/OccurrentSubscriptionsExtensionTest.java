@@ -32,6 +32,7 @@ import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionMo
 
 import java.lang.reflect.Proxy;
 import java.net.URI;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -409,13 +410,86 @@ class OccurrentSubscriptionsExtensionTest {
     }
 
     @Test
-    void clearing_checkpoints_fails_loudly_when_there_are_no_ids_to_clear_them_for() {
+    void clearing_checkpoints_is_a_no_op_when_there_are_no_ids_to_clear_them_for() {
+        CopyOnWriteArrayList<String> deleted = new CopyOnWriteArrayList<>();
         OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel)
-                .clearingCheckpoints(new RecordingCheckpointStorage(new CopyOnWriteArrayList<>()));
+                .clearingCheckpoints(new RecordingCheckpointStorage(deleted));
 
-        assertThatThrownBy(() -> runBeforeEach(extension))
-                .isExactlyInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("no subscription ids");
+        // Deleting nothing is the correct outcome for an empty set of ids, not a reason to fail every test in the class.
+        runBeforeEach(extension);
+
+        assertThat(deleted).isEmpty();
+    }
+
+    @Test
+    void clearing_checkpoints_for_names_ids_without_starting_them() {
+        CopyOnWriteArrayList<String> deleted = new CopyOnWriteArrayList<>();
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel)
+                .clearingCheckpointsFor(new RecordingCheckpointStorage(deleted), "orders", "shipments");
+        runBeforeEach(extension);
+
+        assertThat(deleted).containsExactlyInAnyOrder("orders", "shipments");
+        assertThat(subscriptionModel.isPaused("orders")).isFalse();
+        assertThat(subscriptionModel.isRunning("orders")).isFalse();
+    }
+
+    @Test
+    void clearing_checkpoints_for_rejects_an_empty_id_list() {
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
+
+        assertThatThrownBy(() -> extension.clearingCheckpointsFor(new RecordingCheckpointStorage(new CopyOnWriteArrayList<>())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be empty");
+    }
+
+    @Test
+    void a_subscription_that_does_not_start_within_the_timeout_fails_the_test_instead_of_hanging() {
+        subscriptionModel.subscribe("orders", event -> {
+        });
+        SubscriptionModelLifeCycle neverStarts = neverStartingModel();
+
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(neverStarts)
+                .withStartTimeout(Duration.ofMillis(50));
+
+        assertThatThrownBy(() -> extension.start("orders"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("orders")
+                .hasMessageContaining("withStartTimeout");
+    }
+
+    @Test
+    void with_start_timeout_rejects_a_non_positive_duration() {
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(subscriptionModel);
+
+        assertThatThrownBy(() -> extension.withStartTimeout(Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("positive");
+    }
+
+    // A subscription whose Subscription never reports started, so resumeAndWait's bounded wait is what has to save
+    // the test from hanging rather than the id lookup or the model's own resumeSubscription.
+    private static SubscriptionModelLifeCycle neverStartingModel() {
+        Subscription neverStartingSubscription = new Subscription() {
+            @Override
+            public String id() {
+                return "orders";
+            }
+
+            @Override
+            public boolean waitUntilStarted(Duration timeout) {
+                return false;
+            }
+        };
+        return (SubscriptionModelLifeCycle) Proxy.newProxyInstance(
+                OccurrentSubscriptionsExtensionTest.class.getClassLoader(),
+                new Class<?>[]{SubscriptionModelLifeCycle.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "resumeSubscription" -> neverStartingSubscription;
+                    case "isPaused" -> true;
+                    case "isRunning" -> false;
+                    case "stop", "start", "pauseSubscription", "cancelSubscription" -> null;
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
     }
 
     // Records the life-cycle calls in order while delegating to the real model, so the assertions above are about
