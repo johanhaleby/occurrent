@@ -162,14 +162,12 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @Override
     public synchronized void start(boolean resumeSubscriptionsAutomatically) {
         logDebug("Starting CompetingConsumer subscription model");
-        if (isRunning()) {
-            throw new IllegalStateException(CompetingConsumerSubscriptionModel.class.getSimpleName() + " is already started");
-        }
-
         stoppedByUser.set(false);
         if (!nonCompetingConsumersSubscriptions.isEmpty()) {
             delegate.start(false); // This will automatically start all paused subscriptions (including those in nonCompetingConsumersSubscriptions)
-            nonCompetingConsumersSubscriptions.forEach(delegate::resumeSubscription);
+            // Only the paused ones. Starting a model that is already started arrives here too, and the delegate
+            // refuses to resume a subscription that is already running.
+            nonCompetingConsumersSubscriptions.stream().filter(delegate::isPaused).forEach(delegate::resumeSubscription);
         }
 
         if (resumeSubscriptionsAutomatically) {

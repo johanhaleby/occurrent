@@ -146,9 +146,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
             // wiring its handlers can resume them one at a time.
             if (!running) {
                 pausedSubscriptions.add(subscriptionId);
+                return new RegisteredSubscription(subscriptionId, false);
             }
         }
-        return new AlreadyStartedSubscription(subscriptionId);
+        return new RegisteredSubscription(subscriptionId, true);
     }
 
     @Override
@@ -200,7 +201,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
         running = true;
         pausedSubscriptions.remove(subscriptionId);
-        return new AlreadyStartedSubscription(subscriptionId);
+        return new RegisteredSubscription(subscriptionId, true);
     }
 
     @Override
@@ -344,11 +345,13 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                 .then();
     }
 
-    private record AlreadyStartedSubscription(String id) implements Subscription {
+    // Answers for the one registration it was created for. Nothing runs in the background, so registering on a running
+    // model starts the subscription there and then. A registration made while the model was stopped never completes,
+    // the way the reactor Mongo and durable models park theirs, and a later start hands back its own handle.
+    private record RegisteredSubscription(String id, boolean started) implements Subscription {
         @Override
         public Mono<Void> waitUntilStarted() {
-            // There is no background subscription to wait for: registration completes synchronously in subscribe.
-            return Mono.empty();
+            return started ? Mono.empty() : Mono.never();
         }
     }
 }

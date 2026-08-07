@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 
@@ -57,7 +58,7 @@ import static java.util.Objects.requireNonNull;
 public final class ManualStartSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, IntrospectableSubscriptionModel {
 
     private final SubscriptionModel delegate;
-    private final @Nullable CheckpointAwareSubscriptionModel positionSource;
+    private final @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource;
     private final @Nullable CheckpointStorage checkpointStorage;
 
     private final ConcurrentMap<String, Registration> registrations = new ConcurrentHashMap<>();
@@ -72,7 +73,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     private volatile State state = State.NOT_STARTED;
     private volatile boolean shutdown = false;
 
-    private ManualStartSubscriptionModel(SubscriptionModel delegate, @Nullable CheckpointAwareSubscriptionModel positionSource,
+    private ManualStartSubscriptionModel(SubscriptionModel delegate, @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
                                          @Nullable CheckpointStorage checkpointStorage) {
         this.delegate = requireNonNull(delegate, SubscriptionModel.class.getSimpleName() + " cannot be null");
         this.positionSource = positionSource;
@@ -83,7 +84,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      * A model that registers subscriptions without starting them. A subscription running for the first time will start
      * from wherever {@code delegate} starts by default at the moment it is started, so events written between
      * registration and that moment do not reach it. Use
-     * {@link #stoppedByDefault(SubscriptionModel, CheckpointAwareSubscriptionModel, CheckpointStorage)} to record the
+     * {@link #stoppedByDefault(SubscriptionModel, GlobalCheckpointSource, CheckpointStorage)} to record the
      * position at registration instead.
      *
      * @param delegate The subscription model to register with once a subscription is started.
@@ -99,20 +100,24 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
+     *                          Only {@link GlobalCheckpointSource#globalCheckpoint()} is called, so a caller can pass
+     *                          anything that exposes it, such as a {@link CheckpointAwareSubscriptionModel}, without
+     *                          this method demanding the full subscription model that happens to implement it.
      * @param checkpointStorage Where the recorded position is written, which must be the storage the wrapped models read.
      */
-    public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, CheckpointAwareSubscriptionModel positionSource,
+    public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
                                                                 CheckpointStorage checkpointStorage) {
         return new ManualStartSubscriptionModel(delegate,
-                requireNonNull(positionSource, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"),
+                requireNonNull(positionSource, GlobalCheckpointSource.class.getSimpleName() + " cannot be null"),
                 requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null"));
     }
 
     /**
      * Register a subscription. While this model is withholding, nothing is passed to the wrapped model and the returned
-     * {@link Subscription} is a placeholder standing for the registration. Its {@code waitUntilStarted} returns
-     * immediately, because registering is all that has been asked for. Once the subscription is started,
-     * {@link #resumeSubscription(String)} returns the wrapped model's own subscription.
+     * {@link Subscription} is a placeholder standing for the registration. Its {@code waitUntilStarted} answers
+     * {@code false} straight away, since the subscription has not started and will not until you ask. Once the
+     * subscription is started, {@link #resumeSubscription(String)} returns the wrapped model's own subscription, which
+     * is the handle to wait on.
      *
      * @throws IllegalArgumentException If {@code subscriptionId} is already registered.
      */
@@ -219,9 +224,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        if (!delegate.isRunning()) {
-            delegate.start(resumeSubscriptionsAutomatically);
-        }
+        // Unconditional, so a subscription the wrapped model has paused is resumed even when that model is already
+        // running. Guarding on isRunning() was only ever working around a model that refused a second start.
+        delegate.start(resumeSubscriptionsAutomatically);
         state = State.RUNNING;
         if (resumeSubscriptionsAutomatically) {
             // Fails on the first subscription that cannot start, leaving the rest registered. A partially started model
@@ -353,12 +358,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
         }
     }
 
-    // Stands for a registration that has not been started. Reporting itself as started is what the caller asked about:
-    // registering completed. A subscription that blocked here would hang every caller that waits after registering.
+    // Stands for a registration that has not been started. It answers at once instead of waiting out the timeout,
+    // because nothing changes until the application starts the subscription, and waiting would hang every caller that
+    // uses the no-argument waitUntilStarted().
     private record DeferredSubscription(String id) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
-            return true;
+            return false;
         }
     }
 }

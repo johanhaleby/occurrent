@@ -161,6 +161,11 @@ fun <T : Any> DomainEventQueries<in T>.queryOne(
 
 /**
  * Reads domain events strictly after the global sequence [position] as a [Sequence], in ascending position order.
+ *
+ * A [Sequence] cannot be closed, and the underlying read may hold a database resource, so consume this to the end.
+ * If you stop early, read through [DomainEventQueries.afterPosition] instead and close the stream yourself, as in
+ * `afterPosition(position).use { it.asSequence().take(10).toList() }`.
+ *
  * @see DomainEventQueries.afterPosition
  */
 fun <T : Any> DomainEventQueries<T>.afterPositionAsSequence(position: Long): Sequence<T> =
@@ -168,6 +173,11 @@ fun <T : Any> DomainEventQueries<T>.afterPositionAsSequence(position: Long): Seq
 
 /**
  * Reads domain events matching [filter] within [range] as a [Sequence], in ascending position order.
+ *
+ * A [Sequence] cannot be closed, and the underlying read may hold a database resource, so consume this to the end.
+ * If you stop early, read through [DomainEventQueries.readInPositionOrder] instead and close the stream yourself, as
+ * in `readInPositionOrder(filter, range).use { it.asSequence().take(10).toList() }`.
+ *
  * @see DomainEventQueries.readInPositionOrder
  */
 fun <T : Any> DomainEventQueries<T>.readInPositionOrderAsSequence(

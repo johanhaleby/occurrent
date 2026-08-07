@@ -377,6 +377,56 @@ class CompetingConsumerSubscriptionModelTest {
         await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1", "2", "3"));
     }
 
+    @Test
+    void starting_an_already_running_model_is_accepted_and_leaves_a_mix_of_running_waiting_and_paused_consumers_correctly_delivering() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> runningEvents = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> waitingEvents = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> pausedEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate));
+
+        String runningId = UUID.randomUUID().toString();
+        String waitingId = UUID.randomUUID().toString();
+        String pausedId = UUID.randomUUID().toString();
+
+        // SM1 wins and keeps this lock, so it must still be delivering, undisturbed, after the second start() below.
+        competingConsumerSubscriptionModel1.subscribe(runningId, runningEvents::add).waitUntilStarted();
+
+        // SM1 also wins this lock, but the subscription itself is then explicitly paused by the user.
+        competingConsumerSubscriptionModel1.subscribe(pausedId, pausedEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel1.pauseSubscription(pausedId);
+
+        // SM2 wins this lock first, so SM1's own consumer for it sits in Waiting rather than ever subscribing to
+        // its delegate. If start() ever mistakenly moved it to Running, this action would prove it by running.
+        competingConsumerSubscriptionModel2.subscribe(waitingId, waitingEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel1.subscribe(waitingId, cloudEvent -> {
+            throw new AssertionError("SM1 must never deliver " + waitingId + ": SM2 holds its lock");
+        });
+
+        // When
+        // The model has been running since the first subscribe above (never stopped), so this is exactly the second
+        // start() the removed IllegalStateException guard used to refuse.
+        Throwable thrown = catchThrowable(() -> competingConsumerSubscriptionModel1.start());
+
+        // Then
+        assertThat(thrown).as("starting a model that is already started must be accepted, not refused").isNull();
+
+        NameDefined event = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        eventStore.write("streamId", serialize(event));
+
+        await("the running consumer keeps delivering, undisturbed by the second start()")
+                .atMost(5, SECONDS).untilAsserted(() -> assertThat(runningEvents).hasSize(1));
+        await("start(true) resumes the consumer that was paused by the user")
+                .atMost(5, SECONDS).untilAsserted(() -> assertThat(pausedEvents).hasSize(1));
+        await("SM2 still delivers the id SM1 is only waiting for")
+                .atMost(5, SECONDS).untilAsserted(() -> assertThat(waitingEvents).hasSize(1));
+        assertThat(competingConsumerSubscriptionModel1.isRunning(waitingId))
+                .as("SM1's own consumer for it must still be waiting, not somehow running")
+                .isFalse();
+    }
+
     @RepeatedIfExceptionsTest(repeats = 3, suspend = 400)
     @Timeout(10)
     void stopping_and_starting_both_competing_subscription_models_several_times() {

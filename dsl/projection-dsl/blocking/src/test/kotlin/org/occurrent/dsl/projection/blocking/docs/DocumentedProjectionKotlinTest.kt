@@ -118,7 +118,7 @@ class DocumentedProjectionKotlinTest {
             )
 
             // Then
-            assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+            subscriptionModel.waitUntilAllEventsProcessed()
             assertThat(store["johan"]).isEqualTo("Johan Haleby")
         }
 
@@ -195,7 +195,7 @@ class DocumentedProjectionKotlinTest {
             // A second instance, so the pull side has to scope to one of them. With a single instance the scoping is a
             // no-op and this test cannot tell a correctly scoped fold from one that folds everything.
             write("eve", NameDefined(UUID.randomUUID().toString(), Date(), "eve", "Eve"))
-            assertThat(subscriptionModel.waitUntilAllEventsProcessed()).isTrue()
+            subscriptionModel.waitUntilAllEventsProcessed()
             assertThat(store["johan"]).isEqualTo("Johan Haleby")
 
             val queries = DomainEventQueries(eventStore, converter)
