@@ -1,6 +1,6 @@
 # Upgrading to Occurrent 0.32.0
 
-Four things break, and only if you use the features they belong to.
+Five things break, and only if you use the features they belong to.
 
 **At compile time**, if you write reactive subscriptions, one type was renamed. The reactor `SubscriptionModel` is now
 `FluxSubscriptionModel`. The recipe below rewrites it for you. Read
@@ -22,7 +22,12 @@ refuses to start. If you use a push source, read
 registered instead of returning normally, so the message goes unacknowledged rather than being discarded. Read
 [section 13](#13-domaineventfeed-refuses-an-event-when-no-projection-is-registered).
 
-Thirteen things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+**Also at runtime**, if a `CatchupThenPushSubscriptionModel` or a `@Projection(source = PUSH)`/`@Saga(source = PUSH)`
+(blocking stack) is fed from more than one thread once it is live, your handler now sees genuinely concurrent calls
+instead of calls serialised behind a lock. Read
+[section 14](#14-a-live-push-handler-can-now-be-called-concurrently).
+
+Fourteen things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
 `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
 first failing handler, the reactor subscription primitive was renamed, a durable reactor model refuses a composition it
@@ -31,7 +36,8 @@ replays on its own thread and no longer discards events after a failed replay,
 `NativeMongoLeaseCompetingConsumerStrategy` moved to the package every other native-driver subscription type uses,
 `CompetingConsumerSubscriptionModel` refuses two calls it used to accept, a second `start()` is allowed while
 `waitUntilStarted` stops saying yes when it means no, a domain-event feed refuses an event when no projection is
-registered, and every way a subscription model can refuse a call now has its own exception type.
+registered, every way a subscription model can refuse a call now has its own exception type, and a live push handler
+can be called concurrently instead of queueing behind one lock.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -795,3 +801,31 @@ would fail the write while protecting nothing. Ask its `hasSubscriptions()` when
 
 [ADR 104](../architecture/decisions/0104-an-undeliverable-push-event-is-refused-not-acknowledged.md) records the whole
 contract, including why a stopped model still drops events while an unregistered or failed one refuses them.
+
+## 14. A live push handler can now be called concurrently
+
+Only relevant on the blocking stack, and only if a `CatchupThenPushSubscriptionModel` or a `CatchupProjectionFeed` (or
+the `@Projection(source = PUSH)` / `@Saga(source = PUSH)` annotations built on them) is fed by more than one thread
+once it has gone live — a listener container configured with concurrency greater than one, say.
+
+Once such a subscription or feed is live, every payload used to be folded while holding the handover's own internal
+lock, so concurrent broker threads queued on it and your handler ran one call at a time no matter how much
+concurrency the listener container was configured for. That was never a documented guarantee, and it was costing real
+throughput: a benchmarked handler doing a small synchronous I/O call plateaued at roughly one payload per handler
+duration regardless of thread count. The handler call now runs outside that lock, so a concurrently-fed subscription
+gets concurrent handler calls.
+
+**If your handler is not thread-safe** — it mutates a field, a non-concurrent collection, or anything else without its
+own synchronization — and you configure more than one delivering thread, it can now see real races it could not see
+before. Either make the handler safe for concurrent invocation (an idempotent write to a database is usually already
+safe; an in-memory accumulator usually is not), or keep the delivering side single-threaded, which is the default
+unless you explicitly configure more.
+
+Delivery order across concurrently-delivering threads is not guaranteed either, where the lock used to impose one as a
+side effect. A single-threaded caller sees no change at all: delivery is still synchronous on the calling thread, in
+the order `accept` was called.
+
+### Why
+
+[ADR 107](../architecture/decisions/0107-a-live-push-handler-runs-outside-the-handover-lock.md) has the reasoning,
+including the benchmark that measured the win before this was decided.
