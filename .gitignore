@@ -29,6 +29,10 @@ nbdist/
 # JQWik
 .jqwik-database
 
-# Local durable context: ORCHESTRATOR.md is tracked, everything else here is local-only
+# Local durable context: ORCHESTRATOR.md, lessons.md and the per-epic state files are
+# tracked, everything else here is local-only
 .context/*
 !.context/ORCHESTRATOR.md
+!.context/lessons.md
+!.context/epics/
+!.context/epics/*.yml

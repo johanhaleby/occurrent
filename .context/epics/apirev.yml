@@ -1,0 +1,404 @@
+schema_version: 1
+epic: apirev
+revision: 2
+updated_at: '2026-08-07T06:47:38+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (a84288ce)
+baseline:
+  repo: johanhaleby/occurrent
+  branch: main
+authority: standing merge (squash on green+threads, matrix-sibling leniency, reasoned-decline
+  threads stay open); grants recorded in ORCHESTRATOR.md hot-restart bullet
+pending_actions: []
+units:
+  A1:
+    issue: 578
+    goal: push delivery contract (ADR 0104, refuse undeliverable events)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_463d10f8-d6d6-476c-aed1-14a6fb7a781d
+    deliverables:
+    - check: pr_merged
+      ref: 596
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org.github.io
+      ref: docs/push-delivery-contract
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 578
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: merge on green; raise the missing docs/push-delivery-contract remote
+      branch with the session
+    last_meaningful_progress_at: '2026-08-07T06:47:38+00:00'
+    observed:
+      pr_596:
+        head: 6d63a3b74f
+        rollup: building, new head after shard-fix push
+        threads_open: 5
+        via: restart-test agent gh read
+        at: '2026-08-07T06:47:38+00:00'
+      docs_branch:
+        exists_on_remote: false
+        via: git ls-remote occurrent-org.github.io docs/*
+        at: 2026-08-07 06:40:00+00:00
+    assessment: 5 open threads are reasoned declines, non-blocking per standing rule;
+      shard failures are real (cross-JDK); docs-branch gap newly discovered by this
+      file's generation
+  A2:
+    issue: 579
+    goal: lifecycle contract (ADR 0105, start() idempotent-by-decision, waitUntilStarted
+      meaning)
+    phase: DONE
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_ab1f1c9e-1895-462b-a650-e4ff6bcec525
+    deliverables:
+    - check: pr_merged
+      ref: 597
+      met: true
+      evidence: MERGED, verified via gh 2026-08-07T06:5x
+    - check: branch_pushed
+      repo: occurrent-org.github.io
+      ref: docs/subscription-lifecycle-contract
+      met: true
+      evidence: 'ls-remote hit + held docs PR #33'
+    - check: issue_closed
+      ref: 579
+      met: true
+      evidence: CLOSED, gh issue view 07:04
+    blocking_on: []
+    next_action: sweep once its session finishes the held docs PR wrap-up
+    last_meaningful_progress_at: 2026-08-07 06:53:00+00:00
+    observed:
+      issue_579:
+        state: CLOSED
+        via: gh issue view
+        at: 2026-08-07 07:04:00+00:00
+    assessment: delivery complete; only closeout (swept) remains, gated on session
+      going idle
+  A3:
+    issue: 580
+    goal: refusal exception contract (planning round then ADR + rollout)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_6f0f9234-2ebc-4700-ab46-970d83fba885
+    deliverables:
+    - check: manual_approval
+      ref: Johan rules on sealed-family vs @throws floor
+      met: false
+      evidence: null
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 580
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: await its structured ask to Johan
+    last_meaningful_progress_at: 2026-08-07 06:26:00+00:00
+    observed: {}
+    assessment: planning active in session zen-hypatia
+  A4:
+    issue: 581
+    goal: TCK version policy (ADR 77 amendment + deliveryTimeout knob + implementer
+      doc)
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - A3
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 581
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch chip after A3's decision lands
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: ''
+  A5:
+    issue: 582
+    goal: filter-matching parity (numerics, array traversal, subscribe-time refusal,
+      reader rename)
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - A3
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 582
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch after A3's refusal-type decision
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: ''
+  A6:
+    issue: 583
+    goal: saga keyless-redelivery posture
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - A4
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 583
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch after A4's planning round (one round at a time)
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: ''
+  A7:
+    issue: 584
+    goal: testing-artifact fixes (extension waits, empty clearing, flush builder)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_ef8798eb-8ff2-4420-b8e5-1f972e1ae9c0
+    deliverables:
+    - check: pr_merged
+      ref: 593
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 584
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: merge on green (fresh head ca6596807 after zombie-killing push, 4
+      green 2 running)
+    last_meaningful_progress_at: 2026-08-07 07:00:00+00:00
+    observed:
+      pr_593:
+        head: ca6596807
+        rollup: 4 success, 2 in progress
+        threads_open: 0
+        via: gh pr list + graphql
+        at: 2026-08-07 07:03:00+00:00
+    assessment: healthy; responded to zombie message with fresh push
+  A8:
+    issue: 585
+    goal: three pre-tag API reshapes
+    phase: DONE
+    health: PROGRESSING
+    swept: true
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: 592
+      met: true
+      evidence: MERGED 2026-08-06T19:51:58Z
+    - check: issue_closed
+      ref: 585
+      met: true
+      evidence: CLOSED
+    blocking_on: []
+    next_action: none
+    last_meaningful_progress_at: 2026-08-06 19:52:00+00:00
+    observed: {}
+    assessment: complete and swept
+  A9:
+    issue: 598
+    goal: subscribe-during-start(true) race fix (adopted 2026-08-07)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_4ef863f7-5285-4580-aa9f-609c11164bd2
+    deliverables:
+    - check: pr_merged
+      ref: 600
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 598
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: merge on the session's green ping (it runs an auto-stopping watch)
+    last_meaningful_progress_at: 2026-08-07 06:55:00+00:00
+    observed:
+      pr_600:
+        head: dced29cc8
+        rollup: 6 success, 5 in progress, 15 queued
+        threads_open: 0
+        via: gh pr list + graphql
+        at: 2026-08-07 07:03:00+00:00
+    assessment: self-driving; second race hole found and fixed via correct Copilot
+      finding; no changelog entry per folding rule (confirmed)
+  B1:
+    issue: 586
+    goal: lazy readInPositionOrder
+    phase: DONE
+    health: PROGRESSING
+    swept: true
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: 594
+      met: true
+      evidence: MERGED 2026-08-07, matrix verified at head 69e0a17a
+    - check: issue_closed
+      ref: 586
+      met: true
+      evidence: CLOSED
+    blocking_on: []
+    next_action: none
+    last_meaningful_progress_at: 2026-08-07 05:55:00+00:00
+    observed: {}
+    assessment: complete and swept
+  B2:
+    issue: 587
+    goal: payload-read short-circuit
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 587
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip anytime (Wave B trails the tag)
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: ''
+  B3:
+    issue: 588
+    goal: handover lock measurement
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 588
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip anytime; measure before deciding
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: ''
+  B4:
+    issue: 589
+    goal: replay observability
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 589
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip anytime
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: ''
+  B5:
+    issue: 590
+    goal: parity and hygiene sweep
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 590
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip anytime
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: ''
+  C1:
+    issue: 591
+    goal: record fixes (renumber done, wording PR in flight)
+    phase: DONE
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_8dfabd00-93b2-4331-a841-4fd1857dc36d
+    deliverables:
+    - check: pr_merged
+      ref: 595
+      met: true
+      evidence: MERGED 2026-08-07T05:36:45Z
+    - check: pr_merged
+      ref: 599
+      met: true
+      evidence: MERGED 2026-08-07T06:47:38+00:00, 25/25 green at c37b0a141, 0 threads
+    - check: issue_closed
+      ref: 591
+      met: true
+      evidence: 'auto-closed by Fixes #591'
+    blocking_on: []
+    next_action: sweep once session idle
+    last_meaningful_progress_at: '2026-08-07T06:47:38+00:00'
+    observed:
+      pr_599:
+        head: c37b0a141
+        rollup: 16 success, 9 in progress
+        threads_open: 0
+        via: gh pr list + graphql
+        at: 2026-08-07 07:03:00+00:00
+    assessment: the previously-missed two-deliverable case, now explicit
