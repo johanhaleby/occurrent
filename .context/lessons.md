@@ -33,6 +33,14 @@
   and every session brief OPENS with a MODEL/EFFORT recommendation line, decided per unit at planning time in the
   meta-plan, not re-derived at dispatch. Retitle mis-titled spawned sessions via session tooling; hand Johan the
   orchestrator session's own title, since a session cannot rename itself.
+  Addendum (2026-08-07 correction, same family as the collapsed-summary rule): the MODEL/EFFORT
+  recommendation goes IN THE CHIP TITLE (suffix like "· Opus/high"), because the model is chosen at the
+  chip and the brief's opening line only displays after launch — a recommendation that renders after its
+  decision informs nothing.
+  Second addendum (2026-08-07): plan-first sessions end their planning phase with a downshift
+  recommendation at the plan-approval gate ("implementation is Sonnet/medium, switch before approving"),
+  derived from the approved plan's actual shape — the planning tier is often oversized for what follows,
+  and the approval gate is the one moment the user is present with the model picker at hand.
 - One failed lookup command is not evidence of absence (2026-08-06 correction). An `ls` of a skill's SKILL.md
   returned a false negative and the conclusion "no orchestrator skill" was acted on for a whole dispatch round.
   Before asserting a skill or file does not exist, list the parent directory. The user naming a thing is a strong
@@ -49,6 +57,15 @@
   its polls: ci-wait paced on observed check durations with a ~3x stuck threshold, worker-wait and
   human-wait on a long heartbeat because end-of-session notifications arrive event-driven, action-ready
   acted on immediately. Only ceilings stay as numbers; the rule lives in the /orchestrator skill.
+- A merge under authority is compare-and-swap, never a plain merge (2026-08-07, found by the A2 session).
+  gh pr merge acts on whatever head the API resolves at execution, so a worker push in the read-to-merge
+  window is silently dropped from the squash — #597 lost a follow-up commit this way (it became #601).
+  Always pin with --match-head-commit <verified-sha>; a refusal is a re-verify, and post-merge
+  verification compares the merged head against the verified one.
+- Worker-to-orchestrator messages are unreliable while the orchestrator is mid-turn (2026-08-07, A2's
+  sends failed where A9's succeeded). Signals must ride the work item: the sweep computes merge-readiness
+  from facts anyway, so pings are accelerators, but nuance a worker needs to convey goes in a PR comment,
+  and a sweep that meets a surprising unit state reads the PR conversation before acting.
 - Authorization is repo-scoped policy, never a skill default (2026-08-07 correction). Standing merge
   authority and the matrix-sibling green rule were briefly written into the global /orchestrator skill as
   defaults; both are grants Johan made for THIS repo and would violate process elsewhere (parkster-dev).

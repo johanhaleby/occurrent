@@ -47,6 +47,7 @@ import org.springframework.stereotype.Component;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
@@ -66,7 +67,8 @@ import static org.awaitility.Awaitility.await;
  * A reactive {@code @Projection(source = PUSH)} fed by a {@link DomainEventFeed} the application supplies. Under
  * {@code occurrent.subscription.mode=manual} both the registration and the catch-up are withheld, not just the
  * catch-up, because registering alone puts the feed into buffering mode and an event fed meanwhile would fill a
- * bounded buffer rather than be folded.
+ * bounded buffer rather than reach the projection. With nothing registered the feed refuses the event instead, so it
+ * stays with the source.
  */
 @DisplayName("Reactive subscription mode manual (domain-push projection)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -97,13 +99,20 @@ class ReactiveSubscriptionModeManualDomainPushProjectionMongoTest {
     @Test
     void a_domain_push_projection_reaches_the_feed_only_once_the_application_starts_it() {
         assertThat(manualStartProjections.pendingIds()).containsExactly(PROJECTION_ID);
-        // Nothing is registered on the feed yet, so an event fed now goes nowhere rather than into a buffer.
-        ordersFeed.accept(new OrderPlaced("before-start")).block();
+        // Nothing is registered on the feed yet, so an event fed now is refused rather than accepted. It used to
+        // complete quietly, which meant a listener acknowledged it and the source discarded an event no projection
+        // ever received. Refusing is what makes manual mode withhold rather than lose (ADR 104).
+        StepVerifier.create(ordersFeed.accept(new OrderPlaced("refused-before-start")))
+                .expectErrorSatisfies(e -> assertThat(e)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("has no projection registered"))
+                .verify(ofSeconds(5));
         await().during(ofSeconds(2)).atMost(ofSeconds(10)).until(() -> orderCountStore.findById(VIEW_ID).isEmpty());
 
         manualStartProjections.start(PROJECTION_ID).block(ofSeconds(30));
 
-        // The two events written before startup were caught up, the one fed while withheld was not.
+        // The two events written before startup were caught up. The one fed while withheld was refused, so it never
+        // reached the projection and a real source would still be holding it.
         assertThat(manualStartProjections.pendingIds()).isEmpty();
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(orderCountStore.findById(VIEW_ID)).hasValueSatisfying(state -> assertThat(state.count()).isEqualTo(2)));

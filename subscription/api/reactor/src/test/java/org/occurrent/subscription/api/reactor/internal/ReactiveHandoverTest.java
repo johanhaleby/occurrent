@@ -68,7 +68,7 @@ class ReactiveHandoverTest {
     void the_returned_mono_completes_and_the_marker_is_persisted_before_the_buffered_live_payloads_are_folded() throws Exception {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
         ReactiveHandover<String> handover = ReactiveHandover.create(
-                payload -> Mono.fromRunnable(() -> log.add(payload)), payload -> payload, CatchupThenLiveOptions.defaults());
+                payload -> Mono.fromRunnable(() -> log.add(payload)), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
 
         // Captured before catchUp starts, so this registers as a buffered live payload. Its own Mono is what
         // completes when it has been folded.
@@ -138,7 +138,7 @@ class ReactiveHandoverTest {
         List<String> delivered = Collections.synchronizedList(new ArrayList<>());
         ReactiveHandover<String> handover = ReactiveHandover.create(
                 payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload,
-                new CatchupThenLiveOptions(2, CatchupThenLiveOptions.DEFAULT_MAX_BUFFERED_EVENTS));
+                new CatchupThenLiveOptions(2, CatchupThenLiveOptions.DEFAULT_MAX_BUFFERED_EVENTS), "test payload");
         handover.catchUp(source(List.of(), false)).block(Duration.ofSeconds(5));
 
         // Each accept's Mono completes once its fold has run, so blocking on it waits for exactly that.
@@ -157,7 +157,7 @@ class ReactiveHandoverTest {
         List<String> delivered = new ArrayList<>();
         ReactiveHandover<String> handover = ReactiveHandover.create(
                 payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload,
-                new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 1));
+                new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, 1), "test payload");
 
         handover.accept("L1").subscribe();
 
@@ -170,7 +170,7 @@ class ReactiveHandoverTest {
     }
 
     @Test
-    void a_failed_catch_up_fails_pending_acks_and_later_accept_calls_with_the_original_failure() {
+    void a_failed_catch_up_fails_pending_acks_and_later_accept_calls_with_the_cause_attached() {
         ReactiveHandover<String> handover = handover(new ArrayList<>());
 
         RuntimeException replayFailure = new RuntimeException("replay boom");
@@ -183,14 +183,22 @@ class ReactiveHandoverTest {
         // latter has run. Waiting on L1's own future avoids that race.
         CompletableFuture<Void> l1 = handover.accept("L1").toFuture();
 
+        // The catch-up signal still carries the raw cause: that caller asked about the catch-up itself.
         StepVerifier.create(handover.catchUp(source))
                 .verifyErrorMessage("replay boom");
 
+        // The acks do not. They are wrapped in the terminal-refusal message, the same one the blocking engine uses,
+        // because a caller feeding live payloads needs to be told this is terminal and what the recovery is, not just
+        // what threw during a replay it never saw. Both sides of the failure read the same way.
         assertThatThrownBy(() -> l1.get(5, TimeUnit.SECONDS))
+                .cause().isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed")
                 .cause().isSameAs(replayFailure);
 
         StepVerifier.create(handover.accept("L2"))
-                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(replayFailure));
+                .verifyErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Catch-up failed")
+                        .hasCauseReference(replayFailure));
     }
 
     @Test
@@ -209,7 +217,7 @@ class ReactiveHandoverTest {
     void a_live_payloads_accept_mono_completes_only_after_its_fold_has_run() {
         List<String> log = Collections.synchronizedList(new ArrayList<>());
         ReactiveHandover<String> handover = ReactiveHandover.create(
-                payload -> Mono.fromRunnable(() -> log.add("fold:" + payload)), payload -> payload, CatchupThenLiveOptions.defaults());
+                payload -> Mono.fromRunnable(() -> log.add("fold:" + payload)), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
 
         handover.catchUp(source(List.of(), true)).block(Duration.ofSeconds(5));
         // Blocking is the assertion here: accept()'s contract is that its Mono completes only once the fold has run,
@@ -240,7 +248,7 @@ class ReactiveHandoverTest {
                     : Mono.<Void>fromRunnable(() -> log.add("folded:" + payload));
             return fold.subscribeOn(Schedulers.boundedElastic());
         };
-        ReactiveHandover<String> handover = ReactiveHandover.create(gatedFold, payload -> payload, CatchupThenLiveOptions.defaults());
+        ReactiveHandover<String> handover = ReactiveHandover.create(gatedFold, payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
 
         FakeSource source = source(List.of("R1", "R2"), false);
         source.onMarkCaughtUp = () -> log.add("marker");
@@ -264,7 +272,7 @@ class ReactiveHandoverTest {
         Function<String, Mono<Void>> deliver = payload -> "boom".equals(payload)
                 ? Mono.error(new RuntimeException("fold failed"))
                 : Mono.fromRunnable(() -> delivered.add(payload));
-        ReactiveHandover<String> handover = ReactiveHandover.create(deliver, payload -> payload, CatchupThenLiveOptions.defaults());
+        ReactiveHandover<String> handover = ReactiveHandover.create(deliver, payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
 
         handover.catchUp(source(List.of(), true)).block(Duration.ofSeconds(5));
 
@@ -278,7 +286,7 @@ class ReactiveHandoverTest {
     void a_null_de_dup_key_fails_loud_on_both_the_replay_and_the_live_path() {
         List<String> delivered = new ArrayList<>();
         ReactiveHandover<String> handover = ReactiveHandover.create(
-                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> null, CatchupThenLiveOptions.defaults());
+                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> null, CatchupThenLiveOptions.defaults(), "test payload");
 
         // Without the guard this reaches BoundedIdCache, whose eviction queue rejects a null element, so it surfaces as
         // a bare NullPointerException from inside the cache rather than naming the cause.
@@ -288,7 +296,7 @@ class ReactiveHandoverTest {
                         .hasMessage(HandoverMessages.dedupKeyRequired()));
 
         ReactiveHandover<String> live = ReactiveHandover.create(
-                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> null, CatchupThenLiveOptions.defaults());
+                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> null, CatchupThenLiveOptions.defaults(), "test payload");
         live.catchUp(source(List.of(), true)).block();
         StepVerifier.create(live.accept("L1"))
                 .verifyErrorSatisfies(error -> assertThat(error)
@@ -300,7 +308,7 @@ class ReactiveHandoverTest {
 
     private static ReactiveHandover<String> handover(List<String> delivered) {
         return ReactiveHandover.create(
-                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload, CatchupThenLiveOptions.defaults());
+                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
     }
 
     private static FakeSource source(List<String> history, boolean alreadyCaughtUp) {

@@ -59,15 +59,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 /**
  * Proves {@code occurrent.subscription.mode=manual} also withholds a {@link Projection @Projection} with
  * {@link Source#PUSH} fed by a {@link DomainEventFeed}, which bypasses the {@code SubscriptionModel} bean entirely
- * and so is not withheld by that bean being wrapped. Neither {@code register} nor the catch-up runs at boot: a live
- * event fed to the feed before starting is silently dropped rather than buffered, because nothing is registered on
- * the feed yet to buffer it. {@link ManualStartPushSources#start(String)} is what registers the projection and runs
- * its catch-up, after which the feed works exactly as it would have under {@code auto}.
+ * and so is not withheld by that bean being wrapped. Neither {@code register} nor the catch-up runs at boot, so a live
+ * event fed to the feed before starting is refused rather than accepted, which leaves it with the source instead of
+ * losing it. {@link ManualStartPushSources#start(String)} is what registers the projection and runs its catch-up,
+ * after which the feed works exactly as it would have under {@code auto}.
  */
 @DisplayName("Subscription mode manual (domain-push-source projection)")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -98,9 +99,13 @@ class SubscriptionModeManualDomainPushProjectionMongoTest {
     void a_domain_push_source_projection_is_not_registered_until_started_then_catches_up_and_goes_live() {
         assertThat(manualStartProjections.pendingIds()).contains(PROJECTION_ID);
 
-        // Nothing is registered on the feed yet, so a live event fed now has no projection to fold into or buffer
-        // for, and is simply dropped rather than causing an error or being replayed later.
-        ordersFeed.accept(new OrderPlaced("dropped-before-start"));
+        // Nothing is registered on the feed yet, so a live event fed now is refused rather than accepted. It used to
+        // be dropped silently, which meant a listener acknowledged it and the source discarded an event no projection
+        // ever received. Refusing is what makes manual mode withhold rather than lose, because the source is the only
+        // thing holding a backlog and it only holds one while nobody acknowledges (ADR 104).
+        assertThatThrownBy(() -> ordersFeed.accept(new OrderPlaced("refused-before-start")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("has no projection registered");
         await().during(ofSeconds(2)).atMost(ofSeconds(10)).until(() -> orderCountStore.countFor("orders") == 0);
 
         manualStartProjections.start(PROJECTION_ID);

@@ -77,6 +77,14 @@ subscription whose catch-up failed, and the same id must then be subscribable ag
 true. A one-way latch would break it, so the sole registration is held in an `AtomicReference` that
 `cancelSubscription` clears.
 
+> **Amended on 2026-08-06 by [ADR 104](0104-an-undeliverable-push-event-is-refused-not-acknowledged.md).** The model no
+> longer cancels a subscription whose catch-up failed. Cancelling meant every later event was acknowledged into a
+> subscription that received nothing, which loses events, so the registration is kept and refuses instead. The id is
+> therefore taken until `cancelSubscription` releases it, and the recovery is explicit rather than automatic. What this
+> paragraph needs is unchanged and still holds. The sole registration must be a clearable `AtomicReference` rather than
+> a one-way latch, because `cancelSubscription` is now the only thing that frees the id. The test is renamed
+> `the_same_subscription_id_can_be_used_again_once_a_failed_catch_up_is_cancelled` and checks exactly that.
+
 **The rejection message is the migration path.** There is no OpenRewrite recipe for a bean topology: the fix is to
 declare a second sink bean and point the second projection at it, which no rewrite can infer. A startup failure naming
 both the consumer already registered and the one refused, and saying to declare one sink per projection or saga, is

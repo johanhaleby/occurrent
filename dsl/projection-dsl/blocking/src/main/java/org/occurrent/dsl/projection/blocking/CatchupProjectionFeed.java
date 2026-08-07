@@ -250,6 +250,10 @@ public final class CatchupProjectionFeed<E> {
      * called, then deliver events directly from here on. Use this instead of {@link #catchUp()} for a feed whose
      * events are not in the local event store, so there is nothing to replay. No completion marker is written, since
      * nothing was replayed, so a later {@link #catchUp()} still replays the full history.
+     * <p>
+     * Delivery is still at-least-once here, so the view has to tolerate the same event arriving twice. The de-dup
+     * cache only suppresses the overlap between a replay and the live feed, and there is no replay on this path, so
+     * it is not a guard against your broker redelivering a message.
      */
     public void goLive() {
         handover.catchUp(new BlockingHandover.Source<>() {

@@ -62,7 +62,10 @@ record CatchupSubscription(String id, Future<Subscription> delegatedSubscription
             }
             throw new IllegalStateException("The catch-up for subscription '" + id + "' failed", cause);
         }
-        long elapsed = System.currentTimeMillis() - timeStarted;
-        return subscription.waitUntilStarted(timeout.minusMillis(elapsed));
+        // The delegate gets whatever is left of the caller's budget. When the replay used all of it the subscription
+        // did not start within the timeout, and handing a negative duration on would rely on the delegate tolerating
+        // one, which nothing promises.
+        Duration remaining = timeout.minusMillis(System.currentTimeMillis() - timeStarted);
+        return !remaining.isNegative() && subscription.waitUntilStarted(remaining);
     }
 }

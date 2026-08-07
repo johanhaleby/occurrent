@@ -63,7 +63,9 @@ public final class HandoverMessages {
      *             {@code "subscription"}.
      */
     public static String catchUpFailed(String noun) {
-        return "Catch-up failed for this " + noun + ", so it cannot accept live events. Rebuild it after fixing the cause.";
+        return "Catch-up failed for this " + noun + ", so it refuses live events rather than acknowledging events "
+                + "that nothing folded, and the source keeps redelivering them. Fix the cause, then replace it: a "
+                + "subscription by cancelling it and subscribing again, a projection feed by building a new one.";
     }
 
     /**
