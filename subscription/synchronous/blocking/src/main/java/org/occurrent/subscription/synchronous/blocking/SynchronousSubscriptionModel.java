@@ -38,10 +38,14 @@ import java.util.function.Consumer;
  * {@link #accept(List)} routes the same way for callers driving the model directly, and always offers the event to
  * every handler rather than stopping at the first failure, because nothing rolls back on that path.
  * <p>
- * Unlike the asynchronous {@code SubscriptionModel}s, this model has no lifecycle, start position, checkpoint,
- * catch-up, or replay: it only ever reacts to events fed to it here and now. The register-and-route machinery
- * lives in {@link RegisteringSubscribable}. This model adds the application-service dispatch entry point. For an
- * externally driven push feed (RabbitMQ, Kafka, ...) use {@code PushSubscriptionModel} instead.
+ * Unlike the asynchronous {@code SubscriptionModel}s, this model has no start position, checkpoint, catch-up, or
+ * replay. It only ever reacts to events fed to it here and now. It is a full {@link org.occurrent.subscription.api.blocking.SubscriptionModel}, so
+ * stopping it, or pausing a subscription, drops rather than defers events that arrive in the meantime (ADR 85).
+ * Dispatch happens inside the write, so a stopped model here still lets the write succeed. Only the projection
+ * behind it does not run, so stopping subscriptions and then accepting traffic leaves writes landing with no
+ * projection. The register-and-route machinery lives in {@link RegisteringSubscribable}. This model adds the
+ * application-service dispatch entry point. For an externally driven push feed (RabbitMQ, Kafka, ...) use
+ * {@code PushSubscriptionModel} instead.
  */
 @NullMarked
 public class SynchronousSubscriptionModel extends RegisteringSubscribable implements SynchronousEventDispatcher, Consumer<List<CloudEvent>> {
