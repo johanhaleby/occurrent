@@ -49,6 +49,15 @@
   its polls: ci-wait paced on observed check durations with a ~3x stuck threshold, worker-wait and
   human-wait on a long heartbeat because end-of-session notifications arrive event-driven, action-ready
   acted on immediately. Only ceilings stay as numbers; the rule lives in the /orchestrator skill.
+- A merge under authority is compare-and-swap, never a plain merge (2026-08-07, found by the A2 session).
+  gh pr merge acts on whatever head the API resolves at execution, so a worker push in the read-to-merge
+  window is silently dropped from the squash — #597 lost a follow-up commit this way (it became #601).
+  Always pin with --match-head-commit <verified-sha>; a refusal is a re-verify, and post-merge
+  verification compares the merged head against the verified one.
+- Worker-to-orchestrator messages are unreliable while the orchestrator is mid-turn (2026-08-07, A2's
+  sends failed where A9's succeeded). Signals must ride the work item: the sweep computes merge-readiness
+  from facts anyway, so pings are accelerators, but nuance a worker needs to convey goes in a PR comment,
+  and a sweep that meets a surprising unit state reads the PR conversation before acting.
 - Authorization is repo-scoped policy, never a skill default (2026-08-07 correction). Standing merge
   authority and the matrix-sibling green rule were briefly written into the global /orchestrator skill as
   defaults; both are grants Johan made for THIS repo and would violate process elsewhere (parkster-dev).
