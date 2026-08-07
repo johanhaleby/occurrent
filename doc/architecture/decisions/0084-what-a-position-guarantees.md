@@ -68,7 +68,7 @@ This is not in tension with `EventStoreCapability`, which stays declared. That o
 store does not expose. Position is the opposite, and the rule is worth stating plainly: **declare what cannot be
 asked, ask everything else.**
 
-Covering the position-off branch then needs a factory rather than a flag. `storeWithoutPosition()` returns an empty
+Covering the position-off branch then needs a factory rather than a flag. `eventStoreWithoutPosition()` returns an empty
 `Optional` by default, and an implementation opts in by building one. It returns both the `EventStore` and the
 `PositionOrderedReader` view, because `EventStore` does not extend `PositionOrderedReader` and a suite that
 downcast would throw `ClassCastException` on an implementation where those are separate objects.

@@ -111,26 +111,26 @@ class MongoEventStoreConformanceFixture implements EventStoreFixture {
     }
 
     @Override
-    public Optional<StoreWithoutPosition> storeWithoutPosition() {
+    public Optional<EventStoreWithoutPosition> eventStoreWithoutPosition() {
         EventStoreConfig config = new EventStoreConfig.Builder()
                 .timeRepresentation(timeRepresentation)
                 .eventStoreCapabilities(EventStoreCapability.STREAM)
                 .withoutStreamPosition()
                 .build();
         MongoEventStore withoutPosition = new MongoEventStore(mongoClient, database, "events-without-position", config);
-        return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
+        return Optional.of(new EventStoreWithoutPosition(withoutPosition, withoutPosition));
     }
 
     @Override
-    public Optional<StoreWithoutDcb> storeWithoutDcb() {
+    public Optional<EventStoreWithoutDcb> eventStoreWithoutDcb() {
         MongoEventStore withoutDcb = restrictedTo("events-stream-only", EventStoreCapability.STREAM);
-        return Optional.of(new StoreWithoutDcb(withoutDcb, withoutDcb));
+        return Optional.of(new EventStoreWithoutDcb(withoutDcb, withoutDcb));
     }
 
     @Override
-    public Optional<StoreWithoutStream> storeWithoutStream() {
+    public Optional<EventStoreWithoutStream> eventStoreWithoutStream() {
         MongoEventStore withoutStream = restrictedTo("events-dcb-only", EventStoreCapability.DCB);
-        return Optional.of(new StoreWithoutStream(withoutStream, withoutStream, withoutStream, withoutStream, withoutStream));
+        return Optional.of(new EventStoreWithoutStream(withoutStream, withoutStream, withoutStream, withoutStream, withoutStream));
     }
 
     /**

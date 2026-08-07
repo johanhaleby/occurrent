@@ -22,7 +22,7 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.tck.eventstore.blocking.DcbAppendConditionModel;
 import org.occurrent.tck.eventstore.blocking.EventStoreFixture;
-import org.occurrent.tck.eventstore.blocking.StoreWithoutPosition;
+import org.occurrent.tck.eventstore.blocking.EventStoreWithoutPosition;
 
 import java.util.Optional;
 import java.util.Set;
@@ -91,9 +91,9 @@ class InMemoryEventStoreConformanceFixture implements EventStoreFixture {
     }
 
     @Override
-    public Optional<StoreWithoutPosition> storeWithoutPosition() {
+    public Optional<EventStoreWithoutPosition> eventStoreWithoutPosition() {
         InMemoryEventStore withoutPosition = new InMemoryEventStore().withoutStreamPosition();
-        return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
+        return Optional.of(new EventStoreWithoutPosition(withoutPosition, withoutPosition));
     }
 
     /**
