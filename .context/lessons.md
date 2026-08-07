@@ -103,6 +103,15 @@
   live PR look closed), PR-OPENED separates discovery from state change so adopt-routing and
   merge-routing need no inference, and a multi-repo epic runs one monitor per repository with active
   PR work. The event vocabulary is now shared between the Claude and Codex orchestrators.
+- Whether .context/ is tracked in git is a per-repository decision asked once and recorded
+  (2026-08-07, from Johan about parkster-dev shared repos where he is the only orchestrator user).
+  The policy file's memory_checkpoints setting is the lever, occurrent grants commit+push, a shared
+  repo records the standing local-only answer. Conservative default with no recorded decision:
+  local-only, with ignore rules in .git/info/exclude, never .gitignore, because in a shared repo
+  the ignore file is itself a visible push. The durability trade (no git checkpoint trail, no
+  cross-machine recovery) is named at the ask. The shared contract enum is ask | allowed, so the
+  standing opt-out rides the provenance note; a first-class forbidden value is proposed to Codex,
+  not invented unilaterally.
 - Worker exits end with a typed DELIVERY_RESULT block (2026-08-07, Johan's design, refined same
   day): PR number, full head SHA, pr-fix outcome as exactly done | attempts_exhausted | blocked |
   not_run, the blocker as its own separate field, and the reason whenever the outcome is not done,
