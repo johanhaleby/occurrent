@@ -44,6 +44,8 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * {@code @Saga(source = PUSH, catchup = NONE)}: the saga takes live events only, so it needs no event store to replay
@@ -55,7 +57,7 @@ class SagaAnnotationPushWithoutCatchupTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-            .withUserConfiguration(PushOnlySagaConfiguration.class);
+            .withUserConfiguration(PushInfrastructureConfiguration.class, PushOnlySagaConfiguration.class);
 
     @Test
     void the_context_starts_with_no_event_store_beans_at_all() {
@@ -96,6 +98,42 @@ class SagaAnnotationPushWithoutCatchupTest {
     }
 
     @Test
+    void an_event_carrying_no_stream_metadata_is_refused_rather_than_reacted_to() {
+        runner.run(context -> {
+            PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
+            RecordingDispatcher dispatcher = context.getBean(RecordingDispatcher.class);
+
+            // What a listener forwarding another application's event delivers, with no streamid, streamversion or position
+            Throwable refusal = catchThrowable(() -> feed.accept(TestConverter.INSTANCE.toCloudEvent(new OrderPlaced("e1", "order-3"))));
+
+            // The feed never gets an acknowledgement, so the dropped metadata surfaces instead of costing the saga its
+            // redelivery protection for as long as it runs
+            assertAll(
+                    () -> assertThat(refusal).hasMessageContaining("no streamid, streamversion or position"),
+                    () -> assertThat(dispatcher.issued).isEmpty()
+            );
+        });
+    }
+
+    @Test
+    void a_saga_declaring_best_effort_takes_the_same_event_and_reacts_to_every_redelivery() {
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(PushInfrastructureConfiguration.class, BestEffortSagaConfiguration.class)
+                .run(context -> {
+                    PushSubscriptionModel feed = context.getBean(PushSubscriptionModel.class);
+                    RecordingDispatcher dispatcher = context.getBean(RecordingDispatcher.class);
+                    CloudEvent placed = TestConverter.INSTANCE.toCloudEvent(new OrderPlaced("e1", "order-4"));
+
+                    feed.accept(placed);
+                    feed.accept(placed);
+
+                    // The duplication BEST_EFFORT accepts, which is why it is opt-in rather than the default
+                    assertThat(dispatcher.issued).containsExactly(new ShipOrder("order-4"), new ShipOrder("order-4"));
+                });
+    }
+
+    @Test
     void the_saga_is_published_under_its_own_bean_name() {
         runner.run(context ->
                 assertThat(context).hasBean(SagaAnnotationRegistrar.sagaInstancesBeanName("push-only-saga")));
@@ -105,7 +143,7 @@ class SagaAnnotationPushWithoutCatchupTest {
     void an_event_store_saga_that_sets_catchup_is_pointed_at_start_at_instead() {
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(PushOnlySagaConfiguration.class, EventStoreCatchupConfiguration.class)
+                .withUserConfiguration(PushInfrastructureConfiguration.class, PushOnlySagaConfiguration.class, EventStoreCatchupConfiguration.class)
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
@@ -118,7 +156,7 @@ class SagaAnnotationPushWithoutCatchupTest {
     void a_push_saga_with_catchup_none_still_cannot_set_a_start_position() {
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(PushOnlySagaConfiguration.class, PushCatchupNoneStartAtConfiguration.class)
+                .withUserConfiguration(PushInfrastructureConfiguration.class, PushOnlySagaConfiguration.class, PushCatchupNoneStartAtConfiguration.class)
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
@@ -134,7 +172,7 @@ class SagaAnnotationPushWithoutCatchupTest {
     void a_push_saga_with_catchup_none_cannot_set_a_startup_mode_either_since_it_replays_nothing() {
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
-                .withUserConfiguration(PushOnlySagaConfiguration.class, PushCatchupNoneStartupModeConfiguration.class)
+                .withUserConfiguration(PushInfrastructureConfiguration.class, PushOnlySagaConfiguration.class, PushCatchupNoneStartupModeConfiguration.class)
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
@@ -217,8 +255,10 @@ class SagaAnnotationPushWithoutCatchupTest {
         }
     }
 
+    // Everything a push saga needs except the saga itself, so a test can register a differently configured one on a
+    // feed of its own. A push sink feeds exactly one consumer (ADR 90), so two sagas cannot share these.
     @Configuration(proxyBeanMethods = false)
-    static class PushOnlySagaConfiguration {
+    static class PushInfrastructureConfiguration {
         @Bean
         CloudEventConverter<OrderEvent> cloudEventConverter() {
             return TestConverter.INSTANCE;
@@ -248,10 +288,29 @@ class SagaAnnotationPushWithoutCatchupTest {
         RecordingDispatcher commandDispatcher() {
             return new RecordingDispatcher();
         }
+    }
 
+    @Configuration(proxyBeanMethods = false)
+    static class PushOnlySagaConfiguration {
         @Bean
         PushOnlySaga pushOnlySaga() {
             return new PushOnlySaga();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class BestEffortSagaConfiguration {
+        @Bean
+        BestEffortSaga bestEffortSaga() {
+            return new BestEffortSaga();
+        }
+    }
+
+    static class BestEffortSaga {
+        @Saga(id = "best-effort-saga", source = Source.PUSH, catchup = Catchup.NONE,
+                redeliveryDetection = RedeliveryDetection.BEST_EFFORT)
+        org.occurrent.dsl.saga.Saga<OrderEvent, OrderState, OrderCommand> saga() {
+            return shipsOnEveryPlaced();
         }
     }
 
