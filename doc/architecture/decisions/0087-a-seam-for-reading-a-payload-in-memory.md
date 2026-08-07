@@ -4,7 +4,9 @@ Date: 2026-08-02
 
 ## Status
 
-Accepted. Resolves #58, open since 2020-12-31.
+Accepted. Resolves #58, open since 2020-12-31. Superseded in part by
+[ADR 92](0092-a-subscription-can-filter-on-a-payload-field.md), which reverses the refusal for the three places this
+ADR left refusing.
 
 ## Context
 

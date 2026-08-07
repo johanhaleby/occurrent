@@ -1,5 +1,9 @@
 # Lessons
 
+- The unit-not-PR, verify-side-effects, and stalled-detection rules graduated into the /orchestrator
+  skill's epic-state model on 2026-08-07 (schema v1, `.context/epics/<epic>.yml`, durable pending
+  actions, computed completion). The entries below remain as history of how they were learned.
+
 - A dated changelog heading alone does not prove that a release shipped. Confirm a matching git tag, publication to
   Maven Central, or explicit maintainer state before treating the version as released.
 - Questions to Johan go through the AskUserQuestion tool, always with a recommended option marked (2026-08-06
@@ -45,6 +49,12 @@
   its polls: ci-wait paced on observed check durations with a ~3x stuck threshold, worker-wait and
   human-wait on a long heartbeat because end-of-session notifications arrive event-driven, action-ready
   acted on immediately. Only ceilings stay as numbers; the rule lives in the /orchestrator skill.
+- Authorization is repo-scoped policy, never a skill default (2026-08-07 correction). Standing merge
+  authority and the matrix-sibling green rule were briefly written into the global /orchestrator skill as
+  defaults; both are grants Johan made for THIS repo and would violate process elsewhere (parkster-dev).
+  Grants live in the checked-in `.context/orchestrator-policy.yml` with provenance; the skill carries the
+  mechanism plus conservative defaults (no standing merge, strict green, threads block), and a
+  conversational grant is offered persistence into the policy file rather than left as session lore.
 - Release execution is Johan's manual act (2026-08-06 correction). Never plan or route changelog version stamping,
   `mvn_release.sh`, tagging, docs held-branch merges, the docs version bump, or post-release checks as agent-executed
   work. Plan up to a release-readiness gate and stop there; keep the release-day steps as a reference checklist only.

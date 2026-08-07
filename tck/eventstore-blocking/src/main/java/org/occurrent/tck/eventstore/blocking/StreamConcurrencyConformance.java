@@ -130,8 +130,10 @@ public abstract class StreamConcurrencyConformance extends EventStoreConformance
                 CloudEvent event = event(eventId, DEFINED);
                 return () -> {
                     // No WriteCondition: WriteCondition.anyStreamVersion() promises that a version race between
-                    // concurrent writers can never fail a write, so any failure observed here is a real defect in
-                    // the store rather than an expected loser.
+                    // concurrent writers does not fail a write as long as the store keeps retrying through it, and
+                    // threadCount writers racing on one stream is a contention level every store shipping with
+                    // Occurrent clears, so any failure observed here is a real defect in the store rather than an
+                    // expected loser.
                     eventStore().write(streamId, List.of(event));
                     return eventId;
                 };

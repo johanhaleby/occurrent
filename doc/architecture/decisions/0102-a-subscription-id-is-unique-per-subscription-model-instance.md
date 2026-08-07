@@ -11,9 +11,12 @@ amendment on [ADR 94](0094-the-subscription-tck-declares-three-differences-and-w
 
 The subscription TCK asserts that a model refuses a subscription id that is already in use, because a subscription id
 identifies one subscription and reusing a live one would otherwise silently replace the handler already behind it.
-Four models honour that today: `InMemorySubscriptionModel`, `NativeMongoSubscriptionModel` and
+The blocking stack honours that today: `InMemorySubscriptionModel`, `NativeMongoSubscriptionModel` and
 `SpringMongoSubscriptionModel` throw `IllegalArgumentException("Subscription <id> is already defined.")`, and
-`RegisteringSubscribable` throws its "is already registered" equivalent.
+`RegisteringSubscribable` throws its "is already registered" equivalent. So does the reactor stack, with the same
+`IllegalArgumentException("Subscription <id> is already defined.")` message:
+`ReactorMongoSubscriptionModel`, `ReactorDurableSubscriptionModel`, `ReactorCatchupSubscriptionModel`, and the two
+models sharing `NamedCatchupSupport`, `ReactorStreamCatchupSubscriptionModel` and `ReactorDcbCatchupSubscriptionModel`.
 
 `CompetingConsumerSubscriptionModel` did not, and that is not obviously a bug, which is why it went to an issue. The
 whole point of the competing consumer pattern is that several subscribers use *one* subscription id and a
