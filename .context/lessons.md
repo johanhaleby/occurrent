@@ -72,6 +72,12 @@
   Grants live in the checked-in `.context/orchestrator-policy.yml` with provenance; the skill carries the
   mechanism plus conservative defaults (no standing merge, strict green, threads block), and a
   conversational grant is offered persistence into the policy file rather than left as session lore.
+- Effort tracks remaining uncertainty, not the phase name (2026-08-07 correction). "Routing low,
+  execution high" was too broad: mechanical execution of a settled plan is low/medium, hard
+  planning/debugging/integration is high or above. Same round: a named agent's fixed model is one
+  complete choice (no conflicting override stacked on it), "shared cache wins" was an unmeasured cost
+  claim (the fact is "avoids rebuilding context"), and effort the orchestrator cannot set (sessions,
+  named agents) is stated as a recommendation, never as an applied setting.
 - Release execution is Johan's manual act (2026-08-06 correction). Never plan or route changelog version stamping,
   `mvn_release.sh`, tagging, docs held-branch merges, the docs version bump, or post-release checks as agent-executed
   work. Plan up to a release-readiness gate and stop there; keep the release-day steps as a reference checklist only.
