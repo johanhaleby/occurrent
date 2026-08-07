@@ -26,7 +26,6 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.tck.ConformanceEvents;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -57,8 +56,6 @@ public abstract class InProcessDeliveryConformance extends SubscriptionModelSuit
     @Override
     protected abstract SubscriptionModelFixture createFixture();
 
-    private static final Duration START_TIMEOUT = Duration.ofSeconds(10);
-
     private static String subscriptionId() {
         return UUID.randomUUID().toString();
     }
@@ -70,10 +67,14 @@ public abstract class InProcessDeliveryConformance extends SubscriptionModelSuit
      * it returns, so a model that needs the barrier would otherwise fail here for a reason that has nothing to do with
      * in-process delivery. Occurrent's own two models are started when {@code subscribe} returns, so this waits for
      * something already true of them and costs them nothing.
+     * <p>
+     * It is bounded by {@link SubscriptionModelFixture#deliveryTimeout()} rather than by a constant of its own, because
+     * it is the same wait shape the rest of the leaf uses and a second number for it would be the inconsistency the
+     * declared budget exists to remove.
      */
-    private static void awaitStarted(Subscription subscription) {
-        assertThat(subscription.waitUntilStarted(START_TIMEOUT))
-                .as("the subscription did not start within " + START_TIMEOUT)
+    private void awaitStarted(Subscription subscription) {
+        assertThat(subscription.waitUntilStarted(deliveryTimeout()))
+                .as("the subscription did not start within " + deliveryTimeout())
                 .isTrue();
     }
 

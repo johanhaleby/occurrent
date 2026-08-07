@@ -23,6 +23,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
+import java.time.Duration;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -168,6 +169,35 @@ public interface SubscriptionModelFixture {
      */
     default boolean replaysHistoryToANewSubscription() {
         return false;
+    }
+
+    /**
+     * The longest the suites will wait for something that must arrive, whether that is an event reaching a handler or a
+     * subscription reporting itself started.
+     * <p>
+     * Ten seconds by default, which is what every model shipping with Occurrent runs on. It is already generous against
+     * the rest of this repository, where the same wait shape is usually spelled 2 to 5 seconds.
+     * <p>
+     * <strong>This is a bound, not a delay.</strong> Each wait stops as soon as its condition holds, so a generous
+     * budget costs a passing run nothing and is only paid in full by a test that was going to fail anyway. A model that
+     * has to reach a broker before it can deliver, or that connects lazily on first subscribe, declares what it needs
+     * here rather than being held to a number chosen for a model that talks to a change stream on the same machine.
+     * <p>
+     * <strong>Raising this past a few seconds means raising the class timeout too, and that is yours to do.</strong>
+     * Each suite carries a {@code @Timeout} sized for the default, and the longest test in
+     * {@link SubscriptionModelConformance} chains twelve of these waits, so a model declaring 30 seconds has a worst
+     * case of six minutes in that one test. {@code @Timeout} is {@code @Inherited} and a directly declared one wins, so
+     * putting {@code @Timeout} on your own conformance subclass is all it takes. Without it the class timeout fires
+     * mid-wait and reports a {@code TimeoutException} instead of the assertion naming what never arrived, which is the
+     * one failure mode this whole convention exists to avoid.
+     * <p>
+     * Unlike the declarations above this is not a difference between implementations that the suite asserts both ways.
+     * It is the same line {@link CompetingConsumerStrategyFixture#timeToConverge()} sits on, a schedule nothing on the
+     * interface reports. That one is abstract because a coordination schedule has no answer that is right by default,
+     * where a delivery budget does.
+     */
+    default Duration deliveryTimeout() {
+        return Duration.ofSeconds(10);
     }
 
     /**

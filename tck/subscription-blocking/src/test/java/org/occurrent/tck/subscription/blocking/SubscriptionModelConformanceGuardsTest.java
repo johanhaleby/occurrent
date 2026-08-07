@@ -26,6 +26,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 
@@ -99,6 +100,55 @@ class SubscriptionModelConformanceGuardsTest {
         assertThatThrownBy(suite::createFixtureAndCheckItsDeclaration)
                 .isExactlyInstanceOf(NullPointerException.class)
                 .hasMessageContaining("returned null from aCheckpointToStartFrom()");
+    }
+
+    @Test
+    void reject_a_fixture_that_declares_no_delivery_timeout_at_all() {
+        SubscriptionModelFixture fixture = new StubFixture(NoopSubscriptionModel.INSTANCE) {
+            @Override
+            @SuppressWarnings("NullAway")
+            public Duration deliveryTimeout() {
+                return null;
+            }
+        };
+        SubscriptionModelConformance suite = suiteWith(fixture);
+
+        assertThatThrownBy(suite::createFixtureAndCheckItsDeclaration)
+                .isExactlyInstanceOf(NullPointerException.class)
+                .hasMessageContaining(fixture.getClass().getName())
+                .hasMessageContaining("returned null from deliveryTimeout()");
+    }
+
+    @Test
+    void reject_a_fixture_that_declares_a_zero_delivery_timeout() {
+        SubscriptionModelFixture fixture = new StubFixture(NoopSubscriptionModel.INSTANCE) {
+            @Override
+            public Duration deliveryTimeout() {
+                return Duration.ZERO;
+            }
+        };
+        SubscriptionModelConformance suite = suiteWith(fixture);
+
+        assertThatThrownBy(suite::createFixtureAndCheckItsDeclaration)
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(fixture.getClass().getName())
+                .hasMessageContaining("declared a deliveryTimeout() of PT0S");
+    }
+
+    @Test
+    void reject_a_fixture_that_declares_a_negative_delivery_timeout() {
+        SubscriptionModelFixture fixture = new StubFixture(NoopSubscriptionModel.INSTANCE) {
+            @Override
+            public Duration deliveryTimeout() {
+                return Duration.ofSeconds(-1);
+            }
+        };
+        SubscriptionModelConformance suite = suiteWith(fixture);
+
+        assertThatThrownBy(suite::createFixtureAndCheckItsDeclaration)
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(fixture.getClass().getName())
+                .hasMessageContaining("declared a deliveryTimeout() of PT-1S");
     }
 
     @Test
