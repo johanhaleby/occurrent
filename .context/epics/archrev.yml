@@ -1,7 +1,7 @@
 schema_version: 1
 epic: archrev
-revision: 4
-updated_at: '2026-08-07T16:10:00+00:00'
+revision: 5
+updated_at: '2026-08-07T16:40:00+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (epic registration)
 baseline:
   repo: johanhaleby/occurrent
@@ -11,7 +11,18 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   2026-08-07 via structured ask (full Wave A gates the 0.32.0 tag, new milestone);
   plan at /Users/johan/.claude/plans/users-johan-test2-handoff-state-machine-crystalline-llama.md'
 milestone: 2
-pending_actions: []
+pending_actions:
+- id: act-001
+  type: message-session
+  target: 'T1 session local_f8632716: answer 3 Copilot threads on #628 (test hang
+    risk, inconsistent comment, javadoc wrong for optimistic-locking stores), state
+    the RetryStrategy default and changelog placement'
+  expected: 'threads answered (fix or reasoned decline), fresh head if code changed,
+    PR comment naming the default'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-07T16:38:00+00:00'
 units:
   T1:
     issue: 616
@@ -32,7 +43,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: CAS-merge PR 628 on green with threads handled
+    next_action: 'await session answers on the 3 Copilot threads (routed as act-001);
+      then CAS-merge the resulting green head'
     last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
     observed: {}
     assessment: 'verified: hazard reachable since ADR 108, materializer shipped racy
@@ -64,22 +76,23 @@ units:
   T3:
     issue: 618
     goal: reactive metadata overloads (2 Java + 2 Kotlin delegations)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
       ref: 627
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-07T16:30Z at 7f1e443378 (merge df64d753c), all
+        green, 0 threads'
     - check: issue_closed
       ref: 618
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #618, verified by orchestrator'
     blocking_on: []
-    next_action: CAS-merge PR 627 on green with threads handled
+    next_action: none
     last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
     observed: {}
     assessment: additive, private path exists, DCB sibling is the template
