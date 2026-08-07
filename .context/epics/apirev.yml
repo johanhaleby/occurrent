@@ -1,8 +1,8 @@
 schema_version: 1
 epic: apirev
-revision: 18
-updated_at: '2026-08-07T11:30:11+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
+revision: 19
+updated_at: '2026-08-07T11:41:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (A6 round-2 head up, A11 adopted)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -207,17 +207,19 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: session re-merges main (round 2, cascade); all other epic merges
-      held for it; CAS-merge on green
-    last_meaningful_progress_at: '2026-08-07T11:30:11+00:00'
+    next_action: CAS-merge at 36730abff on green (round-2 rebase delivered; freeze
+      holds until this lands)
+    last_meaningful_progress_at: '2026-08-07T11:41:00+00:00'
     observed:
       pr_609:
-        head: 975ea82ad
-        rollup: 27/27 green
-        threads_open: 0
-        mergeable: CONFLICTING
-        via: gh pr view + graphql
-        at: '2026-08-07T11:18:51+00:00'
+        head: 36730abff
+        rollup: checks running (0 failures so far)
+        threads_open: unrefreshed since round-2 push
+        mergeable: MERGEABLE
+        via: gh pr list + monitor
+        at: '2026-08-07T11:41:00+00:00'
+        note: old head 0100c4e6f finished 26/27 with subscription-mongodb-spring@java-21
+          the sole failure (java-25 green, flaky-suspect); superseded by this head
     assessment: 'decision landed: refuse by default, BEST_EFFORT opt-out for foreign
       feeds, refused on EVENT_STORE sagas'
   A7:
@@ -407,9 +409,11 @@ units:
         head: 57bfedce7
         rollup: 27/27 green
         threads_open: 3
-        via: gh pr view + graphql
-        at: '2026-08-07T11:18:51+00:00'
-    assessment: ''
+        mergeable: CONFLICTING
+        via: gh pr list + monitor
+        at: '2026-08-07T11:41:00+00:00'
+    assessment: went CONFLICTING as more of the cascade landed; rebase is owed anyway,
+      so the hold costs nothing extra
   B5:
     issue: 590
     goal: parity and hygiene sweep
@@ -531,3 +535,43 @@ units:
         via: gh pr list + graphql
         at: '2026-08-07T09:11:26+00:00'
     assessment: adopted 2026-08-07; third spin-off, adoption now epic default
+  A11:
+    issue: 613
+    goal: push saga catch-up replay must not outlive the context close (adopted spin-off)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_2bc4aa41-c66a-425c-994b-213462dc3c69
+    deliverables:
+    - check: pr_merged
+      ref: 614
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 613
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'CAS-merge #614 on green, AFTER #609 lands (freeze order); tag-gating
+      since the push saga feature ships unreleased in 0.32.0'
+    last_meaningful_progress_at: '2026-08-07T11:35:31+00:00'
+    observed:
+      pr_614:
+        head: efd90e1b2
+        rollup: checks running (0 failures so far)
+        threads_open: unchecked
+        mergeable: MERGEABLE
+        via: gh pr list + monitor
+        at: '2026-08-07T11:41:00+00:00'
+      session:
+        title: Shut down push saga catch-up models on context close
+        running: false
+        note: 'not fleet-titled (spawned outside the chip protocol) but claimed #613
+          per AGENTS.md and delivered a complete blocking-only fix with a container-free
+          regression test'
+        via: list_sessions
+        at: '2026-08-07T11:41:00+00:00'
+    assessment: 'adopted under the standing spin-off default (structured-ask grant
+      on #604); real lifecycle bug, BACKGROUND replay survived context close and
+      kept issuing commands into a closing event store'
