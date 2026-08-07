@@ -29,8 +29,8 @@ import reactor.core.scheduler.Schedulers;
 
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -114,7 +114,11 @@ public final class ReactiveHandover<T> {
         this.noun = noun;
         this.maxBufferedEvents = options.maxBufferedEvents();
         this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
-        this.liveSink = Sinks.many().unicast().onBackpressureBuffer(new ArrayBlockingQueue<>(maxBufferedEvents));
+        // LinkedBlockingQueue(capacity), not ArrayBlockingQueue(capacity): both cap at maxBufferedEvents (up to 100k by
+        // default) and reject past it the same way, but ArrayBlockingQueue pre-allocates its full backing array at
+        // construction, roughly 800 KB held for the handover's whole lifetime whether or not the live feed ever
+        // buffers anything. LinkedBlockingQueue allocates one node per buffered item, so memory tracks actual use.
+        this.liveSink = Sinks.many().unicast().onBackpressureBuffer(new LinkedBlockingQueue<>(maxBufferedEvents));
     }
 
     /**

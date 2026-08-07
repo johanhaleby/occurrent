@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 12
-updated_at: '2026-08-07T09:11:26+00:00'
+revision: 13
+updated_at: '2026-08-07T09:38:54+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
 baseline:
   repo: johanhaleby/occurrent
@@ -139,7 +139,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 608
       met: false
       evidence: null
     - check: issue_closed
@@ -147,10 +147,15 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip spawned (task_cf3a9a18, Opus/high) - decision dependency met,
-      PR-merge dependency tracked via depends_on
-    last_meaningful_progress_at: null
-    observed: {}
+    next_action: merge on green (planning gate concluded in-session)
+    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    observed:
+      pr_608:
+        head: 5b8a7d6a8
+        rollup: 2 green 1 queued
+        threads_open: 0
+        via: gh pr list + graphql
+        at: '2026-08-07T09:38:54+00:00'
     assessment: ''
   A5:
     issue: 582
@@ -164,7 +169,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 607
       met: false
       evidence: null
     - check: issue_closed
@@ -172,9 +177,15 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip spawned (task_66486ded, Sonnet/high) with in-flight #603 warning'
-    last_meaningful_progress_at: null
-    observed: {}
+    next_action: merge on green; 1 thread to watch
+    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    observed:
+      pr_607:
+        head: ef67ee312
+        rollup: 6 green 20 queued
+        threads_open: 1
+        via: gh pr list + graphql
+        at: '2026-08-07T09:38:54+00:00'
     assessment: ''
   A6:
     issue: 583
@@ -195,7 +206,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch after A4's planning round (one round at a time)
+    next_action: chip spawned (task_725759fd, Opus/medium)
     last_meaningful_progress_at: null
     observed: {}
     assessment: ''
@@ -334,7 +345,7 @@ units:
     session: local_0c9bd4c6-1b76-4abf-af82-506f449fce32
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 606
       met: false
       evidence: null
     - check: issue_closed
@@ -342,9 +353,16 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: working
-    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
-    observed: {}
+    next_action: merge on green; VERIFY at merge time that the concurrency-contract
+      ADR came with the fix and Johan approved the contract change in-session
+    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    observed:
+      pr_606:
+        head: 3263095b9
+        rollup: 2 green 5 queued
+        threads_open: 1
+        via: gh pr list + graphql
+        at: '2026-08-07T09:38:54+00:00'
     assessment: ''
   B4:
     issue: 589
@@ -371,23 +389,24 @@ units:
   B5:
     issue: 590
     goal: parity and hygiene sweep
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_a2129224-06f5-475f-9418-51a91a74ecec
+    session: null
     deliverables:
     - check: pr_merged
       ref: 605
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED 2026-08-07T09:38:54+00:00 at 8c8b96a1e, 26/26 green, 0
+        threads
     - check: issue_closed
       ref: 590
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #590'
     blocking_on: []
-    next_action: merge on green
-    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
     observed:
       pr_605:
         head: 8c8b96a1e
