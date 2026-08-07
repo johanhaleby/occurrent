@@ -137,11 +137,18 @@ Both applied to MongoDB subscriptions as well, since they convert their filters 
 
 ### The one thing to know
 
-Events already in your database keep the shape they were written with. Queries over events written by 0.32.0 and later
-are correct, and a query whose boundary lands exactly on an older event can still miss it, because the filter is
-rendered in the new shape and the stored value is in the old one.
+Events already in your database keep the shape they were written with. An equality filter, `Filter.time(instant)`
+built from `eq`, `in`, or `ne`, still matches an event written before the upgrade, because it is compared against
+both the canonical shape and the legacy shape a value could have been written with. A range filter (`lt`, `gt`,
+`lte`, `gte`) is not extended this way, since a legacy and a canonical value do not reliably sort against each other,
+so a range whose boundary lands on a pre-upgrade event is unsound there rather than made safe.
 
-If that matters to you, rewrite the field once. This is optional.
+One built-in user of a range filter is worth knowing about. A durable catch-up subscription resumes from its
+`TimeBasedCheckpoint` with a `gt` filter built the same way, no application code involved. At the shape boundary that
+filter is over-inclusive rather than under, so at worst it redelivers an event the subscription already saw rather
+than skipping one it has not, which the idempotency a catch-up resume already requires absorbs.
+
+If the range-filter gap matters to you, rewrite the field once. This is optional.
 
 ### Optional: rewrite the stored values
 

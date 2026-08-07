@@ -34,9 +34,10 @@ public enum TimeRepresentation {
      * if you are uncertain of whether this is required in the future.
      * <br>
      * <br>
-     * <p>Note that the downside of using this is that you cannot do range queries on the "time" field.
-     * If you need nanosecond precision and/or timezone information <i>and</i> need to time queries
-     * then it's recommended to add a custom field (extension) to your {@code CloudEvent}'s
+     * <p>Note that range queries on the "time" field are only sound for a collection whose events carry a
+     * consistent UTC offset, since the field is compared as a string and two different offsets for the same
+     * instant do not sort the same way. If your events span several offsets and you need range queries over them,
+     * add a custom field (extension) to your {@code CloudEvent}'s
      * where you convert the {@link OffsetDateTime} to a {@link Date}. Then index this field and
      * query it using the Mongo Client API (or a derivative such as MongoTemplate in Spring).
      * </p>
