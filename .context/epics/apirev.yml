@@ -1,8 +1,8 @@
 schema_version: 1
 epic: apirev
-revision: 24
-updated_at: '2026-08-07T13:00:00+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (B2 thread routed to session)
+revision: 25
+updated_at: '2026-08-07T13:25:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (B2 merged - EPIC DELIVERY COMPLETE)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -17,7 +17,7 @@ pending_actions:
     (verify vs MongoDB, fix if real, reply, push)'
   expected: 'thread on #615 gets a reply (fix or reasoned decline), fresh head if
     code changed'
-  status: PENDING
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-07T12:58:00+00:00'
@@ -336,36 +336,34 @@ units:
   B2:
     issue: 587
     goal: payload-read short-circuit
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_8347fd08-d21f-424f-9fb6-f48c63fc13b6
+    session: null
     deliverables:
     - check: pr_merged
       ref: 615
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-07T13:20Z at 4df242a0b8 (merge 45ef40128), all
+        checks green, 0 unresolved threads (root-array finding was REAL, fixed with
+        an explicit root-token check plus test before merge)'
     - check: issue_closed
       ref: 587
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #587, verified by orchestrator'
     blocking_on: []
-    next_action: 'await session''s thread answer on the root-array parity question
-      (act-021); then CAS-merge on the resulting green head'
-    last_meaningful_progress_at: '2026-08-07T12:58:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T13:20:00+00:00'
     observed:
       pr_615:
-        head: f5bc2b0c4
-        rollup: all checks green
-        mergeable: MERGEABLE
-        threads_open: 1 (Copilot, unanswered, BLOCKS - root-array traversal may
-          diverge from MongoDB and the class contract)
-        title: Read a data filter field without materialising the whole payload
-        via: gh pr view + graphql + monitor
-        at: '2026-08-07T12:58:00+00:00'
-    assessment: 'delivered the #587 PR after the deliberate park; two targeted read
-      paths replacing tree-parse-per-condition'
+        state: MERGED
+        merge_commit: 45ef40128
+        via: gh pr view post-merge
+        at: '2026-08-07T13:20:00+00:00'
+    assessment: 'streaming + Document-walk read paths replacing tree-parse-per-condition;
+      Copilot''s root-array parity catch confirmed against the class contract and
+      fixed pre-merge; session archived, locked worktree force-removed after archive'
   B3:
     issue: 588
     goal: handover lock measurement
