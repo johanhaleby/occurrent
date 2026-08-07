@@ -1,7 +1,7 @@
 schema_version: 1
 epic: archrev
-revision: 10
-updated_at: '2026-08-07T19:40:00+00:00'
+revision: 11
+updated_at: '2026-08-07T20:05:00+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (T7 adopted, tag-gating rename)
 baseline:
   repo: johanhaleby/occurrent
@@ -185,14 +185,14 @@ units:
   T7:
     issue: 633
     goal: rename TCK capability-guard records Store* to EventStore* (adopted, tag-gating)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 634
       met: false
       evidence: null
     - check: issue_closed
@@ -200,7 +200,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip spawned, awaiting click (Sonnet/medium, mechanical rename)
+    next_action: CAS-merge PR 634 on green with threads handled
     last_meaningful_progress_at: '2026-08-07T19:40:00+00:00'
     observed: {}
     assessment: 'Johan ruled EventStoreWithout* via structured ask, negation kept
