@@ -46,8 +46,11 @@ State the contract in one place, assert it in the TCK against all four stores, a
 `WriteConditionNotFulfilledException` and writes nothing. Asserted on a count, not on `contains`, because `contains`
 passes on a store that wrote both.
 
-**An unconditional write never fails on a version race.** `anyStreamVersion()` means the write retries until it lands,
-so N threads writing concurrently all succeed and every event is present exactly once.
+**An unconditional write does not fail on a version race, for up to 15 retries.** `anyStreamVersion()` means a write
+that loses a race retries rather than surfacing the conflict, with backoff, up to those 15 attempts. The suite
+exercises 6 threads racing on one stream over 5 iterations, which 15 backed-off retries clear easily, so every writer
+succeeds and every event is present exactly once. A stream with more contention than that can clear still exhausts the
+retries and throws.
 
 The reactive store gets the retry the blocking ones have, routed through the existing
 transaction-ownership check ([ADR 74](0074-retry-only-where-the-transaction-is-owned.md)) so it only retries a

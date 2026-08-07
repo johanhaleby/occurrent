@@ -66,6 +66,13 @@ concession. A bare reactive primitive and a named lifecycle-managed subscription
 documents the second as the counterpart to the first. Forcing the primitive through the bridge would mean inventing a
 lifecycle the type does not have.
 
+**This paragraph describes the state as of this ADR, not the current one.** [ADR 98](0098-reactor-subscriptionmodel-means-what-blocking-subscriptionmodel-means.md)
+later gave the three catch-up models the same named, lifecycle-managed contract every other reactor model has, once
+#547 showed a durable model wrapping one had nothing to delegate to. They still also expose the cold `Flux` primitive
+this paragraph describes, the promotion added the lifecycle-managed path alongside it rather than replacing it.
+[ADR 101](0101-a-durable-reactor-subscription-delegates-when-the-model-it-wraps-is-named.md) builds on that promotion
+but does not amend this ADR.
+
 **Deterministic waiting first, polling only where a change stream leaves no alternative.** This supersedes ADR 77's
 waiting paragraph in part. **Amended once phase 6 was written: `Conformance.await()` and `awaitNothing()` were never
 built, and nothing needs them.** What ships is `RecordedEvents`, a recording handler that blocks on a queue with one

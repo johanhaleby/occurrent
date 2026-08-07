@@ -61,16 +61,24 @@ because it disagreed with the SDK. Aligning with the SDK would have fixed equali
 
 Events already stored keep whatever shape they were written with. New events are canonical.
 
-That leaves one narrow caveat: an exact-boundary or equality filter against an event written before the upgrade can miss
-it, because the filter renders the canonical form and the stored value does not match it. It is narrow because the
-general case was already broken. Shape varied per value before this change, so a collection that mixes shapes is not a
-new condition.
+That leaves a real caveat, and it is not a narrow one. An equality filter against an event written before the upgrade
+can miss it, because the filter now renders the canonical nine-digit form and the stored value keeps whatever width
+`OffsetDateTime.toString()` gave it at write time. Most clocks do not carry nanosecond precision, so most pre-upgrade
+values were written with three fractional digits or fewer, not nine, and the new filter will not match them. That
+covers essentially every pre-upgrade event with a `time` value, not the same whole-second-or-minute boundary the old
+writer and the old filter renderer used to disagree on. Before this change, the two renderers agreed on everything
+except that boundary. After it, the new renderer agrees with neither the old writer nor the old filter, on any event
+it did not itself write.
 
 The alternative was a required backfill of every event document. That was rejected as disproportionate: it puts a
-production data rewrite on every user, including those who never query on `time` and would gain nothing. The backfill is
-offered instead of required, in [upgrading to 0.32.0](../../migration/upgrading-to-0.32.0.md), which also records that
-the aggregation-pipeline form of it truncates to milliseconds and writes three fractional digits, so anyone needing
-exact matching against pre-upgrade events has to do the rewrite in application code.
+production data rewrite on every user, including those who never query on `time` and would gain nothing. The backfill
+is offered instead of required, in [upgrading to 0.32.0](../../migration/upgrading-to-0.32.0.md), as two routes with
+the same standing. One is an aggregation pipeline that rewrites every stored value to the canonical shape in one pass,
+and the other is an application-code rewrite that reads each `time` and writes it back with full nanosecond precision.
+The aggregation pipeline is faster to run but goes through a BSON date, which holds only milliseconds, so it truncates
+precision finer than that and still cannot satisfy an exact filter built from a nanosecond instant. The
+application-code route keeps full precision and is the one to use when that matters. Neither is required, and picking
+between them depends on whether the events being backfilled ever carried sub-millisecond precision worth preserving.
 
 ### The ordering guarantee is scoped to a consistent offset
 

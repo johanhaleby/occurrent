@@ -49,8 +49,11 @@ public String getReplicaSetUrl(String databaseName) {
 }
 ```
 
-The **process id** separates two concurrent runs. They are distinct live processes, so their pids cannot collide. The
-**counter** separates container objects inside one JVM, which in practice is one database per test class, since the
+The **process id** separates two concurrent runs. Two live processes sharing a pid namespace are distinct processes, so
+their pids cannot collide there. A build inside a devcontainer running beside a build on the host sits in different pid
+namespaces, and different pid namespaces are exactly where two live processes can end up reporting the same number.
+This scoping does not rule that case out. The cleanup section below works around it instead. The **counter** separates
+container objects inside one JVM, which in practice is one database per test class, since the
 dominant shape is a single `@Container static` field per class.
 
 Only the one-argument overload is overridden, because the no-argument one is a virtual self-call to it. That covers all
