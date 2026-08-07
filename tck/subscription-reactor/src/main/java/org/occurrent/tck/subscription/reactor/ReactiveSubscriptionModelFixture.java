@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 
+import java.time.Duration;
 import java.util.List;
 
 /**
@@ -54,6 +55,23 @@ public interface ReactiveSubscriptionModelFixture {
      * @param events The events to feed in, in order. Never empty, and no id is ever repeated within a test.
      */
     void publish(List<CloudEvent> events);
+
+    /**
+     * The longest {@link ReactiveSubscriptionModelConformance} will wait for anything that must happen.
+     * <p>
+     * Twenty seconds by default, generous because it only has to exceed a working model's delivery latency and a model
+     * that has genuinely stalled fails either way. A model that has to reach a broker before it can deliver declares
+     * what it needs here.
+     * <p>
+     * <strong>This is a bound, not a delay</strong>, on the same terms as
+     * {@link org.occurrent.tck.subscription.blocking.SubscriptionModelFixture#deliveryTimeout()}, which is the budget
+     * for everything the blocking suites assert about this model through {@link BlockingSubscriptionOverReactive}. The
+     * two are declared separately because they bound different things. This suite waits on the two publishers a bridge
+     * destroys, and it carries no class timeout, so nothing here caps what you declare.
+     */
+    default Duration deliveryTimeout() {
+        return Duration.ofSeconds(20);
+    }
 
     /**
      * Releases whatever the fixture opened, and shuts the model down. Called after every test method, including a

@@ -35,7 +35,6 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.ConformanceEvents;
 
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,7 +66,8 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * fixture declares which way it goes and the suite asserts the documented outcome for that answer, so both branches are
  * checked by somebody.
  * <p>
- * <strong>How this suite waits.</strong> Every wait is for something that must arrive within {@link #DELIVERY_TIMEOUT},
+ * <strong>How this suite waits.</strong> Every wait is for something that must arrive within the budget the fixture
+ * declares in {@link SubscriptionModelFixture#deliveryTimeout()},
  * through {@link RecordedEvents}. For "this event must not arrive" it publishes a marker afterwards and waits for the marker,
  * then asserts the whole recorded list. That is not a stylistic choice. A wait for a period in which nothing happens
  * passes just as well against a subscription that was never listening, and any constant short enough to keep a test
@@ -115,17 +115,6 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                 fixture.getClass().getName() + " returned null from aCheckpointToStartFrom()");
     }
 
-    /**
-     * How long a wait for an event that must arrive is given.
-     * <p>
-     * Ten seconds, and the number is arithmetic rather than taste. The longest test here chains four of these waits, so
-     * anything above 15 would let a slow model blow the class-level {@code @Timeout} mid-wait and report a
-     * {@code TimeoutException} instead of an assertion naming what never arrived. It is still generous against the rest
-     * of this repository, where the same wait shape is usually spelled 2 to 5 seconds. Raise the {@code @Timeout} before
-     * raising this.
-     */
-    protected static final Duration DELIVERY_TIMEOUT = Duration.ofSeconds(10);
-
     private static String subscriptionId() {
         return UUID.randomUUID().toString();
     }
@@ -136,9 +125,9 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
     private RecordedEvents subscribeAndWait(String subscriptionId, @Nullable SubscriptionFilter filter) {
         RecordedEvents recorded = new RecordedEvents();
         Subscription subscription = subscriptionModel().subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), recorded);
-        assertThat(subscription.waitUntilStarted(DELIVERY_TIMEOUT))
+        assertThat(subscription.waitUntilStarted(deliveryTimeout()))
                 .as("the subscription must report started within %s, or nothing published afterwards can be expected "
-                        + "to arrive", DELIVERY_TIMEOUT)
+                        + "to arrive", deliveryTimeout())
                 .isTrue();
         return recorded;
     }
@@ -155,7 +144,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
      * Asserts that exactly these events arrived, in this order, by waiting for as many as are expected.
      */
     private void assertReceives(RecordedEvents recorded, CloudEvent... expected) {
-        List<CloudEvent> received = recorded.awaitAtLeast(expected.length, DELIVERY_TIMEOUT);
+        List<CloudEvent> received = recorded.awaitAtLeast(expected.length, deliveryTimeout());
         assertThat(idsOf(received))
                 .as("every published event must reach the handler, in publish order")
                 .containsExactly(idsOf(expected).toArray(new String[0]));
@@ -172,7 +161,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
         CloudEvent marker = ConformanceEvents.event("marker-" + UUID.randomUUID(), "MarkerEvent");
         publish(marker);
 
-        List<CloudEvent> received = recorded.awaitAtLeast(1, DELIVERY_TIMEOUT);
+        List<CloudEvent> received = recorded.awaitAtLeast(1, deliveryTimeout());
         assertThat(idsOf(received))
                 .as("the marker proves the subscription is listening, so anything else in this list arrived when it "
                         + "should not have")
@@ -214,7 +203,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             // that reads either differently would deliver something other than everything.
             RecordedEvents recorded = new RecordedEvents();
             Subscription subscription = subscriptionModel().subscribe(subscriptionId(), recorded);
-            assertThat(subscription.waitUntilStarted(DELIVERY_TIMEOUT)).isTrue();
+            assertThat(subscription.waitUntilStarted(deliveryTimeout())).isTrue();
             CloudEvent event = ConformanceEvents.event("1", "NameDefined");
 
             publish(event);
@@ -272,7 +261,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             // instead of this variant's own.
             Subscription subscription = subscriptionModel()
                     .subscribe(id, null, variant.startAt(() -> fixture().aCheckpointToStartFrom()), recorded);
-            assertThat(subscription.waitUntilStarted(DELIVERY_TIMEOUT))
+            assertThat(subscription.waitUntilStarted(deliveryTimeout()))
                     .as("this model declares it accepts %s, so a subscription starting there must report started", variant)
                     .isTrue();
             CloudEvent event = ConformanceEvents.event(UUID.randomUUID().toString(), "NameDefined");
@@ -283,7 +272,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             // so the first thing to arrive is not necessarily the thing this assertion is about, and a count-wait would
             // read the list while it was still filling.
             List<CloudEvent> received = recorded.awaitUntil(
-                    events -> idsOf(events).contains(event.getId()), DELIVERY_TIMEOUT);
+                    events -> idsOf(events).contains(event.getId()), deliveryTimeout());
             assertThat(idsOf(received))
                     .as("this model declares it accepts %s, and an accepted start position owes a working "
                             + "subscription. Accepting one and then delivering nothing is the failure this catches: it "
@@ -311,7 +300,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             RecordedEvents recorded = subscribeAndWait(subscriptionId());
 
             if (fixture().replaysHistoryToANewSubscription()) {
-                assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+                assertThat(idsOf(recorded.awaitAtLeast(1, deliveryTimeout())))
                         .as("this model declares it replays its history to a subscription id it has not seen before, "
                                 + "so an event published before that subscription existed still has to arrive")
                         .contains(beforeAnythingSubscribed.getId());
@@ -338,13 +327,13 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                 }
                 afterTheFailure.accept(cloudEvent);
             });
-            assertThat(subscription.waitUntilStarted(DELIVERY_TIMEOUT)).isTrue();
+            assertThat(subscription.waitUntilStarted(deliveryTimeout())).isTrue();
             CloudEvent event = ConformanceEvents.event("1", "NameDefined");
 
             if (fixture().retriesAFailingHandler()) {
                 fixture().publish(List.of(event));
 
-                List<CloudEvent> received = afterTheFailure.awaitAtLeast(1, DELIVERY_TIMEOUT);
+                List<CloudEvent> received = afterTheFailure.awaitAtLeast(1, deliveryTimeout());
                 assertThat(idsOf(received))
                         .as("this model declares it retries, so the event must reach the handler on a later attempt "
                                 + "rather than being lost to the first failure")
@@ -408,7 +397,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             CloudEvent whilePaused = ConformanceEvents.event("2", "NameWasChanged");
 
             publish(whilePaused);
-            subscriptionModel().resumeSubscription(id).waitUntilStarted(DELIVERY_TIMEOUT);
+            subscriptionModel().resumeSubscription(id).waitUntilStarted(deliveryTimeout());
 
             if (fixture().deliversEventsPublishedWhilePaused()) {
                 // Held for the subscription, so it arrives before the marker that was published after it.
@@ -421,7 +410,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                     List<String> ids = idsOf(events);
                     int held = ids.indexOf(whilePaused.getId());
                     return held >= 0 && ids.subList(held + 1, ids.size()).contains(marker.getId());
-                }, DELIVERY_TIMEOUT);
+                }, deliveryTimeout());
                 // A subsequence rather than the exact list, because a model resuming from the last event it delivered
                 // rather than from just after it may hand that one over again. Redelivery is not forbidden by this
                 // contract, so asserting the exact list here would reject an at-least-once model over something this
@@ -458,7 +447,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             CloudEvent event = ConformanceEvents.event("1", "NameDefined");
             publish(event);
 
-            assertThat(idsOf(runningRecorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+            assertThat(idsOf(runningRecorded.awaitAtLeast(1, deliveryTimeout())))
                     .as("pausing one subscription says nothing about the others")
                     .containsExactly(event.getId());
             if (!fixture().deliversEventsPublishedWhilePaused()) {
@@ -483,11 +472,11 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                             + "them on its own rather than having to start everything")
                     .isTrue();
 
-            subscriptionModel().resumeSubscription(id).waitUntilStarted(DELIVERY_TIMEOUT);
+            subscriptionModel().resumeSubscription(id).waitUntilStarted(deliveryTimeout());
             CloudEvent afterResume = ConformanceEvents.event("1", "NameDefined");
             publish(afterResume);
 
-            assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+            assertThat(idsOf(recorded.awaitAtLeast(1, deliveryTimeout())))
                     .as("the resumed subscription delivers again")
                     .containsExactly(afterResume.getId());
         }
@@ -501,7 +490,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                 subscribeAndWait(only);
 
                 subscriptionModel().stop();
-                subscriptionModel().resumeSubscription(only).waitUntilStarted(DELIVERY_TIMEOUT);
+                subscriptionModel().resumeSubscription(only).waitUntilStarted(deliveryTimeout());
 
                 assertThat(subscriptionModel().isRunning())
                         .as("resumeSubscription(String) reopens the model-wide gate even for a model that only ever "
@@ -516,7 +505,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
 
             subscriptionModel().stop();
 
-            subscriptionModel().resumeSubscription(resumed).waitUntilStarted(DELIVERY_TIMEOUT);
+            subscriptionModel().resumeSubscription(resumed).waitUntilStarted(deliveryTimeout());
 
             assertThat(subscriptionModel().isRunning())
                     .as("resumeSubscription(String) reopens the model-wide gate rather than scoping to the one "
@@ -533,7 +522,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             CloudEvent afterResume = ConformanceEvents.event("1", "NameDefined");
             publish(afterResume);
 
-            assertThat(idsOf(resumedRecorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+            assertThat(idsOf(resumedRecorded.awaitAtLeast(1, deliveryTimeout())))
                     .as("the resumed subscription actually delivers again, not just isRunning() reporting so")
                     .containsExactly(afterResume.getId());
             // Unconditional, unlike the deliversEventsPublishedWhilePaused()-guarded checks elsewhere in this class:
@@ -555,7 +544,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             assertThat(subscriptionModel().isRunning()).isTrue();
             CloudEvent afterStart = ConformanceEvents.event("1", "NameDefined");
             publish(afterStart);
-            assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+            assertThat(idsOf(recorded.awaitAtLeast(1, deliveryTimeout())))
                     .as("starting a stopped model brings its subscriptions back")
                     .containsExactly(afterStart.getId());
         }
@@ -570,7 +559,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             assertThat(subscriptionModel().isRunning()).isTrue();
             CloudEvent afterStart = ConformanceEvents.event("1", "NameDefined");
             publish(afterStart);
-            assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+            assertThat(idsOf(recorded.awaitAtLeast(1, deliveryTimeout())))
                     .as("starting a model that is already started neither fails nor disturbs a running subscription")
                     .containsExactly(afterStart.getId());
         }
@@ -590,7 +579,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             assertThat(subscriptionModel().isRunning(id)).isTrue();
             CloudEvent afterStart = ConformanceEvents.event("1", "NameDefined");
             publish(afterStart);
-            assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+            assertThat(idsOf(recorded.awaitAtLeast(1, deliveryTimeout())))
                     .as("the subscription delivers again after start() resumed it")
                     .containsExactly(afterStart.getId());
         }
@@ -603,6 +592,12 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
          * them to make that visible instead of happening to land on the entries it iterates correctly.
          */
         @Test
+        // Six subscriptions each waited on twice is twelve chained waits, so this one test's worst case is twelve
+        // times the declared budget, 120 seconds at the default. The class timeout is 60, which would fire mid-wait
+        // and report a TimeoutException instead of naming what never arrived. Scoped to this method rather than
+        // raised on the class: SubscriptionModelConformance has 24 test methods, and a model that hangs on all of
+        // them already runs the shard past its 20 minute kill at 60 seconds each, where it produces no report at all.
+        @Timeout(150)
         void stop_pauses_and_start_resumes_every_one_of_several_running_subscriptions() {
             if (!fixture().acceptsSeveralSubscriptions()) {
                 return;
@@ -634,7 +629,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             CloudEvent afterStart = ConformanceEvents.event("1", "NameDefined");
             publish(afterStart);
             subscriptions.values().forEach(recorded ->
-                    assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+                    assertThat(idsOf(recorded.awaitAtLeast(1, deliveryTimeout())))
                             .as("and each one actually delivers again, not just reports running")
                             .containsExactly(afterStart.getId()));
         }
@@ -696,13 +691,13 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                 // A replaying model hands this subscription the earlier event before the new one. That is more than
                 // the other branch asserts rather than less: the replay has to arrive, and in order.
                 List<CloudEvent> received = afterCancel.awaitUntil(
-                        events -> idsOf(events).contains(afterCancelEvent.getId()), DELIVERY_TIMEOUT);
+                        events -> idsOf(events).contains(afterCancelEvent.getId()), deliveryTimeout());
                 assertThat(idsOf(received))
                         .as("this model replays to a new subscription, so the second one owes the earlier event and "
                                 + "then the new one")
                         .containsSubsequence(beforeCancel.getId(), afterCancelEvent.getId());
             } else {
-                assertThat(idsOf(afterCancel.awaitAtLeast(1, DELIVERY_TIMEOUT))).containsExactly(afterCancelEvent.getId());
+                assertThat(idsOf(afterCancel.awaitAtLeast(1, deliveryTimeout()))).containsExactly(afterCancelEvent.getId());
             }
             assertThat(recorded.soFar())
                     .as("a cancelled subscription receives nothing further")
@@ -719,7 +714,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
 
             CloudEvent event = ConformanceEvents.event("1", "NameDefined");
             publish(event);
-            assertThat(idsOf(reused.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+            assertThat(idsOf(reused.awaitAtLeast(1, deliveryTimeout())))
                     .as("cancelling frees the id, so the same one can be subscribed again and delivers")
                     .containsExactly(event.getId());
         }
