@@ -41,11 +41,11 @@ import java.util.*;
  * <strong>Two differences from the blocking twin, both forced by the reactive types.</strong> Resuming a subscription
  * waits on {@link Subscription#waitUntilStarted()}, and clearing a checkpoint waits on
  * {@link CheckpointStorage#delete(String)}, both of which return a {@code Mono} rather than blocking the calling
- * thread. A JUnit {@code beforeEach} is synchronous, so this extension blocks on them itself, bounded to 10 seconds
- * rather than waiting forever, instead of asking every test to. And there is no reactive
- * {@code DelegatingSubscriptionModel} to unwrap, so introspection is a plain {@code instanceof} check on the model
- * handed in, through {@link IntrospectableSubscriptionModel}, rather than the recursive {@code of(..)} the blocking
- * side has.
+ * thread. A JUnit {@code beforeEach} is synchronous, so this extension blocks on them itself, bounded by
+ * {@link #withStartTimeout(Duration)} rather than waiting forever, instead of asking every test to. And there is no
+ * reactive {@code DelegatingSubscriptionModel} to unwrap, so introspection is a plain {@code instanceof} check on the
+ * model handed in, through {@link IntrospectableSubscriptionModel}, rather than the recursive {@code of(..)} the
+ * blocking side has.
  * <p>
  * Accepts more than one subscription model, because a reactive Spring context typically has two life-cycle bearing
  * ones, the durable model and a {@code SynchronousSubscriptionModel}. Every model given is stopped and resumed the
@@ -53,13 +53,16 @@ import java.util.*;
  */
 public final class OccurrentSubscriptionsExtension implements BeforeEachCallback, AfterEachCallback {
 
-    // Every block() in this class is bounded by this, matching the rest of the reactor stack's tests, so a hung
-    // checkpoint storage or a subscription that never starts fails the test rather than hanging the run.
-    private static final Duration WAIT_TIMEOUT = Duration.ofSeconds(10);
+    // Generous rather than tight, because this bounds a subscription model that may be talking to a container on a
+    // loaded CI machine, and a default that is too tight turns a working subscription into a flaky test. Its job is to
+    // turn a subscription that never starts into a failing test rather than a run that hangs, which any finite bound
+    // does. Matches the blocking twin's default.
+    private static final Duration DEFAULT_START_TIMEOUT = Duration.ofSeconds(30);
 
     private final List<SubscriptionModelLifeCycle> subscriptionModels;
     private final Set<String> alwaysStartIds = new LinkedHashSet<>();
     private final Set<String> knownIds = new LinkedHashSet<>();
+    private Duration startTimeout = DEFAULT_START_TIMEOUT;
     private @Nullable Runnable clearState;
     private @Nullable CheckpointStorage checkpointStorage;
 
@@ -143,12 +146,64 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
      * Clearing the events alone does not achieve this. A stored checkpoint is what decides where a resumed subscription
      * starts, so it has to go too, and it is not necessarily stored next to the events. A MongoDB event store keeping
      * its checkpoints in Redis is an ordinary setup.
+     * <p>
+     * Known means every id the models report plus every id named on this extension. When that comes to nothing, there
+     * is no checkpoint to clear and nothing is deleted. Use {@link #clearingCheckpointsFor(CheckpointStorage, String...)}
+     * to clear checkpoints for subscriptions no model reports.
      *
      * @param checkpointStorage the storage holding the checkpoints, must not be {@code null}
      * @return this extension, so the call can be chained
      */
     public OccurrentSubscriptionsExtension clearingCheckpoints(CheckpointStorage checkpointStorage) {
         this.checkpointStorage = Objects.requireNonNull(checkpointStorage, "checkpointStorage must not be null");
+        return this;
+    }
+
+    /**
+     * As {@link #clearingCheckpoints(CheckpointStorage)}, and additionally clear these subscriptions' checkpoints
+     * whether or not any model reports them.
+     * <p>
+     * This is what to reach for when the checkpoints to clear belong to subscriptions the models cannot list, or to
+     * ones a test starts by hand later. {@link #alwaysStart(String...)} would name them too, but it also resumes them
+     * before every test, which is a different thing to ask for.
+     *
+     * @param checkpointStorage the storage holding the checkpoints, must not be {@code null}
+     * @param subscriptionIds   the ids to clear a checkpoint for, must not be {@code null}, must not contain
+     *                          {@code null}, and must not be empty
+     * @return this extension, so the call can be chained
+     */
+    public OccurrentSubscriptionsExtension clearingCheckpointsFor(CheckpointStorage checkpointStorage, String... subscriptionIds) {
+        Objects.requireNonNull(subscriptionIds, "subscriptionIds must not be null");
+        if (subscriptionIds.length == 0) {
+            throw new IllegalArgumentException("subscriptionIds must not be empty. Use clearingCheckpoints("
+                    + CheckpointStorage.class.getSimpleName() + ") to clear every known subscription's checkpoint.");
+        }
+        for (String subscriptionId : subscriptionIds) {
+            knownIds.add(Objects.requireNonNull(subscriptionId, "subscriptionIds must not contain null"));
+        }
+        return clearingCheckpoints(checkpointStorage);
+    }
+
+    /**
+     * How long to wait for a subscription to actually start before failing the test, whether it is started by
+     * {@link #start(String)}, {@link #startAll()} or {@link #alwaysStart(String...)}. Defaults to 30 seconds.
+     * <p>
+     * There is a bound at all because a subscription that never starts would otherwise hang the whole run rather than
+     * fail one test, and the default is generous because a model talking to a container on a loaded machine is slower
+     * than the same model locally. Widen it for a genuinely slow model rather than narrowing it to catch a fast one.
+     * <p>
+     * It bounds the wait on {@link CheckpointStorage#delete(String)} too, since a {@code beforeEach} has to block on
+     * that {@code Mono} as well and a checkpoint storage that hangs hangs the run exactly the same way.
+     *
+     * @param startTimeout how long to wait, must not be {@code null} and must be positive
+     * @return this extension, so the call can be chained
+     */
+    public OccurrentSubscriptionsExtension withStartTimeout(Duration startTimeout) {
+        Objects.requireNonNull(startTimeout, "startTimeout must not be null");
+        if (startTimeout.isZero() || startTimeout.isNegative()) {
+            throw new IllegalArgumentException("startTimeout must be positive, was " + startTimeout + ".");
+        }
+        this.startTimeout = startTimeout;
         return this;
     }
 
@@ -167,15 +222,16 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
         }
     }
 
+    // Every id this extension can name, rather than the models' ids or the named ones. Naming an id must not narrow
+    // what gets cleared, and an id named for clearing is exactly the one no model reports. Deleting a checkpoint that
+    // does not exist is a no-op, so the union costs nothing when the two overlap, which is the normal case. An empty
+    // union means there is no checkpoint to clear, and deleting nothing is the right answer to that rather than a
+    // failure raised from beforeEach before any test body runs.
     private void deleteCheckpoints(CheckpointStorage storage) {
-        Set<String> ids = modelSubscriptionIds().orElse(knownIds);
-        if (ids.isEmpty()) {
-            throw new IllegalStateException("Cannot clear checkpoints because there are no subscription ids to clear "
-                    + "them for. " + describeAvailableIds() + " Name the subscriptions with alwaysStart(String...), or "
-                    + "use a model implementing " + IntrospectableSubscriptionModel.class.getSimpleName() + ".");
-        }
+        Set<String> ids = new LinkedHashSet<>(knownIds);
+        modelSubscriptionIds().ifPresent(ids::addAll);
         // Sequential rather than fanned out, since this runs once per test and a flush is not a race to win.
-        ids.forEach(id -> storage.delete(id).block(WAIT_TIMEOUT));
+        ids.forEach(id -> storage.delete(id).block(startTimeout));
     }
 
     @Override
@@ -188,8 +244,9 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
      *
      * @param subscriptionId the id of a currently stopped subscription, must not be {@code null}
      * @return the running {@link Subscription}
-     * @throws UnknownSubscriptionException if no model has a subscription with that id
+     * @throws UnknownSubscriptionException        if no model has a subscription with that id
      * @throws SubscriptionAlreadyRunningException if the model that has it reports it is already running
+     * @throws IllegalStateException               if it does not start within {@link #withStartTimeout(Duration)}
      */
     public Subscription start(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId must not be null");
@@ -201,7 +258,8 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
      * subscription that is already running is left alone.
      *
      * @return the ids that were started, in no particular order
-     * @throws IllegalStateException if any model cannot list its subscriptions
+     * @throws IllegalStateException if any model cannot list its subscriptions, or if a subscription does not start
+     *                               within {@link #withStartTimeout(Duration)}
      */
     public Set<String> startAll() {
         Set<String> ids = new LinkedHashSet<>(modelSubscriptionIds().orElseThrow(() -> new IllegalStateException(
@@ -224,7 +282,16 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
             try {
                 Subscription subscription = model.resumeSubscription(subscriptionId);
                 knownIds.add(subscriptionId);
-                subscription.waitUntilStarted().block(WAIT_TIMEOUT);
+                // waitUntilStarted(startTimeout) already resolves within startTimeout by its own internal timeout(),
+                // so block() here needs no separate deadline of its own; giving it one too would race the two clocks
+                // against each other for nothing.
+                Boolean started = subscription.waitUntilStarted(startTimeout).block();
+                if (!Boolean.TRUE.equals(started)) {
+                    throw new IllegalStateException("Subscription '" + subscriptionId + "' was resumed but had not "
+                            + "started after " + startTimeout + ". Widen the wait with withStartTimeout(Duration) if "
+                            + "the model is genuinely this slow to start, otherwise the subscription is not starting "
+                            + "at all.");
+                }
                 return subscription;
             } catch (UnknownSubscriptionException e) {
                 notHere.add(e);

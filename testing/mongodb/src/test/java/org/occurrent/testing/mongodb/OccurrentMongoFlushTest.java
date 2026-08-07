@@ -207,6 +207,31 @@ class OccurrentMongoFlushTest {
     }
 
     @Test
+    void except_on_a_database_drop_rejects_the_call_instead_of_silently_keeping_nothing() {
+        OccurrentMongoFlush flush = OccurrentMongoFlush.droppingTheDatabaseIn(database);
+
+        assertThatThrownBy(() -> flush.except("keepMe"))
+                .as("droppingTheDatabaseIn(db).except(\"keepMe\") used to compile and drop keepMe anyway")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("except");
+    }
+
+    @Test
+    void excepting_every_named_collection_fails_loudly_instead_of_flushing_nothing() {
+        database.getCollection(EVENTS).insertOne(new Document("_id", "1"));
+        OccurrentMongoFlush flush = OccurrentMongoFlush.collectionsIn(database, EVENTS).except(EVENTS);
+
+        assertThatThrownBy(flush::run)
+                .as("collectionsIn(db, \"events\").except(\"events\") used to flush nothing, silently")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(EVENTS);
+
+        assertThat(database.getCollection(EVENTS).countDocuments())
+                .as("a failed flush must not leave stale data behind while pretending to have succeeded")
+                .isOne();
+    }
+
+    @Test
     void a_database_that_cannot_be_reached_fails_loudly_and_names_itself() {
         MongoClientSettings settings = MongoClientSettings.builder()
                 .applyConnectionString(new ConnectionString("mongodb://localhost:1/unreachable"))
