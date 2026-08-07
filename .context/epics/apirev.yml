@@ -1,8 +1,8 @@
 schema_version: 1
 epic: apirev
-revision: 20
-updated_at: '2026-08-07T11:58:00+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (A6 merged, WAVE A COMPLETE, B4 hold lifted)
+revision: 22
+updated_at: '2026-08-07T12:20:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (B2 delivered PR 615)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -335,7 +335,7 @@ units:
     session: local_8347fd08-d21f-424f-9fb6-f48c63fc13b6
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 615
       met: false
       evidence: null
     - check: issue_closed
@@ -343,17 +343,18 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'session rebases over merged #607, finishes Map short-circuit, opens
-      the #587 PR'
-    last_meaningful_progress_at: '2026-08-07T11:28:19+00:00'
+    next_action: CAS-merge on green with threads handled (merge-time check)
+    last_meaningful_progress_at: '2026-08-07T12:20:00+00:00'
     observed:
-      branch:
-        ref: worktree-apirev-b2-587
-        pushed: aa6b9af4b
-        half_done: streaming parser, 5-6x alloc win, JMH baseline for Mongo shape
-        via: session tail read
-        at: '2026-08-07T11:22:30+00:00'
-    assessment: healthy deliberate park at the collision boundary, exactly per brief
+      pr_615:
+        head: f5bc2b0c4
+        rollup: checks running, 0 failures
+        mergeable: UNKNOWN (fresh PR, recompute pending)
+        title: Read a data filter field without materialising the whole payload
+        via: gh pr view + monitor
+        at: '2026-08-07T12:20:00+00:00'
+    assessment: 'delivered the #587 PR after the deliberate park; two targeted read
+      paths replacing tree-parse-per-condition'
   B3:
     issue: 588
     goal: handover lock measurement
@@ -539,41 +540,40 @@ units:
   A11:
     issue: 613
     goal: push saga catch-up replay must not outlive the context close (adopted spin-off)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_2bc4aa41-c66a-425c-994b-213462dc3c69
+    session: null
     deliverables:
     - check: pr_merged
       ref: 614
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-07T12:08Z at efd90e1b20e (merge 494db68ae), all
+        checks green; 1 Copilot thread answered with a reasoned decline (no #613
+        link in a folded unreleased-feature entry, the #600 precedent), left open
+        per standing rule'
     - check: issue_closed
       ref: 613
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #613, verified by orchestrator'
     blocking_on: []
-    next_action: 'CAS-merge #614 on green (freeze gone with A6; tag-gating since the
-      push saga feature ships unreleased in 0.32.0); check threads at merge time'
-    last_meaningful_progress_at: '2026-08-07T11:58:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T12:08:00+00:00'
     observed:
       pr_614:
-        head: efd90e1b2
-        rollup: 2 checks pending, 0 failures
-        threads_open: unchecked (merge-time check)
-        mergeable: 'MERGEABLE, re-verified after the #609 merge (both PRs touch SagaAnnotationRegistrar,
-          no textual conflict)'
-        via: gh pr list + monitor
-        at: '2026-08-07T11:58:00+00:00'
+        state: MERGED
+        merge_commit: 494db68ae
+        via: gh pr view post-merge
+        at: '2026-08-07T12:08:00+00:00'
       session:
         title: Shut down push saga catch-up models on context close
         running: false
         note: 'not fleet-titled (spawned outside the chip protocol) but claimed #613
           per AGENTS.md and delivered a complete blocking-only fix with a container-free
-          regression test'
+          regression test; archived at sweep'
         via: list_sessions
-        at: '2026-08-07T11:41:00+00:00'
+        at: '2026-08-07T12:10:00+00:00'
     assessment: 'adopted under the standing spin-off default (structured-ask grant
       on #604); real lifecycle bug, BACKGROUND replay survived context close and
       kept issuing commands into a closing event store'
