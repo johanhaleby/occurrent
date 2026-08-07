@@ -90,6 +90,15 @@ the same reason: resuming mid-replay would mean persisting the exact replay curs
 not honour that. Fixing it means not routing the stop through the handover's failure path, since that records a stored
 failure the handover would then rethrow for every later event, which is more than this change is worth.
 
+> **Amended on 2026-08-06 by [ADR 104](0104-an-undeliverable-push-event-is-refused-not-acknowledged.md).** A stopped
+> replay is resumable now. It keeps its live registration, and `start(true)` replays the whole history again, which is
+> the decision `CatchupProjectionFeed.stopCatchUp()` had already recorded. The paragraph above assumed the only way to
+> keep the registration was to route the stop through the handover's failure path. That was never so, since a stop and
+> a failure are already separate outcomes inside the handover, so keeping the registration costs nothing and the
+> "more than this change is worth" trade does not arise. The rest still holds. There is still no replay cursor, so
+> resuming means replaying from the beginning rather than from where the stop landed, and `start(false)` leaves the
+> replay for `resumeSubscription` instead of starting it.
+
 **A pause does not interrupt a replay.** It is recorded and applied at the handover instead, so `isPaused(id)` is
 honest while the history keeps folding. Same trade as the event-store model.
 

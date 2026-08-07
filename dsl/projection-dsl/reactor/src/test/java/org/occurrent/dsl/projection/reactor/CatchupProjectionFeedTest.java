@@ -253,9 +253,14 @@ class CatchupProjectionFeedTest {
         feed.catchUp().subscribe(v -> {
         }, e -> {
         }); // replay fails, so the pipeline terminates
-        // A live event fed after the failed catch-up must error rather than hang.
+        // A live event fed after the failed catch-up must error rather than hang, and it says the catch-up is what
+        // failed rather than only surfacing the raw cause, so the caller can tell a terminal refusal from a handler
+        // that happened to throw. The blocking twin has always worded it this way.
         StepVerifier.create(feed.accept(new Counted("live")))
-                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom"))
+                .expectErrorSatisfies(e -> assertThat(e)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Catch-up failed for this projection feed")
+                        .rootCause().hasMessageContaining("replay boom"))
                 .verify(ofSeconds(5));
     }
 

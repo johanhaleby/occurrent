@@ -44,6 +44,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * The reactive counterpart of the blocking {@code CatchupThenPushSubscriptionModel}: a one-time <strong>catch-up</strong>
@@ -98,6 +99,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
     // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
     private final ConcurrentMap<String, Boolean> pauseRequestedDuringReplay = new ConcurrentHashMap<>();
+    // How to launch a subscription's replay again, kept only while there is a replay worth launching, matching the
+    // blocking twin. Removed once one finishes, once one fails (it is refusing, not stopped), and on cancel or
+    // shutdown. What is left is exactly the replays a stop interrupted, which start(true) and resumeSubscription
+    // bring back (ADR 104).
+    private final ConcurrentMap<String, Supplier<Sinks.One<Boolean>>> interruptibleReplays = new ConcurrentHashMap<>();
 
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker) {
         this(reader, liveFeed, catchupMarker, CatchupThenLiveOptions.defaults());
@@ -124,11 +130,26 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Fail fast on a filter that cannot be replayed, before registering anything on the live feed.
         Filter replayFilter = ReplayFilters.replayFilterFor(filter);
 
-        ReactiveHandover<CloudEvent> handover = ReactiveHandover.create(action, CloudEvent::getId, options);
+        ReactiveHandover<CloudEvent> handover = ReactiveHandover.create(action, CloudEvent::getId, options, "subscription");
 
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not lost.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
 
+        // Kept rather than launched once, so a replay a stop interrupts can be launched again over the same handover.
+        // The handover has to be the same one: it holds the live sink and the de-dup cache, so a second one would
+        // replay into a projection that had already seen part of the history.
+        Supplier<Sinks.One<Boolean>> launch = () -> launchReplay(subscriptionId, handover, replayFilter);
+        interruptibleReplays.put(subscriptionId, launch);
+        return new CatchingUpSubscription(subscriptionId, launch.get());
+    }
+
+    // Starts one replay for subscriptionId and returns the signal that fires when it finishes, is stopped, or fails.
+    // Called by subscribe, and again by start(true) or resumeSubscription for a replay that a stop interrupted.
+    //
+    // Relaunching is safe despite the handover's unicast live sink: it is subscribed only after the marker phase, and
+    // a stop errors the pipeline before that, so an interrupted replay left it untouched. A replay that finished is
+    // never relaunched, which is the case that would fail.
+    private Sinks.One<Boolean> launchReplay(String subscriptionId, ReactiveHandover<CloudEvent> handover, Filter replayFilter) {
         // Registered before the replay is handed to the handover, which subscribes it on boundedElastic straight away.
         // isRunning(id) and keepReplaying() therefore answer for this subscription from the moment subscribe returns,
         // rather than from whenever that pipeline happens to get scheduled.
@@ -157,33 +178,60 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             }
         });
 
-        // Subscribed here rather than only handed back, so a caller that never waits still gets the release below. The
-        // handover was registered before the replay, so a failure would otherwise leave a handler that fails every
-        // later event while holding the id. The release runs before replayDone is emitted, so a caller that does wait
-        // finds the id free and can re-subscribe under it. Logged because under startupMode = BACKGROUND nobody waits,
-        // and the failure would otherwise reach no one.
+        // Subscribed here rather than only handed back, so a caller that never waits still gets the bookkeeping below.
+        // Logged because under startupMode = BACKGROUND nobody waits, and a failure would otherwise reach no one.
         catchupDone.subscribe(
                 caughtUp -> {
-                    forget(subscriptionId);
                     if (caughtUp) {
+                        interruptibleReplays.remove(subscriptionId);
+                        forget(subscriptionId);
                         applyPendingPauseIfAny(subscriptionId);
                     } else {
-                        // Stopped rather than failed, so the handover is intact and nothing is marked. Release the
-                        // registration anyway: nothing will revive this replay, and leaving it registered would leave
-                        // a subscription that silently drops every live event.
-                        liveFeed.cancelSubscription(subscriptionId);
+                        // Stopped rather than failed, so the handover is intact, nothing is marked, and both the
+                        // registration and the launcher are kept: start(true) replays the whole history again, the
+                        // answer CatchupProjectionFeed.stopCatchUp() already records (ADR 104). Forgetting the replay
+                        // entry last is what makes "launcher present, nothing replaying" mean stopped.
+                        forget(subscriptionId);
                     }
                     replayDone.tryEmitValue(caughtUp);
                 },
                 error -> {
-                    log.error("Catch-up failed for subscription {}, releasing its registration on the live feed. It received no "
-                            + "replay and will receive no live events until it is subscribed again.", subscriptionId, error);
+                    // The registration stays, matching the blocking twin. The handover recorded this failure and is
+                    // itself the registered action, so every later live event is refused rather than acknowledged and
+                    // the broker keeps holding them (ADR 104). Recovery is cancelSubscription(id) plus a fresh
+                    // subscribe. Dropped before the replay entry, so a start(true) racing this never sees a launcher
+                    // with no replay running and relaunches a catch-up that failed.
+                    log.error("Catch-up failed for subscription {}. Its registration on the live feed is kept and now "
+                            + "refuses every event, so the source redelivers rather than losing them. Cancel the "
+                            + "subscription and subscribe again once the cause is fixed.", subscriptionId, error);
+                    interruptibleReplays.remove(subscriptionId);
                     forget(subscriptionId);
-                    liveFeed.cancelSubscription(subscriptionId);
                     replayDone.tryEmitError(error);
                 });
 
-        return new CatchingUpSubscription(subscriptionId, replayDone);
+        return replayDone;
+    }
+
+    // Relaunches the replay for subscriptionId if a stop interrupted it, and returns its signal, or null if there was
+    // nothing to relaunch. A replay is restartable when its launcher survived and nothing is replaying under that id,
+    // which is exactly the state a stop leaves behind.
+    //
+    // Synchronized because the check and the launch have to be one step. Two callers reaching this together (start and
+    // resumeSubscription, or two starts) would otherwise both see nothing replaying and put two replays on one
+    // handover, and the replay phase folds every event without consulting the de-dup cache, so the history would be
+    // applied twice. Lifecycle calls are rare enough that the lock costs nothing.
+    private synchronized Sinks.@Nullable One<Boolean> relaunchInterruptedReplay(String subscriptionId) {
+        Supplier<Sinks.One<Boolean>> launch = interruptibleReplays.get(subscriptionId);
+        if (launch == null || replayingSubscriptions.containsKey(subscriptionId)) {
+            return null;
+        }
+        // Unpaused here rather than by the caller, so a caller that loses the race above does not leave the
+        // subscription unpaused and then try to resume it a second time, which the live feed refuses. A no-op under
+        // start(true), which cleared every pause before calling this.
+        if (liveFeed.isPaused(subscriptionId)) {
+            liveFeed.resumeSubscription(subscriptionId);
+        }
+        return launch.get();
     }
 
     private void forget(String subscriptionId) {
@@ -207,16 +255,40 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // --- Life cycle. Mirrors the blocking twin: the live feed owns delivery, so most of this is a fan-out, and what
     // this model adds is an answer for the window where a replay is in flight. ---
 
+    /**
+     * Stops the live feed and any catch-up replay still in flight. Reversible: a stopped replay keeps its registration
+     * on the live feed and is replayed from the beginning by {@link #start(boolean)}, because a stop is not a failure
+     * and nothing was marked. That is the decision {@code CatchupProjectionFeed.stopCatchUp()} already records, ported
+     * here rather than re-derived (ADR 104).
+     * <p>
+     * Live events fed while stopped are dropped rather than refused, the dropped-not-deferred contract every stopped
+     * subscription model has (ADR 85). That is bounded here only because the stop is reversible: the window closes at
+     * {@code start(..)}.
+     */
     @Override
     public void stop() {
         stopped = true;
         liveFeed.stop();
     }
 
+    /**
+     * Starts the live feed and, when {@code resumeSubscriptionsAutomatically}, replays the history again for every
+     * subscription whose catch-up {@link #stop()} interrupted.
+     * <p>
+     * A stop is not a failure, so nothing was marked and the replay starts from the beginning rather than from a
+     * cursor this model does not keep. Under {@code start(false)} the interrupted replays are left for
+     * {@link #resumeSubscription(String)} to pick up one at a time.
+     */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         stopped = false;
+        // Before the replays, so the registrations they hand over to are unpaused by the time one finishes.
         liveFeed.start(resumeSubscriptionsAutomatically);
+        if (resumeSubscriptionsAutomatically) {
+            // Skips an id already replaying, so a start() while a replay is in flight does not put a second replay on
+            // the same handover.
+            interruptibleReplays.keySet().forEach(this::relaunchInterruptedReplay);
+        }
     }
 
     @Override
@@ -257,6 +329,13 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Sinks.One<Boolean> relaunched = relaunchInterruptedReplay(subscriptionId);
+        if (relaunched != null) {
+            // Its catch-up was interrupted by a stop, so resuming it means replaying the history again, since this
+            // model keeps no replay cursor to resume from.
+            pauseRequestedDuringReplay.remove(subscriptionId);
+            return new CatchingUpSubscription(subscriptionId, relaunched);
+        }
         if (pauseRequestedDuringReplay.remove(subscriptionId) != null) {
             // Paused and resumed while its replay was still running, so the live feed was never told and has nothing
             // to resume. Dropping the request is the whole of it, but hand back a handle that still tracks the replay
@@ -281,6 +360,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Removing it here is what stops a replay in flight: shouldKeepReplaying reads this map.
         replayingSubscriptions.remove(subscriptionId);
         pauseRequestedDuringReplay.remove(subscriptionId);
+        // A cancel is not a stop, so nothing is kept to launch again. This is also the recovery from a failed
+        // catch-up: it frees the id and releases the registration that was refusing (ADR 104).
+        interruptibleReplays.remove(subscriptionId);
         liveFeed.cancelSubscription(subscriptionId);
     }
 
@@ -298,6 +380,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         awaitReplays(SHUTDOWN_REPLAY_TIMEOUT);
         replayingSubscriptions.clear();
         pauseRequestedDuringReplay.clear();
+        // Unlike stop(), a shutdown keeps nothing to launch again: it drops the registrations too.
+        interruptibleReplays.clear();
         liveFeed.shutdown();
     }
 
@@ -343,6 +427,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * joins it, which is what lets a caller choose to keep the replay off the startup path. It completes when the
      * replay finished or was stopped, and errors when it failed: a projection's runner discards the value, so
      * swallowing a replay failure would start an application whose read model is silently empty.
+     * <p>
+     * It tracks the one replay it was created for. A replay that {@link #stop()} interrupted completes here and stays
+     * completed after {@link #start(boolean)} launches a fresh one, since this handle cannot see it. Ask
+     * {@link #isRunning(String)} about a restarted replay, or take the handle {@link #resumeSubscription(String)}
+     * hands back.
      */
     private record CatchingUpSubscription(String id, Sinks.One<Boolean> replay) implements Subscription {
         @Override

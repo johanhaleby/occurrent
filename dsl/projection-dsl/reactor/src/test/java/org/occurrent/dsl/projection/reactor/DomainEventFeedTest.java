@@ -59,6 +59,76 @@ class DomainEventFeedTest {
     }
 
     @Test
+    void feeding_an_event_before_a_projection_is_registered_is_refused() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
+
+        // Completing is what a listener reads as "handled", so it would acknowledge the message and the broker would
+        // discard an event nothing received. Under occurrent.subscription.mode=manual registration is deferred, so a
+        // listener that starts consuming before startAll() lands exactly here, and refusing is what makes the broker
+        // hold the backlog instead. That is ADR 86's withheld-not-lost guarantee on a push stack.
+        StepVerifier.create(feed.accept(new Counted("1")))
+                .expectErrorSatisfies(e -> assertThat(e)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("has no projection registered")
+                        .hasMessageContaining("refused rather than accepted"))
+                .verify(Duration.ofSeconds(5));
+
+        StepVerifier.create(feed.accept(EventMetadata.empty(), new Counted("1")))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("has no projection registered"))
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void a_projection_registered_after_the_accept_mono_was_assembled_is_still_found() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+
+        // Assembled while the feed is empty. The lookup is deferred to subscription time, the same lateness
+        // catchUp(String) and goLive(String) already have, so this must not have captured the refusal.
+        Mono<Void> accept = feed.accept(new Counted("1"));
+
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.goLive("counter").block(Duration.ofSeconds(5));
+
+        StepVerifier.create(accept).verifyComplete();
+        assertThat(repo).containsEntry("counter", 1);
+    }
+
+    @Test
+    void catching_up_a_feed_with_no_projection_is_refused() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
+
+        // It used to complete empty, so a feed nobody had registered on reported a successful catch-up and then
+        // silently fed nothing. catchUp(String) already refused, so this is the pair of them agreeing.
+        StepVerifier.create(feed.catchUpAll())
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("has no projection registered"))
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void a_feed_reports_whether_a_projection_is_registered() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+
+        assertThat(feed.hasProjection()).isFalse();
+
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        assertThat(feed.hasProjection()).isTrue();
+    }
+
+    @Test
+    void stopping_a_catch_up_on_a_feed_with_no_projection_does_nothing() {
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), countedConverter(), Counted::eventId);
+
+        // A shutdown verb, unlike the two above. One that throws because there was nothing to shut down is a nuisance
+        // in a context-close path, not a safeguard.
+        assertThat(catchThrowable(feed::stopCatchUp)).isNull();
+    }
+
+    @Test
     void registering_two_projections_with_the_same_id_throws() {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);

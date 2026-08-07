@@ -18,13 +18,20 @@ rewrites it. Read
 refuses to start. If you use a push source, read
 [section 3](#3-a-push-sink-feeds-exactly-one-projection-or-saga) first.
 
-Ten things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+**At runtime**, if you feed a `DomainEventFeed` from your own listener, `accept(..)` now throws when no projection is
+registered instead of returning normally, so the message goes unacknowledged rather than being discarded. Read
+[section 12](#12-domaineventfeed-refuses-an-event-when-no-projection-is-registered).
+
+Twelve things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
 `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
 first failing handler, the reactor subscription primitive was renamed, a durable reactor model refuses a composition it
 used to accept, a paused MongoDB subscription now delivers what was written while it was paused, a push catch-up
-replays on its own thread, `NativeMongoLeaseCompetingConsumerStrategy` moved to the package every other
-native-driver subscription type uses, and `CompetingConsumerSubscriptionModel` refuses two calls it used to accept.
+replays on its own thread and no longer discards events after a failed replay,
+`NativeMongoLeaseCompetingConsumerStrategy` moved to the package every other native-driver subscription type uses,
+`CompetingConsumerSubscriptionModel` refuses two calls it used to accept, a second `start()` is allowed while
+`waitUntilStarted` stops saying yes when it means no, and a domain-event feed refuses an event when no projection is
+registered.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -502,9 +509,24 @@ try {
 
 The wait tells the outcomes apart. An exception means the replay failed, `false` means the model was stopped (or that
 the timeout expired, if you passed one with `waitUntilStarted(Duration)`), and `true` means the projection is caught up
-and live. After a failure the subscription's
-registration on the live feed has been released, so it receives nothing until you subscribe it again, and that fresh
-`subscribe(...)` replays the whole history, because nothing was recorded as caught up.
+and live.
+
+**After a failure the subscription keeps its registration and refuses every event fed to the live feed.** It used to
+release the registration instead, which freed the subscription id but meant your listener acknowledged every later
+event into a projection that received nothing, and your broker then discarded them. Now the acknowledgement fails, so
+the source holds the backlog. Fix the cause, call `cancelSubscription(..)` to release the id, and subscribe again. The
+fresh `subscribe(...)` replays the whole history, because nothing was recorded as caught up.
+
+Two things follow. The subscription id stays taken until you cancel it, so a second `subscribe(...)` under the same id
+is refused rather than quietly replacing the failed one. And `isRunning(id)` now answers `true` for a subscription
+whose catch-up failed, because it is registered and refusing, where it used to answer `false`.
+
+**A stop is reversible, and a failure is not.** If you stop the model while a replay is running, `start(true)` replays
+that history again from the beginning, and `start(false)` leaves it for `resumeSubscription(..)`. A replay that
+*failed* is never restarted by `start(..)`, since that would turn the refusal into a restart loop. Note that the
+`Subscription` handle you already hold tracks the replay it was created for, so after a stop it keeps reporting
+`false`. Ask `isRunning(id)`, or `isCatchingUp(id)` on the blocking model, or take the handle `resumeSubscription(..)`
+hands back.
 
 **On both stacks, the state is not there yet when `subscribe(...)` returns.** Code that read the projected state
 straight after subscribing was reading a finished replay before and is racing one now. Call `waitUntilStarted()` first
@@ -675,3 +697,45 @@ has the reasoning, including why a lock-waiting competing consumer counts as sta
 to start yourself does not. `SubscriptionModelConformance` asserts the `start()` half, so every model has to agree on it
 now.
 
+
+## 12. `DomainEventFeed` refuses an event when no projection is registered
+
+Only relevant if you declare a `DomainEventFeed` bean and feed it from a listener yourself, on either stack.
+
+`accept(..)` used to return normally when nothing was registered on the feed. Its own documentation tells you to
+acknowledge the broker message once `accept` returns, so a listener wired before the projection was registered
+acknowledged events that no projection ever received, and the broker then discarded them. It now throws an
+`IllegalStateException` instead, and on the reactor stack the returned `Mono` fails with one, so the message goes
+unacknowledged and your source redelivers it.
+
+This is easiest to reach under `occurrent.subscription.mode=manual`, where the registration is deferred until you call
+`ManualStartPushSources.startAll()`. Anything your listener consumed before that point was lost. Refusing is what makes
+the manual mode mean what [ADR 86](../architecture/decisions/0086-a-manual-subscription-is-registered-not-started.md)
+says it means, that a subscription registered but not started withholds events rather than losing them, because the
+broker is the only thing holding a backlog and it only holds one while nobody acknowledges.
+
+If your listener starts consuming before registration and you would rather check than catch, the feed now answers
+`hasProjection()`:
+
+```java
+@RabbitListener(queues = "orders")
+public void onOrderEvent(OrderEvent event) {
+    if (!orderFeed.hasProjection()) {
+        throw new AmqpRejectAndDontRequeueException("Projection not registered yet");
+    }
+    orderFeed.accept(event);
+}
+```
+
+`catchUpAll()` changes the same way. It used to do nothing on a feed with no projection and report success, so a
+misconfigured feed looked caught up and then fed nothing. It now throws, matching `catchUp(String)`, which always did.
+`stopCatchUp()` is unchanged and stays a no-op, because it runs on a shutdown path where throwing helps nobody.
+
+`PushSubscriptionModel.accept(..)` is deliberately **not** changed. It is also fed from the write path, for example as
+an `InMemoryEventStore` listener, and there the event is already stored and a later catch-up replays it, so refusing
+would fail the write while protecting nothing. Ask its `hasSubscriptions()` when you drive it from a broker.
+
+### Why
+
+[ADR 104](../architecture/decisions/0104-an-undeliverable-push-event-is-refused-not-acknowledged.md) records the whole
+contract, including why a stopped model still drops events while an unregistered or failed one refuses them.

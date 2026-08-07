@@ -74,6 +74,14 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     /**
      * Feed a single event to the model, routing it to the registered handler if its filter matches, on the calling
      * thread.
+     * <p>
+     * <strong>An event fed before any subscription is registered is dropped, and this returns normally.</strong> A
+     * listener that acknowledges once this returns therefore acknowledges an event nothing consumed. Ask
+     * {@link #hasSubscriptions()} before feeding this model from a broker, and register the subscription before the
+     * listener starts consuming. This model cannot refuse the event on your behalf, because it is also fed from the
+     * write path (an {@code InMemoryEventStore} listener, say), where the event is already durably stored and
+     * refusing would fail the write instead of protecting anything. The domain-event feed, which is broker-only, does
+     * refuse. See ADR 104.
      *
      * @param cloudEvent The event received from the external source.
      */
@@ -84,6 +92,8 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
 
     /**
      * Feed a batch of events to the model, routing each in iteration order.
+     * <p>
+     * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes.
      *
      * @param cloudEvents The events received from the external source.
      */

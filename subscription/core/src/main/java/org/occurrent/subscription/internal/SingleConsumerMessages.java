@@ -19,11 +19,12 @@ package org.occurrent.subscription.internal;
 /**
  * The wording shared verbatim by every push sink that takes a single consumer, kept in one place so the four call
  * sites (the blocking and reactor push subscription models, and the blocking and reactor domain-event feeds) cannot
- * drift. See ADR 90 for why the sinks are single-consumer.
+ * drift. See ADR 90 for why the sinks are single-consumer, and ADR 104 for why a sink with no consumer refuses an
+ * event rather than accepting it.
  * <p>
- * This message is the migration path for the change, so it has to carry the whole story. There is no OpenRewrite
- * recipe for a bean topology, and a startup failure that names both consumers is the most useful thing this class can
- * offer instead.
+ * These messages are the migration path for the changes they report, so they have to carry the whole story. There is
+ * no OpenRewrite recipe for a bean topology or for a delivery contract, and a failure that names what collided, or
+ * what was missing, is the most useful thing this class can offer instead.
  */
 public final class SingleConsumerMessages {
 
@@ -44,5 +45,20 @@ public final class SingleConsumerMessages {
                 + "acknowledgement for several consumers, so one consumer that keeps failing holds up every consumer "
                 + "behind it, and they lose the message entirely once the broker gives up on it.")
                 .formatted(sinkType, consumerNoun, registeredId, attemptedId);
+    }
+
+    /**
+     * Refuses an event fed to a sink that has no consumer to feed it to.
+     *
+     * @param sinkType     The sink's simple type name, e.g. {@code "DomainEventFeed"}.
+     * @param consumerNoun What the sink feeds, e.g. {@code "subscription"} or {@code "projection"}.
+     */
+    public static String noConsumerRegistered(String sinkType, String consumerNoun) {
+        return ("This %s has no %s registered, so the event was refused rather than accepted. The listener "
+                + "acknowledges once accept(..) returns, so returning normally here would acknowledge an event "
+                + "nothing consumed and the broker would then discard it. Register a %s before the listener starts "
+                + "feeding this sink. Under occurrent.subscription.mode=manual the registration is deferred until "
+                + "the push sources are started, so a listener consuming before that point reaches this too.")
+                .formatted(sinkType, consumerNoun, consumerNoun);
     }
 }

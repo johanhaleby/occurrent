@@ -129,13 +129,25 @@ public final class DomainEventFeed<E> {
     }
 
     /**
+     * Whether a projection is registered on this feed, so a listener can ask before it feeds one rather than finding
+     * out from {@link #accept(Object)}. The feed's answer to {@code RegisteringSubscribable.hasSubscriptions()} on the
+     * push subscription model.
+     */
+    public boolean hasProjection() {
+        return feed.get() != null;
+    }
+
+    /**
      * Feed a live domain event to the registered projection. The returned {@link Mono} completes once the projection
      * has handled it, so the listener can acknowledge after processing.
+     * <p>
+     * The returned {@link Mono} fails with an {@link IllegalStateException} when no projection is registered. Refused
+     * rather than completed empty, because the listener acknowledges on completion and the broker discards what it
+     * acknowledges, so completing would lose the event. See ADR 104.
      */
     public Mono<Void> accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        CatchupProjectionFeed<E> registered = feed.get();
-        return registered == null ? Mono.empty() : registered.accept(event);
+        return registeredProjection().flatMap(registered -> registered.accept(event));
     }
 
     /**
@@ -143,17 +155,33 @@ public final class DomainEventFeed<E> {
      * about it, so a projection keyed on the stream id, version or position works on the live path and not only during
      * the catch-up replay. Use this when the broker message carries those values and your listener can read them.
      * Otherwise call {@link #accept(Object)}, which folds with {@link EventMetadata#empty()}.
+     * <p>
+     * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
+     * {@link #accept(Object)} gives.
      */
     public Mono<Void> accept(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
-        CatchupProjectionFeed<E> registered = feed.get();
-        return registered == null ? Mono.empty() : registered.accept(metadata, event);
+        return registeredProjection().flatMap(registered -> registered.accept(metadata, event));
+    }
+
+    // The one place the "nothing registered" refusal is spelled, so the two accept overloads and catchUpAll cannot
+    // drift apart on it. Deferred, so a projection registered between assembling the returned Mono and subscribing to
+    // it is still found, which is the lateness catchUp(String) and goLive(String) already have.
+    private Mono<CatchupProjectionFeed<E>> registeredProjection() {
+        return Mono.defer(() -> {
+            CatchupProjectionFeed<E> registered = feed.get();
+            return registered == null
+                    ? Mono.error(new IllegalStateException(SingleConsumerMessages.noConsumerRegistered("DomainEventFeed", "projection")))
+                    : Mono.just(registered);
+        });
     }
 
     /**
      * Run the one-time catch-up of the registered projection. The returned {@link Mono} completes once it has caught
-     * up and gone live, and is empty when nothing is registered.
+     * up and gone live, and fails with an {@link IllegalStateException} when nothing is registered. It used to complete
+     * empty in that case, which meant a feed nobody registered on caught up "successfully" and then silently fed
+     * nothing.
      * <p>
      * An error on the returned {@link Mono} is terminal for this feed, so let it reach the caller and do not start the
      * application. The projection rejects every later event afterwards. Unlike a subscription model, the feed does not
@@ -163,8 +191,7 @@ public final class DomainEventFeed<E> {
      * Named for when a feed could carry several projections. It carries one.
      */
     public Mono<Void> catchUpAll() {
-        CatchupProjectionFeed<E> registered = feed.get();
-        return registered == null ? Mono.empty() : registered.catchUp();
+        return registeredProjection().flatMap(CatchupProjectionFeed::catchUp);
     }
 
     /**
