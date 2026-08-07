@@ -1,8 +1,8 @@
 schema_version: 1
 epic: apirev
-revision: 22
-updated_at: '2026-08-07T12:20:00+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (B2 delivered PR 615)
+revision: 23
+updated_at: '2026-08-07T12:45:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (B4 merged and swept, only B2 open)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -220,8 +220,6 @@ units:
     assessment: 'refuse-by-default posture shipped (ADR 0109, SagaRedeliveryDetectionException,
       BEST_EFFORT opt-out); old-head java-21 shard failure died with its head, did
       not recur; session archived, branch and worktree removed'
-    assessment: 'decision landed: refuse by default, BEST_EFFORT opt-out for foreign
-      feeds, refused on EVENT_STORE sagas'
   A7:
     issue: 584
     goal: testing-artifact fixes (extension waits, empty clearing, flush builder)
@@ -387,35 +385,34 @@ units:
   B4:
     issue: 589
     goal: replay observability
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_19e7ff47-f894-49f8-a06a-5f4418900184
+    session: null
     deliverables:
     - check: pr_merged
       ref: 610
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-07T12:42Z at 32519efc7 (merge 77ed8f32c), all
+        checks green, 0 unresolved threads (session resolved all 3), changelog additions
+        verified in the unreleased Changes entries'
     - check: issue_closed
       ref: 589
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #589, verified by orchestrator'
     blocking_on: []
-    next_action: 'hold LIFTED (A6 landed); session messaged 11:57Z to answer the 3
-      threads, merge main (cascade includes #609''s saga changes), verify changelog
-      placement, push; orchestrator CAS-merges on green'
-    last_meaningful_progress_at: '2026-08-07T11:57:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T12:42:00+00:00'
     observed:
       pr_610:
-        head: 57bfedce7
-        rollup: 27/27 green
-        threads_open: 3
-        mergeable: CONFLICTING
-        via: gh pr list + monitor
-        at: '2026-08-07T11:41:00+00:00'
-    assessment: went CONFLICTING as more of the cascade landed; rebase is owed anyway,
-      so the hold costs nothing extra
+        state: MERGED
+        merge_commit: 77ed8f32c
+        via: gh pr view post-merge
+        at: '2026-08-07T12:42:00+00:00'
+    assessment: 'PushCatchupStatus + ReplayAwareSubscriptionModel shipped; needed a
+      second main merge after its first fetch proved stale (orchestrator message
+      named the missing landings); session archived, branch and worktree removed'
   B5:
     issue: 590
     goal: parity and hygiene sweep

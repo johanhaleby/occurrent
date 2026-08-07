@@ -97,6 +97,13 @@
   to the epic's PR numbers, because a pre-filtered poll misses exactly the spin-off PRs that matter
   (#614 was detected within one poll interval only because the watch was repo-wide); in a busy
   shared repo, post-filter the delta lines, not the poll.
+- Out-of-scope findings route through the orchestrator, not through a worker's own spawn-task chip
+  (2026-08-07, from Johan on how #613/#614 arrived). A worker-spawned chip has no fleet title, no
+  model or effort recommendation, no claiming brief, and no registration, so the session enters the
+  fleet invisible until its PR appears. Briefs now carry the orchestrator's session id and the rule:
+  message the orchestrator AND leave a durable trace (PR comment or unclaimed issue), the
+  orchestrator adopts, registers the unit at dispatch, and spawns the fleet-native chip. Direct
+  spawn-task remains the fallback when the orchestrator is gone.
 - A CAS merge pin is the FULL head SHA fetched from the API, never reconstructed from a truncated
   prefix (2026-08-07). The #609 merge was refused because the pin's tail was invented from a 9-char
   display prefix; the guard treated it as a moved head, which is exactly right, and the fix was to
