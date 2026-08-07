@@ -23,7 +23,9 @@ import org.occurrent.subscription.internal.BoundedIdCache;
 import org.occurrent.subscription.internal.HandoverMessages;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Objects;
 import java.util.Queue;
 import java.util.function.Consumer;
@@ -39,8 +41,12 @@ import java.util.stream.Stream;
  * {@code T} is the payload type, one for both phases. The caller decides what a payload carries, so where a replayed
  * payload has metadata a live one may not, that difference lives in the payload rather than in this engine's signature.
  * <p>
- * The supplied {@code deliver} is invoked on <em>both</em> sides of this engine's monitor: outside it for the replay
- * fold, and while holding it for the drain and for a live {@link #accept(Object)}. It must tolerate both.
+ * The supplied {@code deliver} is always invoked outside this engine's monitor: for the replay fold, for the buffer
+ * drain, and for a live {@link #accept(Object)}. Only the dedup-key reservation that decides whether a given payload
+ * is delivered at all happens under the lock. This means a caller that feeds this engine from more than one thread
+ * once it is live (a listener container with concurrency &gt; 1, say) gets genuinely concurrent {@code deliver} calls
+ * rather than calls queued behind one global lock, so {@code deliver} must tolerate concurrent invocation and cannot
+ * rely on this engine to serialize it (<a href="https://github.com/johanhaleby/occurrent/issues/588">#588</a>).
  * <p>
  * Note the semantic contract this engine keeps: {@link #accept(Object)} buffers a live payload and returns
  * <em>before</em> it is folded while the catch-up is running, so a caller that acknowledges after {@code accept}
@@ -103,8 +109,8 @@ public final class BlockingHandover<T> {
     }
 
     /**
-     * @param deliver Folds a payload, replayed or live. Called outside this engine's monitor for the replay and while
-     *                holding it for the drain and for a live {@link #accept(Object)}, so it must tolerate both.
+     * @param deliver Folds a payload, replayed or live. Always called outside this engine's monitor (see the class
+     *                javadoc), so it must tolerate concurrent invocation once the handover is live.
      * @param dedupId Extracts the replay-to-live de-dup key from a payload.
      * @param options De-dup cache size and live-buffer cap.
      * @param noun    The caller's noun for {@link HandoverMessages#catchUpFailed(String)}, e.g.
@@ -125,29 +131,33 @@ public final class BlockingHandover<T> {
      * A payload fed after a failed catch-up is refused rather than accepted, and stays refused: the caller
      * acknowledges once this returns, so returning normally would acknowledge a payload nothing handled. Recovery is
      * the caller's to choose, not this engine's (ADR 104).
+     * <p>
+     * Once live, {@code deliver} runs outside this engine's monitor (see the class javadoc), so a concurrent caller
+     * gets a concurrent {@code deliver} call, not one queued behind another payload's fold.
      *
      * @throws IllegalStateException if a prior {@link #catchUp(Source)} has failed, or if the live buffer overflows
      *                                during the catch-up.
      */
     public void accept(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
+        boolean deliverNow = false;
         synchronized (lock) {
             if (catchUpFailure != null) {
                 throw new IllegalStateException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (live) {
-                deliverLive(payload);
-                return;
-            }
-            if (stopped) {
-                // Dropped rather than buffered: the replay that would have drained this buffer was stopped, so nothing
-                // is coming to fold it and buffering would just fill up and overflow.
-                return;
-            }
-            if (buffer.size() >= maxBufferedEvents) {
+                deliverNow = reserve(payload);
+            } else if (stopped) {
+                // Dropped rather than buffered: the replay that would have drained this buffer was stopped, so
+                // nothing is coming to fold it and buffering would just fill up and overflow.
+            } else if (buffer.size() >= maxBufferedEvents) {
                 throw new IllegalStateException(HandoverMessages.bufferOverflow(maxBufferedEvents));
+            } else {
+                buffer.add(payload);
             }
-            buffer.add(payload);
+        }
+        if (deliverNow) {
+            deliver.accept(payload);
         }
     }
 
@@ -218,12 +228,21 @@ public final class BlockingHandover<T> {
     }
 
     private void drainBufferAndGoLive() {
+        List<T> toDeliver;
         synchronized (lock) {
+            toDeliver = new ArrayList<>(buffer.size());
             for (T buffered : buffer) {
-                deliverLive(buffered);
+                if (reserve(buffered)) {
+                    toDeliver.add(buffered);
+                }
             }
             buffer.clear();
             live = true;
+        }
+        // Outside the monitor, same as a live accept(Object) (#588). Still sequential on this thread, so catchUp's
+        // markCaughtUp() call after this method returns is still ordered after every one of these deliveries.
+        for (T buffered : toDeliver) {
+            deliver.accept(buffered);
         }
     }
 
@@ -236,13 +255,15 @@ public final class BlockingHandover<T> {
         return key;
     }
 
-    // Must be called holding lock. Folds unless the payload was already folded by the replay or an earlier live copy.
-    private void deliverLive(T payload) {
+    // Must be called holding lock. Reserves the dedup key so at most one caller ever delivers a given payload,
+    // returning false when the replay (or an earlier live copy) already delivered it. Only the reservation, not the
+    // delivery itself, needs the lock (#588): the caller delivers afterwards, outside it.
+    private boolean reserve(T payload) {
         String key = dedupKey(payload);
         if (deliveredIds.contains(key)) {
-            return;
+            return false;
         }
-        deliver.accept(payload);
         deliveredIds.add(key);
+        return true;
     }
 }
