@@ -103,6 +103,13 @@
   live PR look closed), PR-OPENED separates discovery from state change so adopt-routing and
   merge-routing need no inference, and a multi-repo epic runs one monitor per repository with active
   PR work. The event vocabulary is now shared between the Claude and Codex orchestrators.
+- The fleet monitor's lifetime is an every-sweep invariant, not a closeout step (2026-08-07,
+  Johan spotted the leftover). "Stop at epic closeout" fails the moment an epic reopens: T7 was
+  adopted after archrev's closeout, its re-armed monitor had no closeout left to catch it, and it
+  polled an empty PR list for over an hour. The rule now in the skill: the monitor runs exactly as
+  long as some unit has an unmet deliverable a PR event could advance, so the sweep completing the
+  last such unit stops the monitor and the loop then and there. Zero open PRs alone never stops it,
+  workers between deliveries are what it exists to catch.
 - Monitor v7 from the Codex cross-review (2026-08-07, four catches adopted, one pushback). Adopted:
   UNKNOWN suppression must key on PR number PLUS full head SHA, or a worker push during a recompute
   prints the old head's mergeability beside the new head (evidence binds to the exact commit, the
