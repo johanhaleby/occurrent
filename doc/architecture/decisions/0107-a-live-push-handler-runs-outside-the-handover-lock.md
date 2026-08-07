@@ -69,13 +69,27 @@ concurrency ADR 90 already declared legal.
 
 ## Decision
 
-**The de-dup key is reserved under the handover's lock; the handler call runs outside it.** `BlockingHandover`
-now has a `reserve(T)` that does only the lock-requiring part — check `deliveredIds`, add the key if the
-payload needs delivering — and returns whether the caller should deliver. `accept(T)` calls `reserve` inside
-`synchronized (lock)`, then calls `deliver.accept(payload)` after the block has exited, only if `reserve`
-returned `true`. The buffer-to-live drain (`drainBufferAndGoLive`) does the same: it collects the buffered
-payloads that need delivering while holding the lock, then delivers them after releasing it. The replay loop in
-`catchUp` was already outside the lock and needed no change.
+**The dedup bookkeeping is reserved and settled under the handover's lock; the handler call runs outside it.**
+`BlockingHandover` now has `tryReserve(T)`, which does only the lock-requiring part: check `deliveredIds` for a
+payload the replay or an earlier live copy already delivered, check a new `inFlight` set for a payload another
+thread is delivering right now, and if neither holds, add the key to `inFlight` and return it. `accept(T)`
+calls `tryReserve` inside `synchronized (lock)`, then, only if it returned a key, calls
+`deliverOutsideLock(payload, key)` after the block has exited. That method runs `deliver.accept(payload)`
+outside the lock and reports the outcome back under it in a `finally`: success moves the key from `inFlight`
+into `deliveredIds`, failure only clears the `inFlight` entry. The buffer-to-live drain
+(`drainBufferAndGoLive`) does the same, reserving every buffered payload that needs delivering while holding
+the lock, then delivering them after releasing it. The replay loop in `catchUp` was already outside the lock
+and needed no change.
+
+**The first draft recorded a payload as delivered before delivering it, and Copilot's review on the PR caught
+it.** `reserve(T)` added the key to `deliveredIds` and returned whether to deliver, with no path back if
+`deliver.accept` then threw. A push sink acknowledges only after a successful fold, so a failed delivery is
+exactly the case a broker redelivers, and the redelivered copy would have been silently skipped as
+already-delivered, which is the event loss `AGENTS.md`'s isolation rule and ADR 104 both exist to prevent. The
+two-set design above (`deliveredIds` for what actually succeeded, `inFlight` for what is currently being
+attempted) closes that: a payload is only ever marked delivered after `deliver.accept` returns normally, and
+`inFlight` is what keeps two concurrent attempts at the same key from both running the handler at once while
+that determination is still pending.
 
 **This applies to `BlockingHandover` only.** `ReactiveHandover` has no equivalent monitor: its phases are
 serialised by `concatMap`, not by a shared lock a caller's thread blocks on, so concurrent broker threads were
@@ -98,11 +112,16 @@ total (if arbitrary) order as a side effect. This was never a documented guarant
 was relying on something this project promised. A single-threaded caller (concurrency 1, the common case) sees no
 change: `accept` still delivers synchronously on the calling thread before returning, in the order it was called.
 
-**De-dup correctness is unaffected.** The reservation that decides whether a payload is delivered at all still
-happens atomically under the lock, so the replay-to-live overlap is still de-duplicated exactly as before —
-only the fold itself moved outside the monitor, not the bookkeeping that guards it.
+**De-dup correctness is unaffected, and a failed delivery no longer risks losing the redelivery that would fix
+it.** A payload is recorded in `deliveredIds` only once `deliver.accept` has actually returned normally, so a
+handler that throws leaves nothing to make the broker's redelivery of the same payload look like a duplicate.
+`inFlight` closes the narrower gap that opens once delivery runs outside the lock: without it, two concurrent
+attempts at the exact same key (unlikely under normal broker semantics, but not excluded by this engine's own
+contract) could both pass the `deliveredIds` check and both call `deliver` before either recorded anything.
 
-**`BlockingHandoverTest` gained a concurrency test** that rendezvous four `accept` calls inside `deliver` on a
-shared `CyclicBarrier`. It fails by timeout under the pre-fix, fully-locked implementation (verified by
-reverting the production change and running it), and passes once delivery moved outside the lock, which is a
-stronger check than a throughput benchmark for a correctness contract.
+**`BlockingHandoverTest` gained two tests.** One rendezvous four `accept` calls inside `deliver` on a shared
+`CyclicBarrier`; it fails by timeout under the pre-fix, fully-locked implementation (verified by reverting the
+production change and running it), and passes once delivery moved outside the lock, which is a stronger check
+than a throughput benchmark for a correctness contract. The other feeds the same payload twice, failing the
+first delivery attempt and succeeding the second, and asserts the second attempt still runs; it fails under the
+first (`reserve`-only) draft this ADR describes above and passes under the final design.

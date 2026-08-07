@@ -24,10 +24,12 @@ import org.occurrent.subscription.internal.HandoverMessages;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Queue;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -96,6 +98,11 @@ public final class BlockingHandover<T> {
     private final Object lock = new Object();
     private final Queue<T> buffer = new ArrayDeque<>();
     private final BoundedIdCache deliveredIds;
+    // Dedup keys currently being delivered outside the lock, so a second concurrent delivery of the same key waits
+    // for neither: it is dropped rather than raced, and the first attempt's own success or failure is what decides
+    // deliveredIds. Without this a key could be marked delivered before deliver.accept(payload) actually succeeds,
+    // and a delivery that then throws would leave a broker redelivery of the same payload silently skipped.
+    private final Set<String> inFlight = new HashSet<>();
     private boolean live = false;
     private boolean stopped = false;
     private @Nullable Throwable catchUpFailure = null;
@@ -140,13 +147,13 @@ public final class BlockingHandover<T> {
      */
     public void accept(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
-        boolean deliverNow = false;
+        String deliverKey = null;
         synchronized (lock) {
             if (catchUpFailure != null) {
                 throw new IllegalStateException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (live) {
-                deliverNow = reserve(payload);
+                deliverKey = tryReserve(payload);
             } else if (stopped) {
                 // Dropped rather than buffered: the replay that would have drained this buffer was stopped, so
                 // nothing is coming to fold it and buffering would just fill up and overflow.
@@ -156,8 +163,8 @@ public final class BlockingHandover<T> {
                 buffer.add(payload);
             }
         }
-        if (deliverNow) {
-            deliver.accept(payload);
+        if (deliverKey != null) {
+            deliverOutsideLock(payload, deliverKey);
         }
     }
 
@@ -229,20 +236,26 @@ public final class BlockingHandover<T> {
 
     private void drainBufferAndGoLive() {
         List<T> toDeliver;
+        List<String> keysToDeliver;
         synchronized (lock) {
             toDeliver = new ArrayList<>(buffer.size());
+            keysToDeliver = new ArrayList<>(buffer.size());
             for (T buffered : buffer) {
-                if (reserve(buffered)) {
+                String key = tryReserve(buffered);
+                if (key != null) {
                     toDeliver.add(buffered);
+                    keysToDeliver.add(key);
                 }
             }
             buffer.clear();
             live = true;
         }
         // Outside the monitor, same as a live accept(Object) (#588). Still sequential on this thread, so catchUp's
-        // markCaughtUp() call after this method returns is still ordered after every one of these deliveries.
-        for (T buffered : toDeliver) {
-            deliver.accept(buffered);
+        // markCaughtUp() call after this method returns is still ordered after every one of these deliveries, and a
+        // delivery that throws here still reaches catchUp's own catch block exactly as it did before this method
+        // stopped holding the lock for the delivery itself.
+        for (int i = 0; i < toDeliver.size(); i++) {
+            deliverOutsideLock(toDeliver.get(i), keysToDeliver.get(i));
         }
     }
 
@@ -255,15 +268,34 @@ public final class BlockingHandover<T> {
         return key;
     }
 
-    // Must be called holding lock. Reserves the dedup key so at most one caller ever delivers a given payload,
-    // returning false when the replay (or an earlier live copy) already delivered it. Only the reservation, not the
-    // delivery itself, needs the lock (#588): the caller delivers afterwards, outside it.
-    private boolean reserve(T payload) {
+    // Must be called holding lock. Returns the key to deliver under, or null when nothing should be delivered:
+    // the replay (or an earlier live copy) already delivered this payload, or another thread is delivering it
+    // right now. Does not itself record the payload as delivered (#588): a delivery that throws must not poison
+    // a later legitimate redelivery of the same payload, so deliveredIds is only updated once deliverOutsideLock
+    // knows whether the call actually succeeded.
+    private @Nullable String tryReserve(T payload) {
         String key = dedupKey(payload);
-        if (deliveredIds.contains(key)) {
-            return false;
+        if (deliveredIds.contains(key) || !inFlight.add(key)) {
+            return null;
         }
-        deliveredIds.add(key);
-        return true;
+        return key;
+    }
+
+    // Runs deliver outside the lock, then reports the outcome back under it: success moves the key from in-flight
+    // to delivered, failure only clears the in-flight marker, so a payload whose delivery threw is not recorded and
+    // a later redelivery is free to try again.
+    private void deliverOutsideLock(T payload, String key) {
+        boolean succeeded = false;
+        try {
+            deliver.accept(payload);
+            succeeded = true;
+        } finally {
+            synchronized (lock) {
+                inFlight.remove(key);
+                if (succeeded) {
+                    deliveredIds.add(key);
+                }
+            }
+        }
     }
 }

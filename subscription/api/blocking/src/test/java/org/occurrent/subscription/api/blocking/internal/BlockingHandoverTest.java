@@ -30,6 +30,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.*;
@@ -120,6 +121,29 @@ class BlockingHandoverTest {
         handover.accept("C");
         handover.accept("A");
         assertThat(delivered).containsExactly("A", "B", "C", "A");
+    }
+
+    // A push sink acknowledges after the fold, so a fold that throws must not be recorded as delivered, or the
+    // broker's redelivery of the same payload would be skipped as a duplicate and the event lost for good.
+    @Test
+    void a_live_payload_whose_delivery_throws_is_not_recorded_as_delivered_so_a_redelivery_is_retried() {
+        List<String> delivered = new ArrayList<>();
+        AtomicBoolean failNext = new AtomicBoolean(true);
+        BlockingHandover<String> handover = BlockingHandover.create(
+                payload -> {
+                    if (failNext.getAndSet(false)) {
+                        throw new RuntimeException("delivery boom");
+                    }
+                    delivered.add(payload);
+                },
+                payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.catchUp(source(List.of(), true));
+
+        assertThatThrownBy(() -> handover.accept("A")).hasMessage("delivery boom");
+        assertThat(delivered).isEmpty();
+
+        handover.accept("A");
+        assertThat(delivered).containsExactly("A");
     }
 
     @Test
@@ -216,6 +240,9 @@ class BlockingHandoverTest {
     private static void await(CyclicBarrier barrier) {
         try {
             barrier.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
