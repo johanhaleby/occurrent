@@ -53,6 +53,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -62,8 +63,8 @@ import java.util.function.BooleanSupplier;
  * Registers {@code @Saga} factory methods: subscribes the saga to its events, materializes per-instance state, dispatches
  * issued commands, and polls the store to fire timeouts. Invoked from the coordinator's
  * {@code afterSingletonsInstantiated}, after snapshots, sharing the one duplicate-id registry. Each created
- * {@link SagaSubscription} owns a timer poller that {@link #close()} stops when the context is destroyed. Blocking-stack
- * only.
+ * {@link SagaSubscription} owns a timer poller, and a push saga that catches up owns a replay thread, both of which
+ * {@link #close()} stops when the context is destroyed. Blocking-stack only.
  */
 class SagaAnnotationRegistrar {
 
@@ -76,6 +77,10 @@ class SagaAnnotationRegistrar {
     // Concurrent because a push saga withheld by manual mode is added when the application starts it, on whichever
     // thread that is, while close() may be reading the list.
     private final List<SagaSubscription> sagaSubscriptions = new CopyOnWriteArrayList<>();
+    // Push catch-up models created here, kept so the context can stop their replay threads on the way down. Created
+    // during registration on the refresh thread, whether or not manual mode withholds the saga itself, so a plain list
+    // is enough where sagaSubscriptions needs a concurrent one.
+    private final List<CatchupThenPushSubscriptionModel> pushModels = new ArrayList<>();
 
     SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
         this.applicationContext = applicationContext;
@@ -253,8 +258,13 @@ class SagaAnnotationRegistrar {
         }
         PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", PositionOrderedReader.class, id);
         CheckpointStorage catchupMarker = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", CheckpointStorage.class, id);
-        return new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker,
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker,
                 ProjectionAnnotationRegistrar.catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
+        // Retained so close() can stop it. Its replay runs on its own thread, so a context that closes without stopping
+        // it leaves that replay folding into a store that is closing with it, and a saga folding a replayed history is
+        // one that issues commands while it does so.
+        pushModels.add(model);
+        return model;
     }
 
     /**
@@ -342,9 +352,15 @@ class SagaAnnotationRegistrar {
     }
 
     void close() {
-        // Stop each saga's timer poller so no poller thread survives context shutdown.
+        // Stop each saga's timer poller so no poller thread survives context shutdown. Before the models, because
+        // shutting one down waits for a replay still in flight, and a timer that fires during that wait dispatches a
+        // command into a context that is already going down.
         sagaSubscriptions.forEach(SagaSubscription::close);
         sagaSubscriptions.clear();
+        // Then the catch-up replays, which the timer pollers are not: a replay runs on a thread of its own and only the
+        // model that owns it can stop it.
+        pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
+        pushModels.clear();
     }
 
     private static Object invokeSagaFactory(Method method, Object bean) {
