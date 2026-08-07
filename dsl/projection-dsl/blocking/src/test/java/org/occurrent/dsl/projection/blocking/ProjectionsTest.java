@@ -24,10 +24,21 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
+import org.occurrent.dsl.view.MaterializedView;
+import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.retry.RetryStrategy;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -38,6 +49,17 @@ class ProjectionsTest {
     private static final URI SOURCE = URI.create("urn:occurrent:test");
 
     record Counted(String eventId) {
+    }
+
+    record Tick(String key) {
+    }
+
+    // Models a store that does optimistic locking on a @Version-style field: save compares the version threaded
+    // through from findById against what is currently stored, and throws instead of overwriting on a mismatch.
+    record VersionedCount(int value, long version) {
+    }
+
+    static final class ConflictingWriteException extends RuntimeException {
     }
 
     @Test
@@ -84,6 +106,121 @@ class ProjectionsTest {
         Integer countForA = Projections.project(keyedProjection(), queries, "a");
 
         assertThat(countForA).isEqualTo(2);
+    }
+
+    @Test
+    void materialized_view_loses_a_concurrent_update_to_one_key_without_a_retry_strategy() throws Exception {
+        CyclicBarrier bothThreadsHaveReadBeforeEitherSaves = new CyclicBarrier(2);
+        OptimisticLockingRepository repository = new OptimisticLockingRepository(bothThreadsHaveReadBeforeEitherSaves);
+        repository.save("k", new VersionedCount(0, 0));
+        MaterializedView<Tick> view = Projections.materializedView(tickProjection(), repository);
+
+        List<Future<?>> results = runConcurrently(view, "k");
+
+        // One of the two folds loses its save silently: it read the same state the other thread read, and the other
+        // thread's save already moved the version on, so its own save overwrites rather than accumulates. Exactly one
+        // of the two futures surfaces the store's conflict, and the stored value reflects only one tick, not two.
+        long failures = results.stream().filter(ProjectionsTest::failed).count();
+        assertThat(failures).isEqualTo(1);
+        assertThat(repository.findById("k")).hasValueSatisfying(state -> assertThat(state.value()).isEqualTo(1));
+    }
+
+    @Test
+    void materialized_view_keeps_both_concurrent_updates_to_one_key_with_a_retry_strategy() throws Exception {
+        CyclicBarrier bothThreadsHaveReadBeforeEitherSaves = new CyclicBarrier(2);
+        OptimisticLockingRepository repository = new OptimisticLockingRepository(bothThreadsHaveReadBeforeEitherSaves);
+        repository.save("k", new VersionedCount(0, 0));
+        RetryStrategy retryOnConflict = RetryStrategy.retry().maxAttempts(5).retryIf(ConflictingWriteException.class::isInstance);
+        MaterializedView<Tick> view = Projections.materializedView(tickProjection(), repository, retryOnConflict);
+
+        List<Future<?>> results = runConcurrently(view, "k");
+
+        // Both transitions survive: the losing thread's save conflicts, the retry re-reads what the winner saved,
+        // refolds, and saves again, so no future surfaces an exception and the stored value reflects both ticks.
+        assertThat(results.stream().filter(ProjectionsTest::failed).count()).isEqualTo(0);
+        assertThat(repository.findById("k")).hasValueSatisfying(state -> assertThat(state.value()).isEqualTo(2));
+    }
+
+    private static List<Future<?>> runConcurrently(MaterializedView<Tick> view, String key) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<?>> results = List.of(
+                    pool.submit(() -> view.update(new Tick(key))),
+                    pool.submit(() -> view.update(new Tick(key))));
+            for (Future<?> result : results) {
+                try {
+                    result.get(5, TimeUnit.SECONDS);
+                } catch (Exception ignored) {
+                    // Collected below via failed(), not rethrown here, so the sibling future is still awaited.
+                }
+            }
+            return results;
+        } finally {
+            pool.shutdown();
+        }
+    }
+
+    private static boolean failed(Future<?> result) {
+        try {
+            result.get();
+            return false;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    private static Projection<VersionedCount, Tick, String> tickProjection() {
+        return Projection.<VersionedCount, Tick, String>builder(new VersionedCount(0, 0))
+                .id(Tick::key)
+                .on(Tick.class, (state, event) -> new VersionedCount(state.value() + 1, state.version()))
+                .build();
+    }
+
+    // Rendezvous on the first read from each of the two racing threads only, so a retry's re-read (the third read and
+    // later) proceeds immediately instead of blocking on a barrier the sibling thread will never reach again.
+    private static final class OptimisticLockingRepository implements ViewStateRepository<VersionedCount, String> {
+        private final ConcurrentHashMap<String, VersionedCount> stored = new ConcurrentHashMap<>();
+        private final CyclicBarrier rendezvousOnFirstRead;
+        private final AtomicInteger reads = new AtomicInteger();
+
+        OptimisticLockingRepository(CyclicBarrier rendezvousOnFirstRead) {
+            this.rendezvousOnFirstRead = rendezvousOnFirstRead;
+        }
+
+        @Override
+        public Optional<VersionedCount> findById(String id) {
+            // Read first, then rendezvous, so both threads' reads land before either can proceed to evolve and save.
+            // Awaiting before the read only synchronizes arrival at the barrier, not what happens after release, so a
+            // thread that races ahead through evolve and save before its sibling even reads would see no conflict at
+            // all: exactly the bug this ordering avoids.
+            Optional<VersionedCount> result = Optional.ofNullable(stored.get(id));
+            if (reads.getAndIncrement() < 2) {
+                await(rendezvousOnFirstRead);
+            }
+            return result;
+        }
+
+        @Override
+        public void save(String id, VersionedCount state) {
+            stored.compute(id, (key, current) -> {
+                long expectedVersion = current == null ? 0 : current.version();
+                if (state.version() != expectedVersion) {
+                    throw new ConflictingWriteException();
+                }
+                return new VersionedCount(state.value(), expectedVersion + 1);
+            });
+        }
+    }
+
+    private static void await(CyclicBarrier barrier) {
+        try {
+            barrier.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static Projection<Integer, Counted, String> singletonProjection() {

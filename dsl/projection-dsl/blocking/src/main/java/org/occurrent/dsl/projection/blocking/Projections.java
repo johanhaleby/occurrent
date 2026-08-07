@@ -28,6 +28,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.filter.Filter;
+import org.occurrent.retry.RetryStrategy;
 
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -54,14 +55,42 @@ public final class Projections {
      * Throws if the projection is single-instance (it has no id function). Use
      * {@link #materializedView(Projection, ViewStateRepository, String)} with the single-instance key for those.
      * <p>
-     * This does a plain read, fold, and save with no optimistic-locking retry of its own. A failed update is still
-     * retried by the subscription model's retry strategy, which redelivers the event, but for concurrent writers to the
-     * same instance supply a {@link MaterializedView} that re-reads and reapplies on conflict, such as the one the view
-     * DSL's {@code materialized(...)} builds.
+     * This does a plain read, fold, and save with no retry of its own, so two threads folding two events for the same
+     * instance can both read the same state and the second save then overwrites the first. That is reachable wherever
+     * a live push sink is fed by more than one thread. Use
+     * {@link #materializedView(Projection, ViewStateRepository, RetryStrategy)} to recover from it, and read what it
+     * says about what retry can and cannot fix.
      */
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+        return materializedView(projection, repository, RetryStrategy.none());
+    }
+
+    /**
+     * As {@link #materializedView(Projection, ViewStateRepository)}, retrying the whole read, fold, and save with
+     * {@code retryStrategy} when it fails.
+     * <p>
+     * <strong>This recovers a lost update only when your store reports the conflict.</strong> A store that does
+     * optimistic locking (a Spring Data {@code @Version} field, a conditional update, a unique index on an insert)
+     * throws on the losing write, and the retry then re-reads the state the winner saved, folds the event onto it, and
+     * saves again, so both transitions survive. A store that detects nothing never throws, so the second save
+     * overwrites the first whatever strategy you pass here. Retry is the recovery, conflict detection in the store is
+     * what makes it one.
+     * <p>
+     * Scope the strategy to the conflict, for example
+     * {@code RetryStrategy.exponentialBackoff(..).maxAttempts(5).retryIf(OptimisticLockingFailureException.class::isInstance)}.
+     * A strategy that retries everything also retries a fold that fails for a deterministic reason, which keeps the
+     * failure away from the subscription model's error listener and from your broker's redelivery.
+     * <p>
+     * Hand the result to whichever sink you drive through its {@link MaterializedView} overload:
+     * {@code CatchupProjectionFeed.create(id, view, replayFilter, ..)},
+     * {@code DomainEventFeed.register(id, view, replayFilter)}, or
+     * {@code project(subscriptionId, projection, view, startAt)}. On Kotlin with Spring Data MongoDB the view DSL's
+     * {@code materialized(..)} builds an equivalent view with its own duplicate-key and optimistic-locking policy.
+     */
+    public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, RetryStrategy retryStrategy) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
+        requireNonNull(retryStrategy, "retryStrategy cannot be null");
         BiFunction<EventMetadata, E, @Nullable ID> id = projection.idWithMetadata();
         requireNonNull(id, "projection is single-instance; use materializedView(projection, repository, singletonKey)");
         View<S, E> view = projection.view();
@@ -78,8 +107,7 @@ public final class Projections {
                     ProjectionKeys.failIfKeyNeededMetadata(projection.metadataKeyed(), metadata);
                     return;
                 }
-                S currentState = repository.findById(instanceId).orElse(view.initialState());
-                repository.save(instanceId, view.evolve(currentState, metadata, event));
+                updateFromRepository(instanceId, metadata, event, view, repository, retryStrategy);
             }
         };
     }
@@ -90,12 +118,23 @@ public final class Projections {
      * one slot keyed by {@code singletonKey}, the projection's runtime identity (the subscription id, or the
      * {@code @Projection} id).
      */
-    @SuppressWarnings("unchecked")
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
+        return materializedView(projection, repository, singletonKey, RetryStrategy.none());
+    }
+
+    /**
+     * As {@link #materializedView(Projection, ViewStateRepository, String)}, retrying the whole read, fold, and save
+     * with {@code retryStrategy} when it fails. See
+     * {@link #materializedView(Projection, ViewStateRepository, RetryStrategy)} for what retry does and does not
+     * recover.
+     */
+    @SuppressWarnings("unchecked")
+    public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey, RetryStrategy retryStrategy) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
+        requireNonNull(retryStrategy, "retryStrategy cannot be null");
         if (projection.id() != null) {
-            return materializedView(projection, repository);
+            return materializedView(projection, repository, retryStrategy);
         }
         requireNonNull(singletonKey, "singletonKey cannot be null");
         View<S, E> view = projection.view();
@@ -108,8 +147,7 @@ public final class Projections {
 
             @Override
             public void update(EventMetadata metadata, E event) {
-                S currentState = repository.findById(key).orElse(view.initialState());
-                repository.save(key, view.evolve(currentState, metadata, event));
+                updateFromRepository(key, metadata, event, view, repository, retryStrategy);
             }
         };
     }
@@ -132,12 +170,32 @@ public final class Projections {
     }
 
     /**
+     * As {@link #domainEventFeed(Projection, ViewStateRepository)}, retrying the whole read, fold, and save with
+     * {@code retryStrategy} when it fails. See
+     * {@link #materializedView(Projection, ViewStateRepository, RetryStrategy)} for what retry does and does not
+     * recover.
+     */
+    public static <S extends @Nullable Object, E, ID> MaterializedView<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, RetryStrategy retryStrategy) {
+        return materializedView(projection, repository, retryStrategy);
+    }
+
+    /**
      * A domain-event feed for a keyed or single-instance projection, folding directly into {@code repository} with no
      * CloudEvent conversion. A single-instance projection (no id function) updates one slot keyed by
      * {@code singletonKey}. See {@link #domainEventFeed(Projection, ViewStateRepository)}.
      */
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
         return materializedView(projection, repository, singletonKey);
+    }
+
+    /**
+     * As {@link #domainEventFeed(Projection, ViewStateRepository, String)}, retrying the whole read, fold, and save
+     * with {@code retryStrategy} when it fails. See
+     * {@link #materializedView(Projection, ViewStateRepository, RetryStrategy)} for what retry does and does not
+     * recover.
+     */
+    public static <S extends @Nullable Object, E, ID> MaterializedView<E> domainEventFeed(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey, RetryStrategy retryStrategy) {
+        return materializedView(projection, repository, singletonKey, retryStrategy);
     }
 
     /**

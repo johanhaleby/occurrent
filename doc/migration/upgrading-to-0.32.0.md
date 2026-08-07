@@ -822,9 +822,16 @@ gets concurrent handler calls.
 
 **If your handler is not thread-safe** — it mutates a field, a non-concurrent collection, or anything else without its
 own synchronization — and you configure more than one delivering thread, it can now see real races it could not see
-before. Either make the handler safe for concurrent invocation (an idempotent write to a database is usually already
-safe; an in-memory accumulator usually is not), or keep the delivering side single-threaded, which is the default
-unless you explicitly configure more.
+before. This includes the projection DSL's own default read-model materializer. `Projections.materializedView(..)`
+reads the current state, folds the event onto it, and saves, with no locking of its own, so two concurrent threads
+handling different events for the same projection key can both read the same state and the second save then
+overwrites the first, silently. Every convenience path built on it inherits this: `CatchupProjectionFeed.create(..,
+repository)`, `DomainEventFeed.register(.., repository)`, and the zero-config `@Projection(source = PUSH)` store.
+Either pass a `RetryStrategy` to `Projections.materializedView(..)` so a losing write re-reads and re-folds instead of
+overwriting, which only recovers the update when your store detects the conflict and throws (an optimistic-locking
+failure, a unique-key violation), or keep the delivering side single-threaded, which is the default unless you
+explicitly configure more. An idempotent write to a database is not the same shape as this read-fold-save and is not a
+substitute for either fix.
 
 Delivery order across concurrently-delivering threads is not guaranteed either, where the lock used to impose one as a
 side effect. A single-threaded caller sees no change at all: delivery is still synchronous on the calling thread, in
@@ -832,7 +839,7 @@ the order `accept` was called.
 
 ### Why
 
-[ADR 107](../architecture/decisions/0108-a-live-push-handler-runs-outside-the-handover-lock.md) has the reasoning,
+[ADR 108](../architecture/decisions/0108-a-live-push-handler-runs-outside-the-handover-lock.md) has the reasoning,
 including the benchmark that measured the win before this was decided.
 
 ## 15. A saga refuses an event it cannot recognise a redelivery of

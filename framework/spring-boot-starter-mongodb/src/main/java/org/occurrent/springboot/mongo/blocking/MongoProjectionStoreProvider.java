@@ -24,6 +24,14 @@ import org.springframework.data.mongodb.core.MongoOperations;
 /**
  * Materializes a {@code @Projection} that declares no store into MongoDB, into the collection Spring Data derives from
  * the state type.
+ * <p>
+ * {@code save} looks up the document by the state's own {@code @Id}, not by the projection key it is handed. The
+ * projection key is used for {@code findById} only. Give the state type an {@code @Id} field that holds the same
+ * value the projection resolves as its key, or a read and a write for one instance land on two different documents
+ * and the read model never accumulates. This store does no optimistic locking unless the state type also declares
+ * {@code @Version}, so under concurrent delivery to one projection key it is last write wins. Thread a
+ * {@code RetryStrategy} through {@code Projections.materializedView(..)} to recover from that once the state carries
+ * {@code @Version}.
  */
 class MongoProjectionStoreProvider implements DefaultProjectionStoreProvider {
 
@@ -39,6 +47,8 @@ class MongoProjectionStoreProvider implements DefaultProjectionStoreProvider {
         MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
         return ViewStateRepository.create(
                 instanceId -> mongoOperations.findById(instanceId, stateType),
+                // instanceId is not passed to save: the document id used is whatever @Id is set on state itself. See
+                // the class javadoc.
                 (instanceId, state) -> mongoOperations.save(state));
     }
 }
