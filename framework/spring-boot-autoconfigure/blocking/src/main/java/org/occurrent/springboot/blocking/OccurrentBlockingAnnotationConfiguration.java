@@ -48,11 +48,16 @@ public class OccurrentBlockingAnnotationConfiguration {
      * post-processor that fills it in, since it has
      * nothing to hold when annotation processing is off, and it exists under every mode (not only {@code manual}) so
      * an application can inject it without conditioning its own wiring on the mode.
+     * <p>
+     * Named after the stack, like {@link #occurrentBlockingAnnotationBeanPostProcessor()}, because the reactive
+     * configuration declares its own {@code ManualStartPushSources} bean of a different, reactor-specific type. Bean
+     * names are resolved independently of type, so two {@code @Bean} methods of the same name from different
+     * configurations collide on refresh even though nothing here would resolve the wrong one by type (see #621).
      */
     @Bean
     @ConditionalOnMissingBean(ManualStartPushSources.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public ManualStartPushSources occurrentManualStartPushSources() {
+    public ManualStartPushSources occurrentBlockingManualStartPushSources() {
         return new ManualStartPushSources();
     }
 

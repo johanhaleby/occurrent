@@ -143,5 +143,16 @@
             <artifactId>reactor-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+          Test-only: lets this module prove it coexists with the blocking annotation configuration on one classpath
+          (ADR 44), which neither module can otherwise verify without depending on its sibling. Both are store-neutral
+          with no Mongo dependency of their own, so this stays a lightweight, container-free context test.
+        -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-blocking-spring-boot-autoconfigure</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
