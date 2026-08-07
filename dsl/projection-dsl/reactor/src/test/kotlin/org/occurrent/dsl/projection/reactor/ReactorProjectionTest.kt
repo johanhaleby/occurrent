@@ -18,13 +18,16 @@ package org.occurrent.dsl.projection.reactor
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.cloudevents.CloudEvent
+import io.cloudevents.core.builder.CloudEventBuilder
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
+import org.assertj.core.api.Assertions.entry
 import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson.jacksonCloudEventConverter
+import org.occurrent.cloudevents.OccurrentCloudEventExtension
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
@@ -115,6 +118,28 @@ class ReactorProjectionTest {
 
         // No await: the update ran inside the dispatch Mono we blocked on.
         assertThat(store["johan"]).isEqualTo("Johan Haleby")
+    }
+
+    @Test
+    fun the_metadata_extension_exposes_the_delivered_events_real_stream_metadata_to_the_update_function() {
+        // Docker-free: feeds the SynchronousSubscriptionModel a CloudEvent carrying the streamid/streamversion
+        // extensions by hand, since that is all EventMetadata.from(CloudEvent) reads from. getStreamId() throws on
+        // EventMetadata.empty(), so this only passes if real metadata reaches the update.
+        val sync = SynchronousSubscriptionModel()
+        val repo = ConcurrentHashMap<String, Long>()
+        val projection = singletonProjection<Long, DomainEvent>(initialState = 0L) {}
+
+        subscriptions(sync, converter) {
+            project("alice-projection", projection, { metadata, _ ->
+                repo[metadata.getStreamId()] = metadata.getStreamVersion()
+                Mono.empty()
+            })
+        }
+
+        val cloudEvent = withStreamMetadata(converter.toCloudEvent(NameDefined(id(), Date(), "alice", "Alice")), "alice-stream", 1)
+        sync.dispatch(listOf(cloudEvent)).block()
+
+        assertThat(repo).containsExactly(entry("alice-stream", 1L))
     }
 
     @Test
@@ -258,6 +283,9 @@ class ReactorProjectionTest {
     }
 
     private fun cloudEvents(vararg events: DomainEvent): List<CloudEvent> = events.map { converter.toCloudEvent(it) }
+
+    private fun withStreamMetadata(cloudEvent: CloudEvent, streamId: String, streamVersion: Long): CloudEvent =
+        CloudEventBuilder.v1(cloudEvent).withExtension(OccurrentCloudEventExtension.occurrent(streamId, streamVersion)).build()
 
     private fun id(): String = UUID.randomUUID().toString()
 

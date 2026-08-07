@@ -108,6 +108,23 @@ public final class ReactiveProjectionRunner<E> {
     }
 
     /**
+     * Subscribes with the given id and applies {@code update} for every matching event. The metadata-carrying sibling of
+     * {@link #project(String, Projection, Function)}, for a caller that owns the reactive load-evolve-save but still
+     * needs the delivering event's {@link EventMetadata}.
+     */
+    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update) {
+        return project(subscriptionId, projection, update, null);
+    }
+
+    /**
+     * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
+     * and applies {@code update} for every matching event, exposing the event's {@link EventMetadata}.
+     */
+    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable StartAt startAt) {
+        return projectWithMetadata(subscriptionId, projection, update, startAt);
+    }
+
+    /**
      * Subscribes with the given id and materializes {@code projection} into the blocking {@code repository} (scheduled on
      * {@code boundedElastic}), skipping events whose id resolves to {@code null}.
      *
@@ -159,8 +176,9 @@ public final class ReactiveProjectionRunner<E> {
     }
 
     // Threads the delivered event's EventMetadata into the update. The public (E) -> Mono<Void> primitive overload stays
-    // event-only, since a caller-supplied reactive update composes at the domain-event level; the repository and
-    // MaterializedView overloads route here so a metadata-keyed projection folds with real metadata.
+    // event-only, since a caller-supplied reactive update composes at the domain-event level; the BiFunction overload,
+    // and the repository and MaterializedView overloads, route here so a metadata-keyed projection folds with real
+    // metadata.
     private Subscription projectWithMetadata(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable StartAt startAt) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(projection, "projection cannot be null");
