@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 2
-updated_at: '2026-08-07T06:47:38+00:00'
+revision: 3
+updated_at: '2026-08-07T06:52:30+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (a84288ce)
 baseline:
   repo: johanhaleby/occurrent
@@ -234,23 +234,24 @@ units:
   A9:
     issue: 598
     goal: subscribe-during-start(true) race fix (adopted 2026-08-07)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_4ef863f7-5285-4580-aa9f-609c11164bd2
+    session: null
     deliverables:
     - check: pr_merged
       ref: 600
-      met: false
-      evidence: null
+      met: true
+      evidence: MERGED 2026-08-07T06:52:30+00:00, 26/26 green at dced29cc8, 0 threads,
+        verified by orchestrator
     - check: issue_closed
       ref: 598
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #598, verified by orchestrator'
     blocking_on: []
-    next_action: merge on the session's green ping (it runs an auto-stopping watch)
-    last_meaningful_progress_at: 2026-08-07 06:55:00+00:00
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T06:52:30+00:00'
     observed:
       pr_600:
         head: dced29cc8
