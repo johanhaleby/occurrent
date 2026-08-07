@@ -18,7 +18,7 @@ package org.occurrent.subscription.push.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.Pushable;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;

@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
+import org.occurrent.filtermatching.DataFieldReader;
 
 import java.net.URI;
 import java.util.List;
@@ -90,6 +91,28 @@ class ConditionMatcherTest {
         Object payload = Map.of("amount", 42);
 
         assertThat(matches(payload, Filter.data("amount", eq("42")))).isFalse();
+    }
+
+    @Test
+    void eq_compares_numbers_by_value_regardless_of_java_type() {
+        // A Long stored in the payload against an Integer operand is the realistic break: Jackson parses a
+        // serialized whole number back as Integer or Long depending on magnitude, while the filter operand comes
+        // from whatever type the caller happened to write the literal as.
+        assertThat(matches(Map.of("amount", 42L), Filter.data("amount", eq(42)))).isTrue();
+        assertThat(matches(Map.of("amount", 42), Filter.data("amount", eq(42L)))).isTrue();
+        assertThat(matches(Map.of("amount", 42.0), Filter.data("amount", eq(42)))).isTrue();
+    }
+
+    @Test
+    void ne_compares_numbers_by_value_regardless_of_java_type() {
+        assertThat(matches(Map.of("amount", 42L), Filter.data("amount", ne(42)))).isFalse();
+        assertThat(matches(Map.of("amount", 43L), Filter.data("amount", ne(42)))).isTrue();
+    }
+
+    @Test
+    void in_compares_numbers_by_value_regardless_of_java_type() {
+        assertThat(matches(Map.of("amount", 42L), Filter.data("amount", in(1, 42)))).isTrue();
+        assertThat(matches(Map.of("amount", 43L), Filter.data("amount", in(1, 42)))).isFalse();
     }
 
     @Test

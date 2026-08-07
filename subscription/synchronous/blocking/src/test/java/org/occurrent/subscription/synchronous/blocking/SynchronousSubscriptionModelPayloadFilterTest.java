@@ -22,7 +22,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
-import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
+import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 
 import java.net.URI;
@@ -36,7 +36,8 @@ import static org.occurrent.condition.Condition.eq;
 
 /**
  * A synchronous subscription matches entirely in process, so filtering on a field inside the payload only works when
- * the model was given a reader for it. Built without one it refuses, which is what it did for every filter before.
+ * the model was given a reader for it. Built without one it refuses at subscribe time, rather than accepting the
+ * subscription and failing later on a write that needs the reader.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SynchronousSubscriptionModelPayloadFilterTest {
@@ -53,14 +54,14 @@ class SynchronousSubscriptionModelPayloadFilterTest {
     }
 
     @Test
-    void a_payload_filter_is_refused_on_the_first_event_when_the_model_was_given_no_reader() {
-        // Registering succeeds, because building the matcher does not read anything. The refusal lands when an event
-        // arrives and the payload has to be read, which for a synchronous subscription is inside the write.
+    void a_payload_filter_is_refused_at_subscribe_time_when_the_model_was_given_no_reader() {
+        // The model cannot answer a payload condition at all, which is knowable before a single event arrives, so it
+        // refuses here rather than accepting the subscription and failing on the first write that needs the reader.
         SynchronousSubscriptionModel model = new SynchronousSubscriptionModel();
-        model.subscribe("big-amounts", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
-        });
 
-        Throwable thrown = catchThrowable(() -> model.dispatch(List.of(event("1", "{\"amount\":42}"))));
+        Throwable thrown = catchThrowable(() -> model.subscribe("big-amounts",
+                StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
+                }));
 
         assertThat(thrown).isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("occurrent-common-inmemory-filter-matching-jackson");

@@ -22,6 +22,7 @@ import org.occurrent.condition.Condition;
 import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandConditionName;
+import org.occurrent.filtermatching.DataFieldReader;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -82,11 +83,11 @@ public class ConditionMatcher {
                 return false;
             }
             if (singleOperandConditionName == EQ) {
-                return anyElementMatches(actual, element -> Objects.equals(element, expected));
+                return anyElementMatches(actual, element -> valuesEqual(element, expected));
             } else if (singleOperandConditionName == NE) {
                 // "No element equals" rather than "any element differs", the same reading MongoDB gives an array.
                 // Not pinned by the conformance suite, which only exercises EQ and the range operators on an array.
-                return !anyElementMatches(actual, element -> Objects.equals(element, expected));
+                return !anyElementMatches(actual, element -> valuesEqual(element, expected));
             } else {
                 return anyElementMatches(actual, element -> matchesRange(element, expected, singleOperandConditionName));
             }
@@ -98,7 +99,18 @@ public class ConditionMatcher {
                 return false;
             }
             Collection<T> operand = inOperandCondition.operand();
-            return anyElementMatches(actual, element -> operand.stream().anyMatch(it -> Objects.equals(it, element)));
+            return anyElementMatches(actual, element -> operand.stream().anyMatch(it -> valuesEqual(it, element)));
+    }
+
+    // EQ, NE and IN share this rather than Objects.equals, for the same reason the range operators use BigDecimal:
+    // a stored Long and a filter operand built from an int literal are unequal by Objects.equals despite being the
+    // same number, which is not the divergence-from-MongoDB's-$eq that a caller asking "does this field equal 42"
+    // wants to hit. Two operands that are both numbers compare by value; anything else falls back to Objects.equals.
+    private static boolean valuesEqual(Object actual, Object expected) {
+        if (actual instanceof Number actualNumber && expected instanceof Number expectedNumber) {
+            return toBigDecimal(actualNumber).compareTo(toBigDecimal(expectedNumber)) == 0;
+        }
+        return Objects.equals(actual, expected);
     }
 
     // A collection value matches a condition if any element does, the same rule MongoDB applies to an array field.

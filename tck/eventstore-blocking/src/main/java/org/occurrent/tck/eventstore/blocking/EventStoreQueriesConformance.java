@@ -271,7 +271,8 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
                     ConformanceEvents.eventWithJsonData("whole", DEFINED, "{\"amount\":42,\"name\":\"carol\"}"),
                     ConformanceEvents.eventWithJsonData("fraction", DEFINED, "{\"amount\":42.5,\"name\":\"dave\"}"),
                     ConformanceEvents.eventWithJsonData("listed", DEFINED, "{\"tags\":[\"red\",\"blue\"],\"name\":\"erin\"}"),
-                    ConformanceEvents.eventWithJsonData("rootArray", DEFINED, "[1,2,3]")));
+                    ConformanceEvents.eventWithJsonData("rootArray", DEFINED, "[1,2,3]"),
+                    ConformanceEvents.eventWithJsonData("itemized", DEFINED, "{\"items\":[{\"sku\":\"a\"},{\"sku\":\"b\"}],\"name\":\"frank\"}")));
         }
 
         /**
@@ -331,6 +332,38 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
         }
 
         @Test
+        void eq_ne_and_in_compare_numbers_by_value_regardless_of_java_type() {
+            // The stored payload always parses "42" as the same Java type (an Integer, through Jackson), so the
+            // operand varies instead: a Long built from an int literal is the realistic break, since Jackson parses a
+            // serialized long back as Integer or Long depending on magnitude while the filter operand comes from
+            // whatever type the caller happened to write the literal as.
+            //
+            // Every written event carries an "amount", deliberately not reusing writePayloads(): ne on a field a
+            // payload lacks entirely is a separate question (MongoDB matches a missing field against ne, this
+            // suite does not pin that either way), and mixing it in here would assert something this test is not
+            // about.
+            eventStore().write(STREAM_ID, List.of(
+                    ConformanceEvents.eventWithJsonData("whole", DEFINED, "{\"amount\":42}"),
+                    ConformanceEvents.eventWithJsonData("fraction", DEFINED, "{\"amount\":42.5}")));
+            if (declinesDataFilters(Filter.data("amount", eq(42L)))) {
+                return;
+            }
+
+            assertAll(
+                    () -> assertThat(idsOf(queries().query(Filter.data("amount", eq(42L)))))
+                            .as("eq must match a stored number against an operand of a different numeric Java type")
+                            .containsExactly("whole"),
+                    () -> assertThat(idsOf(queries().query(Filter.data("amount", ne(42L)))))
+                            .as("ne must likewise treat them as equal, so it must not match the event whose amount "
+                                    + "equals 42 by value")
+                            .containsExactly("fraction"),
+                    () -> assertThat(idsOf(queries().query(Filter.data("amount", in(1L, 42L)))))
+                            .as("in must match by value too, across the whole operand collection")
+                            .containsExactly("whole")
+            );
+        }
+
+        @Test
         void compares_numbers_by_value_but_refuses_to_compare_across_types() {
             Filter above = Filter.data("amount", gt(10));
             writePayloads();
@@ -366,6 +399,25 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
                             .containsExactly("listed"),
                     () -> assertThat(idsOf(queries().query(Filter.data("tags", eq("green")))))
                             .as("and must not match when it does not")
+                            .isEmpty()
+            );
+        }
+
+        @Test
+        void a_dotted_path_traverses_an_array_of_objects() {
+            Filter byItemSku = Filter.data("items.sku", eq("a"));
+            writePayloads();
+            if (declinesDataFilters(byItemSku)) {
+                return;
+            }
+
+            assertAll(
+                    () -> assertThat(idsOf(queries().query(byItemSku)))
+                            .as("a dotted path must reach into each element of an array of objects, the way MongoDB "
+                                    + "does, rather than stopping because the array itself is not an object")
+                            .containsExactly("itemized"),
+                    () -> assertThat(idsOf(queries().query(Filter.data("items.sku", eq("nosuchsku")))))
+                            .as("and must not match when no element has that value")
                             .isEmpty()
             );
         }
