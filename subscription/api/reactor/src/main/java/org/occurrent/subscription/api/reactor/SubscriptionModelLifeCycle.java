@@ -51,7 +51,11 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
     void stop();
 
     /**
-     * Start a subscription model if it was previously stopped and resume all subscriptions.
+     * Start a subscription model that was previously stopped, and resume all its subscriptions.
+     * <p>
+     * Calling this on a model that is already started is allowed. It brings up whatever is not running yet and leaves
+     * everything else as it is, so a caller that cannot observe the current state, a leader election or a health check
+     * for example, can call it without checking {@link #isRunning()} first.
      *
      * @see #stop()
      * @see #start(boolean)
@@ -61,11 +65,13 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
     }
 
     /**
-     * Start a subscription model if it was previously stopped
+     * Start a subscription model that was previously stopped.
+     * <p>
+     * Calling this on a model that is already started is allowed, and brings up whatever is not running yet.
      *
      * @param resumeSubscriptionsAutomatically Whether to automatically resume all subscriptions when starting. If <code>false</code>, then the subscriptions must be resumed manually using {@link #resumeSubscription(String)}.
      * @see #stop()
-     * @see #start(boolean)
+     * @see #start()
      */
     void start(boolean resumeSubscriptionsAutomatically);
 

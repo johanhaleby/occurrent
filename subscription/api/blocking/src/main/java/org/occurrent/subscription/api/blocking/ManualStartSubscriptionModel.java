@@ -119,9 +119,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
 
     /**
      * Register a subscription. While this model is withholding, nothing is passed to the wrapped model and the returned
-     * {@link Subscription} is a placeholder standing for the registration. Its {@code waitUntilStarted} returns
-     * immediately, because registering is all that has been asked for. Once the subscription is started,
-     * {@link #resumeSubscription(String)} returns the wrapped model's own subscription.
+     * {@link Subscription} is a placeholder standing for the registration. Its {@code waitUntilStarted} answers
+     * {@code false} straight away, since the subscription has not started and will not until you ask. Once the
+     * subscription is started, {@link #resumeSubscription(String)} returns the wrapped model's own subscription, which
+     * is the handle to wait on.
      *
      * @throws IllegalArgumentException If {@code subscriptionId} is already registered.
      */
@@ -136,8 +137,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
 
         claim(subscriptionId);
         try {
-            // Captured before taking the lock, so a slow position source cannot block start(boolean).
-            @Nullable Checkpoint positionToPin = state != State.RUNNING ? capturePositionToPin() : null;
+            // Captured before taking the lock, so a slow position source cannot block start(boolean), and captured
+            // whatever the state looks like from here, because a stop() landing in between would otherwise leave this
+            // registration deferred with no position to start from.
+            @Nullable Checkpoint positionToPin = capturePositionToPin();
             synchronized (stateLock) {
                 if (state != State.RUNNING) {
                     registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action, positionToPin));
@@ -234,9 +237,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      */
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        if (!delegate.isRunning()) {
-            delegate.start(resumeSubscriptionsAutomatically);
-        }
+        // Unconditional, so a subscription the wrapped model has paused is resumed even when that model is already
+        // running. Guarding on isRunning() was only ever working around a model that refused a second start.
+        delegate.start(resumeSubscriptionsAutomatically);
         synchronized (stateLock) {
             state = State.RUNNING;
         }
@@ -375,12 +378,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
         }
     }
 
-    // Stands for a registration that has not been started. Reporting itself as started is what the caller asked about:
-    // registering completed. A subscription that blocked here would hang every caller that waits after registering.
+    // Stands for a registration that has not been started. It answers at once instead of waiting out the timeout,
+    // because nothing changes until the application starts the subscription, and waiting would hang every caller that
+    // uses the no-argument waitUntilStarted().
     private record DeferredSubscription(String id) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
-            return true;
+            return false;
         }
     }
 }

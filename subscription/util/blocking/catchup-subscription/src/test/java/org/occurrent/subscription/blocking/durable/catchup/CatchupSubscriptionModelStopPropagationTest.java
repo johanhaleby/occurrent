@@ -60,7 +60,9 @@ class CatchupSubscriptionModelStopPropagationTest {
 
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
         Subscription subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
-        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        // The replay never ran a single iteration (stopped was already true), so this hands back a
+        // CancelledSubscription rather than a live one, and that answers false, since nothing here is going to start it.
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
 
         assertThat(received).isEmpty();
     }

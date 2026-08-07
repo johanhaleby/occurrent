@@ -21,12 +21,12 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.slf4j.event.Level;
 
 import java.time.Duration;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeoutException;
 
 /**
  * A {@link Subscription} whose start is running asynchronously (the catch-up replay). Public so both the stream and
@@ -34,26 +34,35 @@ import java.util.concurrent.Future;
  */
 @NullMarked
 record CatchupSubscription(String id, Future<Subscription> delegatedSubscription) implements Subscription {
-    private static final Logger log = LoggerFactory.getLogger(CatchupSubscription.class);
 
     @Override
     public boolean waitUntilStarted(Duration timeout) {
         final long timeStarted = System.currentTimeMillis();
         Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
+        final Subscription subscription;
         try {
-            Subscription subscription = delegatedSubscription.get(safeTimeout.timeout(), safeTimeout.timeUnit());
-            long catchupEndTime = System.currentTimeMillis();
-            long remainingMillisToWait = catchupEndTime - timeStarted;
-            Duration remainingDurationToWait = timeout.minusMillis(remainingMillisToWait);
-            subscription.waitUntilStarted(remainingDurationToWait);
-            return true;
-        } catch (Exception e) {
-            logException(e, Level.WARN);
+            subscription = delegatedSubscription.get(safeTimeout.timeout(), safeTimeout.timeUnit());
+        } catch (TimeoutException e) {
             return false;
+        } catch (CancellationException e) {
+            // Same answer as CancelledSubscription. This replay was cancelled, so it never started and nothing will
+            // start it, and that is not a failure to report.
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (ExecutionException e) {
+            // Thrown rather than reported as false, so a caller that discards the return value still finds out that
+            // its read model was never filled. The push catch-up handle answers the same way.
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            } else if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("The catch-up for subscription '" + id + "' failed", cause);
         }
-    }
-
-    private static void logException(Exception e, Level level) {
-        log.atLevel(level).log("Failed to wait until subscription was started because of exception: {} - {}", e.getClass().getName(), e.getMessage(), e);
+        long elapsed = System.currentTimeMillis() - timeStarted;
+        return subscription.waitUntilStarted(timeout.minusMillis(elapsed));
     }
 }

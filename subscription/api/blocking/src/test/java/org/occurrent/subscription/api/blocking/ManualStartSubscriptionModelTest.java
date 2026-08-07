@@ -60,7 +60,23 @@ class ManualStartSubscriptionModelTest {
         assertThat(delegate.subscribeCalls).isEmpty();
         assertThat(received).isEmpty();
         assertThat(subscription.id()).isEqualTo(SUBSCRIPTION_ID);
-        assertThat(subscription.waitUntilStarted(ofSeconds(1))).isTrue();
+        // Answers false rather than true. The subscription has not started and nothing here will start it until the
+        // caller asks, so claiming it started would be a lie a caller relying on the answer could act on.
+        assertThat(subscription.waitUntilStarted(ofSeconds(1))).isFalse();
+    }
+
+    @Test
+    void a_deferred_registration_answers_false_and_the_handle_from_starting_it_answers_true() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+
+        Subscription deferred = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+        assertThat(deferred.waitUntilStarted(ofSeconds(1))).isFalse();
+
+        Subscription started = model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(started.waitUntilStarted(ofSeconds(1))).isTrue();
     }
 
     @Test
@@ -374,6 +390,63 @@ class ManualStartSubscriptionModelTest {
                 .as("start(true) starts everything registered, including a registration in progress while it ran")
                 .isTrue();
         assertThat(delegate.subscribeCalls).extracting(SubscribeCall::subscriptionId).containsExactly(SUBSCRIPTION_ID);
+    }
+
+    @Test
+    void a_subscription_registered_while_the_model_is_being_stopped_still_starts_from_where_it_was_registered() throws Exception {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        CountDownLatch registrationInProgress = new CountDownLatch(1);
+        CountDownLatch stopReturned = new CountDownLatch(1);
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> {
+            registrationInProgress.countDown();
+            awaitOrFail(stopReturned);
+            return new StringCheckpoint("at-registration");
+        };
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+        model.start(false);
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Subscription> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            }));
+            assertThat(registrationInProgress.await(10, TimeUnit.SECONDS))
+                    .as("the position is read on every registration, whatever the state looked like on the way in")
+                    .isTrue();
+            model.stop();
+            stopReturned.countDown();
+            registering.get(10, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+    }
+
+    @Test
+    void starting_the_model_again_resumes_a_subscription_the_wrapped_model_paused_on_its_own() {
+        // The wrapped model reports itself running throughout, since only one of its subscriptions was paused, not the
+        // whole model. Guarding start(true) on delegate.isRunning() (removed) skipped calling delegate.start(..)
+        // here, and this subscription is Live rather than Deferred in this model's own registry, so the
+        // resumeSubscriptionsAutomatically loop below never reached it either. It stayed paused forever.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+        model.start(true);
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
+
+        // Something below paused it without telling this model, for example on losing a lease, while the wrapped
+        // model as a whole stays running.
+        delegate.paused.add(SUBSCRIPTION_ID);
+        assertThat(delegate.isRunning()).isTrue();
+
+        model.start(true);
+
+        assertThat(delegate.resumeCalls).contains(SUBSCRIPTION_ID);
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
     }
 
     @Test
