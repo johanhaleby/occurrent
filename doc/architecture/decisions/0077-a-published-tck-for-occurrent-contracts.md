@@ -120,7 +120,6 @@ declares what the store under test supports, and hands the suite typed accessors
 ```java
 public interface EventStoreFixture {
     Set<EventStoreCapability> capabilities();
-    boolean writesPosition();
 
     EventStore eventStore();
     EventStoreQueries queries();
@@ -133,10 +132,15 @@ public interface EventStoreFixture {
 }
 ```
 
+This is the shape at the time of this decision. The interface has since grown more default-valued accessors as new
+capabilities and store variations were declared, and `writesPosition()` moved from here onto
+`PositionOrderedReader`, which `positionOrderedReader()` already exposed.
+
 Every one of the four existing event stores already implements all of these interfaces on a single
 object, so a concrete fixture is one line per accessor. The fixture contract is that
-`createFixture()` returns a store containing no events. Each implementation is responsible for its
-own cleanup between tests, which is what `FlushMongoDBExtension` already does today.
+`createFixture()` returns a store containing no events. Each implementation was responsible for its
+own cleanup between tests, which is what `FlushMongoDBExtension` did at the time. [ADR 97](0097-a-test-container-owns-its-database.md)
+later deleted it in favour of the published `OccurrentMongoFlush`.
 
 **Four rules stop the suite skipping silently.** #393 is explicit that a suite quietly testing
 nothing is worse than no suite at all, and that principle is load-bearing enough to state as four
