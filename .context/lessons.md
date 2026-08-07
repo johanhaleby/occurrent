@@ -10,10 +10,12 @@
   The reliable signal is the WORK ITEM: when a PR's observable state (rollup, unresolved-thread count) is unchanged
   across two consecutive sweep ticks while its session keeps cycling, read that session's tail; a human-gated hold
   says so in its last message and needs a decision routed, not more waiting.
-- Every sweep tick also OPENS with a one-line restatement of the previous tick's summary (2026-08-06
-  correction, second occurrence of the collapsed-summary complaint). The push is the delivery channel, but
-  the transcript record still matters to Johan: a tick's closing prose collapses under its re-arm call, so
-  the visible restatement belongs at the top of the next tick's turn, before any tool call.
+- Chat prose in a loop tick is NEVER a delivery channel (2026-08-07, third occurrence of the
+  collapsed-summary complaint, superseding the restatement fix). Any text in a turn that continues into
+  tool calls collapses, including a restatement at the top of the next tick. The surfaces that display
+  are: a SendUserFile card carrying the full tick summary as a file (the primary channel), the one-line
+  PushNotification, and an AskUserQuestion when the tick carries a decision. Write the summary file,
+  send it, push the one-liner, every tick.
 - Every sweep tick ends with a delivered summary (2026-08-06 correction). Prose written before the re-arming
   ScheduleWakeup call renders collapsed in Johan's view, so a tick that only writes text effectively reports nothing.
   Send the tick summary through a channel that displays: a PushNotification (what merged, what moved, what needs him)
