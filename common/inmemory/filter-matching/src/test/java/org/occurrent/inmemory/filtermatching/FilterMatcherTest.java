@@ -47,11 +47,13 @@ class FilterMatcherTest {
     }
 
     @Test
-    void the_two_arg_overload_refuses_a_data_filter_exactly_like_before() {
+    void the_two_arg_overload_refuses_a_data_filter_because_it_has_no_reader() {
         Filter dataFilter = Filter.data("amount", eq(42));
 
         assertThatThrownBy(() -> FilterMatcher.matchesFilter(EVENT, dataFilter))
-                .isInstanceOf(IllegalArgumentException.class);
+                .as("the overload that takes no reader can never answer a payload condition, so it refuses the way "
+                        + "anything refuses a capability it was not built with")
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test

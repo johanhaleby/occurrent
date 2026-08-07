@@ -183,7 +183,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         // owns the replay before that model has registered the replay itself; roll the claim back if the subscribe
         // refuses, so the id stays free.
         if (subscriptionOwners.putIfAbsent(subscriptionId, routed) != null) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         final Subscription subscription;
         try {

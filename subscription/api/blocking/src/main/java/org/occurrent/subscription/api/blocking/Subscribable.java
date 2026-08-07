@@ -3,8 +3,11 @@ package org.occurrent.subscription.api.blocking;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.UnsupportedSubscriptionFilterException;
 
 import java.util.function.Consumer;
 
@@ -26,6 +29,9 @@ public interface Subscribable {
      * @param filter         The filter to use to limit which events that are of interest from the EventStore.
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
+     * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
+     * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
+     * @throws UnsupportedStartAtException            If this model does not accept that start position.
      */
     Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action);
 
@@ -35,6 +41,8 @@ public interface Subscribable {
      * @param subscriptionId The id of the subscription, must be unique!
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
+     * @throws DuplicateSubscriptionIdException If {@code subscriptionId} is already in use on this subscription model instance.
+     * @throws UnsupportedStartAtException      If this model does not accept that start position.
      */
     default Subscription subscribe(String subscriptionId, StartAt startAt, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, null, startAt, action);
@@ -46,6 +54,8 @@ public interface Subscribable {
      * @param subscriptionId The id of the subscription, must be unique!
      * @param filter         The filter to use to limit which events that are of interest from the EventStore.
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
+     * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
+     * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
      */
     default Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
@@ -56,6 +66,7 @@ public interface Subscribable {
      *
      * @param subscriptionId The id of the subscription, must be unique!
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
+     * @throws DuplicateSubscriptionIdException If {@code subscriptionId} is already in use on this subscription model instance.
      */
     default Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), action);

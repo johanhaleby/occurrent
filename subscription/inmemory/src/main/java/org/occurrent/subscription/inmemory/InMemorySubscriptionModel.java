@@ -22,12 +22,17 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.inmemory.filtermatching.DataFieldReader;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.DurationToTimeoutConverter;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
-import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -145,15 +150,15 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
             throw new IllegalArgumentException("subscriptionId cannot be null");
         } else if (action == null) {
             throw new IllegalArgumentException("action cannot be null");
-        } else if (subscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        } else if (isKnown(subscriptionId)) {
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         } else if (startAt == null) {
             throw new IllegalArgumentException(StartAt.class.getSimpleName() + " cannot be null");
         }
 
         StartAt startAtToUse = startAt.get(new SubscriptionModelContext(InMemorySubscriptionModel.class));
         if (startAtToUse == null || (!startAtToUse.isNow() && !startAtToUse.isDefault())) {
-            throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
+            throw new UnsupportedStartAtException(startAt, InMemorySubscriptionModel.class.getSimpleName() + " only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
         }
 
         final Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter, dataFieldReader);
@@ -310,8 +315,9 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        requireKnown(subscriptionId);
         if (!isPaused(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
+            throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
         running = true;
         pausedSubscriptions.remove(subscriptionId);
@@ -320,10 +326,23 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
 
     @Override
     public void pauseSubscription(String subscriptionId) {
+        requireKnown(subscriptionId);
         if (!isRunning(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
+            throw new SubscriptionNotRunningException(subscriptionId);
         }
         pausedSubscriptions.put(subscriptionId, true);
+    }
+
+    private boolean isKnown(String subscriptionId) {
+        return subscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    // Separates "no such subscription here" from "wrong state for this call", which a caller holding several models
+    // needs in order to tell "keep looking" from "this is the owner and the answer is no".
+    private void requireKnown(String subscriptionId) {
+        if (!isKnown(subscriptionId)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
     }
 
     @Override

@@ -286,8 +286,10 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
                 return false;
             }
             assertThat(catchThrowable(() -> idsOf(queries().query(probe))))
-                    .as("a store that declares it cannot filter on the data payload must reject Filter.data(..)")
-                    .isExactlyInstanceOf(IllegalArgumentException.class);
+                    .as("a store that declares it cannot filter on the data payload must reject Filter.data(..), and it "
+                            + "refuses the way a store refuses any capability it was not built with, since no filter "
+                            + "the caller passes instead makes the payload readable")
+                    .isExactlyInstanceOf(UnsupportedOperationException.class);
             return true;
         }
 
@@ -418,8 +420,9 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
 
                 assertThat(thrown)
                         .as("a store that declares it cannot filter on the data payload must reject Filter.data(..) "
-                                + "rather than silently ignoring it or scanning every payload unindexed")
-                        .isExactlyInstanceOf(IllegalArgumentException.class);
+                                + "rather than silently ignoring it or scanning every payload unindexed, and it "
+                                + "refuses the way a store refuses any capability it was not built with")
+                        .isExactlyInstanceOf(UnsupportedOperationException.class);
             }
         }
 

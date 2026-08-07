@@ -143,3 +143,9 @@ than it first appeared.
 
 **Unit A3 (#580) owns the exception type.** `IllegalStateException` is used throughout, matching the refusals
 the handovers already threw. If A3 lands a sealed refusal family, these move with it.
+
+> **Amended on 2026-08-07 by [ADR 106](0106-a-refused-subscription-call-says-which-condition-it-hit.md).** The sealed
+> family landed, and these refusals did not move into it. A failed catch-up, a feed with no projection and a cancelled
+> replay stay `IllegalStateException`, because the rule ADR 106 settled on asks whether the caller can fix it by
+> passing something else, and none of these can be. They are a failure or another thread's state, not an argument the
+> caller got wrong.

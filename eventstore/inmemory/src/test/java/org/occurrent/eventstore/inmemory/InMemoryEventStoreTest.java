@@ -77,7 +77,7 @@ public class InMemoryEventStoreTest {
         }));
 
         assertThat(thrown)
-                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .isExactlyInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("was not given a DataFieldReader")
                 .hasMessageContaining("occurrent-common-inmemory-filter-matching-jackson");
     }

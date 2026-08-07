@@ -247,7 +247,7 @@ public class SpringMongoSubscriptionModelTest {
 
         // Then
         assertAll(
-                () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined."),
+                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateSubscriptionIdException.class).hasMessage("Subscription " + subscriptionId + " is already defined."),
                 () -> assertThat(subscriptionModel.isRunning(subscriptionId)).describedAs("is running").isTrue(),
                 () -> assertThat(subscriptionModel.isPaused(subscriptionId)).describedAs("is paused").isFalse()
         );
@@ -265,7 +265,7 @@ public class SpringMongoSubscriptionModelTest {
 
         // Then
         assertAll(
-                () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined."),
+                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateSubscriptionIdException.class).hasMessage("Subscription " + subscriptionId + " is already defined."),
                 () -> assertThat(subscriptionModel.isRunning(subscriptionId)).describedAs("is running").isFalse(),
                 () -> assertThat(subscriptionModel.isPaused(subscriptionId)).describedAs("is paused").isTrue()
         );

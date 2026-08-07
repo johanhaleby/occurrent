@@ -21,6 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 
 import java.net.URI;
 import java.time.Duration;
@@ -102,7 +103,7 @@ class PushSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> model.subscribe("sub", cloudEvent -> {
         }));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("already registered");
+        assertThat(thrown).isInstanceOf(DuplicateSubscriptionIdException.class);
     }
 
     @Test

@@ -89,7 +89,7 @@ class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubsc
         Registration registration = new Registration(matcher, action, Executors.newSingleThreadExecutor());
         if (registrations.putIfAbsent(subscriptionId, registration) != null) {
             registration.dispatcher.shutdownNow();
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         return new StartedSubscription(subscriptionId);
     }
@@ -192,8 +192,9 @@ class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubsc
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        requireKnown(subscriptionId);
         if (!isPaused(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
+            throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
         paused.remove(subscriptionId);
         // Resuming one subscription after stop() has to make it deliver again, which is what the life cycle promises,
@@ -206,10 +207,17 @@ class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubsc
 
     @Override
     public void pauseSubscription(String subscriptionId) {
+        requireKnown(subscriptionId);
         if (!isRunning(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
+            throw new SubscriptionNotRunningException(subscriptionId);
         }
         paused.add(subscriptionId);
+    }
+
+    private void requireKnown(String subscriptionId) {
+        if (!registrations.containsKey(subscriptionId)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
     }
 
     @Override
