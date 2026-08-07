@@ -19,7 +19,7 @@ package org.occurrent.subscription.api.reactor;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
@@ -322,8 +322,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                                     && !pausedSubscriptions.contains(registration.id()))
                             // The matcher and the apply both go inside the defer. Outside it, a throw happens while
                             // concatMap is invoking the mapper, which terminates the whole batch and records nothing,
-                            // and a filter on a payload field does throw from the matcher when the model was given no
-                            // DataFieldReader.
+                            // and a supplied DataFieldReader that itself fails to read can still throw from the
+                            // matcher. A model given no reader at all refuses a payload filter earlier, at subscribe
+                            // time.
                             .concatMap(registration -> Mono.defer(() -> registration.matcher().test(cloudEvent)
                                             ? registration.action().apply(cloudEvent)
                                             : Mono.<Void>empty())

@@ -20,7 +20,7 @@ import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;

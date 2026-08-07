@@ -24,6 +24,7 @@ import org.occurrent.filter.Filter.All;
 import org.occurrent.filter.Filter.CapabilityFilter;
 import org.occurrent.filter.Filter.CompositionFilter;
 import org.occurrent.filter.Filter.SingleConditionFilter;
+import org.occurrent.filtermatching.DataFieldReader;
 
 import java.util.function.Predicate;
 
@@ -75,6 +76,19 @@ public class FilterMatcher {
         }
         Filter withoutPayloadConditions = PayloadConditions.assumingPayloadConditionsMatch(filter);
         return cloudEvent -> matchesFilter(cloudEvent, withoutPayloadConditions);
+    }
+
+    /**
+     * Whether {@code filter} contains a condition on a field inside an event's {@code data} payload, anywhere in its
+     * tree. A caller that owns no {@link DataFieldReader} can check this before registering a subscription, so a
+     * filter it can never honor is refused at subscribe time rather than on the first event that would have needed
+     * the reader.
+     */
+    public static boolean referencesPayloadCondition(Filter filter) {
+        if (filter == null) {
+            throw new IllegalArgumentException(Filter.class.getSimpleName() + " cannot be null");
+        }
+        return PayloadConditions.hasPayloadCondition(filter);
     }
 
     private static boolean matchesCapabilityFilter(CloudEvent cloudEvent, CapabilityFilter cpf) {

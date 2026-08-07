@@ -19,7 +19,7 @@ package org.occurrent.subscription.synchronous.reactor;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.service.reactor.ReactiveSynchronousEventDispatcher;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import reactor.core.publisher.Mono;

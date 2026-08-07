@@ -43,8 +43,8 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
-import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
+import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.springboot.common.*;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
 import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
@@ -274,7 +274,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      */
     @Bean
     @ConditionalOnMissingBean(DataFieldReader.class)
-    @ConditionalOnClass(name = "org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader")
+    @ConditionalOnClass(name = "org.occurrent.filtermatching.jackson.JacksonDataFieldReader")
     public DataFieldReader occurrentDataFieldReader() {
         return new JacksonDataFieldReader();
     }

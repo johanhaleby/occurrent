@@ -23,7 +23,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
-import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
+import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 
 import java.net.URI;
@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.condition.Condition.eq;
 
@@ -63,6 +64,20 @@ class InMemorySubscriptionModelPayloadFilterTest {
         subscriptionModel.accept(List.of(event("matching", "{\"amount\":42}"), event("not-matching", "{\"amount\":7}")));
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).containsExactly("matching"));
+    }
+
+    @Test
+    void a_payload_filter_is_refused_at_subscribe_time_when_the_model_was_given_no_reader() {
+        // The model cannot answer a payload condition at all, which is knowable before a single event arrives, so it
+        // refuses here rather than accepting the subscription and failing on the first event fed to it.
+        subscriptionModel = new InMemorySubscriptionModel();
+
+        Throwable thrown = catchThrowable(() -> subscriptionModel.subscribe("big-amounts",
+                StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
+                }));
+
+        assertThat(thrown).isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("occurrent-common-inmemory-filter-matching-jackson");
     }
 
     private static CloudEvent event(String id, String json) {
