@@ -134,7 +134,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // AgnosticSubscriptionFilter (capability-agnostic). The DCB path accepts a DcbSubscriptionFilter and passes it
         // to its own model.
         if (filter != null && !(filter instanceof StreamSubscriptionFilter) && !(filter instanceof AgnosticSubscriptionFilter)) {
-            throw new IllegalArgumentException("Only StreamSubscriptionFilter or AgnosticSubscriptionFilter is supported!");
+            throw new UnsupportedSubscriptionFilterException(filter.getClass(), "Only StreamSubscriptionFilter or AgnosticSubscriptionFilter is supported!");
         }
         boolean positionMode = streamStoreWritesPosition();
         final StartAt firstStartAt;
@@ -479,7 +479,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
             return agnosticSubscriptionFilter.filter();
         }
-        throw new IllegalArgumentException("Only StreamSubscriptionFilter or AgnosticSubscriptionFilter is supported!");
+        throw new UnsupportedSubscriptionFilterException(filter.getClass(), "Only StreamSubscriptionFilter or AgnosticSubscriptionFilter is supported!");
     }
 
     // ANDs the capability scope onto the caller's filter, so a stream subscription on a store that also has the DCB

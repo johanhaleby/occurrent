@@ -23,7 +23,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StreamSubscriptionFilter;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 
 import java.net.URI;
 import java.util.ArrayList;
@@ -56,7 +58,7 @@ class SynchronousSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> model.subscribe("sub", cloudEvent -> {
         }));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("already registered");
+        assertThat(thrown).isInstanceOf(DuplicateSubscriptionIdException.class);
     }
 
     @Test
@@ -107,7 +109,7 @@ class SynchronousSubscriptionModelTest {
 
         Throwable thrown = catchThrowable(() -> model.resumeSubscription("sub"));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("is not paused");
+        assertThat(thrown).isInstanceOf(SubscriptionAlreadyRunningException.class);
     }
 
     @Test
@@ -210,7 +212,7 @@ class SynchronousSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> model.dispatch(List.of(cloudEvent("1", "NameDefined")), false));
 
         assertThat(handled).containsExactly("plain");
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot query the data field");
+        assertThat(thrown).isInstanceOf(UnsupportedOperationException.class).hasMessageContaining("cannot query the data field");
     }
 
     @Test

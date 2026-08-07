@@ -20,9 +20,13 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 
 import java.time.Duration;
 import java.util.HashSet;
@@ -124,7 +128,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      * subscription is started, {@link #resumeSubscription(String)} returns the wrapped model's own subscription, which
      * is the handle to wait on.
      *
-     * @throws IllegalArgumentException If {@code subscriptionId} is already registered.
+     * @throws DuplicateSubscriptionIdException If {@code subscriptionId} is already registered.
      */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -165,19 +169,29 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      * paused stays paused until it too is resumed. On a model that has never been started, resuming one subscription
      * starts only that one and the rest keep waiting.
      *
-     * @throws IllegalArgumentException If the subscription is neither registered here nor paused in the wrapped model.
+     * @throws UnknownSubscriptionException       If neither this model nor the wrapped model has that subscription.
+     * @throws SubscriptionAlreadyRunningException If the subscription is already running, including when another
+     *                                             thread started this registration first.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        if (!(registrations.get(subscriptionId) instanceof Registration.Deferred deferred)) {
+        Registration registration = registrations.get(subscriptionId);
+        // Another thread is between claiming this registration and subscribing it, so the wrapped model does not have
+        // the id yet and would answer that it knows nothing about it. Answer for the registration this model holds.
+        if (registration instanceof Registration.Starting) {
+            throw new SubscriptionAlreadyRunningException(subscriptionId,
+                    "Subscription " + subscriptionId + " is already being started by another thread.");
+        }
+        if (!(registration instanceof Registration.Deferred deferred)) {
             Subscription subscription = delegate.resumeSubscription(subscriptionId);
             reopenAfterStop();
             return subscription;
         }
         // Claim it before touching the wrapped model, so two threads starting the same subscription cannot both subscribe.
         if (!registrations.replace(subscriptionId, deferred, Registration.STARTING)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
+            throw new SubscriptionAlreadyRunningException(subscriptionId,
+                    "Subscription " + subscriptionId + " is already being started by another thread.");
         }
 
         try {
@@ -205,7 +219,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     public void pauseSubscription(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         if (isWithheld(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't running, it is registered but has not been started.");
+            throw new SubscriptionNotRunningException(subscriptionId,
+                    "Subscription " + subscriptionId + " is not running, it is registered but has not been started.");
         }
         delegate.pauseSubscription(subscriptionId);
     }
@@ -336,7 +351,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
 
     private void claim(String subscriptionId) {
         if (registrations.putIfAbsent(subscriptionId, Registration.STARTING) != null) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         registrationOrder.add(subscriptionId);
     }

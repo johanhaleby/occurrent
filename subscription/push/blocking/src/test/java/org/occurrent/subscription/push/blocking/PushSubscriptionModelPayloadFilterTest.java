@@ -63,7 +63,7 @@ class PushSubscriptionModelPayloadFilterTest {
 
         Throwable thrown = catchThrowable(() -> model.accept(event("1", "{\"amount\":42}")));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+        assertThat(thrown).isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("occurrent-common-inmemory-filter-matching-jackson");
     }
 

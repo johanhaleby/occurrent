@@ -33,6 +33,14 @@
   and every session brief OPENS with a MODEL/EFFORT recommendation line, decided per unit at planning time in the
   meta-plan, not re-derived at dispatch. Retitle mis-titled spawned sessions via session tooling; hand Johan the
   orchestrator session's own title, since a session cannot rename itself.
+  Addendum (2026-08-07 correction, same family as the collapsed-summary rule): the MODEL/EFFORT
+  recommendation goes IN THE CHIP TITLE (suffix like "· Opus/high"), because the model is chosen at the
+  chip and the brief's opening line only displays after launch — a recommendation that renders after its
+  decision informs nothing.
+  Second addendum (2026-08-07): plan-first sessions end their planning phase with a downshift
+  recommendation at the plan-approval gate ("implementation is Sonnet/medium, switch before approving"),
+  derived from the approved plan's actual shape — the planning tier is often oversized for what follows,
+  and the approval gate is the one moment the user is present with the model picker at hand.
 - One failed lookup command is not evidence of absence (2026-08-06 correction). An `ls` of a skill's SKILL.md
   returned a false negative and the conclusion "no orchestrator skill" was acted on for a whole dispatch round.
   Before asserting a skill or file does not exist, list the parent directory. The user naming a thing is a strong
@@ -64,6 +72,12 @@
   Grants live in the checked-in `.context/orchestrator-policy.yml` with provenance; the skill carries the
   mechanism plus conservative defaults (no standing merge, strict green, threads block), and a
   conversational grant is offered persistence into the policy file rather than left as session lore.
+- Effort tracks remaining uncertainty, not the phase name (2026-08-07 correction). "Routing low,
+  execution high" was too broad: mechanical execution of a settled plan is low/medium, hard
+  planning/debugging/integration is high or above. Same round: a named agent's fixed model is one
+  complete choice (no conflicting override stacked on it), "shared cache wins" was an unmeasured cost
+  claim (the fact is "avoids rebuilding context"), and effort the orchestrator cannot set (sessions,
+  named agents) is stated as a recommendation, never as an applied setting.
 - Release execution is Johan's manual act (2026-08-06 correction). Never plan or route changelog version stamping,
   `mvn_release.sh`, tagging, docs held-branch merges, the docs version bump, or post-release checks as agent-executed
   work. Plan up to a release-readiness gate and stop there; keep the release-day steps as a reference checklist only.

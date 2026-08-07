@@ -30,8 +30,12 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -162,8 +166,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, "StartAt cannot be null");
 
-        if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        if (isKnown(subscriptionId)) {
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         }
 
         logDebug("Subscribing ({})", subscriptionId);
@@ -286,9 +290,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public synchronized void pauseSubscription(String subscriptionId) {
         logDebug("Pausing subscription for {}", subscriptionId);
+        requireKnown(subscriptionId);
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't running.");
+            throw new SubscriptionNotRunningException(subscriptionId);
         }
         stopRestartLoop(subscriptionId);
         messageListenerContainer.remove(internalSubscription.getSpringSubscription());
@@ -311,9 +316,10 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         logDebug("Resuming subscription for {}", subscriptionId);
+        requireKnown(subscriptionId);
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't paused.");
+            throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
 
         if (!messageListenerContainer.isRunning()) {
@@ -347,6 +353,18 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     @Override
     public boolean isPaused(String subscriptionId) {
         return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    private boolean isKnown(String subscriptionId) {
+        return runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    // Separates "no such subscription here" from "wrong state for this call", which a caller holding several models
+    // needs in order to tell "keep looking" from "this is the owner and the answer is no".
+    private void requireKnown(String subscriptionId) {
+        if (!isKnown(subscriptionId)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
     }
 
     // SmartLifecycle

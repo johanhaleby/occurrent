@@ -83,7 +83,7 @@ public final class SubscriptionFilterMatcher {
                 return cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, criteria);
             }
             default ->
-                    throw new IllegalArgumentException("Unsupported " + SubscriptionFilter.class.getSimpleName() + " type: " + filter.getClass().getName() + ". Only " + StreamSubscriptionFilter.class.getSimpleName() + ", " + AgnosticSubscriptionFilter.class.getSimpleName() + ", and " + DcbSubscriptionFilter.class.getSimpleName() + " are supported.");
+                    throw new UnsupportedSubscriptionFilterException(filter.getClass(), "Unsupported " + SubscriptionFilter.class.getSimpleName() + " type: " + filter.getClass().getName() + ". Only " + StreamSubscriptionFilter.class.getSimpleName() + ", " + AgnosticSubscriptionFilter.class.getSimpleName() + ", and " + DcbSubscriptionFilter.class.getSimpleName() + " are supported.");
         }
     }
 }

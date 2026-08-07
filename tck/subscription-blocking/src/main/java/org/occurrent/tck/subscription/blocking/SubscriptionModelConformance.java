@@ -22,9 +22,15 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.UnsupportedStartAtException;
+import org.occurrent.subscription.UnsupportedSubscriptionFilterException;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.ConformanceEvents;
@@ -70,8 +76,10 @@ import static org.occurrent.tck.ConformanceEvents.idsOf;
  * <p>
  * What this suite deliberately does not assert:
  * <ul>
- *     <li><strong>The wording of a refusal.</strong> Occurrent's own models word the same refusal as "is not paused"
- *     and "isn't paused.", so the type is the contract and the message is not.</li>
+ *     <li><strong>The wording of a refusal.</strong> The type is the contract and the message is not. Every member of
+ *     the {@link org.occurrent.subscription.SubscriptionRefusedException} family builds its message in its own
+ *     constructor, so Occurrent's models happen to word each one identically, but an implementation is free to supply
+ *     a message of its own and nothing here reads one.</li>
  *     <li><strong>Ordering across two subscriptions.</strong> Two subscriptions are two cursors or two threads, and one
  *     may be several events behind the other at any moment. Only order within one subscription is a promise.</li>
  *     <li><strong>Order by the {@code position} extension.</strong> A position is reserved outside the write
@@ -211,7 +219,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             assertThatThrownBy(() -> subscriptionModel().subscribe(id, new RecordedEvents()))
                     .as("a subscription id identifies one subscription, so reusing a live one has to be refused rather "
                             + "than silently replacing the handler that is already there")
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .isInstanceOf(DuplicateSubscriptionIdException.class);
         }
 
         @Test
@@ -222,7 +230,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             assertThatThrownBy(() -> subscriptionModel().subscribe(subscriptionId(), unrecognised, StartAt.subscriptionModelDefault(), new RecordedEvents()))
                     .as("a filter a model cannot apply must be refused, since accepting it and ignoring it would "
                             + "deliver events the caller asked not to receive")
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .isInstanceOf(UnsupportedSubscriptionFilterException.class);
         }
     }
 
@@ -281,7 +289,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
                     .as("this model declares it does not accept %s, and a start position it cannot honour has to be "
                             + "refused rather than quietly ignored, which would start the subscription somewhere the "
                             + "caller did not ask for", variant)
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .isInstanceOf(UnsupportedStartAtException.class);
         }
 
         @Test
@@ -634,15 +642,29 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             assertThatThrownBy(() -> subscriptionModel().resumeSubscription(id))
                     .as("resuming something that is already running is a caller mistake, and answering it silently "
                             + "would hide a lifecycle bug in the caller")
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .isInstanceOf(SubscriptionAlreadyRunningException.class);
         }
 
         @Test
-        void refuses_to_pause_a_subscription_that_is_not_running() {
+        void refuses_to_pause_a_subscription_it_does_not_have() {
             String neverSubscribed = subscriptionId();
 
             assertThatThrownBy(() -> subscriptionModel().pauseSubscription(neverSubscribed))
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .as("an id this model never had is a different mistake from one it has in the wrong state, and a "
+                            + "caller holding several models needs to tell them apart to find the one that owns an id")
+                    .isInstanceOf(UnknownSubscriptionException.class);
+        }
+
+        @Test
+        void refuses_to_pause_a_subscription_that_is_already_paused() {
+            String id = subscriptionId();
+            subscribeAndWait(id);
+            subscriptionModel().pauseSubscription(id);
+
+            assertThatThrownBy(() -> subscriptionModel().pauseSubscription(id))
+                    .as("the model has this subscription, so the refusal says it is not running rather than that it "
+                            + "does not exist")
+                    .isInstanceOf(SubscriptionNotRunningException.class);
         }
     }
 

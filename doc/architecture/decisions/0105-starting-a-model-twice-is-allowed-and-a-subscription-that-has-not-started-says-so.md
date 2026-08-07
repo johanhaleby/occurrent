@@ -148,6 +148,13 @@ verb that names one subscription is a transition of that subscription, and a wro
 state there is a mistake in application code worth reporting. Unit A3 (#580) owns which exception
 type those refusals use.
 
+> **Amended on 2026-08-07 by [ADR 106](0106-a-refused-subscription-call-says-which-condition-it-hit.md).** They use a
+> sealed family under `IllegalArgumentException`, so `pauseSubscription` throws `SubscriptionNotRunningException` and
+> `resumeSubscription` throws `SubscriptionAlreadyRunningException`, with `UnknownSubscriptionException` for an id the
+> model does not have at all. The asymmetry described above is unchanged. What ADR 106 adds is that the refusal now
+> says which of the three it is, and that a competing consumer whose lock another node holds stays an
+> `IllegalStateException`, because that is not a mistake in the calling code.
+
 ## Consequences
 
 **Four released behaviours change, and each gets its own changelog entry.** All four shipped in

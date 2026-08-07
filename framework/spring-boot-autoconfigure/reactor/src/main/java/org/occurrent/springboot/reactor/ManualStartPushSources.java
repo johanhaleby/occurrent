@@ -17,6 +17,7 @@
 package org.occurrent.springboot.reactor;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -53,14 +54,14 @@ public final class ManualStartPushSources {
      * subscribed. Called by the annotation processor while registering a withheld projection, not normally by
      * application code.
      *
-     * @throws IllegalArgumentException if {@code id} is already registered
+     * @throws DuplicateSubscriptionIdException if {@code id} is already registered
      */
     void register(String id, Supplier<Mono<Void>> startup) {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(startup, "startup cannot be null");
         synchronized (pending) {
             if (pending.containsKey(id)) {
-                throw new IllegalArgumentException("A projection with id '" + id + "' is already registered for manual start.");
+                throw new DuplicateSubscriptionIdException(id, "A projection with id '" + id + "' is already registered for manual start.");
             }
             pending.put(id, startup);
         }

@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -92,7 +93,7 @@ class SynchronousSubscriptionModelTest {
 
         Throwable thrown = catchThrowable(() -> model.subscribe("sub", cloudEvent -> Mono.empty()));
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("already registered");
+        assertThat(thrown).isInstanceOf(DuplicateSubscriptionIdException.class);
     }
 
     @Test
@@ -318,7 +319,7 @@ class SynchronousSubscriptionModelTest {
         model.subscribe("plain", cloudEvent -> Mono.fromRunnable(() -> handled.add("plain")));
 
         StepVerifier.create(model.dispatch(List.of(cloudEvent("1", "NameDefined")), false))
-                .verifyErrorSatisfies(error -> assertThat(error).isInstanceOf(IllegalArgumentException.class)
+                .verifyErrorSatisfies(error -> assertThat(error).isInstanceOf(UnsupportedOperationException.class)
                         .hasMessageContaining("cannot query the data field"));
 
         assertThat(handled).containsExactly("plain");

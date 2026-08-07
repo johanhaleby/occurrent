@@ -26,8 +26,10 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.functional.CheckedFunction;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.time.TimeConversion;
 
 import java.net.URI;
@@ -63,7 +65,7 @@ public class InMemorySubscriptionModelTest {
     }
 
     @Test
-    void inmemory_subscription_model_throws_iae_when_subscription_already_exists() {
+    void inmemory_subscription_model_refuses_a_subscription_id_that_already_exists() {
         // Given
         String subscriptionId = UUID.randomUUID().toString();
         inMemorySubscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted();
@@ -72,15 +74,15 @@ public class InMemorySubscriptionModelTest {
         Throwable throwable = catchThrowable(() -> inMemorySubscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
 
         // Then
-        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
+        assertThat(throwable).isExactlyInstanceOf(DuplicateSubscriptionIdException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
     }
 
     @Test
-    void throws_iae_when_start_at_is_not_now() {
+    void refuses_a_start_position_it_does_not_support() {
         Throwable throwable = catchThrowable(() -> inMemorySubscriptionModel.subscribe("subscription1", StartAt.checkpoint(new StringBasedCheckpoint("343")), __ -> {
         }));
 
-        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("InMemorySubscriptionModel only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
+        assertThat(throwable).isExactlyInstanceOf(UnsupportedStartAtException.class).hasMessage("InMemorySubscriptionModel only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
     }
     
     @Test

@@ -192,6 +192,8 @@ class ConditionMatcherTest {
     @Test
     void a_data_field_condition_without_a_reader_refuses_rather_than_matching_or_throwing_silently() {
         assertThatThrownBy(() -> ConditionMatcher.matchesCondition(EVENT, "data.amount", eq(42)))
-                .isInstanceOf(IllegalArgumentException.class);
+                .as("no condition the caller writes instead makes a payload readable, so this refuses the way anything "
+                        + "refuses a capability it was not built with")
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 }

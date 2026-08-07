@@ -214,7 +214,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
             return agnosticSubscriptionFilter.filter();
         }
-        throw new IllegalArgumentException(ReactorStreamCatchupSubscriptionModel.class.getSimpleName() + " only supports an " + StreamSubscriptionFilter.class.getSimpleName() + " or " + AgnosticSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName());
+        throw new UnsupportedSubscriptionFilterException(filter.getClass(), ReactorStreamCatchupSubscriptionModel.class.getSimpleName() + " only supports an " + StreamSubscriptionFilter.class.getSimpleName() + " or " + AgnosticSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName());
     }
 
     /**

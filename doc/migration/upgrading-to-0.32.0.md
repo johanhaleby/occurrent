@@ -20,9 +20,9 @@ refuses to start. If you use a push source, read
 
 **At runtime**, if you feed a `DomainEventFeed` from your own listener, `accept(..)` now throws when no projection is
 registered instead of returning normally, so the message goes unacknowledged rather than being discarded. Read
-[section 12](#12-domaineventfeed-refuses-an-event-when-no-projection-is-registered).
+[section 13](#13-domaineventfeed-refuses-an-event-when-no-projection-is-registered).
 
-Twelve things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
+Thirteen things are worth reading. One configuration property is deprecated and has a recipe that rewrites it for you, the
 MongoDB event stores changed how they persist the CloudEvent `time` attribute under
 `TimeRepresentation.RFC_3339_STRING`, a push sink feeds one consumer, a synchronous subscription no longer stops at the
 first failing handler, the reactor subscription primitive was renamed, a durable reactor model refuses a composition it
@@ -30,8 +30,8 @@ used to accept, a paused MongoDB subscription now delivers what was written whil
 replays on its own thread and no longer discards events after a failed replay,
 `NativeMongoLeaseCompetingConsumerStrategy` moved to the package every other native-driver subscription type uses,
 `CompetingConsumerSubscriptionModel` refuses two calls it used to accept, a second `start()` is allowed while
-`waitUntilStarted` stops saying yes when it means no, and a domain-event feed refuses an event when no projection is
-registered.
+`waitUntilStarted` stops saying yes when it means no, a domain-event feed refuses an event when no projection is
+registered, and every way a subscription model can refuse a call now has its own exception type.
 
 ## 1. `occurrent.subscription.enabled` becomes `occurrent.subscription.mode`
 
@@ -697,8 +697,64 @@ has the reasoning, including why a lock-waiting competing consumer counts as sta
 to start yourself does not. `SubscriptionModelConformance` asserts the `start()` half, so every model has to agree on it
 now.
 
+## 12. Every subscription refusal has its own exception type
 
-## 12. `DomainEventFeed` refuses an event when no projection is registered
+A subscription model used to throw a bare `IllegalArgumentException` whichever way you got it wrong, and the only
+thing telling the cases apart was a message the conformance suite says is not part of the contract. Each condition
+now has a type of its own.
+
+| You did this | You now get |
+|---|---|
+| `subscribe(..)` with an id this model instance already has | `DuplicateSubscriptionIdException` |
+| `subscribe(..)` with a filter shape the model cannot apply | `UnsupportedSubscriptionFilterException` |
+| `subscribe(..)` with a start position the model does not accept | `UnsupportedStartAtException` |
+| `pauseSubscription(..)` on a subscription that is not running | `SubscriptionNotRunningException` |
+| `resumeSubscription(..)` on a subscription that is running | `SubscriptionAlreadyRunningException` |
+| `pauseSubscription(..)` or `resumeSubscription(..)` with an id the model has never seen | `UnknownSubscriptionException` |
+
+### Nothing you wrote stops compiling
+
+All six extend `IllegalArgumentException`, which is what every one of these calls threw before, so an existing
+`catch (IllegalArgumentException e)` still catches all of them and no call site changes shape. There is no recipe to
+run. What changes is the class you get and the message it carries, so a test asserting
+`isExactlyInstanceOf(IllegalArgumentException.class)` or a specific message needs updating, and a test asserting
+`isInstanceOf(IllegalArgumentException.class)` does not.
+
+The types are sealed under `SubscriptionRefusedException`, so you can catch the whole set at once, or `switch` over
+them exhaustively.
+
+```java
+try {
+    subscriptionModel.resumeSubscription(id);
+} catch (UnknownSubscriptionException e) {
+    // no subscription with that id here, so try the next model
+} catch (SubscriptionAlreadyRunningException e) {
+    // this model owns the id and it is already running
+}
+```
+
+### One behaviour really did change
+
+`UnknownSubscriptionException` is new, and not only as a name. Pausing or resuming an id no model had ever seen used
+to report that the subscription was not running or not paused, which claimed something about a subscription that did
+not exist. If you have code reading those messages to work out whether an id exists, you can ask for the type
+instead. `subscriptionId()` on any of the four id-scoped types tells you which id the refusal was about.
+
+### A missing payload reader is a different kind of refusal
+
+A model or store built without a `DataFieldReader`, asked to filter on a field inside the `data` payload, now throws
+`UnsupportedOperationException` instead of `IllegalArgumentException`. No filter you pass instead makes a payload
+readable, so it is the same kind of answer an event store already gives for a capability it was not built with. Build
+the store or the model with a reader, for example the Jackson-backed one in
+`occurrent-common-inmemory-filter-matching-jackson`.
+
+### Why
+
+The reasoning, including where the line between an argument exception and an unsupported operation falls and why a
+failed catch-up or a competing consumer's lock stays an `IllegalStateException`, is in
+[ADR 106](../architecture/decisions/0106-a-refused-subscription-call-says-which-condition-it-hit.md).
+
+## 13. `DomainEventFeed` refuses an event when no projection is registered
 
 Only relevant if you declare a `DomainEventFeed` bean and feed it from a listener yourself, on either stack.
 

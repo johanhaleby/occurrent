@@ -28,8 +28,9 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.mongodb.MongoFilterSpecification;
+import org.occurrent.subscription.UnsupportedSubscriptionFilterException;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
+import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.internal.DcbSubscriptionFilterConverter;
 import org.occurrent.subscription.mongodb.internal.DocumentAdapter;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
@@ -81,7 +82,7 @@ public class ApplyFilterToChangeStreamOptionsBuilder {
 
             changeStreamOptions = changeStreamOptionsBuilder.filter(documents).build();
         } else {
-            throw new IllegalArgumentException("Unrecognized " + SubscriptionFilter.class.getSimpleName() + " for MongoDB subscription");
+            throw new UnsupportedSubscriptionFilterException(filter.getClass(), "Unrecognized " + SubscriptionFilter.class.getSimpleName() + " for MongoDB subscription");
         }
         return changeStreamOptions;
     }

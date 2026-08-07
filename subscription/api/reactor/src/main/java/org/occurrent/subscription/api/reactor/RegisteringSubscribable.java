@@ -20,9 +20,13 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.internal.HandlerFailures;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
 import reactor.core.publisher.Flux;
@@ -133,7 +137,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter, dataFieldReader);
         synchronized (registrationLock) {
             if (!subscriptionIds.add(subscriptionId)) {
-                throw new IllegalArgumentException("Subscription " + subscriptionId + " is already registered");
+                throw new DuplicateSubscriptionIdException(subscriptionId);
             }
             if (consumers == Consumers.ONE && !soleSubscriptionId.compareAndSet(null, subscriptionId)) {
                 // Release the id again: the duplicate-id check above took it, and this registration is not happening.
@@ -196,8 +200,9 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     @Override
     public final Subscription resumeSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireKnown(subscriptionId);
         if (!isPaused(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
+            throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
         running = true;
         pausedSubscriptions.remove(subscriptionId);
@@ -207,10 +212,19 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     @Override
     public final void pauseSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireKnown(subscriptionId);
         if (!isRunning(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't running.");
+            throw new SubscriptionNotRunningException(subscriptionId);
         }
         pausedSubscriptions.add(subscriptionId);
+    }
+
+    // Separates "no such subscription here" from "wrong state for this call", which a caller holding several models
+    // needs in order to tell "keep looking" from "this is the owner and the answer is no".
+    private void requireKnown(String subscriptionId) {
+        if (!subscriptionIds.contains(subscriptionId)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
     }
 
     /**

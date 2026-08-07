@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 
 import java.net.URI;
@@ -209,6 +210,34 @@ class ManualStartSubscriptionModelTest {
 
         assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID)).isInstanceOf(IllegalArgumentException.class);
         assertThat(delegate.subscribeCalls).hasSize(1);
+    }
+
+    @Test
+    void resuming_a_subscription_another_thread_is_already_starting_reports_that_it_is_already_running() throws InterruptedException {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        CountDownLatch insideSubscribe = new CountDownLatch(1);
+        CountDownLatch releaseSubscribe = new CountDownLatch(1);
+        delegate.subscribeEntered = insideSubscribe;
+        delegate.holdSubscribeUntil = releaseSubscribe;
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            pool.execute(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+            assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Throwable thrown = catchThrowable(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+
+            assertThat(thrown)
+                    .as("the wrapped model has not been handed the id yet, so asking it would answer that it has no "
+                            + "such subscription, which is the one answer that sends a caller looking elsewhere")
+                    .isInstanceOf(SubscriptionAlreadyRunningException.class);
+        } finally {
+            releaseSubscribe.countDown();
+            pool.shutdownNow();
+        }
     }
 
     @Test
@@ -577,6 +606,8 @@ class ManualStartSubscriptionModelTest {
 
         boolean parkOnSubscribe = false;
         boolean failNextSubscribe = false;
+        @Nullable CountDownLatch subscribeEntered = null;
+        @Nullable CountDownLatch holdSubscribeUntil = null;
         @Nullable String failSubscribeFor = null;
         @Nullable Checkpoint globalCheckpoint = null;
         boolean running = true;
@@ -589,6 +620,12 @@ class ManualStartSubscriptionModelTest {
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            if (subscribeEntered != null) {
+                subscribeEntered.countDown();
+            }
+            if (holdSubscribeUntil != null) {
+                awaitOrFail(holdSubscribeUntil);
+            }
             if (failNextSubscribe) {
                 failNextSubscribe = false;
                 throw new IllegalStateException("Cannot subscribe right now");

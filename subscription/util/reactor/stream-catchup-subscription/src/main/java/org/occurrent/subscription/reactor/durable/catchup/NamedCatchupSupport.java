@@ -19,8 +19,12 @@ package org.occurrent.subscription.reactor.durable.catchup;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
@@ -124,7 +128,7 @@ final class NamedCatchupSupport {
         // directly). Refuse synchronously, like every other subscribe path, instead of replaying history a second
         // time and failing asynchronously at the handover.
         if (delegate.isRunning(subscriptionId) || delegate.isPaused(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         BoundedIdCache cache = new BoundedIdCache(handoverCacheSize);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
@@ -162,7 +166,7 @@ final class NamedCatchupSupport {
         };
 
         if (catchingUp.putIfAbsent(subscriptionId, state) != null) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         synchronized (state) {
             if (!stopped) {
@@ -283,14 +287,14 @@ final class NamedCatchupSupport {
             synchronized (state) {
                 if (!state.handedOver.get()) {
                     if (state.pendingPause.getAndSet(true)) {
-                        throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
+                        throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
                     }
                     return;
                 }
             }
         }
         if (!managesNamedSubscriptions()) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't subscribed");
+            throw new UnknownSubscriptionException(subscriptionId);
         }
         named.pauseSubscription(subscriptionId);
     }
@@ -301,14 +305,14 @@ final class NamedCatchupSupport {
             synchronized (state) {
                 if (!state.handedOver.get()) {
                     if (!state.pendingPause.getAndSet(false)) {
-                        throw new IllegalArgumentException("Subscription " + subscriptionId + " is already running");
+                        throw new SubscriptionAlreadyRunningException(subscriptionId);
                     }
                     return new NamedCatchupSubscription(subscriptionId, state.started.asMono());
                 }
             }
         }
         if (!managesNamedSubscriptions()) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't subscribed");
+            throw new UnknownSubscriptionException(subscriptionId);
         }
         return named.resumeSubscription(subscriptionId);
     }

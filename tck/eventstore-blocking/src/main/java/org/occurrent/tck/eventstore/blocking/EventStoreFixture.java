@@ -97,8 +97,9 @@ public interface EventStoreFixture {
      * reach inside it.
      * <p>
      * A fixture answering {@code false} is documenting a real limitation, not a bug. The in-memory store keeps a
-     * payload as opaque bytes and has nothing to reach into, so it must reject {@code Filter.data(..)} rather than
-     * silently ignore it or scan every payload without an index.
+     * payload as opaque bytes and has nothing to reach into, so it must reject {@code Filter.data(..)} with an
+     * {@link UnsupportedOperationException}, the same way a store refuses any capability it was not built with, rather
+     * than silently ignoring it or scanning every payload without an index.
      */
     default boolean supportsDataFilter() {
         return true;

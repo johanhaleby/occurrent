@@ -63,7 +63,7 @@ class SynchronousSubscriptionModelPayloadFilterTest {
 
         Throwable thrown = catchThrowable(() -> model.dispatch(List.of(event("1", "{\"amount\":42}"))).block());
 
-        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+        assertThat(thrown).isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("occurrent-common-inmemory-filter-matching-jackson");
     }
 

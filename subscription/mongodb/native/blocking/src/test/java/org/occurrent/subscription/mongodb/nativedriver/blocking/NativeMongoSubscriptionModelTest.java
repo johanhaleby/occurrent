@@ -29,6 +29,7 @@ import org.bson.Document;
 import org.bson.json.JsonParseException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.condition.Condition;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
@@ -139,7 +140,7 @@ public class NativeMongoSubscriptionModelTest {
         Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
 
         // Then
-        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
+        assertThat(throwable).isExactlyInstanceOf(DuplicateSubscriptionIdException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
     }
 
     @Test

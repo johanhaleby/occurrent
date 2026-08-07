@@ -21,6 +21,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.UnsupportedSubscriptionFilterException;
 
 /**
  * Derives the plain {@link Filter} that drives a catch-up replay's position-ordered read from a
@@ -35,7 +36,7 @@ public final class ReplayFilters {
      * @param filter The subscription filter to translate, or {@code null} to replay everything.
      * @return {@link Filter#all()} for a {@code null} filter, or the plain filter behind a stream or
      * capability-agnostic subscription filter.
-     * @throws IllegalArgumentException if {@code filter} is a kind that cannot be replayed in position order (for
+     * @throws UnsupportedSubscriptionFilterException if {@code filter} is a kind that cannot be replayed in position order (for
      *                                  example a DCB subscription filter, which needs a different replay read).
      */
     public static Filter replayFilterFor(@Nullable SubscriptionFilter filter) {
@@ -44,7 +45,7 @@ public final class ReplayFilters {
             case StreamSubscriptionFilter streamSubscriptionFilter -> streamSubscriptionFilter.filter();
             case AgnosticSubscriptionFilter agnosticSubscriptionFilter -> agnosticSubscriptionFilter.filter();
             default ->
-                    throw new IllegalArgumentException("Cannot catch-up-replay a " + filter.getClass().getSimpleName()
+                    throw new UnsupportedSubscriptionFilterException(filter.getClass(), "Cannot catch-up-replay a " + filter.getClass().getSimpleName()
                             + ". Only a stream or capability-agnostic subscription filter can be replayed in position order.");
         };
     }
