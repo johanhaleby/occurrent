@@ -30,12 +30,14 @@ import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
@@ -55,6 +57,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -175,16 +178,16 @@ class SagaAnnotationRegistrar {
     // the background is until its replay hands over. A model with no life cycle cannot answer, so those keep firing
     // timers as before.
     private static BooleanSupplier timersEnabledFor(Subscribable subscribable, String subscriptionId) {
-        if (subscribable instanceof CatchupThenPushSubscriptionModel catchupThenPush) {
-            // isRunning(id) is true throughout the replay, so it cannot stand in for the handover here. A timeout that
-            // fires mid-replay decides against state that is only half folded up, which is the one thing a saga
-            // catching up before it goes live is meant to avoid.
-            return () -> catchupThenPush.isRunning(subscriptionId) && !catchupThenPush.isCatchingUp(subscriptionId);
+        if (!(subscribable instanceof SubscriptionModelLifeCycle lifeCycle)) {
+            return () -> true;
         }
-        if (subscribable instanceof SubscriptionModelLifeCycle lifeCycle) {
-            return () -> lifeCycle.isRunning(subscriptionId);
-        }
-        return () -> true;
+        // isRunning(id) is true throughout a replay, so it cannot stand in for the handover here. A timeout that fires
+        // mid-replay decides against state that is only half folded up, which is the one thing a saga catching up
+        // before it goes live is meant to avoid. Asked through the capability rather than a concrete class, so an
+        // event-store catch-up model behind a durable wrapper is held to it too, not only the push one.
+        return ReplayAwareSubscriptionModel.of(subscribable)
+                .<BooleanSupplier>map(replayAware -> () -> lifeCycle.isRunning(subscriptionId) && !replayAware.isCatchingUp(subscriptionId))
+                .orElse(() -> lifeCycle.isRunning(subscriptionId));
     }
 
     /**
@@ -230,12 +233,28 @@ class SagaAnnotationRegistrar {
             throw new IllegalArgumentException("@Saga '%s' with source=PUSH resolved a %s, which is not a PushSubscriptionModel.".formatted(id, feedBean.getClass().getName()));
         }
         if (annotation.catchup() == org.occurrent.annotation.Catchup.NONE) {
+            // No history to replay, so it is live from the start. Leaving it unknown would make a readiness probe
+            // useless for exactly the saga that is always ready.
+            withPushCatchupStatus(status -> status.recordLive(id));
             return pushModel;
         }
         PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", PositionOrderedReader.class, id);
         CheckpointStorage catchupMarker = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", CheckpointStorage.class, id);
-        return new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker,
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker,
                 ProjectionAnnotationRegistrar.catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
+        // Asked rather than recorded, so a model that is stopped and started again, replaying a second time, reports
+        // catching up again instead of staying at whatever it reached the first time.
+        withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id)));
+        return model;
+    }
+
+    // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the post
+    // processor directly has no reason to.
+    private void withPushCatchupStatus(Consumer<PushCatchupStatus> action) {
+        PushCatchupStatus status = applicationContext.getBeanProvider(PushCatchupStatus.class).getIfAvailable();
+        if (status != null) {
+            action.accept(status);
+        }
     }
 
     /**

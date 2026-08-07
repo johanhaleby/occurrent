@@ -29,7 +29,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.springboot.common.BackgroundCatchupFailures;
+import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
@@ -51,7 +51,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * The reactor twin of the blocking {@code BackgroundCatchupFailureTest}: a background push catch-up that fails does
  * not fail the context (that is the whole point of {@code BACKGROUND}), and the failure lands in
- * {@link BackgroundCatchupFailures} instead of vanishing.
+ * {@link PushCatchupStatus} instead of vanishing.
  * <p>
  * Container-free: a fake reader whose replay errors, the real push model, and the real fake {@code CheckpointStorage}
  * (a mock's null default for {@code read()} breaks the reactive catch-up before the failure is ever reached, see
@@ -68,18 +68,18 @@ class BackgroundCatchupFailureTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
 
-                    BackgroundCatchupFailures failures = context.getBean(BackgroundCatchupFailures.class);
+                    PushCatchupStatus status = context.getBean(PushCatchupStatus.class);
                     // No Awaitility dependency in this module: a manual poll matches the idiom this module's other
-                    // async tests (ReactiveProjectionPushCatchupTunablesTest) already use.
+                    // async tests already use.
                     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                    while (failures.failureFor("push-background-failing-reactive").isEmpty() && System.nanoTime() < deadline) {
+                    while (!(status.of("push-background-failing-reactive") instanceof PushCatchupStatus.Failed) && System.nanoTime() < deadline) {
                         Thread.sleep(10);
                     }
-                    assertThat(failures.failureFor("push-background-failing-reactive")).isPresent();
-                    assertThat(failures.failureFor("push-background-failing-reactive").orElseThrow())
-                            .isInstanceOf(RuntimeException.class)
-                            .hasMessage("replay boom");
-                    assertThat(failures.isEmpty()).isFalse();
+                    assertThat(status.of("push-background-failing-reactive")).isInstanceOfSatisfying(PushCatchupStatus.Failed.class, failed ->
+                            assertThat(failed.cause()).isInstanceOf(RuntimeException.class).hasMessage("replay boom"));
+                    // A failed catch-up is not ready, which is the whole point of asking rather than checking a
+                    // failure list for emptiness.
+                    assertThat(status.isCaughtUp("push-background-failing-reactive")).isFalse();
                 });
     }
 
@@ -88,8 +88,8 @@ class BackgroundCatchupFailureTest {
     static class FailingPushConfiguration {
 
         @Bean
-        BackgroundCatchupFailures backgroundCatchupFailures() {
-            return new BackgroundCatchupFailures();
+        PushCatchupStatus pushCatchupStatus() {
+            return new PushCatchupStatus();
         }
 
         @Bean

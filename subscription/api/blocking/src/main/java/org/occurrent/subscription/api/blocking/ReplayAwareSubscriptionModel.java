@@ -1,0 +1,66 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.api.blocking;
+
+import org.jspecify.annotations.NullMarked;
+
+import java.util.Optional;
+
+/**
+ * A subscription model that replays history before it delivers live events, and can say which of its subscriptions are
+ * still in that replay.
+ * <p>
+ * Deliberately not answerable from {@link SubscriptionModelLifeCycle#isRunning(String)}, which is {@code true}
+ * throughout a replay. A caller that needs the handover specifically has to be able to ask for it: a saga fed by such a
+ * model gates its timers on being live, and firing a timeout mid-replay would decide against state that is only half
+ * folded up.
+ * <p>
+ * Not every subscription model replays, so reach it with {@link #of(Object)} rather than assuming a concrete class.
+ */
+@NullMarked
+public interface ReplayAwareSubscriptionModel {
+
+    /**
+     * Whether {@code subscriptionId} is still replaying history and has not yet handed over to live delivery.
+     * <p>
+     * {@code false} for an id this model has never seen, so never-subscribed and handed-over read the same way, which
+     * is what a poll wants. {@code false} once a replay has ended, whether it finished, was stopped, or failed: a
+     * failed subscription keeps its registration and refuses events, so ask {@link SubscriptionModelLifeCycle} about
+     * that rather than this.
+     *
+     * @param subscriptionId The subscription to ask about.
+     * @return {@code true} while a replay for this id is in flight.
+     */
+    boolean isCatchingUp(String subscriptionId);
+
+    /**
+     * The replay-aware model behind {@code subscriptionModel}, unwrapping a {@link DelegatingSubscriptionModel} until
+     * one is found. An empty result means the model cannot say whether it is replaying, which is not the same as
+     * having handed over.
+     *
+     * @param subscriptionModel Any subscription model, wrapped or not.
+     * @return The replay-aware model, or empty if nothing in the chain implements this.
+     */
+    static Optional<ReplayAwareSubscriptionModel> of(Object subscriptionModel) {
+        if (subscriptionModel instanceof ReplayAwareSubscriptionModel replayAware) {
+            return Optional.of(replayAware);
+        } else if (subscriptionModel instanceof DelegatingSubscriptionModel delegating) {
+            return of(delegating.getDelegatedSubscriptionModel());
+        }
+        return Optional.empty();
+    }
+}

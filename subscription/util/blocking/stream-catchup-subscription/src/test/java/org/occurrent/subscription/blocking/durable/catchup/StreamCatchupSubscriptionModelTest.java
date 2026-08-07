@@ -44,14 +44,18 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * In-memory unit tests for {@link StreamCatchupSubscriptionModel}, used directly rather than through the
@@ -212,6 +216,66 @@ class StreamCatchupSubscriptionModelTest {
         subscription.subscribe("subscription", StartAtTime.beginningOfTime(), toDomainEvents(received)).waitUntilStarted();
 
         assertThat(runningMarkedBeforeCatchupRuns).isTrue();
+    }
+
+    /**
+     * The reason {@code isCatchingUp} exists as a signal distinct from {@code isRunning}: a caller (for example a
+     * saga's timer poller) that gates on liveness needs to know when the replay has actually handed over, since
+     * {@code isRunning(id)} is true for the entire replay and cannot answer that on its own.
+     */
+    @Test
+    void a_subscription_reports_catching_up_while_its_replay_is_still_in_flight_and_stops_once_it_hands_over() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        String subscriptionId = "subscription";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        Subscription started = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+        try {
+            assertAll(
+                    () -> assertThat(subscription.isCatchingUp(subscriptionId)).isTrue(),
+                    () -> assertThat(subscription.isRunning(subscriptionId)).isTrue()
+            );
+        } finally {
+            releaseReplay.countDown();
+        }
+
+        assertThat(started.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+        assertThat(subscription.isCatchingUp(subscriptionId)).isFalse();
+    }
+
+    @Test
+    void an_id_the_model_has_never_seen_is_not_catching_up() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+
+        assertThat(subscription.isCatchingUp("never-subscribed")).isFalse();
+    }
+
+    @Test
+    void is_catching_up_rejects_a_null_subscription_id() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+
+        Throwable thrown = catchThrowable(() -> subscription.isCatchingUp(null));
+
+        assertThat(thrown).isInstanceOf(NullPointerException.class);
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
     }
 
     private NameDefined nameDefined(String name) {

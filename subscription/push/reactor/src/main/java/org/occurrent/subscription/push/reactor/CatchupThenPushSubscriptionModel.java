@@ -29,6 +29,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
@@ -76,7 +77,7 @@ import java.util.function.Supplier;
  * a replay is in flight, which the live feed cannot give because it is buffering rather than delivering.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, ReplayAwareSubscriptionModel {
 
     private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
 
@@ -300,6 +301,17 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     @Override
     public boolean isRunning(String subscriptionId) {
         return replayingSubscriptions.containsKey(subscriptionId) || liveFeed.isRunning(subscriptionId);
+    }
+
+    /**
+     * Whether {@code subscriptionId} is still replaying history and has not yet handed over to the live feed. Here
+     * {@link #isRunning(String)} is {@code true} throughout the replay, matching what an event-store catch-up model
+     * reports, which is why the handover needs an answer of its own.
+     */
+    @Override
+    public boolean isCatchingUp(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return replayingSubscriptions.containsKey(subscriptionId);
     }
 
     @Override

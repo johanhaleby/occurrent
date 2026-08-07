@@ -27,11 +27,13 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -64,7 +66,7 @@ import static java.util.Objects.requireNonNull;
  * constructor is used), since catch-up is DCB-specific.
  */
 @NullMarked
-class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
+class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, ReplayAwareSubscriptionModel {
 
     /**
      * Default number of DCB positions read per replay window.
@@ -239,7 +241,9 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
 
     // Whether a replay for this id is in flight here, so this model is the only one that can answer for it. Lets a
     // dispatcher over several catch-up models find the one that owns an id instead of picking one of them.
-    boolean isCatchingUp(String subscriptionId) {
+    @Override
+    public boolean isCatchingUp(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return namedSubscriptions.isCatchingUp(subscriptionId);
     }
 
