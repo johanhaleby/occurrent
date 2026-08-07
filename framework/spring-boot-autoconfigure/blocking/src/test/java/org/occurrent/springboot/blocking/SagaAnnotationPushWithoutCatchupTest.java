@@ -28,6 +28,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.blocking.SagaRedeliveryDetectionException;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.springboot.common.OccurrentProperties;
@@ -109,7 +110,8 @@ class SagaAnnotationPushWithoutCatchupTest {
             // The feed never gets an acknowledgement, so the dropped metadata surfaces instead of costing the saga its
             // redelivery protection for as long as it runs
             assertAll(
-                    () -> assertThat(refusal).hasMessageContaining("no streamid, streamversion or position"),
+                    () -> assertThat(refusal).isInstanceOf(SagaRedeliveryDetectionException.class)
+                            .hasMessageContaining("no streamid, streamversion or position"),
                     () -> assertThat(dispatcher.issued).isEmpty()
             );
         });
