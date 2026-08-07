@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.PushCatchupStatus;
+import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -87,8 +88,8 @@ class DomainEventFeedBackgroundCatchupFailureTest {
     static class FailingDomainFeedConfiguration {
 
         @Bean
-        PushCatchupStatus pushCatchupStatus() {
-            return new PushCatchupStatus();
+        PushCatchupStatusImpl pushCatchupStatus() {
+            return new PushCatchupStatusImpl();
         }
 
         @Bean

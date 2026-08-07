@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.PushCatchupStatus;
+import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -162,8 +163,8 @@ class SagaPushCatchupStatusTest {
     static class SagaSupportConfiguration {
 
         @Bean
-        PushCatchupStatus pushCatchupStatus() {
-            return new PushCatchupStatus();
+        PushCatchupStatusImpl pushCatchupStatus() {
+            return new PushCatchupStatusImpl();
         }
 
         @Bean

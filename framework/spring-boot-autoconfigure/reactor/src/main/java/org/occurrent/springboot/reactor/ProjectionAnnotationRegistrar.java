@@ -33,7 +33,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.AsynchronousSubscribables;
-import org.occurrent.springboot.common.PushCatchupStatus;
+import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
@@ -239,8 +239,8 @@ class ProjectionAnnotationRegistrar {
 
     // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the post
     // processor directly has no reason to, and losing the record is better than losing the log too.
-    private void withPushCatchupStatus(Consumer<PushCatchupStatus> action) {
-        PushCatchupStatus status = applicationContext.getBeanProvider(PushCatchupStatus.class).getIfAvailable();
+    private void withPushCatchupStatus(Consumer<PushCatchupStatusImpl> action) {
+        PushCatchupStatusImpl status = applicationContext.getBeanProvider(PushCatchupStatusImpl.class).getIfAvailable();
         if (status != null) {
             action.accept(status);
         }

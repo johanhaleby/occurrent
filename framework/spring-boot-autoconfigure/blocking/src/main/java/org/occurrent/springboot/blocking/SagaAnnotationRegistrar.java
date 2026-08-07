@@ -31,7 +31,7 @@ import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.OccurrentProperties;
-import org.occurrent.springboot.common.PushCatchupStatus;
+import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
@@ -305,8 +305,8 @@ class SagaAnnotationRegistrar {
 
     // getIfAvailable rather than getBean: the starter contributes this bean, but a context that wires the post
     // processor directly has no reason to.
-    private void withPushCatchupStatus(Consumer<PushCatchupStatus> action) {
-        PushCatchupStatus status = applicationContext.getBeanProvider(PushCatchupStatus.class).getIfAvailable();
+    private void withPushCatchupStatus(Consumer<PushCatchupStatusImpl> action) {
+        PushCatchupStatusImpl status = applicationContext.getBeanProvider(PushCatchupStatusImpl.class).getIfAvailable();
         if (status != null) {
             action.accept(status);
         }

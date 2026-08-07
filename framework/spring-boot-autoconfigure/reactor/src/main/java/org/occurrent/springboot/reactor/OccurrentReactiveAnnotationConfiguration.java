@@ -17,6 +17,7 @@
 package org.occurrent.springboot.reactor;
 
 import org.occurrent.springboot.common.PushCatchupStatus;
+import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -64,7 +65,11 @@ public class OccurrentReactiveAnnotationConfiguration {
     @Bean
     @ConditionalOnMissingBean(PushCatchupStatus.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public PushCatchupStatus occurrentPushCatchupStatus() {
-        return new PushCatchupStatus();
+    public PushCatchupStatusImpl occurrentPushCatchupStatus() {
+        // The declared return type is the implementation, not the PushCatchupStatus interface an application injects,
+        // so that the registrar's by-type lookup of the writable type matches from the bean definition rather than
+        // only once the singleton has been instantiated. See OccurrentBlockingAnnotationConfiguration for the same
+        // reasoning applied to SagaInstancesRegistryImpl.
+        return new PushCatchupStatusImpl();
     }
 }

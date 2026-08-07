@@ -30,6 +30,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.PushCatchupStatus;
+import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
@@ -88,8 +89,8 @@ class BackgroundCatchupFailureTest {
     static class FailingPushConfiguration {
 
         @Bean
-        PushCatchupStatus pushCatchupStatus() {
-            return new PushCatchupStatus();
+        PushCatchupStatusImpl pushCatchupStatus() {
+            return new PushCatchupStatusImpl();
         }
 
         @Bean
