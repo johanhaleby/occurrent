@@ -1,16 +1,39 @@
 schema_version: 1
-scope: johanhaleby/occurrent
-granted_by: "Johan, via structured asks 2026-08-06 and 2026-08-07 (apirev epic); persisted 2026-08-07"
-merge_authority: standing        # none | ask-per-pr | standing
-merge_rules:
-  method: squash
-  requires: "rollup green + review threads handled"
-  matrix_sibling_leniency: true  # a pending matrix variant passes when its sibling passed the
-                                 # same commit; a FAILED sibling always blocks; a PR targeting
-                                 # the matrix axis itself waits for its own variant
-  reasoned_decline_threads_block: false  # answered reasoned-decline review threads stay open
-                                         # and do not block (the #570/#257 precedent)
-  held_prs_excluded: true        # release-held PRs (e.g. docs held branches) never auto-merge
-memory_commits:
-  ci_skip_prefix: true
-  direct_push_default_branch: true   # for orchestrator memory files (.context/*)
+repository: johanhaleby/occurrent
+updated_at: 2026-08-07T10:20:00+02:00
+updated_by: orchestrator session worktree-mobile-setup-916a9c (migrated from pre-contract shape)
+
+merge:
+  mode: auto_epic_prs
+  provenance:
+    granted_by: Johan Haleby
+    granted_at: 2026-08-06T18:30:00+02:00
+    source: "structured ask in the apirev orchestrator session ('Yes, same authority'), recorded in .context/ORCHESTRATOR.md hot-restart bullet"
+
+green:
+  pending_matrix_jobs: allow_one_equivalent_sibling
+  provenance:
+    granted_by: Johan Haleby
+    granted_at: 2026-08-06T21:55:00+02:00
+    source: "user message in the apirev orchestrator session ('If a sibling test in the matrix has passed... feel free to merge anyways'), recorded in .context/ORCHESTRATOR.md"
+
+review_threads:
+  mode: allow_reasoned_declines
+  provenance:
+    granted_by: Johan Haleby
+    granted_at: 2026-08-07T07:40:00+02:00
+    source: "structured ask in the apirev orchestrator session ('Open + merge, standing rule', #570/#257 precedent), recorded in .context/ORCHESTRATOR.md"
+
+memory_checkpoints:
+  commit: allowed
+  push_default_branch: allowed
+  commit_prefix: "[ci skip]"
+  provenance:
+    commit:
+      granted_by: Johan Haleby
+      granted_at: 2026-08-07T09:55:00+02:00
+      source: "user message in the apirev orchestrator session ('The epic file should be committed with [ci skip] prefix just like updates to ORCH'), plus the standing ORCHESTRATOR.md [ci skip] convention in AGENTS.md"
+    push_default_branch:
+      granted_by: Johan Haleby
+      granted_at: 2026-08-07T09:55:00+02:00
+      source: "same message ('it's okay to push directly to main if deemed appropriate'), plus the ORCHESTRATOR.md direct-commit convention in AGENTS.md"
