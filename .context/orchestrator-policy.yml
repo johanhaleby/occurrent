@@ -1,0 +1,16 @@
+schema_version: 1
+scope: johanhaleby/occurrent
+granted_by: "Johan, via structured asks 2026-08-06 and 2026-08-07 (apirev epic); persisted 2026-08-07"
+merge_authority: standing        # none | ask-per-pr | standing
+merge_rules:
+  method: squash
+  requires: "rollup green + review threads handled"
+  matrix_sibling_leniency: true  # a pending matrix variant passes when its sibling passed the
+                                 # same commit; a FAILED sibling always blocks; a PR targeting
+                                 # the matrix axis itself waits for its own variant
+  reasoned_decline_threads_block: false  # answered reasoned-decline review threads stay open
+                                         # and do not block (the #570/#257 precedent)
+  held_prs_excluded: true        # release-held PRs (e.g. docs held branches) never auto-merge
+memory_commits:
+  ci_skip_prefix: true
+  direct_push_default_branch: true   # for orchestrator memory files (.context/*)
