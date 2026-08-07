@@ -187,6 +187,14 @@ class JacksonDataFieldReaderTest {
         assertThat(reader.read(event, "name")).contains("alice");
     }
 
+    @Test
+    void the_first_occurrence_wins_for_a_duplicate_field_name() {
+        // Valid JSON should not contain duplicate keys, so this only pins down a defined answer rather than a
+        // requirement; a full tree parse into a Map would instead keep the last occurrence.
+        CloudEvent event = eventWithJson("{\"name\":\"alice\",\"name\":\"bob\"}");
+        assertThat(reader.read(event, "name")).contains("alice");
+    }
+
     private static CloudEvent eventWithJson(String json) {
         return eventWithBytes(json.getBytes(StandardCharsets.UTF_8), "application/json");
     }

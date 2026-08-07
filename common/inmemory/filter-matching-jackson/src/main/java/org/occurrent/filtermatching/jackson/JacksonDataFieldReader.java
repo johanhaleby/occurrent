@@ -16,6 +16,8 @@
 
 package org.occurrent.filtermatching.jackson;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
@@ -25,7 +27,6 @@ import org.occurrent.filtermatching.DataFieldReader;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -76,38 +77,68 @@ public class JacksonDataFieldReader implements DataFieldReader {
             return Optional.empty();
         }
 
-        Object root;
-        try {
-            root = objectMapper.readValue(bytes, Object.class);
+        return readByStreaming(bytes, path);
+    }
+
+    /**
+     * Streams the payload instead of materialising it into a tree first. A data filter reads one field, so most of
+     * the document is irrelevant, and {@link JsonParser#skipChildren()} lets a sibling field's nested object or
+     * array pass by without ever being turned into Java objects.
+     */
+    private Optional<Object> readByStreaming(byte[] bytes, String path) {
+        String[] segments = path.split("\\.");
+        try (JsonParser parser = objectMapper.getFactory().createParser(bytes)) {
+            parser.nextToken();
+            return resolve(parser, segments, 0);
         } catch (IOException e) {
             // Malformed JSON, or bytes that are not JSON at all. A single bad payload must not fail a query.
             return Optional.empty();
         }
-
-        return resolve(root, path.split("\\."), 0);
     }
 
-    // A dotted path is resolved one segment at a time, the way MongoDB resolves it. A Map is stepped into by key.
-    // An array is stepped into element by element, the same "any element" reading FilterMatcher's anyElementMatches
-    // gives the result, so items.sku against [{"sku":"a"},{"sku":"b"}] reaches into both rather than stopping at the
-    // array. Anything else (a bare number, a bare string, ...) is an opaque value with no field to step into, which
-    // covers a non-object root on the first segment and a path that continues past a value with no fields of its own
-    // on a later one; MongoDB stops the same way, but only for that case, not for the array case above it.
-    private static Optional<Object> resolve(@Nullable Object current, String[] pathSegments, int segmentIndex) {
-        if (segmentIndex == pathSegments.length) {
-            return Optional.ofNullable(current);
+    // A dotted path is resolved one segment at a time, the way MongoDB resolves it, with the parser positioned on
+    // the current value's token. An array is stepped into element by element, the same "any element" reading
+    // FilterMatcher's anyElementMatches gives the result, so items.sku against [{"sku":"a"},{"sku":"b"}] reaches
+    // into both rather than stopping at the array; the segment index does not advance for that step, since the
+    // array itself named no field. Anything else that is not an object when a field remains to read (a bare number,
+    // a bare string, ...) is an opaque value with no field to step into, which covers a non-object root on the
+    // first segment and a path that continues past a value with no fields of its own on a later one; MongoDB stops
+    // the same way, but only for that case, not for the array case above it.
+    private Optional<Object> resolve(JsonParser parser, String[] segments, int segmentIndex) throws IOException {
+        if (segmentIndex == segments.length) {
+            return Optional.ofNullable(objectMapper.readValue(parser, Object.class));
         }
-        if (current instanceof List<?> list) {
+        if (parser.currentToken() == JsonToken.START_ARRAY) {
             List<Object> matched = new ArrayList<>();
-            for (Object element : list) {
-                resolve(element, pathSegments, segmentIndex).ifPresent(matched::add);
+            while (parser.nextToken() != JsonToken.END_ARRAY) {
+                resolve(parser, segments, segmentIndex).ifPresent(matched::add);
             }
             return matched.isEmpty() ? Optional.empty() : Optional.of(matched);
         }
-        if (!(current instanceof Map<?, ?> map)) {
+        if (parser.currentToken() != JsonToken.START_OBJECT) {
             return Optional.empty();
         }
-        return resolve(map.get(pathSegments[segmentIndex]), pathSegments, segmentIndex + 1);
+        if (!advanceToField(parser, segments[segmentIndex])) {
+            return Optional.empty();
+        }
+        return resolve(parser, segments, segmentIndex + 1);
+    }
+
+    /**
+     * Scans the object the parser is positioned inside of for a field named {@code fieldName}, leaving the parser at
+     * its value token and returning {@code true} if found. On duplicate field names within one object, which valid
+     * JSON should not contain, the first occurrence wins here rather than the last one a full tree parse would keep.
+     */
+    private static boolean advanceToField(JsonParser parser, String fieldName) throws IOException {
+        while (parser.nextToken() == JsonToken.FIELD_NAME) {
+            String currentField = parser.currentName();
+            parser.nextToken();
+            if (currentField.equals(fieldName)) {
+                return true;
+            }
+            parser.skipChildren();
+        }
+        return false;
     }
 
     private static @Nullable byte[] dataBytes(CloudEvent cloudEvent) {
