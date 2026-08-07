@@ -125,11 +125,11 @@ public abstract class CheckpointAwareSubscriptionModelConformance extends Subscr
         RecordedEvents recorded = new RecordedEvents();
         fixture().subscriptionModel()
                 .subscribe(subscriptionId(), null, StartAt.checkpoint(before), recorded)
-                .waitUntilStarted(SubscriptionModelConformance.DELIVERY_TIMEOUT);
+                .waitUntilStarted(deliveryTimeout());
 
         fixture().publish(List.of(written));
 
-        assertThat(idsOf(recorded.awaitAtLeast(1, SubscriptionModelConformance.DELIVERY_TIMEOUT)))
+        assertThat(idsOf(recorded.awaitAtLeast(1, deliveryTimeout())))
                 .as("the position was read before the write, so a subscription starting from it owes that event. This "
                         + "is the handover a catch-up subscription performs, and losing the event here means losing "
                         + "every event written while history replayed")
@@ -141,11 +141,11 @@ public abstract class CheckpointAwareSubscriptionModelConformance extends Subscr
         RecordedEvents recorded = new RecordedEvents();
         fixture().subscriptionModel()
                 .subscribe(subscriptionId(), recorded)
-                .waitUntilStarted(SubscriptionModelConformance.DELIVERY_TIMEOUT);
+                .waitUntilStarted(deliveryTimeout());
 
         fixture().publish(List.of(written));
 
-        assertThat(idsOf(recorded.awaitAtLeast(1, SubscriptionModelConformance.DELIVERY_TIMEOUT)))
+        assertThat(idsOf(recorded.awaitAtLeast(1, deliveryTimeout())))
                 .as("a model that cannot report a position is still a working live model, it just cannot seed a "
                         + "catch-up handover")
                 .contains(written.getId());

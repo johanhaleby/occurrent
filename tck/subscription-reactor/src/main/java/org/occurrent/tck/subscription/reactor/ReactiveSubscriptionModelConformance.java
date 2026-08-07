@@ -70,12 +70,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ExtendWith(FailureNamesTheTestClass.class)
 public abstract class ReactiveSubscriptionModelConformance {
 
-    /**
-     * How long any single wait here is given. Generous, because it only has to exceed a working model's delivery
-     * latency, and a model that has genuinely stalled fails either way.
-     */
-    private static final Duration TIMEOUT = Duration.ofSeconds(20);
-
     private static final String SUBSCRIPTION = "reactive-conformance";
 
     private @Nullable ReactiveSubscriptionModelFixture fixture;
@@ -87,7 +81,22 @@ public abstract class ReactiveSubscriptionModelConformance {
 
     @BeforeEach
     final void createTheFixture() {
-        this.fixture = requireNonNull(createFixture(), "createFixture() returned null");
+        ReactiveSubscriptionModelFixture created = requireNonNull(createFixture(), "createFixture() returned null");
+        Duration declared = requireNonNull(created.deliveryTimeout(),
+                created.getClass().getName() + " returned null from deliveryTimeout()");
+        if (declared.isZero() || declared.isNegative()) {
+            throw new IllegalArgumentException(created.getClass().getName() + " declared a deliveryTimeout() of "
+                    + declared + ". Every wait here is bounded by it, so a budget that is not positive makes each of "
+                    + "them give up before looking.");
+        }
+        this.fixture = created;
+    }
+
+    /**
+     * The budget every wait here is given, as {@link ReactiveSubscriptionModelFixture#deliveryTimeout()} declares it.
+     */
+    private Duration timeout() {
+        return fixture().deliveryTimeout();
     }
 
     @AfterEach
@@ -112,7 +121,7 @@ public abstract class ReactiveSubscriptionModelConformance {
 
             fixture().publish(List.of(ConformanceEvents.event("1", "NameDefined")));
 
-            assertThat(ConformanceEvents.idsOf(recorded.awaitAtLeast(1, TIMEOUT)))
+            assertThat(ConformanceEvents.idsOf(recorded.awaitAtLeast(1, timeout())))
                     .as("the recording runs inside the returned Mono, so it arriving proves the model subscribed to " +
                             "the Mono rather than assembling and dropping it, and a fire-and-forget model fails here")
                     .containsExactly("1");
@@ -162,7 +171,7 @@ public abstract class ReactiveSubscriptionModelConformance {
 
             // The wait is for the later event itself, not a count: a retrying model records the redelivered "1"
             // first, which would satisfy a count of one while "2" is still in flight.
-            assertThat(ConformanceEvents.idsOf(recorded.awaitUntil(events -> ConformanceEvents.idsOf(events).contains("2"), TIMEOUT)))
+            assertThat(ConformanceEvents.idsOf(recorded.awaitUntil(events -> ConformanceEvents.idsOf(events).contains("2"), timeout())))
                     .as("a later event must still be delivered after an action failed, or one bad event ends the " +
                             "subscription. A retrying model may also redeliver the failed event first, which is why " +
                             "only the later event's arrival is asserted")
@@ -178,7 +187,7 @@ public abstract class ReactiveSubscriptionModelConformance {
         void wait_until_started_answers_within_its_timeout() {
             Subscription subscription = model().subscribe(SUBSCRIPTION, cloudEvent -> Mono.empty());
 
-            assertThat(subscription.waitUntilStarted(TIMEOUT).block())
+            assertThat(subscription.waitUntilStarted(timeout()).block())
                     .as("waitUntilStarted is promised to answer, and callers gate startup on it")
                     .isTrue();
         }
@@ -188,7 +197,7 @@ public abstract class ReactiveSubscriptionModelConformance {
             Subscription subscription = model().subscribe(SUBSCRIPTION, cloudEvent -> Mono.empty());
             awaitStarted(subscription);
 
-            assertThat(subscription.waitUntilStarted(TIMEOUT).block())
+            assertThat(subscription.waitUntilStarted(timeout()).block())
                     .as("a second wait must answer too, or the answer is consumed by whoever asked first")
                     .isTrue();
         }
@@ -202,13 +211,13 @@ public abstract class ReactiveSubscriptionModelConformance {
             Disposable abandonedWait = subscription.waitUntilStarted().subscribe();
             abandonedWait.dispose();
 
-            assertThat(subscription.waitUntilStarted(TIMEOUT).block())
+            assertThat(subscription.waitUntilStarted(timeout()).block())
                     .as("disposing one wait is a caller giving up on waiting, not on the subscription")
                     .isTrue();
 
             fixture().publish(List.of(ConformanceEvents.event("1", "NameDefined")));
 
-            assertThat(ConformanceEvents.idsOf(recorded.awaitAtLeast(1, TIMEOUT)))
+            assertThat(ConformanceEvents.idsOf(recorded.awaitAtLeast(1, timeout())))
                     .as("delivery must be unaffected by a disposed wait")
                     .containsExactly("1");
         }
@@ -223,7 +232,7 @@ public abstract class ReactiveSubscriptionModelConformance {
     }
 
     private void awaitStarted(Subscription subscription) {
-        Boolean started = subscription.waitUntilStarted(TIMEOUT).block();
+        Boolean started = subscription.waitUntilStarted(timeout()).block();
         assertThat(started)
                 .as("the subscription must report started before the test can mean anything")
                 .isTrue();

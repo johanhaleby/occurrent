@@ -79,7 +79,7 @@ public abstract class IntrospectableSubscriptionModelConformance extends Subscri
     void knows_a_running_subscription() {
         String id = subscriptionId();
 
-        fixture().subscriptionModel().subscribe(id, new RecordedEvents()).waitUntilStarted(SubscriptionModelConformance.DELIVERY_TIMEOUT);
+        fixture().subscriptionModel().subscribe(id, new RecordedEvents()).waitUntilStarted(deliveryTimeout());
 
         assertThat(introspectable().subscriptionIds()).containsExactly(id);
     }
@@ -87,7 +87,7 @@ public abstract class IntrospectableSubscriptionModelConformance extends Subscri
     @Test
     void knows_a_paused_subscription_too() {
         String id = subscriptionId();
-        fixture().subscriptionModel().subscribe(id, new RecordedEvents()).waitUntilStarted(SubscriptionModelConformance.DELIVERY_TIMEOUT);
+        fixture().subscriptionModel().subscribe(id, new RecordedEvents()).waitUntilStarted(deliveryTimeout());
 
         fixture().subscriptionModel().pauseSubscription(id);
 
@@ -100,7 +100,7 @@ public abstract class IntrospectableSubscriptionModelConformance extends Subscri
     @Test
     void forgets_a_cancelled_subscription() {
         String id = subscriptionId();
-        fixture().subscriptionModel().subscribe(id, new RecordedEvents()).waitUntilStarted(SubscriptionModelConformance.DELIVERY_TIMEOUT);
+        fixture().subscriptionModel().subscribe(id, new RecordedEvents()).waitUntilStarted(deliveryTimeout());
 
         fixture().subscriptionModel().cancelSubscription(id);
 
@@ -120,8 +120,8 @@ public abstract class IntrospectableSubscriptionModelConformance extends Subscri
         String first = subscriptionId();
         String second = subscriptionId();
 
-        fixture().subscriptionModel().subscribe(first, new RecordedEvents()).waitUntilStarted(SubscriptionModelConformance.DELIVERY_TIMEOUT);
-        fixture().subscriptionModel().subscribe(second, new RecordedEvents()).waitUntilStarted(SubscriptionModelConformance.DELIVERY_TIMEOUT);
+        fixture().subscriptionModel().subscribe(first, new RecordedEvents()).waitUntilStarted(deliveryTimeout());
+        fixture().subscriptionModel().subscribe(second, new RecordedEvents()).waitUntilStarted(deliveryTimeout());
 
         assertThat(introspectable().subscriptionIds()).containsExactlyInAnyOrder(first, second);
     }

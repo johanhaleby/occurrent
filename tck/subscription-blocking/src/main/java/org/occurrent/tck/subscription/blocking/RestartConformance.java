@@ -31,7 +31,6 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
-import static org.occurrent.tck.subscription.blocking.SubscriptionModelConformance.DELIVERY_TIMEOUT;
 
 /**
  * What a model owes a subscription that outlives the model itself. An event published while nothing was running is
@@ -55,10 +54,11 @@ import static org.occurrent.tck.subscription.blocking.SubscriptionModelConforman
  * these assertions are about what must arrive and never about what must not repeat.
  * <p>
  * The 60 second class timeout is the same number the other suites use, and the margin here is thinner than it looks.
- * The longest test chains three {@code DELIVERY_TIMEOUT} waits at 10 seconds each, and between them it tears a model
- * down and builds another one, which against a real store means closing a change stream and opening a fresh one. That
- * leaves about 30 seconds for two rebuilds. Raise this before raising {@code DELIVERY_TIMEOUT}, since a wait that
- * outlives the class timeout reports a {@code TimeoutException} instead of naming the event that never arrived.
+ * The longest test chains four {@code deliveryTimeout()} waits, 40 seconds at the default, and between them it tears a
+ * model down and builds another one, which against a real store means closing a change stream and opening a fresh one.
+ * That leaves about 20 seconds for the rebuild. A fixture declaring a longer budget puts a matching {@code @Timeout} on
+ * its own subclass, which {@link SubscriptionModelFixture#deliveryTimeout()} explains, since a wait that outlives the
+ * class timeout reports a {@code TimeoutException} instead of naming the event that never arrived.
  */
 @NullMarked
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -90,12 +90,12 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
     void continues_where_it_left_off_or_starts_at_the_present_as_the_fixture_declares() {
         String id = subscriptionId();
         RecordedEvents beforeTheRestart = new RecordedEvents();
-        assertThat(subscriptionModel().subscribe(id, beforeTheRestart).waitUntilStarted(DELIVERY_TIMEOUT))
+        assertThat(subscriptionModel().subscribe(id, beforeTheRestart).waitUntilStarted(deliveryTimeout()))
                 .as("the subscription must be listening before the event that establishes where it got to")
                 .isTrue();
         CloudEvent delivered = ConformanceEvents.event("1", "NameDefined");
         publish(delivered);
-        assertThat(idsOf(beforeTheRestart.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+        assertThat(idsOf(beforeTheRestart.awaitAtLeast(1, deliveryTimeout())))
                 .as("the model has to be working before a restart says anything about it")
                 .contains(delivered.getId());
 
@@ -105,14 +105,14 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
         CloudEvent whileNothingWasRunning = ConformanceEvents.event("2", "NameWasChanged");
         publish(whileNothingWasRunning);
         RecordedEvents afterTheRestart = new RecordedEvents();
-        assertThat(restarted.subscribe(id, afterTheRestart).waitUntilStarted(DELIVERY_TIMEOUT))
+        assertThat(restarted.subscribe(id, afterTheRestart).waitUntilStarted(deliveryTimeout()))
                 .as("the rebuilt subscription must report started, or whichever branch runs below reports a missing "
                         + "event as a checkpoint problem when it was really a subscription that never started")
                 .isTrue();
 
         if (restartable().resumesAfterARestart()) {
             List<CloudEvent> received = afterTheRestart.awaitUntil(
-                    events -> idsOf(events).contains(whileNothingWasRunning.getId()), DELIVERY_TIMEOUT);
+                    events -> idsOf(events).contains(whileNothingWasRunning.getId()), deliveryTimeout());
             assertThat(idsOf(received))
                     .as("this model declares it resumes, so the event published while nothing was running is owed to "
                             + "the subscription that was running before. Losing it here is losing every event a "
@@ -123,7 +123,7 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
             // than a subscription that never listened.
             CloudEvent marker = ConformanceEvents.event("3", "MarkerEvent");
             publish(marker);
-            assertThat(idsOf(afterTheRestart.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+            assertThat(idsOf(afterTheRestart.awaitAtLeast(1, deliveryTimeout())))
                     .as("this model declares it starts at the present, so the event published while nothing was "
                             + "running is gone and only the marker arrives. Delivering it anyway would mean the model "
                             + "keeps a position it does not admit to")
@@ -136,14 +136,14 @@ public abstract class RestartConformance extends SubscriptionModelSuite {
         SubscriptionModel restarted = restartable().restart();
 
         RecordedEvents recorded = new RecordedEvents();
-        assertThat(restarted.subscribe(subscriptionId(), recorded).waitUntilStarted(DELIVERY_TIMEOUT))
+        assertThat(restarted.subscribe(subscriptionId(), recorded).waitUntilStarted(deliveryTimeout()))
                 .as("a rebuilt model is a working model, whatever it does about positions")
                 .isTrue();
         CloudEvent afterTheRestart = ConformanceEvents.event("1", "NameDefined");
 
         publish(afterTheRestart);
 
-        assertThat(idsOf(recorded.awaitAtLeast(1, DELIVERY_TIMEOUT)))
+        assertThat(idsOf(recorded.awaitAtLeast(1, deliveryTimeout())))
                 .as("state left behind by the previous model must not stop a fresh subscription from delivering, which "
                         + "is what a checkpoint left in a state nothing can start from would do")
                 .contains(afterTheRestart.getId());
