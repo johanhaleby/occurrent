@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 6
-updated_at: '2026-08-07T07:17:50+00:00'
+revision: 7
+updated_at: '2026-08-07T07:32:41+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (a84288ce)
 baseline:
   repo: johanhaleby/occurrent
@@ -58,9 +58,9 @@ units:
       meaning)
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_ab1f1c9e-1895-462b-a650-e4ff6bcec525
+    session: null
     deliverables:
     - check: pr_merged
       ref: 597
@@ -76,7 +76,7 @@ units:
       met: true
       evidence: CLOSED, gh issue view 07:04
     blocking_on: []
-    next_action: sweep once its session finishes the held docs PR wrap-up
+    next_action: none
     last_meaningful_progress_at: 2026-08-07 06:53:00+00:00
     observed:
       issue_579:
@@ -406,27 +406,27 @@ units:
         at: 2026-08-07 07:03:00+00:00
     assessment: the previously-missed two-deliverable case, now explicit
   A10:
-    issue: null
+    issue: 602
     goal: catch-up wait must not overrun the caller timeout (adopted from A2 adversarial
       review)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_ab1f1c9e-1895-462b-a650-e4ff6bcec525
+    session: null
     deliverables:
     - check: pr_merged
       ref: 601
-      met: false
-      evidence: null
+      met: true
+      evidence: MERGED 2026-08-07T07:32:41+00:00 via CAS at 9d9f77d44 (merge cea9b5f9f),
+        27/27 green, 1 reasoned-decline thread open per policy
     - check: issue_closed
-      ref: null
-      met: false
-      evidence: null
+      ref: 602
+      met: true
+      evidence: 'CLOSED via Fixes #602, milestoned by session'
     blocking_on: []
-    next_action: session files the missing issue + handles 1 thread; assign issue
-      to milestone; merge on green
-    last_meaningful_progress_at: '2026-08-07T07:17:50+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T07:32:41+00:00'
     observed:
       pr_601:
         head: 9d9f77d44
