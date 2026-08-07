@@ -1,7 +1,7 @@
 schema_version: 1
 epic: archrev
-revision: 11
-updated_at: '2026-08-07T20:05:00+00:00'
+revision: 12
+updated_at: '2026-08-07T20:30:00+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (T7 adopted, tag-gating rename)
 baseline:
   repo: johanhaleby/occurrent
@@ -185,22 +185,23 @@ units:
   T7:
     issue: 633
     goal: rename TCK capability-guard records Store* to EventStore* (adopted, tag-gating)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
       ref: 634
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-07T20:25Z at a1cfb4780c (merge aa737b47e), all
+        green, 0 threads; new accessors verified on origin/main'
     - check: issue_closed
       ref: 633
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #633, verified by orchestrator'
     blocking_on: []
-    next_action: CAS-merge PR 634 on green with threads handled
+    next_action: none
     last_meaningful_progress_at: '2026-08-07T19:40:00+00:00'
     observed: {}
     assessment: 'Johan ruled EventStoreWithout* via structured ask, negation kept
