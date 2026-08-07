@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
+import org.occurrent.filtermatching.DataFieldReader;
 
 import java.net.URI;
 import java.util.Map;

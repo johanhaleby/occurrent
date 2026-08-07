@@ -47,8 +47,8 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
-import org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader;
+import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.blocking.*;
 import org.occurrent.springboot.common.*;
@@ -294,7 +294,7 @@ public class OccurrentMongoAutoConfiguration<E> {
      */
     @Bean
     @ConditionalOnMissingBean(DataFieldReader.class)
-    @ConditionalOnClass(name = "org.occurrent.inmemory.filtermatching.jackson.JacksonDataFieldReader")
+    @ConditionalOnClass(name = "org.occurrent.filtermatching.jackson.JacksonDataFieldReader")
     public DataFieldReader occurrentDataFieldReader() {
         return new JacksonDataFieldReader();
     }

@@ -15,6 +15,6 @@
  */
 
 @NullMarked
-package org.occurrent.inmemory.filtermatching.jackson;
+package org.occurrent.filtermatching;
 
 import org.jspecify.annotations.NullMarked;

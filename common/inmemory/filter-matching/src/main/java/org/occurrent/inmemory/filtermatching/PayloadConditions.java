@@ -62,6 +62,18 @@ final class PayloadConditions {
         };
     }
 
+    /**
+     * Whether {@code filter} contains a condition on a {@code data} payload field anywhere in its tree.
+     */
+    static boolean hasPayloadCondition(Filter filter) {
+        return switch (filter) {
+            case SingleConditionFilter scf -> isPayloadCondition(scf);
+            case CompositionFilter cf -> cf.filters().stream().anyMatch(PayloadConditions::hasPayloadCondition);
+            case All ignored -> false;
+            case CapabilityFilter ignored -> false;
+        };
+    }
+
     private static boolean isPayloadCondition(SingleConditionFilter scf) {
         return scf.fieldName().startsWith(DATA_PREFIX);
     }
