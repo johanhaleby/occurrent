@@ -85,6 +85,22 @@
   complete choice (no conflicting override stacked on it), "shared cache wins" was an unmeasured cost
   claim (the fact is "avoids rebuilding context"), and effort the orchestrator cannot set (sessions,
   named agents) is stated as a recommendation, never as an applied setting.
+- Fleet-monitor hardening from Johan's review (2026-08-07): pin the repo with -R and raise --limit
+  past the gh default of 30 (silent truncation in a busy repo); count consecutive poll failures and
+  emit one MONITOR-UNHEALTHY line carrying the real stderr at the threshold, MONITOR-RECOVERED on
+  the next success (silence must never be ambiguous between quiet and dead); put reviewDecision in
+  the delta key (it is an EMPTY STRING when absent, not null, the same trap as check conclusions);
+  run a full sweep immediately after arming, because the first poll only sets a baseline and reports
+  nothing already red, done, or reviewed; record the monitor task id in ORCHESTRATOR.md, never in
+  the epic state file (the shared schema rejects unknown fields, additions need cross-tool
+  agreement). Kept deliberately against the feedback: the poll stays repo-wide rather than scoped
+  to the epic's PR numbers, because a pre-filtered poll misses exactly the spin-off PRs that matter
+  (#614 was detected within one poll interval only because the watch was repo-wide); in a busy
+  shared repo, post-filter the delta lines, not the poll.
+- A CAS merge pin is the FULL head SHA fetched from the API, never reconstructed from a truncated
+  prefix (2026-08-07). The #609 merge was refused because the pin's tail was invented from a 9-char
+  display prefix; the guard treated it as a moved head, which is exactly right, and the fix was to
+  fetch headRefOid in full and re-issue.
 - Release execution is Johan's manual act (2026-08-06 correction). Never plan or route changelog version stamping,
   `mvn_release.sh`, tagging, docs held-branch merges, the docs version bump, or post-release checks as agent-executed
   work. Plan up to a release-readiness gate and stop there; keep the release-day steps as a reference checklist only.
