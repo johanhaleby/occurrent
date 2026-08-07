@@ -1,8 +1,8 @@
 schema_version: 1
 epic: archrev
-revision: 9
-updated_at: '2026-08-07T18:45:00+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (WAVE A COMPLETE)
+revision: 10
+updated_at: '2026-08-07T19:40:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (T7 adopted, tag-gating rename)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -182,6 +182,30 @@ units:
     observed: {}
     assessment: new defect found during verification, not in the review; ADR 44
       blesses the configuration nothing tests
+  T7:
+    issue: 633
+    goal: rename TCK capability-guard records Store* to EventStore* (adopted, tag-gating)
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 633
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip spawned, awaiting click (Sonnet/medium, mechanical rename)
+    last_meaningful_progress_at: '2026-08-07T19:40:00+00:00'
+    observed: {}
+    assessment: 'Johan ruled EventStoreWithout* via structured ask, negation kept
+      (three-member family, no positive complement for the position case); unreleased
+      until the tag so the rename is free now; reopens the tag gate until merged'
   B1:
     issue: 622
     goal: replay-phase batching contract (ADR-led design, post-release)
