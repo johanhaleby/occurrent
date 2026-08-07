@@ -103,11 +103,13 @@
   live PR look closed), PR-OPENED separates discovery from state change so adopt-routing and
   merge-routing need no inference, and a multi-repo epic runs one monitor per repository with active
   PR work. The event vocabulary is now shared between the Claude and Codex orchestrators.
-- Worker exits end with a typed DELIVERY_RESULT block (2026-08-07, Johan's design): PR number,
-  full head SHA, pr-fix outcome (green, attempts-exhausted, blocked-on-what, not-run), an explicit
-  done-or-not verdict with the reason, and the remaining blocker or none, as the session's last
-  message so a tail-read needs one glance. Mirrored as a PR comment only on non-green exits, since
-  those are what an archived session takes with it while green is observable from GitHub. The block
+- Worker exits end with a typed DELIVERY_RESULT block (2026-08-07, Johan's design, refined same
+  day): PR number, full head SHA, pr-fix outcome as exactly done | attempts_exhausted | blocked |
+  not_run, the blocker as its own separate field, and the reason whenever the outcome is not done,
+  as the session's last message so a tail-read needs one glance. The success value is done, not
+  green, because green CI with unresolved scope is not pr-fix done and the looser name invites
+  claim inflation. Non-done exits mirror the block as ONE marker-tagged PR comment with an attempt
+  counter, updated in place on retries so conflicting delivery results cannot accumulate. The block
   is a claim the sweep verifies, never evidence: the stated SHA is cross-checked before any CAS pin.
 - The fleet monitor's lifetime is an every-sweep invariant, not a closeout step (2026-08-07,
   Johan spotted the leftover). "Stop at epic closeout" fails the moment an epic reopens: T7 was
