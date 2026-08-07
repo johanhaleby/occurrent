@@ -97,6 +97,12 @@
   to the epic's PR numbers, because a pre-filtered poll misses exactly the spin-off PRs that matter
   (#614 was detected within one poll interval only because the watch was repo-wide); in a busy
   shared repo, post-filter the delta lines, not the poll.
+  Addendum (2026-08-07, from Codex via Johan, all four adopted): MONITOR-READY confirms the baseline
+  poll matched something before the arming sweep runs, MONITOR-INCOMPLETE flags a result that hit the
+  configured limit so closure events are re-verified instead of trusted (a truncated set makes a
+  live PR look closed), PR-OPENED separates discovery from state change so adopt-routing and
+  merge-routing need no inference, and a multi-repo epic runs one monitor per repository with active
+  PR work. The event vocabulary is now shared between the Claude and Codex orchestrators.
 - Out-of-scope findings route through the orchestrator, not through a worker's own spawn-task chip
   (2026-08-07, from Johan on how #613/#614 arrived). A worker-spawned chip has no fleet title, no
   model or effort recommendation, no claiming brief, and no registration, so the session enters the
