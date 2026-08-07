@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 13
-updated_at: '2026-08-07T09:38:54+00:00'
+revision: 14
+updated_at: '2026-08-07T11:15:55+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
 baseline:
   repo: johanhaleby/occurrent
@@ -131,24 +131,24 @@ units:
     issue: 581
     goal: TCK version policy (ADR 77 amendment + deliveryTimeout knob + implementer
       doc)
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - A3
     session: null
     deliverables:
     - check: pr_merged
       ref: 608
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED at 99881864d, 27/27 green, 0 threads
     - check: issue_closed
       ref: 581
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #581'
     blocking_on: []
-    next_action: merge on green (planning gate concluded in-session)
-    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T11:15:55+00:00'
     observed:
       pr_608:
         head: 5b8a7d6a8
@@ -177,7 +177,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: merge on green; 1 thread to watch
+    next_action: session re-merges main; CAS-merge on fresh green head
     last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
     observed:
       pr_607:
@@ -186,6 +186,7 @@ units:
         threads_open: 1
         via: gh pr list + graphql
         at: '2026-08-07T09:38:54+00:00'
+        mergeable: 'CONFLICTING after #608; session messaged to re-merge main'
     assessment: ''
   A6:
     issue: 583
@@ -338,24 +339,24 @@ units:
   B3:
     issue: 588
     goal: handover lock measurement
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_0c9bd4c6-1b76-4abf-af82-506f449fce32
+    session: null
     deliverables:
     - check: pr_merged
       ref: 606
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED at 3263095b9, 27/27 green, contract change approved by
+        Johan via structured ask; ADR renumbered to 0108 by #611'
     - check: issue_closed
       ref: 588
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #588'
     blocking_on: []
-    next_action: merge on green; VERIFY at merge time that the concurrency-contract
-      ADR came with the fix and Johan approved the contract change in-session
-    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T11:15:55+00:00'
     observed:
       pr_606:
         head: 3263095b9
@@ -478,26 +479,27 @@ units:
         at: '2026-08-07T07:17:50+00:00'
     assessment: adopted by Johan via structured ask 2026-08-07; issue number pending
   C2:
-    issue: null
+    issue: 612
     goal: stale no-lifecycle javadoc fix (adopted spin-off)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_a083cdac-7324-4193-ac1e-7b50fc3f8dd3
+    session: null
     deliverables:
     - check: pr_merged
       ref: 604
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED at cd2f6bd16, 24 checks green, threads resolved; NOT markdown-only,
+        earlier fact was wrong
     - check: issue_closed
-      ref: null
-      met: false
-      evidence: null
+      ref: 612
+      met: true
+      evidence: 'issue filed by orchestrator (session declined side-channel instruction,
+        correctly), CLOSED via Fixes #612'
     blocking_on: []
-    next_action: session files issue + handles 1 thread; markdown-only so no checks;
-      merge on threads-handled
-    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T11:15:55+00:00'
     observed:
       pr_604:
         head: c14ebe73e
