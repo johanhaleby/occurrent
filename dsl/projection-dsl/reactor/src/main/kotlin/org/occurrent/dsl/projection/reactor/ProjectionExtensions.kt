@@ -46,6 +46,13 @@ fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Proje
 }
 
 /**
+ * As the [update] overload above, but [update] also sees the delivering event's [EventMetadata], for a caller that owns
+ * the reactive load-evolve-save but still needs the stream id, stream version, or other metadata.
+ */
+fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt? = null): Subscription =
+    projectWithMetadata(subscriptionId, projection, update, startAt)
+
+/**
  * Runs [projection] as a capability-agnostic, subscription-fed read model materialized into the blocking [repository]
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
@@ -87,6 +94,13 @@ fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection:
         subscribe(subscriptionId, *projection.eventTypes().map { it.kotlin }.toTypedArray(), startAt = startAt) { e -> update(e) }
     }
 }
+
+/**
+ * As the [update] overload above, but [update] also sees the delivering event's [EventMetadata], for a caller that owns
+ * the reactive load-evolve-save but still needs the stream id, stream version, or other metadata.
+ */
+fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt? = null): Subscription =
+    projectWithMetadata(subscriptionId, projection, update, startAt)
 
 /**
  * Runs [projection] as a stream-scoped, subscription-fed read model materialized into the blocking [repository]
