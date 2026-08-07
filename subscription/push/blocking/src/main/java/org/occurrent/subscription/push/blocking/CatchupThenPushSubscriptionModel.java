@@ -25,6 +25,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
@@ -35,6 +36,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -78,7 +80,7 @@ import java.util.stream.Stream;
  * delegated per-subscription to {@link BlockingHandover}, shared with {@code CatchupProjectionFeed}.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel {
 
     private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
 
@@ -343,6 +345,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel {
     @Override
     public boolean isPaused(String subscriptionId) {
         return pauseRequestedDuringReplay.containsKey(subscriptionId) || liveFeed.isPaused(subscriptionId);
+    }
+
+    @Override
+    public Set<String> subscriptionIds() {
+        // A subscription is registered on the live feed before its replay is recorded, and the replay is only forgotten
+        // when the live feed either keeps the registration or loses it too, so the live feed knows every id this model
+        // knows. That is why this does not also read replayingSubscriptions, unlike isRunning.
+        return liveFeed.subscriptionIds();
     }
 
     /**
