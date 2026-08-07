@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 10
-updated_at: '2026-08-07T08:42:14+00:00'
+revision: 11
+updated_at: '2026-08-07T08:51:35+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
 baseline:
   repo: johanhaleby/occurrent
@@ -319,7 +319,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip anytime (Wave B trails the tag)
+    next_action: chip spawned (task_39d3a6b6); session id recorded when Johan clicks
     last_meaningful_progress_at: null
     observed: {}
     assessment: ''
@@ -341,7 +341,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip anytime; measure before deciding
+    next_action: chip spawned (task_2dd48e82); session id recorded when Johan clicks
     last_meaningful_progress_at: null
     observed: {}
     assessment: ''
@@ -363,7 +363,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip anytime
+    next_action: chip spawned (task_372eed62); session id recorded when Johan clicks
     last_meaningful_progress_at: null
     observed: {}
     assessment: ''
@@ -385,7 +385,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip anytime
+    next_action: chip spawned (task_49eaab15); session id recorded when Johan clicks
     last_meaningful_progress_at: null
     observed: {}
     assessment: ''
