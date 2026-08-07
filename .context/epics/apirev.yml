@@ -1,8 +1,8 @@
 schema_version: 1
 epic: apirev
-revision: 13
-updated_at: '2026-08-07T09:38:54+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
+revision: 19
+updated_at: '2026-08-07T11:41:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (A6 round-2 head up, A11 adopted)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -131,24 +131,24 @@ units:
     issue: 581
     goal: TCK version policy (ADR 77 amendment + deliveryTimeout knob + implementer
       doc)
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - A3
     session: null
     deliverables:
     - check: pr_merged
       ref: 608
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED at 99881864d, 27/27 green, 0 threads
     - check: issue_closed
       ref: 581
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #581'
     blocking_on: []
-    next_action: merge on green (planning gate concluded in-session)
-    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T11:15:55+00:00'
     observed:
       pr_608:
         head: 5b8a7d6a8
@@ -161,24 +161,24 @@ units:
     issue: 582
     goal: filter-matching parity (numerics, array traversal, subscribe-time refusal,
       reader rename)
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - A3
     session: null
     deliverables:
     - check: pr_merged
       ref: 607
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED 2026-08-07T11:28:19+00:00 at 2d1220436, all green, 0 threads
     - check: issue_closed
       ref: 582
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #582'
     blocking_on: []
-    next_action: merge on green; 1 thread to watch
-    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T11:28:19+00:00'
     observed:
       pr_607:
         head: ef67ee312
@@ -186,19 +186,20 @@ units:
         threads_open: 1
         via: gh pr list + graphql
         at: '2026-08-07T09:38:54+00:00'
+        mergeable: 'CONFLICTING after #608; session messaged to re-merge main'
     assessment: ''
   A6:
     issue: 583
     goal: saga keyless-redelivery posture
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
     - A4
-    session: null
+    session: local_974c0434-0e46-45e4-be6b-0d0d8a6f5413
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 609
       met: false
       evidence: null
     - check: issue_closed
@@ -206,10 +207,21 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip spawned (task_725759fd, Opus/medium)
-    last_meaningful_progress_at: null
-    observed: {}
-    assessment: ''
+    next_action: CAS-merge at 36730abff on green (round-2 rebase delivered; freeze
+      holds until this lands)
+    last_meaningful_progress_at: '2026-08-07T11:41:00+00:00'
+    observed:
+      pr_609:
+        head: 36730abff
+        rollup: checks running (0 failures so far)
+        threads_open: unrefreshed since round-2 push
+        mergeable: MERGEABLE
+        via: gh pr list + monitor
+        at: '2026-08-07T11:41:00+00:00'
+        note: old head 0100c4e6f finished 26/27 with subscription-mongodb-spring@java-21
+          the sole failure (java-25 green, flaky-suspect); superseded by this head
+    assessment: 'decision landed: refuse by default, BEST_EFFORT opt-out for foreign
+      feeds, refused on EVENT_STORE sagas'
   A7:
     issue: 584
     goal: testing-artifact fixes (extension waits, empty clearing, flush builder)
@@ -331,31 +343,38 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: working
-    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
-    observed: {}
-    assessment: ''
+    next_action: 'session rebases over merged #607, finishes Map short-circuit, opens
+      the #587 PR'
+    last_meaningful_progress_at: '2026-08-07T11:28:19+00:00'
+    observed:
+      branch:
+        ref: worktree-apirev-b2-587
+        pushed: aa6b9af4b
+        half_done: streaming parser, 5-6x alloc win, JMH baseline for Mongo shape
+        via: session tail read
+        at: '2026-08-07T11:22:30+00:00'
+    assessment: healthy deliberate park at the collision boundary, exactly per brief
   B3:
     issue: 588
     goal: handover lock measurement
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_0c9bd4c6-1b76-4abf-af82-506f449fce32
+    session: null
     deliverables:
     - check: pr_merged
       ref: 606
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED at 3263095b9, 27/27 green, contract change approved by
+        Johan via structured ask; ADR renumbered to 0108 by #611'
     - check: issue_closed
       ref: 588
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #588'
     blocking_on: []
-    next_action: merge on green; VERIFY at merge time that the concurrency-contract
-      ADR came with the fix and Johan approved the contract change in-session
-    last_meaningful_progress_at: '2026-08-07T09:38:54+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T11:15:55+00:00'
     observed:
       pr_606:
         head: 3263095b9
@@ -374,7 +393,7 @@ units:
     session: local_19e7ff47-f894-49f8-a06a-5f4418900184
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 610
       met: false
       evidence: null
     - check: issue_closed
@@ -382,10 +401,19 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: working
-    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
-    observed: {}
-    assessment: ''
+    next_action: 'HOLD merge until A6/#609 lands (anti-cascade priority: A6 is the
+      last tag-gating PR); then threads + rebase + CAS-merge'
+    last_meaningful_progress_at: '2026-08-07T11:18:51+00:00'
+    observed:
+      pr_610:
+        head: 57bfedce7
+        rollup: 27/27 green
+        threads_open: 3
+        mergeable: CONFLICTING
+        via: gh pr list + monitor
+        at: '2026-08-07T11:41:00+00:00'
+    assessment: went CONFLICTING as more of the cascade landed; rebase is owed anyway,
+      so the hold costs nothing extra
   B5:
     issue: 590
     goal: parity and hygiene sweep
@@ -478,26 +506,27 @@ units:
         at: '2026-08-07T07:17:50+00:00'
     assessment: adopted by Johan via structured ask 2026-08-07; issue number pending
   C2:
-    issue: null
+    issue: 612
     goal: stale no-lifecycle javadoc fix (adopted spin-off)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_a083cdac-7324-4193-ac1e-7b50fc3f8dd3
+    session: null
     deliverables:
     - check: pr_merged
       ref: 604
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED at cd2f6bd16, 24 checks green, threads resolved; NOT markdown-only,
+        earlier fact was wrong
     - check: issue_closed
-      ref: null
-      met: false
-      evidence: null
+      ref: 612
+      met: true
+      evidence: 'issue filed by orchestrator (session declined side-channel instruction,
+        correctly), CLOSED via Fixes #612'
     blocking_on: []
-    next_action: session files issue + handles 1 thread; markdown-only so no checks;
-      merge on threads-handled
-    last_meaningful_progress_at: '2026-08-07T09:11:26+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T11:15:55+00:00'
     observed:
       pr_604:
         head: c14ebe73e
@@ -506,3 +535,43 @@ units:
         via: gh pr list + graphql
         at: '2026-08-07T09:11:26+00:00'
     assessment: adopted 2026-08-07; third spin-off, adoption now epic default
+  A11:
+    issue: 613
+    goal: push saga catch-up replay must not outlive the context close (adopted spin-off)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_2bc4aa41-c66a-425c-994b-213462dc3c69
+    deliverables:
+    - check: pr_merged
+      ref: 614
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 613
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'CAS-merge #614 on green, AFTER #609 lands (freeze order); tag-gating
+      since the push saga feature ships unreleased in 0.32.0'
+    last_meaningful_progress_at: '2026-08-07T11:35:31+00:00'
+    observed:
+      pr_614:
+        head: efd90e1b2
+        rollup: checks running (0 failures so far)
+        threads_open: unchecked
+        mergeable: MERGEABLE
+        via: gh pr list + monitor
+        at: '2026-08-07T11:41:00+00:00'
+      session:
+        title: Shut down push saga catch-up models on context close
+        running: false
+        note: 'not fleet-titled (spawned outside the chip protocol) but claimed #613
+          per AGENTS.md and delivered a complete blocking-only fix with a container-free
+          regression test'
+        via: list_sessions
+        at: '2026-08-07T11:41:00+00:00'
+    assessment: 'adopted under the standing spin-off default (structured-ask grant
+      on #604); real lifecycle bug, BACKGROUND replay survived context close and
+      kept issuing commands into a closing event store'

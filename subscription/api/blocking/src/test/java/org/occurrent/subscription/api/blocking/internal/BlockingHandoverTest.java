@@ -25,6 +25,12 @@ import org.occurrent.subscription.internal.HandoverMessages;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.*;
@@ -117,6 +123,29 @@ class BlockingHandoverTest {
         assertThat(delivered).containsExactly("A", "B", "C", "A");
     }
 
+    // A push sink acknowledges after the fold, so a fold that throws must not be recorded as delivered, or the
+    // broker's redelivery of the same payload would be skipped as a duplicate and the event lost for good.
+    @Test
+    void a_live_payload_whose_delivery_throws_is_not_recorded_as_delivered_so_a_redelivery_is_retried() {
+        List<String> delivered = new ArrayList<>();
+        AtomicBoolean failNext = new AtomicBoolean(true);
+        BlockingHandover<String> handover = BlockingHandover.create(
+                payload -> {
+                    if (failNext.getAndSet(false)) {
+                        throw new RuntimeException("delivery boom");
+                    }
+                    delivered.add(payload);
+                },
+                payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.catchUp(source(List.of(), true));
+
+        assertThatThrownBy(() -> handover.accept("A")).hasMessage("delivery boom");
+        assertThat(delivered).isEmpty();
+
+        handover.accept("A");
+        assertThat(delivered).containsExactly("A");
+    }
+
     @Test
     void exceeding_the_max_buffered_events_cap_while_replaying_fails_loud_with_the_documented_message() {
         List<String> delivered = new ArrayList<>();
@@ -180,6 +209,43 @@ class BlockingHandoverTest {
         assertThatThrownBy(() -> live.accept("L1"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage(HandoverMessages.dedupKeyRequired());
+    }
+
+    @Test
+    void deliver_runs_concurrently_for_live_payloads_instead_of_serialized_behind_the_handover_lock() throws Exception {
+        int threadCount = 4;
+        // Every thread's deliver call rendezvous here before any of them returns. If deliver were still called while
+        // holding the handover's lock (the behaviour #588 measured and removed), only one thread could ever be inside
+        // deliver at a time, so this barrier could never fill and the test would time out instead of completing.
+        CyclicBarrier allInsideDeliverAtOnce = new CyclicBarrier(threadCount);
+        BlockingHandover<String> handover = BlockingHandover.create(
+                payload -> await(allInsideDeliverAtOnce), payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.catchUp(source(List.of(), true));
+
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        try {
+            List<Future<?>> deliveries = new ArrayList<>();
+            for (int i = 0; i < threadCount; i++) {
+                String payload = "L" + i;
+                deliveries.add(pool.submit(() -> handover.accept(payload)));
+            }
+            for (Future<?> delivery : deliveries) {
+                delivery.get(5, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdown();
+        }
+    }
+
+    private static void await(CyclicBarrier barrier) {
+        try {
+            barrier.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     // --- helpers ---

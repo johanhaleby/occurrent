@@ -180,7 +180,7 @@ class ProjectionAnnotationRegistrar {
             Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
             boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
             if (synchronous) {
-                // The synchronous subscription model has no lifecycle or start position, so nothing to wait for. It
+                // The synchronous subscription model has no start position, so nothing to wait for. It
                 // delivers the just-written events on the write path (read-your-writes); the fold ignores unhandled types.
                 ReactiveProjectionRunner<E> runner = ReactiveProjectionRunner.agnostic(applicationContext.getBean(SynchronousSubscriptionModel.class), converter);
                 projectAgnosticOrStream(runner, id, projection, resolveStore(annotation, id), null);

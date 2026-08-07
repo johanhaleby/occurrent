@@ -21,12 +21,13 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
-import org.occurrent.inmemory.filtermatching.DataFieldReader;
+import org.occurrent.filtermatching.DataFieldReader;
 
 import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
+import static org.occurrent.inmemory.filtermatching.FilterMatcher.referencesPayloadCondition;
 
 /**
  * Translates a {@link SubscriptionFilter} into an in-process {@link Predicate} over {@link CloudEvent}.
@@ -67,12 +68,14 @@ public final class SubscriptionFilterMatcher {
             }
             case StreamSubscriptionFilter streamSubscriptionFilter -> {
                 Filter f = streamSubscriptionFilter.filter();
+                refuseIfUnreadable(f, dataFieldReader);
                 return cloudEvent -> matchesFilter(cloudEvent, f, dataFieldReader);
             }
             case AgnosticSubscriptionFilter agnosticSubscriptionFilter -> {
                 // Capability-agnostic delivery: match only the plain Filter, with no capability guard, so both stream and
                 // DCB events are delivered. A plain Filter (no CapabilityFilter) matches events of every capability.
                 Filter f = agnosticSubscriptionFilter.filter();
+                refuseIfUnreadable(f, dataFieldReader);
                 return cloudEvent -> matchesFilter(cloudEvent, f, dataFieldReader);
             }
             case DcbSubscriptionFilter dcbSubscriptionFilter -> {
@@ -84,6 +87,15 @@ public final class SubscriptionFilterMatcher {
             }
             default ->
                     throw new UnsupportedSubscriptionFilterException(filter.getClass(), "Unsupported " + SubscriptionFilter.class.getSimpleName() + " type: " + filter.getClass().getName() + ". Only " + StreamSubscriptionFilter.class.getSimpleName() + ", " + AgnosticSubscriptionFilter.class.getSimpleName() + ", and " + DcbSubscriptionFilter.class.getSimpleName() + " are supported.");
+        }
+    }
+
+    // Every caller builds this matcher during subscribe(), before the subscription is registered, so a filter this
+    // reader can never honor is refused at subscribe time instead of on the first event that would have reached
+    // DataFieldReader#read and thrown there.
+    private static void refuseIfUnreadable(Filter filter, DataFieldReader dataFieldReader) {
+        if (!dataFieldReader.supportsPayloadFields() && referencesPayloadCondition(filter)) {
+            throw DataFieldReader.unsupportedPayloadFieldException();
         }
     }
 }
