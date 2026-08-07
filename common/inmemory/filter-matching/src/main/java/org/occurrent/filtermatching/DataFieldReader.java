@@ -19,6 +19,9 @@ package org.occurrent.filtermatching;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -53,6 +56,28 @@ public interface DataFieldReader {
      * @param path       the dotted path, without the leading {@code data.}
      */
     Optional<Object> read(CloudEvent cloudEvent, String path);
+
+    /**
+     * The value at each path in {@code paths}, resolved against the same event, keyed by path. A path that reaches
+     * nothing is absent from the returned map, the same outcome {@link #read(CloudEvent, String)} reports as
+     * {@link Optional#empty()} for that path. Values keep the contract described on the interface, a plain Java
+     * value, or a {@link java.util.List} when the field holds an array.
+     * <p>
+     * The default calls {@link #read(CloudEvent, String)} once per path, so an existing implementation gains this
+     * method without changing behavior. A reader whose read means parsing the payload, for example one backed by a
+     * streaming JSON parser, can override this to resolve every path in a single traversal instead of parsing the
+     * payload once per path, which is why the method exists on the interface rather than as a caller-side loop.
+     *
+     * @param cloudEvent the event whose payload to read
+     * @param paths      the dotted paths to resolve, each without the leading {@code data.}
+     */
+    default Map<String, Object> readAll(CloudEvent cloudEvent, Collection<String> paths) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (String path : paths) {
+            read(cloudEvent, path).ifPresent(value -> result.put(path, value));
+        }
+        return result;
+    }
 
     /**
      * Whether this reader can actually answer a payload condition. {@link #refusing()} is the only implementation that
