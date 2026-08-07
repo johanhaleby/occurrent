@@ -1,7 +1,7 @@
 schema_version: 1
 epic: archrev
-revision: 7
-updated_at: '2026-08-07T17:30:00+00:00'
+revision: 8
+updated_at: '2026-08-07T18:05:00+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (epic registration)
 baseline:
   repo: johanhaleby/occurrent
@@ -54,22 +54,22 @@ units:
     issue: 617
     goal: time-filter compatibility shim (two-form eq/in/ne, stale javadoc, mixed-format
       tests)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
       ref: 631
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-07 at merge a9bfa9124, all green, 0 threads; two-form shim, stale javadoc, TimeBasedCheckpoint guide note, mixed-format tests'
     - check: issue_closed
       ref: 617
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #617, verified by orchestrator'
     blocking_on: []
-    next_action: CAS-merge PR 631 on green with threads handled
+    next_action: none
     last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
     observed: {}
     assessment: 'verified: legacy rendering deterministic so two forms close the
@@ -135,22 +135,22 @@ units:
   T5:
     issue: 620
     goal: PushCatchupStatus hardening (duplicate rejection + read/recorder split)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
       ref: 630
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-07 at merge c1531ca20, all green, 0 threads; duplicate guard + read/recorder split shipped'
     - check: issue_closed
       ref: 620
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #620, verified by orchestrator'
     blocking_on: []
-    next_action: CAS-merge PR 630 on green with threads handled, then spawn T6
+    next_action: none
     last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
     observed: {}
     assessment: three-helper funnel makes the split small; SagaInstancesRegistryImpl
@@ -159,7 +159,7 @@ units:
     issue: 621
     goal: dual-stack occurrentManualStartPushSources bean collision (verify, fix,
       dual-stack test)
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on:
@@ -175,8 +175,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'spawn after T5 merges (Sonnet/high, verify-first); its dual-stack
-      test must exercise T5''s duplicate guard'
+    next_action: 'chip spawned 2026-08-07T18:00Z (task_c61ac45b), awaiting click; verify-first
+      brief includes exercising T5''s duplicate guard''s duplicate guard'
     last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
     observed: {}
     assessment: new defect found during verification, not in the review; ADR 44
