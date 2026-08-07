@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 5
-updated_at: '2026-08-07T07:01:19+00:00'
+revision: 6
+updated_at: '2026-08-07T07:17:50+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (a84288ce)
 baseline:
   repo: johanhaleby/occurrent
@@ -34,16 +34,17 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: merge on green; raise the missing docs/push-delivery-contract remote
-      branch with the session
-    last_meaningful_progress_at: '2026-08-07T06:47:38+00:00'
+    next_action: session to merge main again (3 siblings landed) and push the missing
+      docs branch; then merge
+    last_meaningful_progress_at: '2026-08-07T07:17:50+00:00'
     observed:
       pr_596:
-        head: 6d63a3b74f
-        rollup: building, new head after shard-fix push
+        head: 6d63a3b74
+        rollup: 24/24 green
         threads_open: 5
-        via: restart-test agent gh read
-        at: '2026-08-07T06:47:38+00:00'
+        mergeable: CONFLICTING
+        via: gh pr list + graphql
+        at: '2026-08-07T07:17:50+00:00'
       docs_branch:
         exists_on_remote: false
         via: git ls-remote occurrent-org.github.io docs/*
@@ -184,24 +185,24 @@ units:
   A7:
     issue: 584
     goal: testing-artifact fixes (extension waits, empty clearing, flush builder)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_ef8798eb-8ff2-4420-b8e5-1f972e1ae9c0
+    session: null
     deliverables:
     - check: pr_merged
       ref: 593
-      met: false
-      evidence: null
+      met: true
+      evidence: MERGED 2026-08-07T07:17:50+00:00, 26/26 green at ca6596807, 0 threads,
+        verified
     - check: issue_closed
       ref: 584
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #584'
     blocking_on: []
-    next_action: merge on green (fresh head ca6596807 after zombie-killing push, 4
-      green 2 running)
-    last_meaningful_progress_at: 2026-08-07 07:00:00+00:00
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T07:17:50+00:00'
     observed:
       pr_593:
         head: ca6596807
@@ -377,9 +378,9 @@ units:
     goal: record fixes (renumber done, wording PR in flight)
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_8dfabd00-93b2-4331-a841-4fd1857dc36d
+    session: null
     deliverables:
     - check: pr_merged
       ref: 595
@@ -394,7 +395,7 @@ units:
       met: true
       evidence: 'auto-closed by Fixes #591'
     blocking_on: []
-    next_action: sweep once session idle
+    next_action: none
     last_meaningful_progress_at: '2026-08-07T06:47:38+00:00'
     observed:
       pr_599:
@@ -404,3 +405,33 @@ units:
         via: gh pr list + graphql
         at: 2026-08-07 07:03:00+00:00
     assessment: the previously-missed two-deliverable case, now explicit
+  A10:
+    issue: null
+    goal: catch-up wait must not overrun the caller timeout (adopted from A2 adversarial
+      review)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_ab1f1c9e-1895-462b-a650-e4ff6bcec525
+    deliverables:
+    - check: pr_merged
+      ref: 601
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: session files the missing issue + handles 1 thread; assign issue
+      to milestone; merge on green
+    last_meaningful_progress_at: '2026-08-07T07:17:50+00:00'
+    observed:
+      pr_601:
+        head: 9d9f77d44
+        rollup: 26/26 green
+        threads_open: 1
+        via: gh pr list + graphql
+        at: '2026-08-07T07:17:50+00:00'
+    assessment: adopted by Johan via structured ask 2026-08-07; issue number pending
