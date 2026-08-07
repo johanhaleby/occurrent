@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -115,13 +117,53 @@ class CatchupSubscriptionTest {
                 .cause().isSameAs(checkedFailure);
     }
 
-    // Stands for the Subscription a real replay hands over to once it completes (for example the wrapped model's own
-    // subscription, or a CancelledSubscription): CatchupSubscription.waitUntilStarted must forward this answer
-    // rather than assume it.
+    @Test
+    void the_delegate_gets_what_is_left_of_the_callers_budget_rather_than_the_whole_of_it() {
+        // A replay that spends part of the budget leaves the rest for the delegate. Handing over the full timeout
+        // again would let one call wait for nearly twice what the caller asked for, and a caller that overshot would
+        // otherwise pass the delegate a negative duration, which nothing promises to tolerate.
+        RecordingSubscription delegate = new RecordingSubscription("delegated");
+        CompletableFuture<Subscription> future = new CompletableFuture<>();
+        CompletableFuture.delayedExecutor(200, TimeUnit.MILLISECONDS).execute(() -> future.complete(delegate));
+
+        new CatchupSubscription("sub", future).waitUntilStarted(Duration.ofSeconds(5));
+
+        assertThat(delegate.received)
+                .as("the delegate waits out the remainder of the budget, not the whole of it again")
+                .isNotNull()
+                .isLessThan(Duration.ofSeconds(5))
+                .isGreaterThan(Duration.ZERO);
+    }
+
+    // Stands for the Subscription a real replay hands over to once it completes, for example the wrapped model's own
+    // subscription or a CancelledSubscription. CatchupSubscription.waitUntilStarted must forward this answer rather
+    // than assume it.
     private record FixedAnswerSubscription(String id, boolean answer) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             return answer;
+        }
+    }
+
+    // Records the budget it was handed, so a test can check what is left over after the replay rather than only what
+    // the answer was.
+    private static final class RecordingSubscription implements Subscription {
+        private final String id;
+        private volatile @Nullable Duration received;
+
+        private RecordingSubscription(String id) {
+            this.id = id;
+        }
+
+        @Override
+        public String id() {
+            return id;
+        }
+
+        @Override
+        public boolean waitUntilStarted(Duration timeout) {
+            received = timeout;
+            return true;
         }
     }
 }
