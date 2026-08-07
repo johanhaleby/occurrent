@@ -33,6 +33,10 @@
   and every session brief OPENS with a MODEL/EFFORT recommendation line, decided per unit at planning time in the
   meta-plan, not re-derived at dispatch. Retitle mis-titled spawned sessions via session tooling; hand Johan the
   orchestrator session's own title, since a session cannot rename itself.
+  Addendum (2026-08-07 correction, same family as the collapsed-summary rule): the MODEL/EFFORT
+  recommendation goes IN THE CHIP TITLE (suffix like "· Opus/high"), because the model is chosen at the
+  chip and the brief's opening line only displays after launch — a recommendation that renders after its
+  decision informs nothing.
 - One failed lookup command is not evidence of absence (2026-08-06 correction). An `ls` of a skill's SKILL.md
   returned a false negative and the conclusion "no orchestrator skill" was acted on for a whole dispatch round.
   Before asserting a skill or file does not exist, list the parent directory. The user naming a thing is a strong
