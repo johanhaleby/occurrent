@@ -46,6 +46,12 @@ public interface CommandDispatcher<C> {
      * {@link #dispatch} in order, so a plain lambda dispatcher gets this behaviour for free and a failure partway
      * through still leaves the earlier commands dispatched. Override this to make the batch atomic, for example one
      * transaction covering every command, when that is possible for the dispatcher's target.
+     * <p>
+     * <strong>Decorator hazard:</strong> a decorator that overrides only {@code dispatch} and delegates inherits
+     * this default rather than the delegate's own {@code dispatchAll}, so it silently turns a delegate's atomic batch
+     * back into one call to {@code dispatch} per command, restoring the partial-progress hazard an overridden
+     * {@code dispatchAll} exists to remove. Extend {@link ForwardingCommandDispatcher} instead of implementing this
+     * interface directly to forward both methods.
      */
     default void dispatchAll(List<C> commands) {
         for (C command : commands) {
