@@ -341,7 +341,11 @@ public class DomainEventQueries<T> {
     /**
      * Reads domain events strictly after the global sequence {@code position}, in ascending position order.
      * Equivalent to {@code readInPositionOrder(Filter.all(), PositionRange.afterPosition(position))}.
+     * <p>
+     * <b>The returned stream must be closed</b>, for the reason given on
+     * {@link #readInPositionOrder(Filter, PositionRange)}.
      *
+     * @return The matching domain events, in position order. Must be closed.
      * @throws UnsupportedOperationException if the underlying event store does not write a position.
      * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
      */
@@ -351,7 +355,13 @@ public class DomainEventQueries<T> {
 
     /**
      * Reads domain events matching {@code filter} within {@code range}, in ascending position order.
+     * <p>
+     * <b>The returned stream must be closed</b>, for the same reason as the underlying
+     * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)}: it is lazy and may hold a database
+     * resource, such as a server cursor. Use it in a try-with-resources block, or close it explicitly, in particular
+     * when you stop reading before the end of the range.
      *
+     * @return The matching domain events, in position order. Must be closed.
      * @throws UnsupportedOperationException if the underlying event store does not write a position.
      * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
      */
