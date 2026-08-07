@@ -1,8 +1,8 @@
 schema_version: 1
 epic: apirev
-revision: 8
-updated_at: '2026-08-07T07:40:40+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (a84288ce)
+revision: 9
+updated_at: '2026-08-07T07:58:16+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -14,7 +14,7 @@ pending_actions:
   type: rerun
   target: 596 Java CI failed jobs at head 1869398b9
   expected: example-domain java-21 SUCCESS at same head
-  status: PENDING
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-07T07:40:40+00:00'
@@ -22,16 +22,17 @@ units:
   A1:
     issue: 578
     goal: push delivery contract (ADR 0104, refuse undeliverable events)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_463d10f8-d6d6-476c-aed1-14a6fb7a781d
+    session: null
     deliverables:
     - check: pr_merged
       ref: 596
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED 2026-08-07T07:58:16+00:00 at 1869398b9, 27/27 green after
+        verified flake rerun (act-020)
     - check: branch_pushed
       repo: occurrent-org.github.io
       ref: docs/push-delivery-contract
@@ -39,11 +40,11 @@ units:
       evidence: docs/push-delivery-contract on remote, ls-remote verified 2026-08-07T07:40:40+00:00
     - check: issue_closed
       ref: 578
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #578'
     blocking_on: []
-    next_action: rerun of failed shard issued at same head; CAS-merge on green
-    last_meaningful_progress_at: '2026-08-07T07:40:40+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T07:58:16+00:00'
     observed:
       pr_596:
         head: 1869398b9
@@ -57,9 +58,7 @@ units:
         exists_on_remote: true
         via: git ls-remote
         at: '2026-08-07T07:40:40+00:00'
-    assessment: 5 open threads are reasoned declines, non-blocking per standing rule;
-      shard failures are real (cross-JDK); docs-branch gap newly discovered by this
-      file's generation
+    assessment: complete; 5 reasoned-decline threads left open per policy
   A2:
     issue: 579
     goal: lifecycle contract (ADR 0105, start() idempotent-by-decision, waitUntilStarted
@@ -116,7 +115,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: session pr-fix owns the 8 failures; watch via no-progress rule
+    next_action: 'session nudged post-restart: resume pr-fix on 8 failures, merge
+      main in (#596 landed)'
     last_meaningful_progress_at: '2026-08-07T07:40:40+00:00'
     observed:
       pr_603:
@@ -125,7 +125,7 @@ units:
         threads_open: null
         via: gh pr list
         at: '2026-08-07T07:40:40+00:00'
-    assessment: planning active in session zen-hypatia
+    assessment: session was cut by app relaunch at 07:57Z; nudged 2026-08-07T07:58:16+00:00
   A4:
     issue: 581
     goal: TCK version policy (ADR 77 amendment + deliveryTimeout knob + implementer
@@ -146,7 +146,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch chip after A3's decision lands
+    next_action: chip spawned (task_cf3a9a18, Opus/high) - decision dependency met,
+      PR-merge dependency tracked via depends_on
     last_meaningful_progress_at: null
     observed: {}
     assessment: ''
@@ -170,7 +171,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch after A3's refusal-type decision
+    next_action: 'chip spawned (task_66486ded, Sonnet/high) with in-flight #603 warning'
     last_meaningful_progress_at: null
     observed: {}
     assessment: ''
