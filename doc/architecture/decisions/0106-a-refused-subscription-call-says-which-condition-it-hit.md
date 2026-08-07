@@ -4,7 +4,7 @@ Date: 2026-08-07
 
 ## Status
 
-Accepted. Closes #580. Answers the question ADR 104 and
+Accepted. Closes #580. Answers the question [ADR 104](0104-an-undeliverable-push-event-is-refused-not-acknowledged.md) and
 [ADR 105](0105-starting-a-model-twice-is-allowed-and-a-subscription-that-has-not-started-says-so.md)
 both deferred here, and settles the type half of the coherence question
 [ADR 93](0093-a-missing-capability-is-refused-and-a-reactive-publisher-is-cold.md) opened.
@@ -92,7 +92,7 @@ two assertions in the event store suites.
 
 ### What stays an `IllegalStateException`
 
-ADR 104 offered its refusals to this family if one arrived. They stay where they are, and the same question decides
+[ADR 104](0104-an-undeliverable-push-event-is-refused-not-acknowledged.md) offered its refusals to this family if one arrived. They stay where they are, and the same question decides
 it. A catch-up that failed, a projection feed with nothing registered on it, a replay cancelled before it went live,
 and a competing consumer whose lock another node holds all reject a perfectly good argument. No different argument
 helps, and none of them is a mistake in the calling code. They are either a failure that already happened or the state
