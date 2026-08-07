@@ -57,10 +57,15 @@ public interface DataFieldReader {
     /**
      * A reader that refuses, which is how a store behaves when it was given none. It throws rather than answering
      * empty, because answering empty would report "no event matched" for a question the store cannot answer.
+     * <p>
+     * It throws {@link UnsupportedOperationException} rather than an argument exception because no filter the caller
+     * passes makes a payload readable: the reader is a construction-time argument, so the fix is to build the store or
+     * subscription model with one. That is the same answer an event store gives for a capability it was not built
+     * with.
      */
     static DataFieldReader refusing() {
         return (cloudEvent, path) -> {
-            throw new IllegalArgumentException("This store cannot query the data field, because it was not given a "
+            throw new UnsupportedOperationException("This store cannot query the data field, because it was not given a "
                     + DataFieldReader.class.getSimpleName() + ". Supply one to filter on a payload field, for example "
                     + "the Jackson-backed reader in occurrent-common-inmemory-filter-matching-jackson.");
         };

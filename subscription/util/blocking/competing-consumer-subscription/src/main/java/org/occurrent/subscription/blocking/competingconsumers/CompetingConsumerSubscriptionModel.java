@@ -4,9 +4,13 @@ import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.slf4j.Logger;
@@ -85,13 +89,13 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      * @param filter         The filter to use to limit which events that are of interest from the EventStore.
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
-     * @throws IllegalArgumentException If this subscription model instance already has a subscription with this id.
+     * @throws DuplicateSubscriptionIdException If this subscription model instance already has a subscription with this id.
      */
     public Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriberId, "SubscriberId cannot be null");
         Objects.requireNonNull(subscriptionId, "SubscriptionId cannot be null");
         if (isSubscriptionIdInUse(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         }
 
         final Subscription subscription;
@@ -239,9 +243,10 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         logDebug("Trying to resume CompetingConsumer subscription (subscriptionId={})", subscriptionId);
+        requireKnown(subscriptionId);
         if (isRunning(subscriptionId)) {
             logDebug("Subscription already is running, cannot resume (subscriptionId={}, delegate={})", subscriptionId, delegate.toString());
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
+            throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
 
         if (nonCompetingConsumersSubscriptions.contains(subscriptionId)) {
@@ -324,8 +329,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     private synchronized void pauseSubscription(String subscriptionId, boolean pausedByUser) {
         logDebug("Trying to pause CompetingConsumer subscription (subscriptionId={}, pausedByUser={})", subscriptionId, pausedByUser);
+        requireKnown(subscriptionId);
         if (isPaused(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
+            throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
         }
 
         if (nonCompetingConsumersSubscriptions.contains(subscriptionId)) {
@@ -336,7 +342,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 logDebug("Failed to find CompetingConsumer for subscription (subscriptionId={}, pausedByUser={})", subscriptionId, pausedByUser);
                 // The delegate refuses this as well, but never sees it: an id with no competing consumer here stops at
                 // this branch, so returning quietly was the wrapper answering for the delegate, and answering wrongly.
-                throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
+                throw new SubscriptionNotRunningException(subscriptionId);
             } else if (competingConsumer.isWaiting()) {
                 logDebug("CompetingConsumer in waiting state, will ignore (subscriptionId={}, subscriberId={}, pausedByUser={})", subscriptionId, competingConsumer.getSubscriberId(), pausedByUser);
             } else {
@@ -600,6 +606,14 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      * Both collections count, because a subscription whose start position opted out of competing consumption occupies
      * the id just as much as a competing one does.
      */
+    // A subscription id is unique per model instance, so an id neither collection here holds is unknown to this
+    // model, whatever the delegate may separately know about it.
+    private void requireKnown(String subscriptionId) {
+        if (!isSubscriptionIdInUse(subscriptionId)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
+    }
+
     private boolean isSubscriptionIdInUse(String subscriptionId) {
         return nonCompetingConsumersSubscriptions.contains(subscriptionId)
                 || findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).isPresent();

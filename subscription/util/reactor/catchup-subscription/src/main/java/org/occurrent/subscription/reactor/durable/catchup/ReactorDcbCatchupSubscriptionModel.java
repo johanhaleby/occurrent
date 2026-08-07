@@ -167,7 +167,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
             return dcbSubscriptionFilter.criteria();
         }
-        throw new IllegalArgumentException(ReactorDcbCatchupSubscriptionModel.class.getSimpleName() + " only supports a " + DcbSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName());
+        throw new UnsupportedSubscriptionFilterException(filter.getClass(), ReactorDcbCatchupSubscriptionModel.class.getSimpleName() + " only supports a " + DcbSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName());
     }
 
     /**

@@ -186,8 +186,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
-        if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        if (isKnown(subscriptionId)) {
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         }
 
         // Built here rather than on the dispatcher thread, so a filter this model cannot apply is refused to the caller
@@ -323,7 +323,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
                 };
             }).collect(Collectors.toList());
         } else {
-            throw new IllegalArgumentException("Invalid " + SubscriptionFilter.class.getSimpleName());
+            throw new UnsupportedSubscriptionFilterException(filter.getClass());
         }
         return pipeline;
     }
@@ -408,6 +408,18 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
     }
 
+    private boolean isKnown(String subscriptionId) {
+        return runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    // Separates "no such subscription here" from "wrong state for this call", which a caller holding several models
+    // needs in order to tell "keep looking" from "this is the owner and the answer is no".
+    private void requireKnown(String subscriptionId) {
+        if (!isKnown(subscriptionId)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
+    }
+
     /**
      * Resume a paused subscription from the change-stream position it had read to, so that nothing written while it
      * was paused is lost.
@@ -424,13 +436,15 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         if (shutdown) {
             throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
-        } else if (isRunning(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already running");
+        }
+        requireKnown(subscriptionId);
+        if (isRunning(subscriptionId)) {
+            throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
 
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't paused.");
+            throw new SubscriptionNotRunningException(subscriptionId);
         }
 
         running = true;
@@ -456,10 +470,12 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     public synchronized void pauseSubscription(String subscriptionId) {
         if (shutdown) {
             throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
-        } else if (isPaused(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
+        }
+        requireKnown(subscriptionId);
+        if (isPaused(subscriptionId)) {
+            throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
         } else if (!isRunning(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
+            throw new SubscriptionNotRunningException(subscriptionId);
         }
 
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);

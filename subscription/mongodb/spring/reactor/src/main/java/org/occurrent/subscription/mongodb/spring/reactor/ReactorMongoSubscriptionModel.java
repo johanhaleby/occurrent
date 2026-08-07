@@ -26,9 +26,13 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
-import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.*;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
@@ -140,7 +144,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
         if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+            throw new DuplicateSubscriptionIdException(subscriptionId);
         }
         if (shutdown) {
             throw new IllegalStateException("Cannot start subscription because the subscription model is shutdown.");
@@ -313,10 +317,12 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     public synchronized void pauseSubscription(String subscriptionId) {
         if (shutdown) {
             throw new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
-        } else if (isPaused(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
+        }
+        requireKnown(subscriptionId);
+        if (isPaused(subscriptionId)) {
+            throw new SubscriptionNotRunningException(subscriptionId, "Subscription " + subscriptionId + " is already paused.");
         } else if (!isRunning(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
+            throw new SubscriptionNotRunningException(subscriptionId);
         }
 
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
@@ -342,13 +348,15 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         if (shutdown) {
             throw new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
-        } else if (isRunning(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already running");
+        }
+        requireKnown(subscriptionId);
+        if (isRunning(subscriptionId)) {
+            throw new SubscriptionAlreadyRunningException(subscriptionId);
         }
 
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't paused.");
+            throw new SubscriptionNotRunningException(subscriptionId);
         }
 
         running = true;
@@ -413,6 +421,18 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     @Override
     public boolean isPaused(String subscriptionId) {
         return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    private boolean isKnown(String subscriptionId) {
+        return runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    // Separates "no such subscription here" from "wrong state for this call", which a caller holding several models
+    // needs in order to tell "keep looking" from "this is the owner and the answer is no".
+    private void requireKnown(String subscriptionId) {
+        if (!isKnown(subscriptionId)) {
+            throw new UnknownSubscriptionException(subscriptionId);
+        }
     }
 
     /**

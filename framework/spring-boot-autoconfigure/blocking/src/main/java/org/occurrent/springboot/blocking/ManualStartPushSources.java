@@ -17,6 +17,7 @@
 package org.occurrent.springboot.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 
 import java.util.*;
 
@@ -46,14 +47,14 @@ public final class ManualStartPushSources {
      * Record the startup work for {@code id}, to run once {@link #start(String)} or {@link #startAll()} is called.
      * Called by the annotation processor while registering a withheld push source, not normally by application code.
      *
-     * @throws IllegalArgumentException if {@code id} is already registered
+     * @throws DuplicateSubscriptionIdException if {@code id} is already registered
      */
     void register(String id, Runnable startup) {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(startup, "startup cannot be null");
         synchronized (pending) {
             if (pending.containsKey(id)) {
-                throw new IllegalArgumentException("A push source with id '" + id + "' is already registered for manual start.");
+                throw new DuplicateSubscriptionIdException(id, "A push source with id '" + id + "' is already registered for manual start.");
             }
             pending.put(id, startup);
         }

@@ -20,6 +20,8 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -170,7 +172,8 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
      *
      * @param subscriptionId the id of a currently stopped subscription, must not be {@code null}
      * @return the running {@link Subscription}
-     * @throws IllegalArgumentException if no model has a stopped subscription with that id
+     * @throws UnknownSubscriptionException if no model has a subscription with that id
+     * @throws SubscriptionAlreadyRunningException if the model that has it reports it is already running
      */
     public Subscription start(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId must not be null");
@@ -196,22 +199,24 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
 
     // Tries each model in turn, since the id's owner is not known up front, and none of the DSL wrappers forward
     // introspection to say so directly.
+    // A model that does not have the id says so with UnknownSubscriptionException, which is the one refusal worth
+    // searching past. Every other refusal comes from the model that does own the id, so it is the answer rather than
+    // something to keep looking behind.
     private Subscription resumeAndWait(String subscriptionId) {
-        List<IllegalArgumentException> failures = new ArrayList<>();
+        List<UnknownSubscriptionException> notHere = new ArrayList<>();
         for (SubscriptionModelLifeCycle model : subscriptionModels) {
             try {
                 Subscription subscription = model.resumeSubscription(subscriptionId);
                 knownIds.add(subscriptionId);
                 subscription.waitUntilStarted();
                 return subscription;
-            } catch (IllegalArgumentException e) {
-                failures.add(e);
+            } catch (UnknownSubscriptionException e) {
+                notHere.add(e);
             }
         }
-        IllegalArgumentException failure = new IllegalArgumentException(
-                "Could not start subscription '" + subscriptionId + "', " + failures.get(failures.size() - 1).getMessage()
-                        + ". " + describeAvailableIds());
-        failures.forEach(failure::addSuppressed);
+        UnknownSubscriptionException failure = new UnknownSubscriptionException(subscriptionId,
+                "Could not start subscription '" + subscriptionId + "', no subscription model has it. " + describeAvailableIds());
+        notHere.forEach(failure::addSuppressed);
         throw failure;
     }
 

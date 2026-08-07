@@ -17,6 +17,9 @@
 package org.occurrent.subscription.api.reactor;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.SubscriptionAlreadyRunningException;
+import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.UnknownSubscriptionException;
 
 /**
  * Defines life-cycle methods for reactive subscription models and subscriptions. Mirrors the blocking
@@ -107,7 +110,14 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      * model has no state in between.
      *
      * @param subscriptionId The id of the subscription to resume.
-     * @throws IllegalArgumentException If subscription is not paused
+     * @throws UnknownSubscriptionException       If this subscription model has no subscription with that id.
+     * @throws SubscriptionAlreadyRunningException If the subscription is already running. Resuming is a transition of
+     *                                             one subscription rather than a goal, so a redundant call is a
+     *                                             mistake worth reporting. Starting the whole model is the opposite
+     *                                             and accepts being called twice.
+     * @throws IllegalStateException              If the subscription cannot be resumed right now for a reason that is
+     *                                             not the caller's doing, which on a competing consumer model means
+     *                                             another node currently holds the subscription.
      */
     Subscription resumeSubscription(String subscriptionId);
 
@@ -117,7 +127,9 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      * to write events to an event store without triggering this particular subscription.
      *
      * @param subscriptionId The id of the subscription to pause.
-     * @throws IllegalArgumentException If subscription is not running
+     * @throws UnknownSubscriptionException   If this subscription model has no subscription with that id.
+     * @throws SubscriptionNotRunningException If the subscription exists here but is not running, because it is
+     *                                         already paused, was never started, or the whole model is stopped.
      */
     void pauseSubscription(String subscriptionId);
 
