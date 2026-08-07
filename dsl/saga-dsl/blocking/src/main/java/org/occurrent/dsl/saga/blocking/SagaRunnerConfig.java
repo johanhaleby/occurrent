@@ -29,15 +29,18 @@ import static java.util.Objects.requireNonNull;
  * {@code maxCasAttempts} times. Command receivers must be idempotent and tolerate that multiplicity, not merely
  * at-least-once delivery.
  *
- * @param timerPollInterval how often to poll for due timers
- * @param timerBatchLimit   the maximum number of due instances fired per poll
- * @param maxCasAttempts    the maximum compare-and-set attempts for one input before failing, also the maximum number of
- *                          times that input's commands can be re-dispatched
+ * @param timerPollInterval    how often to poll for due timers
+ * @param timerBatchLimit      the maximum number of due instances fired per poll
+ * @param maxCasAttempts       the maximum compare-and-set attempts for one input before failing, also the maximum number
+ *                             of times that input's commands can be re-dispatched
+ * @param redeliveryDetection  what to do with an event the runner cannot recognise a redelivery of
  */
-public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts) {
+public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
+                               RedeliveryDetection redeliveryDetection) {
 
     public SagaRunnerConfig {
         requireNonNull(timerPollInterval, "timerPollInterval cannot be null");
+        requireNonNull(redeliveryDetection, "redeliveryDetection cannot be null");
         if (timerPollInterval.isZero() || timerPollInterval.isNegative()) {
             throw new IllegalArgumentException("timerPollInterval must be positive");
         }
@@ -50,17 +53,30 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
     }
 
     /**
+     * A configuration requiring redelivery detection, which is what every runner wants unless its feed is known to
+     * carry no stream metadata at all.
+     */
+    public SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts) {
+        this(timerPollInterval, timerBatchLimit, maxCasAttempts, RedeliveryDetection.REQUIRED);
+    }
+
+    /**
      * The default configuration: poll every 15 seconds, fire up to 100 due instances per poll, retry a lost save up to 50
-     * times. The poll interval only bounds how late a due timer fires, and saga timeouts run at a minutes-to-days
-     * timescale, so 15 seconds (the same default as JobRunr) keeps the store query load low while firing well within
-     * tolerance. Lower it only when you rely on short timeouts firing promptly.
+     * times, and require redelivery detection. The poll interval only bounds how late a due timer fires, and saga
+     * timeouts run at a minutes-to-days timescale, so 15 seconds (the same default as JobRunr) keeps the store query
+     * load low while firing well within tolerance. Lower it only when you rely on short timeouts firing promptly.
      */
     public static SagaRunnerConfig defaults() {
-        return new SagaRunnerConfig(Duration.ofSeconds(15), 100, 50);
+        return new SagaRunnerConfig(Duration.ofSeconds(15), 100, 50, RedeliveryDetection.REQUIRED);
     }
 
     /** A copy of this configuration with a different poll interval. */
     public SagaRunnerConfig withTimerPollInterval(Duration interval) {
-        return new SagaRunnerConfig(interval, timerBatchLimit, maxCasAttempts);
+        return new SagaRunnerConfig(interval, timerBatchLimit, maxCasAttempts, redeliveryDetection);
+    }
+
+    /** A copy of this configuration with a different redelivery-detection posture. */
+    public SagaRunnerConfig withRedeliveryDetection(RedeliveryDetection detection) {
+        return new SagaRunnerConfig(timerPollInterval, timerBatchLimit, maxCasAttempts, detection);
     }
 }

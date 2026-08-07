@@ -97,7 +97,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         // its null-tolerant watermark behaviour is unchanged.
         EventMetadata metadata = EventMetadata.from(cloudEvent);
         EventMeta meta = extractMeta(cloudEvent);
-        warnOnceIfRedeliveryCannotBeDetected(meta);
+        refuseOrWarnIfRedeliveryCannotBeDetected(meta);
         process(sagaId, SagaInput.event(event, metadata), meta, null);
     }
 
@@ -181,14 +181,26 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     }
 
     // An event carrying neither a stream id with a version nor a position leaves nothing to compare a redelivery
-    // against, so the reaction runs again and issues its commands again. Occurrent's own stored events always carry
-    // one, so this means a feed that dropped the extensions on the way in, which it does for every event, not just
-    // this one. Hence once per runner rather than once per event.
-    private void warnOnceIfRedeliveryCannotBeDetected(EventMeta meta) {
-        if (!meta.carriesRedeliveryKey() && dedupUnavailableWarningLogged.compareAndSet(false, true)) {
-            log.warn("Saga subscription '{}' received an event with no streamid, streamversion or position. A redelivered event " +
-                     "cannot be recognised as one, so it will run the reaction again and issue its commands again. " +
-                     "Forward the Occurrent CloudEvent extensions from the listener feeding this saga.", subscriptionId);
+    // against, so the reaction would run again and issue its commands again. Occurrent's own stored events always carry
+    // one, so this means a feed that dropped the extensions on the way in, which it does for every event, not just this
+    // one. Under REQUIRED that is refused rather than reacted to, so the throw reaches the subscription model, the
+    // event goes unacknowledged, and the feed offers it again until somebody looks. Under BEST_EFFORT the duplication
+    // is accepted knowingly, so the warning says so once per runner rather than once per event.
+    private void refuseOrWarnIfRedeliveryCannotBeDetected(EventMeta meta) {
+        if (meta.carriesRedeliveryKey()) {
+            return;
+        }
+        if (config.redeliveryDetection() == RedeliveryDetection.REQUIRED) {
+            throw new SagaRedeliveryDetectionException(
+                    "Saga subscription '" + subscriptionId + "' received an event with no streamid, streamversion or position. " +
+                    "A redelivered event cannot be recognised as one, so reacting to it would run the reaction again and issue " +
+                    "its commands again. Forward the Occurrent CloudEvent extensions from the listener feeding this saga, or " +
+                    "set redeliveryDetection to BEST_EFFORT if the feed carries none of them and every reaction is idempotent.");
+        }
+        if (dedupUnavailableWarningLogged.compareAndSet(false, true)) {
+            log.warn("Saga subscription '{}' received an event with no streamid, streamversion or position, and " +
+                     "redeliveryDetection is BEST_EFFORT. A redelivered event cannot be recognised as one, so it will run the " +
+                     "reaction again and issue its commands again.", subscriptionId);
         }
     }
 

@@ -59,6 +59,7 @@ import java.util.function.IntPredicate;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
@@ -322,8 +323,11 @@ class SagaRunnerTest {
             }
         }
 
+        // Carries the stream metadata a stored event always has, so these stay about what they are named for rather
+        // than tripping the redelivery-detection refusal on the way in.
         private CloudEvent orderPlaced(String orderId) {
-            return converter.toCloudEvents(List.of(new OrderPlaced(UUID.randomUUID().toString(), orderId))).getFirst();
+            CloudEvent event = converter.toCloudEvents(List.of(new OrderPlaced(UUID.randomUUID().toString(), orderId))).getFirst();
+            return CloudEventBuilder.v1(event).withExtension(new OccurrentCloudEventExtension(orderId, 1L)).build();
         }
 
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(SagaStateStore<OrderState> store, int maxCasAttempts) {
@@ -477,8 +481,14 @@ class SagaRunnerTest {
 
         private SagaSubscription runOn(PushSubscriptionModel pushModel, String subscriptionId,
                                        SagaStateStore<OrderState> stateStore, CommandDispatcher<OrderCommand> dispatcher) {
+            return runOn(pushModel, subscriptionId, stateStore, dispatcher, FAST_POLL_CONFIG);
+        }
+
+        private SagaSubscription runOn(PushSubscriptionModel pushModel, String subscriptionId,
+                                       SagaStateStore<OrderState> stateStore, CommandDispatcher<OrderCommand> dispatcher,
+                                       SagaRunnerConfig config) {
             SagaSubscription subscription = SagaRunner.<OrderEvent, OrderCommand>agnostic(pushModel, converter)
-                    .run(subscriptionId, shipsOnEveryPlaced(), stateStore, dispatcher, null, FAST_POLL_CONFIG);
+                    .run(subscriptionId, shipsOnEveryPlaced(), stateStore, dispatcher, null, config);
             subscriptionsToClose.add(subscription);
             return subscription;
         }
@@ -507,7 +517,7 @@ class SagaRunnerTest {
         }
 
         @Test
-        void a_redelivered_event_carrying_no_stream_metadata_is_reacted_to_twice() {
+        void an_event_carrying_no_stream_metadata_is_refused_by_default_and_no_command_is_issued() {
             // Given the same saga fed events with none of the Occurrent extensions, which is what a listener that
             // forwards a converter-produced CloudEvent delivers
             PushSubscriptionModel pushModel = new PushSubscriptionModel();
@@ -517,11 +527,35 @@ class SagaRunnerTest {
             CloudEvent placed = converter.toCloudEvent(new OrderPlaced("e1", "order-2"));
 
             // When
+            Throwable refusal = catchThrowable(() -> pushModel.accept(placed));
+
+            // Then the refusal reaches the feed, so the event goes unacknowledged instead of the saga silently taking
+            // on duplicate commands, and it names the way out
+            assertAll(
+                    () -> assertThat(refusal).isInstanceOf(SagaRedeliveryDetectionException.class)
+                            .hasMessageContaining("push-no-dedup")
+                            .hasMessageContaining("BEST_EFFORT"),
+                    () -> assertThat(issued).isEmpty()
+            );
+        }
+
+        @Test
+        void an_event_carrying_no_stream_metadata_is_reacted_to_twice_under_best_effort() {
+            // Given a saga that knowingly accepts a feed carrying none of the metadata, which is what another
+            // application's broker delivers
+            PushSubscriptionModel pushModel = new PushSubscriptionModel();
+            SagaStateStore<OrderState> stateStore = SagaStateStore.inMemory();
+            CopyOnWriteArrayList<OrderCommand> issued = new CopyOnWriteArrayList<>();
+            runOn(pushModel, "push-best-effort", stateStore, issued::add,
+                    FAST_POLL_CONFIG.withRedeliveryDetection(RedeliveryDetection.BEST_EFFORT));
+            CloudEvent placed = converter.toCloudEvent(new OrderPlaced("e1", "order-2"));
+
+            // When
             pushModel.accept(placed);
             pushModel.accept(placed);
 
-            // Then the command goes out twice, which is the cost the warning names. Pinned so the consequence of a
-            // feed dropping the extensions is written down as behaviour rather than only in prose.
+            // Then the command goes out twice, which is the cost BEST_EFFORT accepts. Pinned so the consequence of
+            // opting out is written down as behaviour rather than only in prose.
             assertThat(issued).containsExactly(new ShipOrder("order-2"), new ShipOrder("order-2"));
         }
 
@@ -627,8 +661,11 @@ class SagaRunnerTest {
                     .build();
         }
 
+        // Carries the stream metadata a stored event always has, so these stay about what they are named for rather
+        // than tripping the redelivery-detection refusal on the way in.
         private CloudEvent orderPlaced(String orderId) {
-            return converter.toCloudEvents(List.of(new OrderPlaced(UUID.randomUUID().toString(), orderId))).getFirst();
+            CloudEvent event = converter.toCloudEvents(List.of(new OrderPlaced(UUID.randomUUID().toString(), orderId))).getFirst();
+            return CloudEventBuilder.v1(event).withExtension(new OccurrentCloudEventExtension(orderId, 1L)).build();
         }
 
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(CommandDispatcher<OrderCommand> dispatcher) {
