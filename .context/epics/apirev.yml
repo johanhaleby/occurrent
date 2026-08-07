@@ -1,13 +1,14 @@
 schema_version: 1
 epic: apirev
-revision: 3
-updated_at: '2026-08-07T06:52:30+00:00'
+revision: 4
+updated_at: '2026-08-07T06:55:29+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (a84288ce)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
 authority: standing merge (squash on green+threads, matrix-sibling leniency, reasoned-decline
   threads stay open); grants recorded in ORCHESTRATOR.md hot-restart bullet
+milestone: 1
 pending_actions: []
 units:
   A1:
