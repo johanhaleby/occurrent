@@ -827,5 +827,5 @@ the order `accept` was called.
 
 ### Why
 
-[ADR 107](../architecture/decisions/0107-a-live-push-handler-runs-outside-the-handover-lock.md) has the reasoning,
+[ADR 107](../architecture/decisions/0108-a-live-push-handler-runs-outside-the-handover-lock.md) has the reasoning,
 including the benchmark that measured the win before this was decided.
