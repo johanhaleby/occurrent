@@ -1,5 +1,9 @@
 # Lessons
 
+- The unit-not-PR, verify-side-effects, and stalled-detection rules graduated into the /orchestrator
+  skill's epic-state model on 2026-08-07 (schema v1, `.context/epics/<epic>.yml`, durable pending
+  actions, computed completion). The entries below remain as history of how they were learned.
+
 - A dated changelog heading alone does not prove that a release shipped. Confirm a matching git tag, publication to
   Maven Central, or explicit maintainer state before treating the version as released.
 - Questions to Johan go through the AskUserQuestion tool, always with a recommended option marked (2026-08-06
