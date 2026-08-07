@@ -153,9 +153,9 @@ class SubscriptionAnnotationRegistrar {
         };
 
         Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
-        // The synchronous subscription model has no lifecycle, start position, or background thread, so there is no
-        // start position to resolve and nothing to wait for. Pass the default StartAt (the model ignores it) rather
-        // than null to honor the Subscribable contract.
+        // The synchronous subscription model has no start position or background thread, so there is no start
+        // position to resolve and nothing to wait for. Pass the default StartAt (the model ignores it) rather than
+        // null to honor the Subscribable contract.
         synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(filter), StartAt.subscriptionModelDefault(), false, consumer);
     }
 

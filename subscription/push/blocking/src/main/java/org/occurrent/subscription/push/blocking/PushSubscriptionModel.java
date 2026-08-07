@@ -23,6 +23,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Pushable;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.function.Consumer;
 
@@ -46,10 +47,13 @@ import java.util.function.Consumer;
  * {@code position} when a catch-up model reads them). Forward the stored cloud event as CloudEvents JSON and
  * reconstruct it on the listener side.
  * <p>
- * Like {@code SynchronousSubscriptionModel}, it has no lifecycle, start position, checkpoint, catch-up, or replay: it
- * only ever reacts to events fed to it here and now. For catch-up from the event store before attaching the push feed,
- * wrap it in the replay-then-push catch-up model. The shared register-and-route machinery lives in
- * {@link RegisteringSubscribable}.
+ * Like {@code SynchronousSubscriptionModel}, it has no start position, checkpoint, catch-up, or replay. It only
+ * ever reacts to events fed to it here and now. It is a full {@link SubscriptionModel}, so stopping it, or pausing
+ * a subscription, drops rather than defers events that arrive in the meantime (ADR 85). {@link #accept(CloudEvent)}
+ * returns normally either way, so a listener that acknowledges on return acknowledges those events too, and
+ * stopping this model while the push feed keeps running loses them for good. For catch-up from the event store
+ * before attaching the push feed, wrap it in the replay-then-push catch-up model. The shared register-and-route
+ * machinery lives in {@link RegisteringSubscribable}.
  */
 @NullMarked
 public class PushSubscriptionModel extends RegisteringSubscribable implements Pushable {
