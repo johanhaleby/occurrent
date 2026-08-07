@@ -25,6 +25,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.json.JsonParseException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
@@ -150,7 +151,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
         Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()));
 
         // Then
-        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
+        assertThat(throwable).isExactlyInstanceOf(DuplicateSubscriptionIdException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
     }
 
     @Test

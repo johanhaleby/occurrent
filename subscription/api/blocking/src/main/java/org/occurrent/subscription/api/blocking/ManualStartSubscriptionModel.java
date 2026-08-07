@@ -176,7 +176,14 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        if (!(registrations.get(subscriptionId) instanceof Registration.Deferred deferred)) {
+        Registration registration = registrations.get(subscriptionId);
+        // Another thread is between claiming this registration and subscribing it, so the wrapped model does not have
+        // the id yet and would answer that it knows nothing about it. Answer for the registration this model holds.
+        if (registration instanceof Registration.Starting) {
+            throw new SubscriptionAlreadyRunningException(subscriptionId,
+                    "Subscription " + subscriptionId + " is already being started by another thread.");
+        }
+        if (!(registration instanceof Registration.Deferred deferred)) {
             Subscription subscription = delegate.resumeSubscription(subscriptionId);
             reopenAfterStop();
             return subscription;

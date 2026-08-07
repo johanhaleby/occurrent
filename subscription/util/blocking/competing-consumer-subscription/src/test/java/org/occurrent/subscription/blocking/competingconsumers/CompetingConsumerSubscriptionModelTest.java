@@ -12,6 +12,8 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.subscription.UnknownSubscriptionException;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
@@ -877,7 +879,7 @@ class CompetingConsumerSubscriptionModelTest {
 
         // Then
         assertThat(throwable)
-                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .isExactlyInstanceOf(DuplicateSubscriptionIdException.class)
                 .hasMessage("Subscription " + subscriptionId + " is already defined.");
     }
 
@@ -896,7 +898,7 @@ class CompetingConsumerSubscriptionModelTest {
         // Then
         assertThat(throwable)
                 .as("the overload that mints a subscriber id of its own must not turn a duplicate id into a second consumer")
-                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .isExactlyInstanceOf(DuplicateSubscriptionIdException.class)
                 .hasMessage("Subscription " + subscriptionId + " is already defined.");
     }
 
@@ -973,8 +975,8 @@ class CompetingConsumerSubscriptionModelTest {
 
         // Then
         assertThat(throwable)
-                .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Subscription neverSubscribed is not running");
+                .isExactlyInstanceOf(UnknownSubscriptionException.class)
+                .hasMessage("Subscription neverSubscribed is not known to this subscription model.");
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {
