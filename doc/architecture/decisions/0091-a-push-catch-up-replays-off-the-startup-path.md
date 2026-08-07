@@ -168,14 +168,14 @@ one that succeeded from one that never existed, so the one question `BACKGROUND`
 ready to serve, could not be asked at all. The object that could answer, the `CatchupThenPushSubscriptionModel` the
 registrar builds, sat in a private list and was never published as a bean.
 
-It is now `PushCatchupStatus`, a read-only per-id observable with four states: `CatchingUp`, `Live`, `Failed` carrying
-the cause, and `Unknown`. Three things about the shape are deliberate.
+It is now `PushCatchupStatus`, a read-only per-id observable with five states: `CatchingUp`, `Live`, `NotStarted`,
+`Failed` carrying the cause, and `Unknown`. Four things about the shape are deliberate.
 
 **The states are a sealed interface rather than an enum plus a separate cause accessor.** Only `Failed` carries a
 `Throwable`, so "a cause exists exactly when it failed" is true by construction rather than by javadoc, and a readiness
 probe switches exhaustively instead of remembering which combinations are possible.
 
-**The live states are derived, not recorded, wherever there is a model to ask.** `register(id, BooleanSupplier)` keeps a
+**The live states are derived, not recorded, wherever there is a model to ask.** `register(id, catchingUp, running)` keeps
 handle on the model's `isCatchingUp(id)` (see `ReplayAwareSubscriptionModel`, the capability interface that made this
 askable at all), so a model that is stopped and started again, replaying its history a second time, reports
 `CatchingUp` again rather than staying at whatever it reached the first time. Nothing tells this bean that a replay
@@ -187,8 +187,16 @@ because the registrar is the only thing that drives that replay.
 failed while keeping the registration that now refuses events, so its `isCatchingUp` answers false afterwards, and
 resolving the model first would report a broken projection as ready to serve.
 
-The parameter is a `BooleanSupplier` rather than a subscription model type so the class can keep serving both stacks
+The parameters are `BooleanSupplier`s rather than a subscription model type so the class can keep serving both stacks
 from `org.occurrent.springboot.common` without that module depending on either subscription API.
+
+**`NotStarted` exists because asking whether a replay is in flight is not the same as asking whether anything is
+running.** `occurrent.subscription.mode = manual` defers the registration, so nothing is replaying and nothing has
+started, and a status derived from `isCatchingUp` alone called that `Live`. A readiness probe would have been told a
+projection nobody had started was ready to serve. There are five conditions a push id can be in (withheld, replaying,
+live, failed, unregistered) and only four states existed, so `register` takes both answers and resolves catching up
+first, since a model reports a replay as running. That is also why `catchup = NONE` registers a supplier instead of
+recording `Live` at registration time. It never replays, but it is only live once something has started it.
 
 `Unknown` is deliberately distinct from `Live`: a probe asking about a name nothing recognises has not been told yes.
 The rename cost nothing, since none of this had shipped. Resolves
