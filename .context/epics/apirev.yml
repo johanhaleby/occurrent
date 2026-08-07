@@ -1,8 +1,8 @@
 schema_version: 1
 epic: apirev
-revision: 21
-updated_at: '2026-08-07T12:10:00+00:00'
-updated_by: orchestrator worktree-mobile-setup-916a9c (A11 merged and swept)
+revision: 22
+updated_at: '2026-08-07T12:20:00+00:00'
+updated_by: orchestrator worktree-mobile-setup-916a9c (B2 delivered PR 615)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -335,7 +335,7 @@ units:
     session: local_8347fd08-d21f-424f-9fb6-f48c63fc13b6
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 615
       met: false
       evidence: null
     - check: issue_closed
@@ -343,17 +343,18 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'session rebases over merged #607, finishes Map short-circuit, opens
-      the #587 PR'
-    last_meaningful_progress_at: '2026-08-07T11:28:19+00:00'
+    next_action: CAS-merge on green with threads handled (merge-time check)
+    last_meaningful_progress_at: '2026-08-07T12:20:00+00:00'
     observed:
-      branch:
-        ref: worktree-apirev-b2-587
-        pushed: aa6b9af4b
-        half_done: streaming parser, 5-6x alloc win, JMH baseline for Mongo shape
-        via: session tail read
-        at: '2026-08-07T11:22:30+00:00'
-    assessment: healthy deliberate park at the collision boundary, exactly per brief
+      pr_615:
+        head: f5bc2b0c4
+        rollup: checks running, 0 failures
+        mergeable: UNKNOWN (fresh PR, recompute pending)
+        title: Read a data filter field without materialising the whole payload
+        via: gh pr view + monitor
+        at: '2026-08-07T12:20:00+00:00'
+    assessment: 'delivered the #587 PR after the deliberate park; two targeted read
+      paths replacing tree-parse-per-condition'
   B3:
     issue: 588
     goal: handover lock measurement
