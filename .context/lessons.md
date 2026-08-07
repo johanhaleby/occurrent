@@ -103,6 +103,13 @@
   live PR look closed), PR-OPENED separates discovery from state change so adopt-routing and
   merge-routing need no inference, and a multi-repo epic runs one monitor per repository with active
   PR work. The event vocabulary is now shared between the Claude and Codex orchestrators.
+- Worker sessions never block on Johan for delivery mechanics (2026-08-07, from Johan after a
+  delivered archrev session idled waiting on a pr-create question). Brief defaults now: non-draft PR
+  opened non-interactively (any question the PR skill would ask is decided from the brief or the
+  worker's judgment), simplify at the worker's or brief's discretion, then pr-fix with autostop so
+  the worker self-heals its CI and goes quiet exactly when the orchestrator's monitor sees green and
+  CAS-merges. The head pin makes the worker-push-versus-merge race safe. Judgment gates stay
+  interactive: plan approvals, shipped-contract structured asks, BLOCKED escalations.
 - Out-of-scope findings route through the orchestrator, not through a worker's own spawn-task chip
   (2026-08-07, from Johan on how #613/#614 arrived). A worker-spawned chip has no fleet title, no
   model or effort recommendation, no claiming brief, and no registration, so the session enters the
