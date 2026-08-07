@@ -103,6 +103,17 @@
   live PR look closed), PR-OPENED separates discovery from state change so adopt-routing and
   merge-routing need no inference, and a multi-repo epic runs one monitor per repository with active
   PR work. The event vocabulary is now shared between the Claude and Codex orchestrators.
+- Monitor v7 from the Codex cross-review (2026-08-07, four catches adopted, one pushback). Adopted:
+  UNKNOWN suppression must key on PR number PLUS full head SHA, or a worker push during a recompute
+  prints the old head's mergeability beside the new head (evidence binds to the exact commit, the
+  same rule as the CAS pin); a truncated at-limit snapshot must pause delta and closure inference
+  and keep the last complete baseline (v6 warned but still adopted the truncated set, so missing
+  rows read as closures), with MONITOR-COMPLETE on recovery; the substituted mergeable value is a
+  notification de-dup device and never enters the epic state as an observed fact; trap-cleanup for
+  the stderr tempfile. Pushback kept with a capability distinction: the worker spawn-task fallback
+  stays, because on this host a chip spawns nothing, it is a suggestion only Johan's click turns
+  into a session, so the fallback passes through the human rather than becoming autonomous
+  child-spawning, and the skill wording now says so explicitly.
 - Worker sessions never block on Johan for delivery mechanics (2026-08-07, from Johan after a
   delivered archrev session idled waiting on a pr-create question). Brief defaults now: non-draft PR
   opened non-interactively (any question the PR skill would ask is decided from the brief or the
