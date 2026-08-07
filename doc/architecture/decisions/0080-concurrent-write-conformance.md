@@ -46,11 +46,14 @@ State the contract in one place, assert it in the TCK against all four stores, a
 `WriteConditionNotFulfilledException` and writes nothing. Asserted on a count, not on `contains`, because `contains`
 passes on a store that wrote both.
 
-**An unconditional write does not fail on a version race, for up to 15 retries.** `anyStreamVersion()` means a write
-that loses a race retries rather than surfacing the conflict, with backoff, up to those 15 attempts. The suite
-exercises 6 threads racing on one stream over 5 iterations, which 15 backed-off retries clear easily, so every writer
-succeeds and every event is present exactly once. A stream with more contention than that can clear still exhausts the
-retries and throws.
+**An unconditional write does not fail on a version race, as long as the store keeps retrying through it.**
+`anyStreamVersion()` means a write that loses a race retries rather than surfacing the conflict. The two blocking
+Mongo stores retry with no fixed attempt limit, `RetryStrategy.retry()`'s default. The reactive store instead caps
+the retry at 15 attempts with backoff, because retrying an unbounded reactive pipeline with neither a delay nor a
+limit spins a scheduler thread. The suite's contention, 6 threads racing on one stream over 5 iterations, settles
+well inside that 15-attempt cap, so every writer succeeds and every event is present exactly once on all four stores.
+A stream contended past what the reactive store's 15 backed-off retries can clear still exhausts them and throws
+there. The blocking stores have no such ceiling to hit.
 
 The reactive store gets the retry the blocking ones have, routed through the existing
 transaction-ownership check ([ADR 74](0074-retry-only-where-the-transaction-is-owned.md)) so it only retries a
@@ -98,8 +101,9 @@ the eight instances is what lets the guard start from zero instead of shipping w
 ## Consequences
 
 A concurrent unconditional write behaves the same on all four stores now, so code written against the blocking stores
-ports to the reactive one without acquiring a failure mode. The retry is bounded (15 attempts, 10ms backoff capped at
-500ms), so a genuinely contended stream fails eventually rather than never.
+ports to the reactive one without acquiring a failure mode. Only the reactive store caps its retry, at 15 attempts
+with backoff up to 500ms, so a genuinely contended stream fails there eventually rather than never. The blocking
+stores retry without that cap.
 
 The suite runs 5 iterations per test and passes in under 5 seconds per store, well inside the 240 second shard budget.
 `eventstore/mongodb/spring` is the shard to watch as the TCK grows: it is a single path carrying both the blocking and
