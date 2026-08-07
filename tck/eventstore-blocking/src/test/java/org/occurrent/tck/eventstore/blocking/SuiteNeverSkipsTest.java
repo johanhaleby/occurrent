@@ -46,7 +46,7 @@ import static org.junit.platform.engine.discovery.DiscoverySelectors.selectClass
  * It does not establish the no-skipping rule, because every test dies on its first call into the store, so an
  * assumption placed anywhere after that is never reached and the skipped count stays zero either way.
  * {@link StreamPositionDisabledConformance} does earn something the others do not here: a second way to skip is
- * {@link EventStoreFixture#storeWithoutPosition()} answering {@link java.util.Optional#empty()}, which is a legitimate
+ * {@link EventStoreFixture#eventStoreWithoutPosition()} answering {@link java.util.Optional#empty()}, which is a legitimate
  * answer for a fixture to give but must still fail the suite rather than pass it, and
  * {@link CapabilityGuardConformance} covers the same shape for its two restricted-store accessors.
  * <p>
@@ -285,7 +285,7 @@ class SuiteNeverSkipsTest {
 
     /**
      * As {@link HonoursNothingConformance}, but for {@link StreamPositionDisabledConformance}. This fixture leaves
-     * {@link EventStoreFixture#storeWithoutPosition()} at its default, i.e. it declines to supply a store built with
+     * {@link EventStoreFixture#eventStoreWithoutPosition()} at its default, i.e. it declines to supply a store built with
      * position turned off, which is exactly the empty answer the suite must never let pass silently or skip. Every
      * test must still fail, just from that declined answer rather than from calling {@link NoopStore}.
      */
@@ -324,7 +324,7 @@ class SuiteNeverSkipsTest {
                     return NoopStore.INSTANCE;
                 }
 
-                // storeWithoutPosition() deliberately left at its default: Optional.empty()
+                // eventStoreWithoutPosition() deliberately left at its default: Optional.empty()
             };
         }
     }
@@ -412,7 +412,7 @@ class SuiteNeverSkipsTest {
 
     /**
      * As {@link HonoursNothingConformance}, but for {@link CapabilityGuardConformance}. This fixture leaves
-     * {@link EventStoreFixture#storeWithoutDcb()} and {@link EventStoreFixture#storeWithoutStream()} at their defaults,
+     * {@link EventStoreFixture#eventStoreWithoutDcb()} and {@link EventStoreFixture#eventStoreWithoutStream()} at their defaults,
      * i.e. it declines to build a store restricted to one capability, which is the second way this suite could quietly
      * pass. Every test must fail from that declined answer rather than skip, the same rule
      * {@link HonoursNothingPositionDisabledConformance} covers for the position-disabled suite.
@@ -462,7 +462,7 @@ class SuiteNeverSkipsTest {
                     return DcbAppendConditionModel.EXACT_CRITERIA;
                 }
 
-                // storeWithoutDcb() and storeWithoutStream() deliberately left at their defaults: Optional.empty()
+                // eventStoreWithoutDcb() and eventStoreWithoutStream() deliberately left at their defaults: Optional.empty()
             };
         }
     }

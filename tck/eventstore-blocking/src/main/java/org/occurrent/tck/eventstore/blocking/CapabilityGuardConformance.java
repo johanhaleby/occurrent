@@ -55,7 +55,7 @@ import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.*;
  * store, so a decider would append against a boundary it never actually checked.
  * <p>
  * The suite needs two extra stores, one per direction, which the fixture builds through
- * {@link EventStoreFixture#storeWithoutDcb()} and {@link EventStoreFixture#storeWithoutStream()}. Extending this suite
+ * {@link EventStoreFixture#eventStoreWithoutDcb()} and {@link EventStoreFixture#eventStoreWithoutStream()}. Extending this suite
  * is the promise that both exist, so an empty answer from either fails rather than skipping.
  * <p>
  * Each group also asserts that its restricted store still serves the capability it <em>was</em> built with. Without
@@ -90,7 +90,7 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
 
         @Test
         void every_dcb_read_refuses() {
-            DcbEventStore store = storeWithoutDcb().dcbEventStore();
+            DcbEventStore store = eventStoreWithoutDcb().dcbEventStore();
             DcbCriteria criteria = DcbCriteria.tags(tag(NAME_1));
 
             assertAll(
@@ -105,7 +105,7 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
 
         @Test
         void every_dcb_append_refuses() {
-            DcbEventStore store = storeWithoutDcb().dcbEventStore();
+            DcbEventStore store = eventStoreWithoutDcb().dcbEventStore();
             List<CloudEvent> events = List.of(taggedEvent(DEFINED, NAME_1));
 
             assertAll(
@@ -117,7 +117,7 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
         @Test
         void the_stream_capability_it_was_built_with_still_works() {
             // Proves the refusals above are scoped to DCB rather than this being a store that refuses everything.
-            EventStore store = storeWithoutDcb().eventStore();
+            EventStore store = eventStoreWithoutDcb().eventStore();
             store.write(STREAM_1, WriteCondition.anyStreamVersion(), List.of(event("A", DEFINED)));
 
             assertThat(idsOf(store.read(STREAM_1).events())).containsExactly("A");
@@ -130,7 +130,7 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
 
         @Test
         void every_stream_read_refuses() {
-            StoreWithoutStream store = storeWithoutStream();
+            EventStoreWithoutStream store = eventStoreWithoutStream();
 
             assertAll(
                     () -> assertRefuses(EventStoreCapability.STREAM, () -> store.eventStore().read(STREAM_1)),
@@ -142,7 +142,7 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
 
         @Test
         void every_stream_write_refuses() {
-            StoreWithoutStream store = storeWithoutStream();
+            EventStoreWithoutStream store = eventStoreWithoutStream();
             List<CloudEvent> events = List.of(event("A", DEFINED));
 
             assertAll(
@@ -153,7 +153,7 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
 
         @Test
         void every_query_refuses() {
-            StoreWithoutStream store = storeWithoutStream();
+            EventStoreWithoutStream store = eventStoreWithoutStream();
 
             assertAll(
                     () -> assertRefuses(EventStoreCapability.STREAM, () -> consume(store.queries().query(Filter.all(), 0, 10, SortBy.unsorted()))),
@@ -164,7 +164,7 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
 
         @Test
         void every_operation_refuses() {
-            StoreWithoutStream store = storeWithoutStream();
+            EventStoreWithoutStream store = eventStoreWithoutStream();
 
             assertAll(
                     () -> assertRefuses(EventStoreCapability.STREAM, () -> store.operations().deleteEventStream(STREAM_1)),
@@ -177,7 +177,7 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
         @Test
         void the_dcb_capability_it_was_built_with_still_works() {
             // Proves the refusals above are scoped to STREAM rather than this being a store that refuses everything.
-            DcbEventStore store = storeWithoutStream().dcbEventStore();
+            DcbEventStore store = eventStoreWithoutStream().dcbEventStore();
             store.append(List.of(taggedEvent(DEFINED, NAME_1)));
 
             assertThat(typesOf(store.read(DcbCriteria.tags(tag(NAME_1))).events())).containsExactly(DEFINED);
@@ -211,17 +211,17 @@ public abstract class CapabilityGuardConformance extends EventStoreConformance {
         }
     }
 
-    private StoreWithoutDcb storeWithoutDcb() {
-        return fixture().storeWithoutDcb().orElseThrow(() -> new AssertionError(
-                fixture().getClass().getName() + " does not override storeWithoutDcb(), so " + getClass().getName()
-                        + " has no store to assert the DCB guards against. Override storeWithoutDcb() to build a store "
+    private EventStoreWithoutDcb eventStoreWithoutDcb() {
+        return fixture().eventStoreWithoutDcb().orElseThrow(() -> new AssertionError(
+                fixture().getClass().getName() + " does not override eventStoreWithoutDcb(), so " + getClass().getName()
+                        + " has no store to assert the DCB guards against. Override eventStoreWithoutDcb() to build a store "
                         + "with the STREAM capability alone."));
     }
 
-    private StoreWithoutStream storeWithoutStream() {
-        return fixture().storeWithoutStream().orElseThrow(() -> new AssertionError(
-                fixture().getClass().getName() + " does not override storeWithoutStream(), so " + getClass().getName()
-                        + " has no store to assert the STREAM guards against. Override storeWithoutStream() to build a "
+    private EventStoreWithoutStream eventStoreWithoutStream() {
+        return fixture().eventStoreWithoutStream().orElseThrow(() -> new AssertionError(
+                fixture().getClass().getName() + " does not override eventStoreWithoutStream(), so " + getClass().getName()
+                        + " has no store to assert the STREAM guards against. Override eventStoreWithoutStream() to build a "
                         + "store with the DCB capability alone."));
     }
 }

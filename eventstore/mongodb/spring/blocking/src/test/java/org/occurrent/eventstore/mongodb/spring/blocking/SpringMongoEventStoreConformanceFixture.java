@@ -124,7 +124,7 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
     }
 
     @Override
-    public Optional<StoreWithoutPosition> storeWithoutPosition() {
+    public Optional<EventStoreWithoutPosition> eventStoreWithoutPosition() {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder()
                 .eventStoreCollectionName("events-without-position")
                 .transactionConfig(transactionManager)
@@ -132,19 +132,19 @@ class SpringMongoEventStoreConformanceFixture implements EventStoreFixture {
                 .withoutStreamPosition()
                 .build();
         SpringMongoEventStore withoutPosition = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-        return Optional.of(new StoreWithoutPosition(withoutPosition, withoutPosition));
+        return Optional.of(new EventStoreWithoutPosition(withoutPosition, withoutPosition));
     }
 
     @Override
-    public Optional<StoreWithoutDcb> storeWithoutDcb() {
+    public Optional<EventStoreWithoutDcb> eventStoreWithoutDcb() {
         SpringMongoEventStore withoutDcb = restrictedTo("events-stream-only", EventStoreCapability.STREAM);
-        return Optional.of(new StoreWithoutDcb(withoutDcb, withoutDcb));
+        return Optional.of(new EventStoreWithoutDcb(withoutDcb, withoutDcb));
     }
 
     @Override
-    public Optional<StoreWithoutStream> storeWithoutStream() {
+    public Optional<EventStoreWithoutStream> eventStoreWithoutStream() {
         SpringMongoEventStore withoutStream = restrictedTo("events-dcb-only", EventStoreCapability.DCB);
-        return Optional.of(new StoreWithoutStream(withoutStream, withoutStream, withoutStream, withoutStream, withoutStream));
+        return Optional.of(new EventStoreWithoutStream(withoutStream, withoutStream, withoutStream, withoutStream, withoutStream));
     }
 
     /**

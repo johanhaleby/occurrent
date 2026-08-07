@@ -202,7 +202,7 @@ public interface EventStoreFixture {
      * must be STREAM-only. {@link EventStoreCapability#DCB} always writes a position, and the stores reject building
      * one with DCB and position disabled together.
      */
-    default Optional<StoreWithoutPosition> storeWithoutPosition() {
+    default Optional<EventStoreWithoutPosition> eventStoreWithoutPosition() {
         return Optional.empty();
     }
 
@@ -213,7 +213,7 @@ public interface EventStoreFixture {
      * Supplying one opts the implementation into {@link CapabilityGuardConformance}, which asserts that every DCB call
      * on it refuses while its stream capability still works.
      */
-    default Optional<StoreWithoutDcb> storeWithoutDcb() {
+    default Optional<EventStoreWithoutDcb> eventStoreWithoutDcb() {
         return Optional.empty();
     }
 
@@ -224,7 +224,7 @@ public interface EventStoreFixture {
      * Supplying one opts the implementation into {@link CapabilityGuardConformance}, which asserts that every stream
      * call on it refuses while its DCB capability still works.
      */
-    default Optional<StoreWithoutStream> storeWithoutStream() {
+    default Optional<EventStoreWithoutStream> eventStoreWithoutStream() {
         return Optional.empty();
     }
 

@@ -38,7 +38,7 @@ An unsound answer is worse than no answer, which is the reasoning ADR 79 already
 
 **Each group also asserts the restricted store still serves the capability it does have.** Without that, a fixture
 handing back a dead store, or one closed early, passes every refusal assertion. The fixture accessors therefore hand
-over the working view alongside the refusing ones: `StoreWithoutDcb` carries the stream view, `StoreWithoutStream`
+over the working view alongside the refusing ones: `EventStoreWithoutDcb` carries the stream view, `EventStoreWithoutStream`
 carries the DCB view.
 
 **The both-capabilities case is not here.** Nothing refuses in that configuration, so what is worth asserting is that

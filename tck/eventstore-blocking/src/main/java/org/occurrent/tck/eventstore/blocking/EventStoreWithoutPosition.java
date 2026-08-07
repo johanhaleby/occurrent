@@ -34,9 +34,9 @@ import static java.util.Objects.requireNonNull;
  * @param positionOrderedReader answers {@link PositionOrderedReader#writesPosition()} for that same store
  */
 @NullMarked
-public record StoreWithoutPosition(EventStore eventStore, PositionOrderedReader positionOrderedReader) {
+public record EventStoreWithoutPosition(EventStore eventStore, PositionOrderedReader positionOrderedReader) {
 
-    public StoreWithoutPosition {
+    public EventStoreWithoutPosition {
         requireNonNull(eventStore, "eventStore cannot be null");
         requireNonNull(positionOrderedReader, "positionOrderedReader cannot be null");
     }

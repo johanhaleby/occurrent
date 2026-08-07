@@ -32,15 +32,15 @@ import static java.util.Objects.requireNonNull;
  * {@code eventStore} to show the store is otherwise alive rather than closed or broken.
  * <p>
  * Both views are handed over separately because neither interface extends the other, exactly as
- * {@link StoreWithoutPosition} does. An implementation where one object is both passes the same instance twice.
+ * {@link EventStoreWithoutPosition} does. An implementation where one object is both passes the same instance twice.
  *
  * @param eventStore    writes and reads a stream, which this store must still do
  * @param dcbEventStore the DCB view, every method of which must refuse
  */
 @NullMarked
-public record StoreWithoutDcb(EventStore eventStore, DcbEventStore dcbEventStore) {
+public record EventStoreWithoutDcb(EventStore eventStore, DcbEventStore dcbEventStore) {
 
-    public StoreWithoutDcb {
+    public EventStoreWithoutDcb {
         requireNonNull(eventStore, "eventStore cannot be null");
         requireNonNull(dcbEventStore, "dcbEventStore cannot be null");
     }
