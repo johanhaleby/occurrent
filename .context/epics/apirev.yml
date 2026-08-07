@@ -1,7 +1,7 @@
 schema_version: 1
 epic: apirev
-revision: 9
-updated_at: '2026-08-07T07:58:16+00:00'
+revision: 10
+updated_at: '2026-08-07T08:42:14+00:00'
 updated_by: orchestrator worktree-mobile-setup-916a9c (post-restart reconcile)
 baseline:
   repo: johanhaleby/occurrent
@@ -95,11 +95,11 @@ units:
   A3:
     issue: 580
     goal: refusal exception contract (planning round then ADR + rollout)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_6f0f9234-2ebc-4700-ab46-970d83fba885
+    session: null
     deliverables:
     - check: manual_approval
       ref: Johan rules on sealed-family vs @throws floor
@@ -108,24 +108,24 @@ units:
         docs chip exists)
     - check: pr_merged
       ref: 603
-      met: false
-      evidence: null
+      met: true
+      evidence: CAS-MERGED 2026-08-07T08:42:14+00:00 at eaeaee68c, 27/27 green, 0
+        threads
     - check: issue_closed
       ref: 580
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #580'
     blocking_on: []
-    next_action: 'session nudged post-restart: resume pr-fix on 8 failures, merge
-      main in (#596 landed)'
-    last_meaningful_progress_at: '2026-08-07T07:40:40+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-07T08:42:14+00:00'
     observed:
       pr_603:
-        head: 3e6c2a882
-        rollup: 19 green, 8 FAILURE, session actively fixing
-        threads_open: null
-        via: gh pr list
-        at: '2026-08-07T07:40:40+00:00'
-    assessment: session was cut by app relaunch at 07:57Z; nudged 2026-08-07T07:58:16+00:00
+        head: eaeaee68c
+        rollup: 9 green, 18 in progress, matrix running
+        threads_open: 0
+        via: gh pr list + graphql
+        at: '2026-08-07T08:19:37+00:00'
+    assessment: sealed refusal family (ADR 0106) on main
   A4:
     issue: 581
     goal: TCK version policy (ADR 77 amendment + deliveryTimeout knob + implementer
