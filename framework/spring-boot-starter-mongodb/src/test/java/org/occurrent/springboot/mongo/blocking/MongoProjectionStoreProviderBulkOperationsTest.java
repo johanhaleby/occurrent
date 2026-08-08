@@ -127,9 +127,9 @@ class MongoProjectionStoreProviderBulkOperationsTest {
         PlainState a = new PlainState(prefix + "a", "value-a");
         PlainState b = new PlainState(prefix + "b", "value-b");
 
-        // save(id, state) ignores id and writes under the state's own @Id, per the class javadoc; saveAll must do
-        // the same, so the map keys below are deliberately not the states' own ids.
-        repository.saveAll(Map.of("irrelevant-key-1", a, "irrelevant-key-2", b));
+        // save(id, state) writes under the state's own @Id, per the class javadoc; saveAll must do the same, so the
+        // map keys below match the states' own ids, which the document-id guard now requires of every entry.
+        repository.saveAll(Map.of(a.id(), a, b.id(), b));
 
         assertThat(mongoOperations.findById(a.id(), PlainState.class)).isEqualTo(a);
         assertThat(mongoOperations.findById(b.id(), PlainState.class)).isEqualTo(b);
@@ -205,9 +205,9 @@ class MongoProjectionStoreProviderBulkOperationsTest {
     void saveAll_surfaces_DuplicateKeyException_not_the_raw_bulk_write_wrapper_for_a_unique_index_violation() {
         mongoOperations.indexOps(UniqueFieldState.class).ensureIndex(new Index().on("uniqueValue", ASC).unique());
         String uniqueValue = "dup-" + UUID.randomUUID();
-        Map<String, UniqueFieldState> states = Map.of(
-                "id-" + UUID.randomUUID(), new UniqueFieldState("id-" + UUID.randomUUID(), uniqueValue),
-                "id-" + UUID.randomUUID(), new UniqueFieldState("id-" + UUID.randomUUID(), uniqueValue));
+        UniqueFieldState first = new UniqueFieldState("id-" + UUID.randomUUID(), uniqueValue);
+        UniqueFieldState second = new UniqueFieldState("id-" + UUID.randomUUID(), uniqueValue);
+        Map<String, UniqueFieldState> states = Map.of(first.id(), first, second.id(), second);
         ViewStateRepository<UniqueFieldState, String> repository = provider.createDefaultProjectionStore("unique", UniqueFieldState.class);
 
         Throwable thrown = catchThrowable(() -> repository.saveAll(states));
