@@ -47,6 +47,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Updates.set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -88,7 +90,6 @@ class MongoLeaseRaceTest {
     private static MongoDatabase database;
 
     private MongoCollection<BsonDocument> locks;
-    private MutableClock clock;
 
     @BeforeAll
     static void connect() {
@@ -104,12 +105,19 @@ class MongoLeaseRaceTest {
     @BeforeEach
     void startWithNoLocks() {
         locks = database.getCollection("competing-consumer-locks-" + UUID.randomUUID(), BsonDocument.class);
-        clock = new MutableClock(Instant.parse("2026-08-08T12:00:00Z"));
     }
 
     @AfterEach
     void dropTheLocks() {
         locks.drop();
+    }
+
+    /**
+     * Writes {@code expiresAt} on a subscription's lock document directly, so it looks expired to the database's own
+     * clock, which is what production code judges it against, without moving anything in this process.
+     */
+    private void expireLeaseFor(String subscriptionId) {
+        locks.updateOne(eq("_id", subscriptionId), set("expiresAt", Instant.now().minus(LONG_ENOUGH)));
     }
 
     @Test
@@ -121,8 +129,8 @@ class MongoLeaseRaceTest {
 
         assertThat(rival.register(subscription)).isTrue();
         assertThat(node.register(subscription)).isFalse();
-        // The rival stops refreshing, so the node's next round is a round it wins.
-        clock.advanceBy(LEASE.plusMillis(1));
+        // As if the rival stopped refreshing, so the node's next round is a round it wins.
+        expireLeaseFor(subscription);
 
         Thread refresh = run(node::refresh);
         assertThat(held.awaitArrival()).isEqualTo(subscription);
@@ -153,7 +161,7 @@ class MongoLeaseRaceTest {
 
         assertThat(rival.register(subscription)).isTrue();
         assertThat(node.register(subscription)).isFalse();
-        clock.advanceBy(LEASE.plusMillis(1));
+        expireLeaseFor(subscription);
 
         Thread refresh = run(node::refresh);
         held.awaitArrival();
@@ -213,7 +221,7 @@ class MongoLeaseRaceTest {
 
         assertThat(rival.register(subscription)).isTrue();
         assertThat(node.register(subscription)).isFalse();
-        clock.advanceBy(LEASE.plusMillis(1));
+        expireLeaseFor(subscription);
 
         Thread refresh = run(node::refresh);
         held.awaitArrival();
@@ -265,7 +273,7 @@ class MongoLeaseRaceTest {
         private Node(String subscriberId, MongoCollection<BsonDocument> collectionForRefresh, Object model) {
             this.subscriberId = subscriberId;
             ScheduledRefresh heldRefresh = new ScheduledRefresh((lease, scheduler) -> scheduledRefresh.set(scheduler.refresh()));
-            this.support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, clock, RetryStrategy.none(), heldRefresh)
+            this.support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), heldRefresh)
                     .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(collectionForRefresh));
             this.support.addListener(new CompetingConsumerListener() {
                 @Override
@@ -397,11 +405,15 @@ class MongoLeaseRaceTest {
 
     /**
      * Every call the strategy makes to the server filters on the subscription id, which is the lock document's id,
-     * and the driver renders each of those filters as an {@code $and}. Throws rather than answering null if that ever
-     * stops being true, since a test that silently held the wrong consumer would look like the code under test broke.
+     * either directly or, when the driver renders a multi-clause filter, nested inside an {@code $and}. Throws
+     * rather than answering null if neither shape holds, since a test that silently held the wrong consumer would
+     * look like the code under test broke.
      */
     private static String subscriptionIdIn(Object[] args) {
         BsonDocument filter = ((Bson) args[0]).toBsonDocument(BsonDocument.class, MongoClientSettings.getDefaultCodecRegistry());
+        if (filter.containsKey("_id")) {
+            return filter.getString("_id").getValue();
+        }
         return filter.getArray("$and", new BsonArray()).stream()
                 .map(BsonValue::asDocument)
                 .filter(document -> document.containsKey("_id"))

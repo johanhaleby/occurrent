@@ -36,6 +36,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Updates.set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -45,11 +47,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * and has no lease to speak of. What the lease itself does is this class's subject, and it belongs here rather than in
  * either strategy module because both reach exactly this code through a different MongoDB API.
  * <p>
- * <strong>No time passes while these run.</strong> The support class has always taken a {@link Clock}, which decides
- * when a lease is up, and it now takes its {@link ScheduledRefresh} too, which decides when a refresh runs. Handing it
- * one that keeps the refresh instead of scheduling it leaves the test holding both halves, so a lease expiring is
- * moving a clock and a refresh happening is calling a method. The alternative is a short lease and a sleep, which is
- * slower and weaker: it cannot tell "the lease was up" from "the machine was busy".
+ * <strong>No sleep waits out a lease.</strong> {@code expiresAt} is judged against the database's own clock, so
+ * nothing in the test process can move it. A test that needs a lease to look expired, or close to expiring, writes
+ * {@code expiresAt} on the lock document directly instead, and a real refresh then overwrites it from the database's
+ * actual current time. The support class's {@link ScheduledRefresh} still decides when a refresh runs, and holding it
+ * rather than scheduling it is what leaves each {@link Consumer#refresh()} call in charge of that, instead of a
+ * background thread on its own timer. The alternative is a short lease and a sleep, which is slower and weaker: it
+ * cannot tell "the lease was up" from "the machine was busy".
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -62,6 +66,13 @@ class MongoLeaseTimingTest {
     private static final String DATABASE = "mongoleasetiming";
     private static final Duration LEASE = Duration.ofMinutes(10);
     private static final String SUBSCRIPTION = "a-subscription";
+    /**
+     * How far from the real current instant a seeded {@code expiresAt} sits, in either direction. Long enough that
+     * the round trip to seed it and the round trip the test makes afterwards cannot cross it on a loaded CI runner,
+     * short enough next to {@link #LEASE} that "close to expiring" and "just expired" still test the boundary rather
+     * than a lease that is, for the test's purposes, simply fresh or simply gone.
+     */
+    private static final Duration MARGIN = Duration.ofSeconds(2);
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
@@ -71,7 +82,6 @@ class MongoLeaseTimingTest {
     private static MongoDatabase database;
 
     private MongoCollection<BsonDocument> locks;
-    private MutableClock clock;
 
     @BeforeAll
     static void connect() {
@@ -87,7 +97,6 @@ class MongoLeaseTimingTest {
     @BeforeEach
     void startWithNoLocks() {
         locks = database.getCollection("competing-consumer-locks-" + UUID.randomUUID(), BsonDocument.class);
-        clock = new MutableClock(Instant.parse("2026-08-05T12:00:00Z"));
     }
 
     @AfterEach
@@ -95,12 +104,27 @@ class MongoLeaseTimingTest {
         locks.drop();
     }
 
+    /**
+     * Writes {@code expiresAt} on the subscription's lock document directly, standing in for what a real lease
+     * would look like at that instant. The production code judges expiry against the database's own clock, so
+     * seeding a value relative to the real {@link Instant#now()} is what makes a lease look expired, or close to
+     * expiring, without moving anything.
+     */
+    private void seedExpiresAt(Instant expiresAt) {
+        locks.updateOne(eq("_id", SUBSCRIPTION), set("expiresAt", expiresAt));
+    }
+
+    private Instant readExpiresAt() {
+        BsonDocument document = locks.find(eq("_id", SUBSCRIPTION)).first();
+        return Instant.ofEpochMilli(document.getDateTime("expiresAt").getValue());
+    }
+
     @Test
     void is_still_held_a_moment_before_it_is_up() {
         Consumer holder = new Consumer("the-holder");
         assertThat(holder.register()).isTrue();
 
-        clock.advanceBy(LEASE.minusMillis(1));
+        seedExpiresAt(Instant.now().plus(MARGIN));
 
         assertThat(new Consumer("the-rival").register())
                 .as("a rival taking a lease over early is the one thing a lease is there to prevent, since both would "
@@ -113,7 +137,7 @@ class MongoLeaseTimingTest {
         Consumer holder = new Consumer("the-holder");
         assertThat(holder.register()).isTrue();
 
-        clock.advanceBy(LEASE.plusMillis(1));
+        seedExpiresAt(Instant.now().minus(MARGIN));
 
         assertThat(new Consumer("the-rival").register())
                 .as("a lease nobody renewed has to become available, or an instance that died holds its subscription "
@@ -126,15 +150,16 @@ class MongoLeaseTimingTest {
         Consumer holder = new Consumer("the-holder");
         holder.register();
 
-        clock.advanceBy(LEASE.dividedBy(2));
+        // As if the lease taken above were about to run out, rather than fresh.
+        seedExpiresAt(Instant.now().plus(MARGIN));
         holder.refresh();
-        // Past when the lease would have been up had it not been refreshed, and short of when it is up now.
-        clock.advanceBy(LEASE.dividedBy(2).plusMinutes(1));
 
-        assertThat(new Consumer("the-rival").register())
-                .as("a refresh has to move the lease, or a holder that is alive and refreshing on schedule loses its "
-                        + "subscription every lease anyway")
-                .isFalse();
+        assertThat(readExpiresAt())
+                .as("a refresh computed from the moment it ran, not extended from whatever expiresAt held before it, "
+                        + "or a holder that is alive and refreshing on schedule loses its subscription every lease "
+                        + "anyway")
+                .isAfter(Instant.now().plus(LEASE.dividedBy(2)));
+        assertThat(new Consumer("the-rival").register()).isFalse();
         assertThat(holder.hasLock()).isTrue();
     }
 
@@ -145,8 +170,8 @@ class MongoLeaseTimingTest {
         holder.register();
         assertThat(rival.register()).isFalse();
 
-        // The holder never refreshes again, which is what it looks like from MongoDB when its process is gone.
-        clock.advanceBy(LEASE.plusMillis(1));
+        // As if the holder never refreshed again, which is what it looks like from MongoDB when its process is gone.
+        seedExpiresAt(Instant.now().minus(MARGIN));
         rival.refresh();
 
         assertThat(rival.hasLock()).isTrue();
@@ -162,7 +187,7 @@ class MongoLeaseTimingTest {
         Consumer rival = new Consumer("the-rival");
         holder.register();
         rival.register();
-        clock.advanceBy(LEASE.plusMillis(1));
+        seedExpiresAt(Instant.now().minus(MARGIN));
         rival.refresh();
 
         // The holder comes back and refreshes, late.
@@ -253,7 +278,7 @@ class MongoLeaseTimingTest {
         private Consumer(String subscriberId) {
             this.subscriberId = subscriberId;
             ScheduledRefresh held = new ScheduledRefresh((lease, scheduler) -> scheduledRefresh.set(scheduler.refresh()));
-            this.support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, clock, RetryStrategy.none(), held)
+            this.support = new MongoLeaseCompetingConsumerStrategySupport(LEASE, RetryStrategy.none(), held)
                     .scheduleRefresh(refreshOrAcquire -> () -> refreshOrAcquire.accept(locks));
             this.support.addListener(new CompetingConsumerListener() {
                 @Override

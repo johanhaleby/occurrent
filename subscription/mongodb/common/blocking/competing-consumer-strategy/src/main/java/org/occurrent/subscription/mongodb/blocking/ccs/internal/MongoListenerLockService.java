@@ -33,10 +33,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -66,27 +63,35 @@ class MongoListenerLockService {
      * @return {@code Optional} with a {@link ListenerLock} if the lock is held by this subscriber,
      * otherwise an empty optional if the lock is held by a different subscriber.
      */
-    static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, Clock clock, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) {
+    static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) {
         return retryStrategy.execute(() -> {
             try {
                 logDebug("acquireOrRefreshFor (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+                // Matches on _id alone, upsert-safe, since MongoDB refuses $expr (needed to judge expiry against
+                // the database's own clock) inside an upsert's filter, and matching on subscriberId as well would
+                // seed that field into a freshly upserted document before the pipeline below ever saw it, hiding
+                // the very "is this a fresh take" distinction that pipeline depends on. Whether the lease is
+                // actually taken is instead decided entirely inside the pipeline, so it stays one atomic operation.
                 final BsonDocument found = collection
                         .withWriteConcern(WriteConcern.MAJORITY)
                         .findOneAndUpdate(
-                                and(
-                                        eq("_id", subscriptionId),
-                                        or(lockIsExpired(clock), eq("subscriberId", subscriberId))),
+                                eq("_id", subscriptionId),
                                 singletonList(combine(
-                                        set("subscriberId", subscriberId),
-                                        set("version", sameIfRefreshOtherwiseIncrement(subscriberId)),
-                                        set("expiresAt", clock.instant().plus(leaseTime)))),
+                                        set("subscriberId", subscriberIdIfAllowed(subscriberId)),
+                                        set("version", sameIfRefreshOtherwiseIncrementIfAllowed(subscriberId)),
+                                        set("expiresAt", expiresAtFromNowIfAllowed(subscriberId, leaseTime)))),
                                 new FindOneAndUpdateOptions()
-                                        .projection(include("version"))
+                                        .projection(include("version", "subscriberId"))
                                         .returnDocument(ReturnDocument.AFTER)
                                         .upsert(true));
 
                 if (found == null) {
                     throw new IllegalStateException("No lock document upserted, but none found. This should never happen.");
+                }
+
+                if (!subscriberId.equals(found.getString("subscriberId").getValue())) {
+                    // Held by someone else and not expired, so the pipeline above left it untouched.
+                    return Optional.empty();
                 }
 
                 final ListenerLock lock = new ListenerLock(found.getNumber("version"));
@@ -98,7 +103,9 @@ class MongoListenerLockService {
                 final ErrorCategory errorCategory = ErrorCategory.fromErrorCode(e.getErrorCode());
 
                 if (errorCategory.equals(DUPLICATE_KEY)) {
-                    // Happens frequently, not logged.
+                    // Matching on _id alone, against its unique index, is exactly the shape MongoDB itself
+                    // documents as immune to an upsert racing itself into a duplicate key, so this is not expected
+                    // to fire. Kept as a defensive fallback rather than a signal this method relies on.
                     return Optional.empty();
                 }
 
@@ -110,6 +117,35 @@ class MongoListenerLockService {
         });
     }
 
+    /**
+     * Whether {@code subscriberId} is entitled to take or keep the lease: nobody has taken it yet, it is already
+     * this subscriber's, or the current holder's lease has expired.
+     */
+    private static Document isAllowedFor(String subscriberId) {
+        return new Document("$or", asList(
+                new Document("$eq", asList(new Document("$type", "$subscriberId"), "missing")),
+                isCurrentHolder(subscriberId),
+                lockIsExpiredExpr()));
+    }
+
+    private static Document isCurrentHolder(String subscriberId) {
+        return new Document("$eq", asList("$subscriberId", subscriberId));
+    }
+
+    private static Document subscriberIdIfAllowed(String subscriberId) {
+        return new Document("$cond", new Document(Map.of(
+                "if", isAllowedFor(subscriberId),
+                "then", subscriberId,
+                "else", "$subscriberId")));
+    }
+
+    private static Document expiresAtFromNowIfAllowed(String subscriberId, Duration leaseTime) {
+        return new Document("$cond", new Document(Map.of(
+                "if", isAllowedFor(subscriberId),
+                "then", expiresAtFromNow(leaseTime),
+                "else", "$expiresAt")));
+    }
+
     static DeleteResult remove(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, String subscriptionId, String subscriberId) {
         return retryStrategy.execute(() -> {
             logDebug("Before removing lock (subscriptionId={})", subscriptionId);
@@ -117,17 +153,16 @@ class MongoListenerLockService {
         });
     }
 
-    static boolean commit(MongoCollection<BsonDocument> collection, Clock clock, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
+    static boolean commit(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
         return retryStrategy.execute(() -> {
             logDebug("Before commit (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            Instant newLeaseTime = clock.instant().plus(leaseTime);
             UpdateResult result = collection
                     .withWriteConcern(WriteConcern.MAJORITY)
                     .updateOne(
                             and(
                                     eq("_id", subscriptionId),
                                     eq("subscriberId", subscriberId)),
-                            set("expiresAt", newLeaseTime));
+                            singletonList(set("expiresAt", expiresAtFromNow(leaseTime))));
 
             boolean gotLock = result.getMatchedCount() != 0;
             logDebug("After commit gotLock={} (subscriberId={}, subscriptionId={})", gotLock, subscriberId, subscriptionId);
@@ -135,22 +170,36 @@ class MongoListenerLockService {
         });
     }
 
-    private static Bson lockIsExpired(Clock clock) {
-        return or(
-                eq("expiresAt", null),
-                not(exists("expiresAt")),
-                lte("expiresAt", clock.instant()));
+    /**
+     * The database's own clock, not the calling node's, so that acquiring, refreshing and judging a lease all agree
+     * with each other regardless of clock skew between nodes. {@code $$NOW} is fixed once per operation and is the
+     * same value on every member of the deployment.
+     */
+    private static Document expiresAtFromNow(Duration leaseTime) {
+        return new Document("$add", asList("$$NOW", leaseTime.toMillis()));
     }
 
-    private static Document sameIfRefreshOtherwiseIncrement(String subscriberId) {
-        Map<String, Object> map = new HashMap<>();
-        map.put("if", new Document("$ne", asList("$subscriberId", subscriberId)));
-        map.put("then", new Document("$ifNull", asList(
-                new Document("$add", asList("$version", 1)),
-                0)));
-        map.put("else", "$version");
+    private static Document lockIsExpiredExpr() {
+        return new Document("$or", asList(
+                new Document("$eq", asList("$expiresAt", null)),
+                new Document("$eq", asList(new Document("$type", "$expiresAt"), "missing")),
+                new Document("$lte", asList("$expiresAt", "$$NOW"))));
+    }
 
-        return new Document("$cond", new Document(map));
+    /**
+     * The version stays put on a refresh, increments on a genuine takeover (a fresh or expired lease), and stays
+     * put again when {@code subscriberId} was not entitled to touch it at all.
+     */
+    private static Document sameIfRefreshOtherwiseIncrementIfAllowed(String subscriberId) {
+        return new Document("$cond", new Document(Map.of(
+                "if", isCurrentHolder(subscriberId),
+                "then", "$version",
+                "else", new Document("$cond", new Document(Map.of(
+                        "if", isAllowedFor(subscriberId),
+                        "then", new Document("$ifNull", asList(
+                                new Document("$add", asList("$version", 1)),
+                                0)),
+                        "else", "$version"))))));
     }
 
     private static void logDebug(String message, Object... params) {

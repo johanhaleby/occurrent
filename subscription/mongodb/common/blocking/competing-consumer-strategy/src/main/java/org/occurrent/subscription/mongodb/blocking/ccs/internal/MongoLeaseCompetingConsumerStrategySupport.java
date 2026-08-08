@@ -28,7 +28,6 @@ import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.Competi
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Clock;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Objects;
@@ -55,7 +54,6 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      */
     private static final int CONSUMER_LOCKS = 16;
 
-    private final Clock clock;
     private final Duration leaseTime;
     private final ScheduledRefresh scheduledRefresh;
     private final ConcurrentMap<CompetingConsumer, Status> competingConsumers;
@@ -73,21 +71,20 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private volatile boolean running;
 
 
-    public MongoLeaseCompetingConsumerStrategySupport(Duration leaseTime, Clock clock, RetryStrategy retryStrategy) {
-        this(leaseTime, clock, retryStrategy, ScheduledRefresh.auto());
+    public MongoLeaseCompetingConsumerStrategySupport(Duration leaseTime, RetryStrategy retryStrategy) {
+        this(leaseTime, retryStrategy, ScheduledRefresh.auto());
     }
 
     /**
      * Takes the {@link ScheduledRefresh} rather than building one, so that a test can hold the refresh itself and run
-     * it when it chooses. Together with the {@link Clock} this class already takes, that makes the lease's own timing
-     * testable without any real time passing: move the clock past the lease and run the refresh, rather than sleeping
-     * for the lease and hoping the background thread got there.
+     * it when it chooses, which is what makes the scheduled refresh itself testable without any real time passing.
+     * A lease's own timing is a different matter: {@code expiresAt} is judged against the database's clock, not an
+     * injectable one, so a test that needs a lease to look expired seeds the lock document directly instead.
      * <p>
      * Package-private on purpose. {@code ScheduledRefresh} is not public, and neither strategy's builder exposes a
      * refresh schedule, so this widens nothing a user can reach.
      */
-    MongoLeaseCompetingConsumerStrategySupport(Duration leaseTime, Clock clock, RetryStrategy retryStrategy, ScheduledRefresh scheduledRefresh) {
-        this.clock = clock;
+    MongoLeaseCompetingConsumerStrategySupport(Duration leaseTime, RetryStrategy retryStrategy, ScheduledRefresh scheduledRefresh) {
         this.leaseTime = leaseTime;
         this.scheduledRefresh = scheduledRefresh;
         this.running = true;
@@ -184,7 +181,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private Outcome acquireLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status oldStatus) {
         String subscriptionId = competingConsumer.subscriptionId;
         String subscriberId = competingConsumer.subscriberId;
-        boolean acquired = MongoListenerLockService.acquireOrRefreshFor(collection, clock, retryStrategy, leaseTime, subscriptionId, subscriberId).isPresent();
+        boolean acquired = MongoListenerLockService.acquireOrRefreshFor(collection, retryStrategy, leaseTime, subscriptionId, subscriberId).isPresent();
         logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
         competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
         if (oldStatus != Status.LOCK_ACQUIRED && acquired) {
@@ -260,7 +257,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
         return switch (status) {
             case LOCK_ACQUIRED -> {
-                boolean stillHasLock = MongoListenerLockService.commit(collection, clock, retryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId);
+                boolean stillHasLock = MongoListenerLockService.commit(collection, retryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId);
                 if (stillHasLock) {
                     yield Outcome.NOTHING;
                 }

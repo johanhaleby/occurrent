@@ -34,7 +34,6 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
      *     <tr><td colspan="2">Lease time</td><td>20 seconds</td></tr>
      *     <tr><td colspan="2">Collection name</td><td>competing-consumer-locks</td></tr>
      *     <tr><td colspan="2">Retry Strategy</td><td>Exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between each retry when read/updating the lease</td></tr>
-     *     <tr><td colspan="2">Clock</td><td>UTC</td></tr>
      * </table>
      *
      * @param db The MongoDB database to store the lease information for the subscribers.
@@ -160,9 +159,11 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         }
 
         /**
-         * The clock to use when scheduling lease updates. Default is {@code UTC}.
+         * Does nothing. A lease's expiry is judged against the database's own clock, not this one, so that
+         * acquiring, refreshing and judging a lease agree regardless of clock skew between nodes. Kept for source
+         * compatibility.
          *
-         * @param clock The clock
+         * @param clock Ignored.
          * @return The same builder instance.
          */
         @NullMarked
@@ -205,10 +206,9 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          */
         @NullMarked
         public NativeMongoLeaseCompetingConsumerStrategy build() {
-            Clock clockToUse = clock == null ? Clock.systemUTC() : clock;
             Duration leaseTimeToUse = leaseTime == null ? DEFAULT_LEASE_TIME : leaseTime;
             RetryStrategy retryStrategyToUse = retryStrategy == null ? RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f) : retryStrategy;
-            MongoLeaseCompetingConsumerStrategySupport support = new MongoLeaseCompetingConsumerStrategySupport(leaseTimeToUse, clockToUse, retryStrategyToUse)
+            MongoLeaseCompetingConsumerStrategySupport support = new MongoLeaseCompetingConsumerStrategySupport(leaseTimeToUse, retryStrategyToUse)
                     .scheduleRefresh(c -> () -> c.accept(collection));
             return new NativeMongoLeaseCompetingConsumerStrategy(collection, support);
         }
