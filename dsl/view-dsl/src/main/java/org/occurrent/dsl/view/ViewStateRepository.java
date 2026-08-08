@@ -61,7 +61,7 @@ public interface ViewStateRepository<S extends @Nullable Object, ID> {
      * @param ids The ids to read state for.
      * @return The state found for each id, absent ids omitted.
      */
-    default Map<@NonNull ID, @NonNull S> findAllById(Collection<@NonNull ID> ids) {
+    default Map<@NonNull ID, @NonNull S> findAllById(@NonNull Collection<@NonNull ID> ids) {
         Map<ID, S> result = new LinkedHashMap<>();
         for (ID id : ids) {
             findById(id).ifPresent(state -> result.put(id, state));
@@ -93,7 +93,7 @@ public interface ViewStateRepository<S extends @Nullable Object, ID> {
      *
      * @param states The state to save, keyed by id.
      */
-    default void saveAll(Map<@NonNull ID, @NonNull S> states) {
+    default void saveAll(@NonNull Map<@NonNull ID, @NonNull S> states) {
         states.forEach(this::save);
     }
 
