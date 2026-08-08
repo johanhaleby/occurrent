@@ -154,7 +154,6 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
     @NullUnmarked
     public static final class Builder {
         private final MongoOperations mongoOperations;
-        private Clock clock;
         private Duration leaseTime;
         private String collectionName;
         private RetryStrategy retryStrategy;
@@ -181,7 +180,6 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         @NullMarked
         public Builder clock(Clock clock) {
             Objects.requireNonNull(clock, Clock.class.getSimpleName() + " cannot be null");
-            this.clock = clock;
             return this;
         }
 
