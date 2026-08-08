@@ -513,6 +513,19 @@
             </activation>
         </profile>
         <profile>
+            <!--
+              Opt-in only (no activeByDefault), unlike examples-module. A plain "mvn install" or "mvn -Prelease
+              install" never discovers this module at all, which is stronger than excluding it from
+              central-publishing-maven-plugin's excludeArtifacts list below: there is nothing to keep in sync, and
+              combining -Prelease with this profile by mistake still cannot publish it, since the module also sets
+              maven.deploy.skip (see benchmark/pom.xml). Build it explicitly with "-Pbenchmarks -pl benchmark -am".
+            -->
+            <id>benchmarks</id>
+            <modules>
+                <module>benchmark</module>
+            </modules>
+        </profile>
+        <profile>
             <id>skip-pom-modules-deployment</id>
             <activation>
                 <file>
