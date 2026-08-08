@@ -1,8 +1,8 @@
 schema_version: 1
 epic: vgpr
-revision: 4
-updated_at: '2026-08-08T17:10:00+00:00'
-updated_by: orchestrator gallant-einstein-134826 (rename decision relayed, Copilot threads open)
+revision: 5
+updated_at: '2026-08-08T17:35:00+00:00'
+updated_by: orchestrator gallant-einstein-134826 (backoff-with-Backoff-reuse decision relayed)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -49,13 +49,22 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: worker session local_76c0400d handles the AppliedPositionStore rename
-      (Johan's decision 2026-08-08, structured ask in the orchestrator session, Applied
-      prefix stays) plus the two Copilot threads on PR 654 (position validation likely
-      a fix, changelog format likely a reasoned decline under the PR 300 rule); on green
-      with threads resolved and the DELIVERY_RESULT verified, CAS-merge pinned to the
-      verified head, then verify docs PR 52 review-clean and sweep
-    last_meaningful_progress_at: '2026-08-08T16:40:00+00:00'
+    next_action: worker session local_76c0400d carries four decided changes on PR 654
+      (all Johan's decisions 2026-08-08 in the orchestrator session, mirrored as PR
+      comments) plus the two Copilot threads. Decisions, not to be re-litigated by the
+      worker or a later sweep, are (1) rename AppliedPositionStorage to
+      AppliedPositionStore, Applied prefix stays, (2) waitUntilApplied default polling
+      becomes exponential backoff with app-wide Spring properties under
+      occurrent.projection.applied-position, (3) the backoff parameter reuses the
+      sealed org.occurrent.retry.Backoff type, full RetryStrategy delegation for the
+      wait loop rejected because it is exception-driven with no wall-clock deadline,
+      recorded in ADR 0111, (4) the Mongo store implementations take a RetryStrategy
+      for transient store errors mirroring NativeMongoCheckpointStorage (default
+      exponential 100ms to 2s) guarding advance and appliedPosition, the neutral
+      interface staying RetryStrategy-free. On green with threads resolved and the
+      DELIVERY_RESULT verified, CAS-merge pinned to the verified head, then verify
+      docs PR 52 review-clean and sweep
+    last_meaningful_progress_at: '2026-08-08T17:45:00+00:00'
     observed:
       pr_654: {head: 7f11d5e4448f7ed20001448d2b8ae21fd2a2859e, mergeable: MERGEABLE,
         rollup: running, review: NOREVIEW, via: "vgpr monitor + gh pr view", at: '2026-08-08T16:35:00+00:00'}
