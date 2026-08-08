@@ -70,9 +70,10 @@ public class FilterMatcher {
      * costs more than it saves once the value is already known, which is what kept a Map-backed event (already
      * cheap to read, the production MongoDB path) from paying for the batch it did not need.
      * <p>
-     * Every operand is still read, matching {@code allMatch}'s short-circuiting on the boolean result, since reading
-     * a path a short-circuited operand would never have needed does not change which paths any operand looks up, and
-     * the payload reader used in production never fails a read for an existing filter (only a store built with no
+     * The batch read is eager, every data path is resolved through {@code readAll} up front, unlike evaluating each
+     * operand's boolean, which still stops at the first mismatch the same way {@code allMatch} would. Reading a path
+     * a stopped-early operand would never have needed does not change which paths any operand looks up, and the
+     * payload reader used in production never fails a read for an existing filter (only a store built with no
      * reader at all refuses, and that is decided before any event is evaluated, not per leaf), so the eagerness costs
      * a few extra lookups at worst, never a different match outcome.
      */

@@ -334,8 +334,12 @@ class FilterMatcherTest {
 
         private static Condition<?> randomCondition(Random random, Object actual) {
             if (actual instanceof Number number) {
-                int delta = random.nextInt(3) - 1; // -1, 0 or 1: mismatch below, exact match, mismatch above
-                return delta == 0 ? eq(number.intValue()) : gt(number.intValue() - delta - 1);
+                int value = number.intValue();
+                return switch (random.nextInt(3)) {
+                    case 0 -> eq(value); // matches
+                    case 1 -> gt(value - 1); // value > value - 1: matches
+                    default -> gt(value + 1); // value > value + 1: does not match
+                };
             }
             if (actual instanceof String text && random.nextBoolean()) {
                 return eq(text);
