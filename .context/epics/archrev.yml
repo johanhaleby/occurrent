@@ -1,8 +1,8 @@
 schema_version: 1
 epic: archrev
-revision: 26
+revision: 27
 updated_at: '2026-08-08T13:40:00+00:00'
-updated_by: orchestrator a7c1523c (B7 delivered PR 646, both Wave B PRs in ci-wait)
+updated_by: orchestrator a7c1523c (B7 merged and swept, B8 docs subagent dispatched)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -130,6 +130,17 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T11:50:00+00:00'
+- id: act-014
+  type: merge
+  target: 'PR 646 squash-merge pinned to verified head 077adf0ee093954e776672e2253c0252f0b6cd7d
+    (all green, 0 threads, MERGEABLE)'
+  expected: 'PR merged, merged head equals verified head, issue 643 auto-closed via
+    Fixes, then B7 sweep and B8 docs dispatch; DONE: squash 44af74e9a, issue 643
+    CLOSED, agent worktree and branches removed, B8 subagent dispatched'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T14:20:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -465,22 +476,23 @@ units:
     issue: 643
     goal: bulk findAllById ($in) and saveAll (bulk write) overrides in the three
       shipped Mongo view state repositories
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
       ref: 646
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T14:20Z at 077adf0ee09 (squash 44af74e9a),
+        all green, 0 threads'
     - check: issue_closed
       ref: 643
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #643, verified by orchestrator'
     blocking_on: []
-    next_action: 'ci-wait on PR 646 (head 077adf0ee09, three sites + tests + shared internal MongoBulkViewStateOperations helper + changelog); CAS merge on green with threads resolved, then unblock B8 docs chip'' including requireMatchingDocumentId
+    next_action: 'none'' including requireMatchingDocumentId
       and DTO conversion'
     last_meaningful_progress_at: '2026-08-08T11:35:00+00:00'
     observed: {}
@@ -490,7 +502,7 @@ units:
     issue: 644
     goal: docs-site section for replay batching (held branch, next release), incl.
       the no-extra-indexes note
-    phase: BLOCKED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
@@ -501,15 +513,12 @@ units:
       ref: 644
       met: false
       evidence: null
-    blocking_on:
-    - what: 'B7 (#643) landing, so the docs describe the shipped Mongo bulk behaviour'
-      since: '2026-08-08T11:35:00+00:00'
-      recheck_after: '2026-08-09T08:00:00+00:00'
-    next_action: 'spawn the docs chip (cwd occurrent-org.github.io, Haiku-or-Sonnet/low)
-      in the tick that merges B7; deliverable is a held review-clean docs PR, issue
-      closes on review-clean not on merge; docs repo is unwatched by the monitor by
-      design (held PR)'
-    last_meaningful_progress_at: '2026-08-08T11:35:00+00:00'
+    blocking_on: []
+    next_action: 'running as in-session subagent since 2026-08-08T14:25Z in the docs
+      repo checkout; deliverable is a held review-clean docs PR, issue 644 closes on
+      review-clean; docs repo unwatched by the monitor by design, the subagent
+      completion notification is the wake signal'
+    last_meaningful_progress_at: '2026-08-08T14:25:00+00:00'
     observed: {}
     assessment: registered from the index-question investigation, approved by Johan
       via multi-select structured ask 2026-08-08
