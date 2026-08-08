@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 28
+revision: 29
 updated_at: '2026-08-08T13:40:00+00:00'
-updated_by: orchestrator a7c1523c (B2 delivered PR 647 with the expected changelog
-  conflict; subagent ids recorded in session fields)
+updated_by: orchestrator a7c1523c (B6 merged and swept, keep-decision recorded in
+  the register)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -142,6 +142,18 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T14:20:00+00:00'
+- id: act-015
+  type: merge
+  target: 'PR 645 squash-merge pinned to verified head e9bac63f008eaee1708cf4498c798f9c6d40836d
+    (all green, 3 threads all resolved with fixes, MERGEABLE)'
+  expected: 'PR merged, merged head equals verified head, issue 639 auto-closed via
+    Fixes, then B6 sweep and do-not-relitigate register update; DONE: squash
+    b12565044, issue 639 CLOSED, 3 threads all resolved with fixes, worktree and
+    branches removed, register updated'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T15:30:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -454,9 +466,9 @@ units:
     issue: 639
     goal: measure the per-event boundedElastic hand-off in the reactor projection
       DSL (remove only if numbers justify)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - B3
     - B5
@@ -464,14 +476,17 @@ units:
     deliverables:
     - check: pr_merged
       ref: 645
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T15:32Z at e9bac63f0 (squash b12565044), all
+        green, 3 Copilot threads resolved with fixes including the isolate-the-hop
+        benchmark correction'
     - check: issue_closed
       ref: 639
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #639, verified by orchestrator; keep-decision and
+        numbers on the issue'
     blocking_on: []
-    next_action: 'ci-wait on PR 645 (head 9e67a631b1b, benchmark-only); CAS merge on green with threads resolved. KEEP-DECISION: correctness gate found live events reach the wrapped folds on the Mongo driver I/O thread (ReactorMongoSubscriptionModel delivers directly, the hot sink emits synchronously on the caller thread), so removing subscribeOn would put blocking repository calls on the driver thread; the wrapping is load-carrying, not redundant'
+    next_action: 'none'
     last_meaningful_progress_at: '2026-08-08T08:40:00+00:00'
     observed: {}
     assessment: adopted from B1's handoff (Projections.java:92/:120/:139 vs
