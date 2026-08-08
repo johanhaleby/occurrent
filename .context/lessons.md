@@ -1,5 +1,15 @@
 # Lessons
 
+- Sweep a worker's worktree only after its FINAL report, not after its PR merges
+  (2026-08-08, B2's closeout). A clean tree is not proof the worker is finished: B2's
+  worktree was removed in the merge sweep while the agent still owed itself a trailing
+  `gh pr edit` (fixing a stale body line) and its DELIVERY_RESULT, so it woke to a dead
+  cwd and the orchestrator had to make the body edit for it. The B5 rule (never remove a
+  DIRTY worktree) already existed; this extends it: for in-session subagents, hold the
+  worktree until the completion notification carrying DELIVERY_RESULT has arrived, or
+  the agent is confirmed stopped. The cost of holding is nothing; the cost of the early
+  sweep is a worker that cannot finish its own bookkeeping.
+
 - A subagent's background processes die with its turn, and nothing wakes it for them
   (2026-08-08, B2 and B6 both lost detached JMH runs the same hour). A worker SESSION can
   run an hour-long benchmark in the background because the harness re-invokes sessions on
