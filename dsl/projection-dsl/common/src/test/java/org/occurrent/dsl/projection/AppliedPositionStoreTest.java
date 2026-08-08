@@ -20,7 +20,12 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 
+import org.occurrent.retry.Backoff;
+
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.OptionalLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -74,6 +79,44 @@ class AppliedPositionStoreTest {
     }
 
     @Test
+    void waitUntilApplied_rejects_a_backoff_of_none_because_that_would_poll_the_store_in_a_busy_loop() {
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> storage.waitUntilApplied("orders", 42, Duration.ofMillis(50), Backoff.none())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Backoff.none()");
+    }
+
+    @Test
+    void an_exponential_backoff_grows_the_interval_between_polls_and_stops_growing_at_its_max() {
+        List<Long> pollGapsMillis = new ArrayList<>();
+        long[] previousPoll = {System.nanoTime()};
+        AppliedPositionStore neverApplied = new AppliedPositionStore() {
+            @Override
+            public OptionalLong appliedPosition(String projectionId) {
+                long now = System.nanoTime();
+                pollGapsMillis.add(Duration.ofNanos(now - previousPoll[0]).toMillis());
+                previousPoll[0] = now;
+                return OptionalLong.empty();
+            }
+
+            @Override
+            public void advance(String projectionId, long position) {
+            }
+        };
+
+        neverApplied.waitUntilApplied("orders", 42, Duration.ofMillis(900), Backoff.exponential(Duration.ofMillis(20), Duration.ofMillis(80), 2.0));
+
+        // The first gap is the time before any sleep, so the sleeps show up from the second gap onwards: 20, 40, 80,
+        // then 80 again because the max caps it. Timing is machine-dependent, so this asserts growth and the cap
+        // rather than exact values.
+        List<Long> sleeps = pollGapsMillis.subList(1, pollGapsMillis.size());
+        assertThat(sleeps).hasSizeGreaterThanOrEqualTo(4);
+        assertThat(sleeps.get(1)).isGreaterThan(sleeps.get(0));
+        assertThat(sleeps).allSatisfy(gap -> assertThat(gap).isLessThan(200L));
+    }
+
+    @Test
     void waitUntilApplied_returns_true_immediately_when_the_position_is_already_applied() {
         AppliedPositionStore storage = AppliedPositionStore.inMemory();
         storage.advance("orders", 42);
@@ -90,7 +133,7 @@ class AppliedPositionStoreTest {
         try {
             scheduler.schedule(() -> storage.advance("orders", 42), 50, TimeUnit.MILLISECONDS);
 
-            boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofSeconds(5), Duration.ofMillis(10));
+            boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofSeconds(5), Backoff.fixed(10));
 
             assertThat(caughtUp).isTrue();
         } finally {
@@ -102,7 +145,7 @@ class AppliedPositionStoreTest {
     void waitUntilApplied_returns_false_on_timeout_rather_than_throwing_when_the_position_never_arrives() {
         AppliedPositionStore storage = AppliedPositionStore.inMemory();
 
-        boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofMillis(100), Duration.ofMillis(10));
+        boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofMillis(100), Backoff.fixed(10));
 
         assertThat(caughtUp).isFalse();
     }
@@ -125,7 +168,7 @@ class AppliedPositionStoreTest {
         boolean[] interruptedAfterwards = new boolean[1];
         Thread waiter = new Thread(() -> {
             started.countDown();
-            result[0] = storage.waitUntilApplied("orders", 42, Duration.ofSeconds(30), Duration.ofSeconds(30));
+            result[0] = storage.waitUntilApplied("orders", 42, Duration.ofSeconds(30), Backoff.fixed(Duration.ofSeconds(30)));
             interruptedAfterwards[0] = Thread.currentThread().isInterrupted();
         });
         waiter.start();

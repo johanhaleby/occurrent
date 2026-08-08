@@ -17,6 +17,7 @@
 package org.occurrent.dsl.projection;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.retry.Backoff;
 
 import java.time.Duration;
 import java.util.Map;
@@ -47,9 +48,11 @@ import static java.util.Objects.requireNonNull;
 public interface AppliedPositionStore {
 
     /**
-     * The default interval {@link #waitUntilApplied(String, long, Duration)} polls at.
+     * The pace {@link #waitUntilApplied(String, long, Duration)} polls at, 25 ms doubling up to 250 ms. The first
+     * poll stays fast so a projection that is already caught up answers immediately, and the interval grows for a
+     * projection that is behind, which is exactly when the extra polling would cost the store the most.
      */
-    Duration DEFAULT_POLL_INTERVAL = Duration.ofMillis(25);
+    Backoff DEFAULT_POLL_BACKOFF = Backoff.exponential(Duration.ofMillis(25), Duration.ofMillis(250), 2.0);
 
     /**
      * The position {@code projectionId} has applied, or empty when the projection has not advanced yet (it has not
@@ -67,10 +70,13 @@ public interface AppliedPositionStore {
     void advance(String projectionId, long position);
 
     /**
-     * As {@link #waitUntilApplied(String, long, Duration, Duration)}, polling at {@link #DEFAULT_POLL_INTERVAL}.
+     * As {@link #waitUntilApplied(String, long, Duration, Backoff)}, pacing the polls with
+     * {@link #DEFAULT_POLL_BACKOFF}. An implementation the application has configured a different pace for overrides
+     * this to supply its own {@link Backoff}, which is how the Spring properties under
+     * {@code occurrent.projection.applied-position} reach a caller that never names one.
      */
     default boolean waitUntilApplied(String projectionId, long position, Duration timeout) {
-        return waitUntilApplied(projectionId, position, timeout, DEFAULT_POLL_INTERVAL);
+        return waitUntilApplied(projectionId, position, timeout, DEFAULT_POLL_BACKOFF);
     }
 
     /**
@@ -84,19 +90,32 @@ public interface AppliedPositionStore {
      * A {@code position} that belongs to an event this projection never handles, because the event's type does not
      * match the projection's selector, is never reached, and the wait times out. That is the correct answer rather
      * than a defect, since a projection that never sees the event has no effect for the caller to read.
+     * <p>
+     * {@code backoff} paces the polls only. It is not a retry policy for the store, which is an implementation's own
+     * concern: the Mongo stores wrap their reads and writes in a {@code RetryStrategy}, so a transient store error
+     * during a wait is absorbed there rather than ending the wait.
      *
-     * @param position     the position to wait for, must be positive, following <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0084-what-a-position-guarantees.md">ADR 84</a>.
-     * @param timeout      how long to wait before giving up.
-     * @param pollInterval how often to re-check the stored position.
+     * @param position the position to wait for, must be positive, following <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0084-what-a-position-guarantees.md">ADR 84</a>.
+     * @param timeout  how long to wait before giving up.
+     * @param backoff  how the interval between polls grows. {@link Backoff#none()} is rejected, since a wait with no
+     *                 delay between polls is a busy loop on the store.
      */
-    default boolean waitUntilApplied(String projectionId, long position, Duration timeout, Duration pollInterval) {
+    default boolean waitUntilApplied(String projectionId, long position, Duration timeout, Backoff backoff) {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(timeout, "timeout cannot be null");
-        requireNonNull(pollInterval, "pollInterval cannot be null");
+        requireNonNull(backoff, "backoff cannot be null");
         if (position <= 0) {
             throw new IllegalArgumentException("position must be positive but was " + position);
         }
+        if (backoff instanceof Backoff.None) {
+            throw new IllegalArgumentException("backoff cannot be Backoff.none(), a wait polls the store and needs a delay between polls. Use Backoff.fixed(..) or Backoff.exponential(..).");
+        }
         long deadline = System.nanoTime() + timeout.toNanos();
+        long intervalNanos = switch (backoff) {
+            case Backoff.Fixed fixed -> Duration.ofMillis(fixed.millis).toNanos();
+            case Backoff.Exponential exponential -> exponential.initial.toNanos();
+            case Backoff.None ignored -> throw new IllegalStateException("unreachable, rejected above");
+        };
         while (true) {
             OptionalLong applied = appliedPosition(projectionId);
             if (applied.isPresent() && applied.getAsLong() >= position) {
@@ -106,14 +125,17 @@ public interface AppliedPositionStore {
             if (remainingNanos <= 0) {
                 return false;
             }
-            // toMillis() rather than toNanos() precision would truncate a sub-millisecond pollInterval or remaining
-            // time to Thread.sleep(0), which never actually sleeps and spins the loop instead.
-            long sleepNanos = Math.min(pollInterval.toNanos(), remainingNanos);
+            // Nanosecond precision rather than toMillis(), which would truncate a sub-millisecond interval or
+            // remaining time to Thread.sleep(0), never actually sleeping and spinning the loop instead.
+            long sleepNanos = Math.min(intervalNanos, remainingNanos);
             try {
                 Thread.sleep(sleepNanos / 1_000_000, (int) (sleepNanos % 1_000_000));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;
+            }
+            if (backoff instanceof Backoff.Exponential exponential) {
+                intervalNanos = Math.min((long) (intervalNanos * exponential.multiplier), exponential.max.toNanos());
             }
         }
     }

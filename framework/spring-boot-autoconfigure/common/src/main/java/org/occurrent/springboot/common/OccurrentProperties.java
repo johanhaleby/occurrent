@@ -434,12 +434,69 @@ public class OccurrentProperties {
          */
         private String appliedPositionCollection = "appliedPositions";
 
+        /**
+         * How {@code AppliedPositionStore.waitUntilApplied(..)} paces its polls.
+         */
+        private AppliedPositionProperties appliedPosition = new AppliedPositionProperties();
+
         public String getAppliedPositionCollection() {
             return appliedPositionCollection;
         }
 
         public void setAppliedPositionCollection(String appliedPositionCollection) {
             this.appliedPositionCollection = appliedPositionCollection;
+        }
+
+        public AppliedPositionProperties getAppliedPosition() {
+            return appliedPosition;
+        }
+
+        public void setAppliedPosition(AppliedPositionProperties appliedPosition) {
+            this.appliedPosition = appliedPosition;
+        }
+
+        public static class AppliedPositionProperties {
+
+            /**
+             * The interval before the first re-check of the recorded position. Kept short so a projection that is
+             * already caught up answers immediately.
+             */
+            private Duration initial = Duration.ofMillis(25);
+
+            /**
+             * The longest the interval grows to. A projection that is behind is polled at this pace rather than at
+             * {@code initial}, which is what keeps a lagging projection from being hammered by every waiting caller.
+             */
+            private Duration max = Duration.ofMillis(250);
+
+            /**
+             * What the interval is multiplied by after each poll that found the projection still behind.
+             */
+            private double multiplier = 2.0;
+
+            public Duration getInitial() {
+                return initial;
+            }
+
+            public void setInitial(Duration initial) {
+                this.initial = initial;
+            }
+
+            public Duration getMax() {
+                return max;
+            }
+
+            public void setMax(Duration max) {
+                this.max = max;
+            }
+
+            public double getMultiplier() {
+                return multiplier;
+            }
+
+            public void setMultiplier(double multiplier) {
+                this.multiplier = multiplier;
+            }
         }
     }
 

@@ -103,7 +103,7 @@ public interface AppliedPositionStore {
 
     default boolean waitUntilApplied(String projectionId, long position, Duration timeout) { /* polls */ }
 
-    default boolean waitUntilApplied(String projectionId, long position, Duration timeout, Duration pollInterval) { /* polls */ }
+    default boolean waitUntilApplied(String projectionId, long position, Duration timeout, Backoff backoff) { /* polls */ }
 
     static AppliedPositionStore inMemory() { /* a map, for tests and single-process applications */ }
 }
@@ -117,9 +117,31 @@ MongoDB does in one upsert with `$max`.
 `waitUntilApplied` returns `false` on timeout rather than throwing, and reads the value once before it starts sleeping.
 That is the shape `Subscription.waitUntilStarted(Duration)` already established for a blocking wait in this codebase.
 The difference is that `waitUntilStarted` waits on something inside the process while this one waits on a stored value,
-so the default implementation polls, at 25 ms unless the caller says otherwise. Polling is what makes the answer
-correct for a reader in a different process from the projection, which is the common deployment. An implementation
-backed by a store that can push a change is free to override the method.
+so the default implementation polls. Polling is what makes the answer correct for a reader in a different process from
+the projection, which is the common deployment. An implementation backed by a store that can push a change is free to
+override the method.
+
+**The polls back off rather than running at a fixed rate, and the pace is `org.occurrent.retry.Backoff`.** A fixed
+25 ms interval is wrong in the direction that matters, because the polls that keep coming are exactly the ones a
+lagging projection cannot afford. The load a waiting caller puts on the store is anti-correlated with the health of
+the thing it is waiting for. The default is `Backoff.exponential(25 ms, 250 ms, 2.0)`, so the first poll still answers
+an already-caught-up projection immediately and a projection that is behind is asked at most four times a second per
+waiter. The cap is the low end of the range considered, since this sits on a read path where a caller is blocked and
+tail latency is the cost of a longer cap.
+
+Reusing `Backoff` rather than a pair of `Duration` parameters keeps one vocabulary for delay shapes across the
+library, and the caller-facing overload takes the sealed type directly. `Backoff.none()` is rejected with an
+`IllegalArgumentException`, since a wait with no delay between polls is a busy loop against the store.
+
+Full `RetryStrategy` delegation was considered and rejected. `RetryStrategy` is exception-driven, counts
+`maxAttempts`, and has no wall-clock deadline, while a poll that finds the projection still behind is the normal
+answer rather than an error, and a wait is defined by a timeout rather than by an attempt count. `Backoff` is the part
+of that family that carries only the delay shape, which is the part this needs.
+
+An application tunes the pace through `occurrent.projection.applied-position.initial`, `.max` and `.multiplier`, which
+the Mongo starters bind into `Backoff.exponential` and hand to the store they build. The store applies it by
+overriding the three-argument `waitUntilApplied`, so a caller that never names a `Backoff` still gets the configured
+one.
 
 The wait method lives on the storage interface rather than in a second type because the storage is the only thing that
 knows how to observe the value, and `ViewStateRepository` already carries defaulted convenience methods next to its
@@ -128,6 +150,19 @@ abstract ones.
 There is deliberately no method that returns the view state once the projection has caught up. It would have to
 distinguish "no such view instance" from "timed out" in its return type, and the caller can read through the repository
 it already holds once `waitUntilApplied` answers `true`.
+
+**The shipped Mongo stores retry a failing read or write, and the interface does not mention retry at all.** Both take
+a retry policy, defaulting to exponential backoff from 100 ms to 2 seconds, the same default
+`NativeMongoCheckpointStorage` uses. It guards both directions, because both have a silent failure mode. A transient
+blip inside `advance` while the projection is applying an event would otherwise fail that delivery and cost a
+redelivery for something the store would have accepted a moment later. A transient blip inside `appliedPosition` during a wait would
+otherwise abort a caller's wait with an exception rather than being absorbed. The blocking store uses
+`RetryStrategy`, the reactor one uses `reactor.util.retry.Retry`, matching how each stack retries elsewhere.
+
+Retry stays out of `AppliedPositionStore` itself. Error policy belongs to an implementation, and the in-memory store
+has nothing to retry. Keep the two mechanisms apart when reading this. The retry policy decides what happens when a
+store operation **fails**, and `Backoff` decides how long to wait between polls that **succeeded** and found the
+projection still behind. They never apply to the same event.
 
 ### 4. A delegating materialized view records the position, and it is built by an explicit factory
 

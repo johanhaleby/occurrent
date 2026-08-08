@@ -207,7 +207,9 @@ public @interface Projection {
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>)
      * <p>
      * Requires an {@code AppliedPositionStore} bean, resolved the same way {@link #store()} resolves a read-model
-     * store, the unique bean of that type, or the store starter's zero-config default when one is configured.
+     * store, the unique bean of that type, or the store starter's zero-config default when one is configured. How
+     * long a waiting caller sleeps between polls is set by {@code occurrent.projection.applied-position.initial},
+     * {@code .max} and {@code .multiplier}.
      * Mutually exclusive with {@link Mode#SYNCHRONOUS}, since a synchronous projection has already updated the read
      * model by the time the command returns and recording a position for it buys nothing. An event whose metadata
      * carries no position (the event store has position writing turned off, or the delivery path carries no

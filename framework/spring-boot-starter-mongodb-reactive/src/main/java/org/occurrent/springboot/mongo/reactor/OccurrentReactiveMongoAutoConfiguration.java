@@ -46,6 +46,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
+import org.occurrent.retry.Backoff;
 import org.occurrent.springboot.common.*;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
 import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
@@ -75,6 +76,8 @@ import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import reactor.util.retry.Retry;
+
+import java.time.Duration;
 
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -165,7 +168,13 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(AppliedPositionStore.class)
     public AppliedPositionStore occurrentAppliedPositionStore(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
-        return new ReactiveMongoAppliedPositionStore(mongo, occurrentProperties.getProjection().getAppliedPositionCollection());
+        OccurrentProperties.ProjectionProperties projection = occurrentProperties.getProjection();
+        OccurrentProperties.ProjectionProperties.AppliedPositionProperties pollProperties = projection.getAppliedPosition();
+        Backoff pollBackoff = Backoff.exponential(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
+        Retry storeRetry = Retry.backoff(5, Duration.ofMillis(100))
+                .maxBackoff(Duration.ofSeconds(2))
+                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+        return new ReactiveMongoAppliedPositionStore(mongo, projection.getAppliedPositionCollection(), storeRetry, pollBackoff);
     }
 
     /**

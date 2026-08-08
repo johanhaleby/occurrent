@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.retry.Backoff;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -129,7 +130,7 @@ class ReactiveMongoAppliedPositionStoreTest {
         try {
             scheduler.schedule(() -> writer.advance("orders", 42), 100, TimeUnit.MILLISECONDS);
 
-            boolean caughtUp = reader.waitUntilApplied("orders", 42, Duration.ofSeconds(10), Duration.ofMillis(20));
+            boolean caughtUp = reader.waitUntilApplied("orders", 42, Duration.ofSeconds(10), Backoff.fixed(20));
 
             assertThat(caughtUp).isTrue();
         } finally {
