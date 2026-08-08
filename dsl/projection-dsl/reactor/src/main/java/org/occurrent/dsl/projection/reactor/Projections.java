@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
@@ -263,5 +264,30 @@ public final class Projections {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         requireNonNull(queries, "queries cannot be null");
         return foldIncrementally(dcbProjection.projection().view(), queries.query(dcbProjection.criteria()));
+    }
+
+    /**
+     * Wraps {@code update} so every applied event also advances {@code store} with its global position, after the
+     * delegate's {@link Mono} completes
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
+     * Works with any {@code (EventMetadata, E) -> Mono<Void>} update, including
+     * {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository)}'s coalescing catch-up batching through
+     * {@link ReplayAwareMaterializedView}: the returned update forwards the lifecycle calls to {@code update} and only
+     * records the position once the delegate's own write for that replay is durable.
+     * <p>
+     * An event whose {@link EventMetadata#getPosition()} is {@code null} makes the returned {@link Mono} error with an
+     * {@link IllegalStateException}, either because the event store has position writing turned off, or because the
+     * event arrived on a path that carries no metadata. Recording is opt-in, so a projection that cannot supply a
+     * position should not wrap its update with this in the first place.
+     *
+     * @param projectionId the id {@code store} records the position under, read back with
+     *                      {@link AppliedPositionStore#appliedPosition(String)} or
+     *                      {@link AppliedPositionStore#waitUntilApplied(String, long, java.time.Duration)}.
+     */
+    public static <E> BiFunction<EventMetadata, E, Mono<Void>> recordingAppliedPosition(BiFunction<EventMetadata, E, Mono<Void>> update, AppliedPositionStore store, String projectionId) {
+        requireNonNull(update, "update cannot be null");
+        requireNonNull(store, "store cannot be null");
+        requireNonNull(projectionId, "projectionId cannot be null");
+        return new RecordingReactiveUpdate<>(update, store, projectionId);
     }
 }

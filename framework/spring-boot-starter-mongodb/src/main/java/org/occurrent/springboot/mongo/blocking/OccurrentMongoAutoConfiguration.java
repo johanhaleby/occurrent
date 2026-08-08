@@ -37,6 +37,7 @@ import org.occurrent.command.StreamIdResolver;
 import org.occurrent.command.annotation.AnnotationStreamIdResolver;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -49,6 +50,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
+import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.blocking.*;
 import org.occurrent.springboot.common.*;
@@ -79,6 +81,7 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
@@ -173,6 +176,20 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointStorage occurrentCheckpointStorage(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
         return new SpringMongoCheckpointStorage(mongoTemplate, occurrentProperties.getSubscription().getCollection());
+    }
+
+    /**
+     * The zero-config {@link AppliedPositionStore} a {@code @Projection(recordAppliedPosition = true)} resolves
+     * when the application declares none.
+     */
+    @Bean
+    @ConditionalOnMissingBean(AppliedPositionStore.class)
+    public AppliedPositionStore occurrentAppliedPositionStore(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
+        OccurrentProperties.ProjectionProperties projection = occurrentProperties.getProjection();
+        OccurrentProperties.ProjectionProperties.AppliedPositionProperties pollProperties = projection.getAppliedPosition();
+        Backoff pollBackoff = Backoff.exponential(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
+        return new MongoAppliedPositionStore(mongoTemplate, projection.getAppliedPositionCollection(),
+                RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), pollBackoff);
     }
 
     @Bean
