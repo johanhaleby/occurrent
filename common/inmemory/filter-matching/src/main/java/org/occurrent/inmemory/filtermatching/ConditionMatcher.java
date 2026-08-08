@@ -49,25 +49,39 @@ public class ConditionMatcher {
 
     // Marks a data path that led nowhere, so every condition answers "no match" for it without going through any
     // comparison logic. Kept distinct from null, which still means "this attribute or extension is absent" and
-    // keeps behaving exactly as before (see matchesRange).
-    private static final Object ABSENT = new Object();
+    // keeps behaving exactly as before (see matchesRange). Package-private rather than private, since FilterMatcher
+    // passes it to matchesCondition(Object, Condition) for a batched data leaf that readAll resolved to nothing.
+    static final Object ABSENT = new Object();
 
     public static <T> boolean matchesCondition(CloudEvent cloudEvent, String fieldName, Condition<T> condition) {
         return matchesCondition(cloudEvent, fieldName, condition, DataFieldReader.refusing());
     }
 
     public static <T> boolean matchesCondition(CloudEvent cloudEvent, String fieldName, Condition<T> condition, DataFieldReader dataFieldReader) {
+        return matchesCondition(extractValue(cloudEvent, fieldName, dataFieldReader), condition);
+    }
+
+    /**
+     * Evaluates {@code condition} against a value already known, rather than reading it through a
+     * {@link DataFieldReader}. FilterMatcher uses this for a data-field leaf of a composed {@code AND} whose value
+     * came out of one batched {@link DataFieldReader#readAll} call instead of its own {@link DataFieldReader#read}
+     * call, so a filter with several data-field leaves does not pay for a {@code DataFieldReader} round trip, an
+     * {@code Optional}, and the field-name/attribute-or-data branch in {@link #extractValue} on top of a lookup the
+     * batch already did. Pass {@link #ABSENT} for a path the batch resolved to nothing, the same as
+     * {@link #matchesCondition(CloudEvent, String, Condition, DataFieldReader)} would treat an empty read.
+     */
+    static <T> boolean matchesCondition(Object extractedValue, Condition<T> condition) {
         return switch (condition) {
-            case MultiOperandCondition<T> operation -> matchesMultiOperandCondition(cloudEvent, fieldName, operation, dataFieldReader);
-            case SingleOperandCondition<T> singleOperandCondition -> matchesSingleOperandCondition(cloudEvent, fieldName, singleOperandCondition, dataFieldReader);
-            case Condition.InOperandCondition<T> inOperandCondition -> matchesInOperandCondition(cloudEvent, fieldName, inOperandCondition, dataFieldReader);
+            case MultiOperandCondition<T> operation -> matchesMultiOperandCondition(extractedValue, operation);
+            case SingleOperandCondition<T> singleOperandCondition -> matchesSingleOperandCondition(extractedValue, singleOperandCondition);
+            case Condition.InOperandCondition<T> inOperandCondition -> matchesInOperandCondition(extractedValue, inOperandCondition);
         };
     }
 
-    private static <T> boolean matchesMultiOperandCondition(CloudEvent cloudEvent, String fieldName, MultiOperandCondition<T> operation, DataFieldReader dataFieldReader) {
+    private static <T> boolean matchesMultiOperandCondition(Object extractedValue, MultiOperandCondition<T> operation) {
             Condition.MultiOperandConditionName operationName = operation.operationName();
             List<Condition<T>> operations = operation.operations();
-            Stream<Boolean> filters = operations.stream().map(c -> matchesCondition(cloudEvent, fieldName, c, dataFieldReader));
+            Stream<Boolean> filters = operations.stream().map(c -> matchesCondition(extractedValue, c));
             return switch (operationName) {
                 case AND -> filters.allMatch(isEqual(true));
                 case OR -> filters.anyMatch(isEqual(true));
@@ -75,10 +89,9 @@ public class ConditionMatcher {
             };
     }
 
-    private static <T> boolean matchesSingleOperandCondition(CloudEvent cloudEvent, String fieldName, SingleOperandCondition<T> singleOperandCondition, DataFieldReader dataFieldReader) {
+    private static <T> boolean matchesSingleOperandCondition(Object actual, SingleOperandCondition<T> singleOperandCondition) {
             T expected = singleOperandCondition.operand();
             SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
-            Object actual = extractValue(cloudEvent, fieldName, dataFieldReader);
             if (actual == ABSENT) {
                 return false;
             }
@@ -93,8 +106,7 @@ public class ConditionMatcher {
             }
     }
 
-    private static <T> boolean matchesInOperandCondition(CloudEvent cloudEvent, String fieldName, Condition.InOperandCondition<T> inOperandCondition, DataFieldReader dataFieldReader) {
-            Object actual = extractValue(cloudEvent, fieldName, dataFieldReader);
+    private static <T> boolean matchesInOperandCondition(Object actual, Condition.InOperandCondition<T> inOperandCondition) {
             if (actual == ABSENT) {
                 return false;
             }
