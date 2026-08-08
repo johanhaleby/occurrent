@@ -1,8 +1,8 @@
 schema_version: 1
 epic: vgpr
-revision: 2
-updated_at: '2026-08-08T15:12:00+00:00'
-updated_by: orchestrator gallant-einstein-134826 (unit A chip dispatched)
+revision: 3
+updated_at: '2026-08-08T16:40:00+00:00'
+updated_by: orchestrator gallant-einstein-134826 (unit A delivered PR 654 and docs PR 52)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -24,23 +24,23 @@ units:
     issue: 361
     goal: version-gated projection reads (read-your-writes for async projections),
       plan-first with an ADR approval gate before implementation
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: chip task_571ae132 launched by Johan (session id unknown until tail-read)
     deliverables:
     - check: manual_approval
-      ref: 'ADR (number max+1 at write time) approved by Johan at the plan gate'
+      ref: 'ADR 0111 approved by Johan at the plan gate inside the unit session'
       met: false
       evidence: null
     - check: pr_merged
-      ref: null
+      ref: 654
       met: false
       evidence: null
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
-      ref: 'held docs branch for version-gated projection reads (PR open, review-clean,
+      ref: 'docs/vgpr-361-version-gated-projection-reads (PR 52 open and held, review-clean,
         never merged to docs main before the next release)'
       met: false
       evidence: null
@@ -49,10 +49,17 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: Johan launches the chip (model picker at the chip, Opus/high recommended)
-    last_meaningful_progress_at: '2026-08-08T15:05:00+00:00'
+    next_action: on green with review threads resolved and the DELIVERY_RESULT verified,
+      CAS-merge PR 654 pinned to the verified head, then verify docs PR 52 review-clean
+      and sweep
+    last_meaningful_progress_at: '2026-08-08T16:40:00+00:00'
     observed:
-      issue_361: {state: OPEN, labels: [], assignees: [], comments: 0, via: "gh issue view",
-        at: '2026-08-08T14:45:00+00:00'}
-    assessment: unclaimed and unblocked next-release scope; the ADR 68 deferral this
-      issue tracks is now the only missing half (metadata primitive shipped in 0.31.0)
+      pr_654: {head: 7f11d5e4448f7ed20001448d2b8ae21fd2a2859e, mergeable: MERGEABLE,
+        rollup: running, review: NOREVIEW, via: "vgpr monitor + gh pr view", at: '2026-08-08T16:35:00+00:00'}
+      docs_pr_52: {branch: docs/vgpr-361-version-gated-projection-reads, state: OPEN,
+        via: "gh pr list", at: '2026-08-08T16:38:00+00:00'}
+      adr: {file: doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md,
+        in_pr: 654, via: "gh pr view --json files", at: '2026-08-08T16:38:00+00:00'}
+    assessment: side-channel AppliedPositionStorage design landed (not in-document);
+      manual_approval needs evidence from the unit session's plan gate before it is met,
+      the implementation existing is inference, not proof of the gate
