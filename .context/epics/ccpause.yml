@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccpause
-revision: 4
-updated_at: '2026-08-08T19:35:00+00:00'
-updated_by: orchestrator session worktree-mobile-setup-916a9c (PR 655 merge-ready, merge blocked by session permission layer)
+revision: 5
+updated_at: '2026-08-08T19:50:00+00:00'
+updated_by: orchestrator session worktree-mobile-setup-916a9c (U1 merged and closed, U2 chipped, library monitor stopped)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -17,11 +17,24 @@ pending_actions:
   target: 'PR 655 squash-merge pinned to verified head a14daa8d01d520e02dab5cb32a1cfb80c1e8fb71
     (27/27 success, MERGEABLE, 1 thread open as a reasoned decline per policy, 3
     threads resolved with fixes)'
-  expected: 'PR merged, merged head equals pin, issue 565 auto-closed via Fixes'
-  status: PENDING
+  expected: 'PR merged, merged head equals pin, issue 565 auto-closed via Fixes;
+    DONE: permission denial routed to Johan, he approved the retry via structured
+    ask, squash f8e310db8, head-at-merge equals pin, issue 565 CLOSED verified,
+    in-progress label removed, remote branch deleted by the merge'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-08T19:33:00+00:00'
+- id: act-003
+  type: dispatch-chip
+  target: 'U2 chip task_9bf7ddc3: ⌁[ccpause/U2] Document waiting-consumer pause ·
+    Sonnet/medium (held docs branch docs/565-waiting-consumer-pause in
+    occurrent-org.github.io)'
+  expected: chip visible to Johan; session enters fleet on his click
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T19:48:00+00:00'
 - id: act-001
   type: dispatch-chip
   target: 'U1 chip task_d649cf9f: ⌁[ccpause/U1#565] Fix waiting-consumer pause ·
@@ -38,7 +51,7 @@ units:
     goal: CompetingConsumerSubscriptionModel remembers and honours a pause of a
       consumer waiting for the lock, with truthful introspection, within the ADR
       105/106 constraints and the saga-timer hard constraint
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -46,16 +59,19 @@ units:
     deliverables:
     - check: pr_merged
       ref: 655
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T19:45Z pinned to a14daa8d0, squash f8e310db8,
+        head-at-merge equals pin (verified), 27/27 success, 3 threads fixed, 1 open
+        reasoned decline per policy (Copilot compile claim, disproved by CI)'
     - check: issue_closed
       ref: 565
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #565, verified by orchestrator; in-progress label
+        removed'
     blocking_on: []
-    next_action: 'MERGE-READY at a14daa8d0 (act-002); the session permission
-      classifier denied gh pr merge, so the merge is routed to Johan (he merges or
-      grants the permission and the orchestrator retries the same pinned command)'
+    next_action: 'hold the sweep until the session''s DELIVERY_RESULT arrives
+      (lesson: a merged PR is not a finished worker), then archive the session and
+      remove its worktree and local branch'
     last_meaningful_progress_at: '2026-08-08T17:33:00+00:00'
     observed:
       pr_655:
@@ -84,7 +100,7 @@ units:
     goal: occurrent.org docs for the 565 behavior change per AGENTS.md (pages/docs/docs.md
       on a held docs branch in occurrent-org.github.io, news post only if worth
       announcing), dispatched after U1 merges
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: [U1]
@@ -96,10 +112,10 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'dispatch a chip after U1 merges (Sonnet/medium, docs-only, held
-      branch per the docs-repo convention, PR held until next release); adopted by
-      the orchestrator 2026-08-08 because AGENTS.md requires docs for user-affecting
-      changes, so this is DoD compliance, not scope growth; Johan may veto'
+    next_action: 'chip task_9bf7ddc3 spawned 2026-08-08 ~19:48Z, awaiting launch;
+      a docs-repo monitor is armed when the session goes live (multi-repo rule);
+      the library monitor bc0cymzzm was stopped at U1 completion per the lifetime
+      invariant'
     last_meaningful_progress_at: '2026-08-08T16:55:00+00:00'
     observed: {}
     assessment: routed out of U1 by Johan at the unit's plan gate rather than folded
