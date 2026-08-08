@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccpause
-revision: 1
-updated_at: '2026-08-08T15:55:00+00:00'
-updated_by: orchestrator session worktree-mobile-setup-916a9c (ccpause registration)
+revision: 2
+updated_at: '2026-08-08T16:55:00+00:00'
+updated_by: orchestrator session worktree-mobile-setup-916a9c (U1 plan gate cleared, U2 docs adopted, finding 651 routed)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -28,11 +28,11 @@ units:
     goal: CompetingConsumerSubscriptionModel remembers and honours a pause of a
       consumer waiting for the lock, with truthful introspection, within the ADR
       105/106 constraints and the saga-timer hard constraint
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_21600c19
     deliverables:
     - check: pr_merged
       ref: null
@@ -43,13 +43,46 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip task_d649cf9f spawned 2026-08-08 ~15:52Z, awaiting launch;
-      issue 565 claimed by orchestrator (in-progress label + comment 5226684082);
-      plan-first, so the first observable after launch is the unit plan at Johan''s
-      approval gate carrying the SubscriptionModelLifeCycle contract ask and the
-      downshift recommendation'
-    last_meaningful_progress_at: '2026-08-08T15:52:00+00:00'
+    next_action: 'implementation in progress; next observable is the PR (monitor
+      bc0cymzzm catches PR-OPENED); on green with threads resolved, CAS merge under
+      standing authority'
+    last_meaningful_progress_at: '2026-08-08T16:50:00+00:00'
+    observed:
+      plan_gate:
+        note: 'cleared by Johan 2026-08-08 ~16:50Z in the unit session: the
+          SubscriptionModelLifeCycle.pauseSubscription contract amendment is
+          APPROVED, paused-while-waiting UNREGISTERS from the strategy (grant never
+          arrives, resume re-registers), changelog entry goes under #### Changes'
+        via: cross-session message from local_21600c19
+        at: '2026-08-08T16:50:00+00:00'
+    assessment: 'fragile-area state-model change on shipped 0.32.0 API; the two-round
+      plan review is folded into the brief. Settled by the unit, do not re-litigate:
+      no OpenRewrite recipe, because the call site is unchanged and only runtime
+      behavior changes, the ADR 105 precedent (recorded in the unit''s ADR). Side
+      finding routed: issue 651 (strategy-level register-vs-refresh race), filed
+      unclaimed, OUT of this epic per Johan''s 565-only scoping, backlog'
+  U2:
+    issue: null
+    goal: occurrent.org docs for the 565 behavior change per AGENTS.md (pages/docs/docs.md
+      on a held docs branch in occurrent-org.github.io, news post only if worth
+      announcing), dispatched after U1 merges
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U1]
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'dispatch a chip after U1 merges (Sonnet/medium, docs-only, held
+      branch per the docs-repo convention, PR held until next release); adopted by
+      the orchestrator 2026-08-08 because AGENTS.md requires docs for user-affecting
+      changes, so this is DoD compliance, not scope growth; Johan may veto'
+    last_meaningful_progress_at: '2026-08-08T16:55:00+00:00'
     observed: {}
-    assessment: fragile-area state-model change on shipped 0.32.0 API; the two-round
-      plan review is folded into the brief, so the unit starts constrained rather
-      than blank-slate
+    assessment: routed out of U1 by Johan at the unit's plan gate rather than folded
+      into its PR (separate repo)
