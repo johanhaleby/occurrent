@@ -1,9 +1,8 @@
 schema_version: 1
 epic: archrev
-revision: 18
-updated_at: '2026-08-08T09:58:00+00:00'
-updated_by: orchestrator a7c1523c (B3 delivered PR 640, ci-wait; revision 17 was
-  reused for the mid-benchmark tail-read note, corrected here)
+revision: 19
+updated_at: '2026-08-08T10:05:00+00:00'
+updated_by: orchestrator a7c1523c (B5 delivered PR 641, ci-wait alongside PR 640)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -352,14 +351,14 @@ units:
     issue: 638
     goal: implement ADR 110 replay batching (capability interfaces, Source replay
       hooks, repository bulk defaults, coalescing view, default-on)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 641
       met: false
       evidence: null
     - check: issue_closed
@@ -367,9 +366,11 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip spawned 2026-08-08 (act-007), awaiting Johan''s launch; Sonnet/high,
-      contract fixed by ADR 110, partial-failure rules not up for redesign'
-    last_meaningful_progress_at: '2026-08-08T08:40:00+00:00'
+    next_action: 'ci-wait on PR 641 (head fbd8e309ad4935e74da7deb6239ea72978724177,
+      session local_b7330376, worktree angry-germain-e89c88); at merge review, confirm
+      the reactor Projections.java diff leaves the subscribeOn wrapping intact (B6
+      scope), then CAS merge on green with threads resolved'
+    last_meaningful_progress_at: '2026-08-08T10:05:00+00:00'
     observed: {}
     assessment: adopted from B1's handoff on PR 637 under Johan's structured-ask
       approval 2026-08-08
