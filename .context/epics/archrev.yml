@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 23
-updated_at: '2026-08-08T11:55:00+00:00'
-updated_by: orchestrator a7c1523c (PR 642 merged, B5 fully swept with DELIVERY_RESULT
-  done)
+revision: 24
+updated_at: '2026-08-08T12:10:00+00:00'
+updated_by: orchestrator a7c1523c (B6 and B7 started as in-session subagents on
+  Johan's request, chips withdrawn)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -440,7 +440,7 @@ units:
     issue: 639
     goal: measure the per-event boundedElastic hand-off in the reactor projection
       DSL (remove only if numbers justify)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
@@ -453,9 +453,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip spawned 2026-08-08 ~11:00Z (act-011), awaiting launch; Johan
-      is on mobile where chips do not render, so the orchestrator may start it as an
-      in-session subagent on his word, as B2 was'
+    next_action: 'running as in-session subagent (worktree-isolated, Sonnet) since 2026-08-08T12:10Z, chip task_0769a30e withdrawn; ci-wait then CAS merge when its PR appears'
     last_meaningful_progress_at: '2026-08-08T08:40:00+00:00'
     observed: {}
     assessment: adopted from B1's handoff (Projections.java:92/:120/:139 vs
@@ -464,7 +462,7 @@ units:
     issue: 643
     goal: bulk findAllById ($in) and saveAll (bulk write) overrides in the three
       shipped Mongo view state repositories
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -479,8 +477,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip spawned 2026-08-08 (act-012), awaiting launch; Sonnet/medium;
-      semantics must stay exactly the looping defaults'' including requireMatchingDocumentId
+    next_action: 'running as in-session subagent (worktree-isolated, Sonnet) since 2026-08-08T12:10Z, chip task_1b62745f withdrawn; ci-wait then CAS merge when its PR appears'' including requireMatchingDocumentId
       and DTO conversion'
     last_meaningful_progress_at: '2026-08-08T11:35:00+00:00'
     observed: {}
