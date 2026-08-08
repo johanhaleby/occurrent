@@ -1,8 +1,8 @@
 schema_version: 1
 epic: archrev
-revision: 13
-updated_at: '2026-08-08T07:41:25+00:00'
-updated_by: orchestrator a7c1523c (Wave B dispatched post-release, tag occurrent-0.32.0 verified on main at 601fc6f10)
+revision: 14
+updated_at: '2026-08-08T07:50:57+00:00'
+updated_by: orchestrator a7c1523c (B4 delivered PR 635, ci-wait)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -293,19 +293,31 @@ units:
   B4:
     issue: 625
     goal: saga CAS amplification javadoc qualifiers (doc only)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
+    - check: pr_merged
+      ref: 635
+      met: false
+      evidence: null
     - check: issue_closed
       ref: 625
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip task_77f5e1f8 spawned 2026-08-08, awaiting Johan''s launch;
-      doc only, Haiku/low'
-    last_meaningful_progress_at: '2026-08-08T07:41:00+00:00'
-    observed: {}
+    next_action: 'ci-wait on PR 635 (head 7e522ca4c5e85caef6dfe235e7686a7875b9a671);
+      CAS merge under standing authority once green with threads resolved, then sweep
+      session, cool-herschel worktree, both branches (johan/cool-herschel-de6f0b and
+      the stray archrev-b4-saga-dsl-docs, zero unique commits)'
+    last_meaningful_progress_at: '2026-08-08T07:50:00+00:00'
+    observed:
+      pr_635:
+        head: 7e522ca4c5e85caef6dfe235e7686a7875b9a671
+        note: 'opened from johan/cool-herschel-de6f0b, Fixes #625, exactly the two
+          saga-dsl files (+5/-3), checks running'
+        via: monitor + gh pr view
+        at: '2026-08-08T07:50:00+00:00'
     assessment: code behavior stays as decided in ADR 63/64/76/81
