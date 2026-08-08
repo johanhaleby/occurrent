@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccpause
-revision: 3
-updated_at: '2026-08-08T17:35:00+00:00'
-updated_by: orchestrator session worktree-mobile-setup-916a9c (U1 PR 655 opened, ci-wait)
+revision: 4
+updated_at: '2026-08-08T19:35:00+00:00'
+updated_by: orchestrator session worktree-mobile-setup-916a9c (PR 655 merge-ready, merge blocked by session permission layer)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -12,6 +12,16 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   /Users/johan/.claude/plans/https-github-com-johanhaleby-occurrent-i-lucky-canyon.md;
   epic scoped to issue 565 alone, milestone deliberately skipped (one-unit epic)'
 pending_actions:
+- id: act-002
+  type: merge
+  target: 'PR 655 squash-merge pinned to verified head a14daa8d01d520e02dab5cb32a1cfb80c1e8fb71
+    (27/27 success, MERGEABLE, 1 thread open as a reasoned decline per policy, 3
+    threads resolved with fixes)'
+  expected: 'PR merged, merged head equals pin, issue 565 auto-closed via Fixes'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-08T19:33:00+00:00'
 - id: act-001
   type: dispatch-chip
   target: 'U1 chip task_d649cf9f: ⌁[ccpause/U1#565] Fix waiting-consumer pause ·
@@ -43,9 +53,9 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'PR 655 checks running (ci-wait); worker runs pr-fix with autostop;
-      on green with threads resolved per policy, CAS merge pinned to the verified
-      full head SHA, then verify issue 565 closed via Fixes'
+    next_action: 'MERGE-READY at a14daa8d0 (act-002); the session permission
+      classifier denied gh pr merge, so the merge is routed to Johan (he merges or
+      grants the permission and the orchestrator retries the same pinned command)'
     last_meaningful_progress_at: '2026-08-08T17:33:00+00:00'
     observed:
       pr_655:
