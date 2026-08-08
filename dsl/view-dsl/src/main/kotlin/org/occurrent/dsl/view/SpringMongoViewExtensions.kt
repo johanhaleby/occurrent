@@ -18,14 +18,17 @@
 package org.occurrent.dsl.view
 
 import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.dsl.view.internal.MongoBulkViewStateOperations
 import org.occurrent.dsl.view.internal.requireMatchingDocumentId
 import org.occurrent.retry.Backoff.exponential
 import org.occurrent.retry.RetryStrategy
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.dao.OptimisticLockingFailureException
+import org.springframework.data.annotation.Id
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.findById
 import org.springframework.data.repository.CrudRepository
+import java.lang.reflect.Field
 import java.util.*
 
 interface StateConverter<S_VIEW, S_DTO> {
@@ -157,16 +160,7 @@ inline fun <S_VIEW, reified S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>
 
     // Built by hand rather than through the viewStateRepository(find, save) factory, whose state type is bounded to Any
     // and so cannot carry a nullable view state.
-    val stateRepository = object : ViewStateRepository<S_VIEW, VIEW_ID> {
-        override fun findById(id: VIEW_ID): Optional<S_VIEW & Any> = Optional.ofNullable(mongoOperations.findById(id, S_DTO::class.java))
-            .map { dto -> converter.fromDTO(dto) }
-
-        override fun save(id: VIEW_ID, state: S_VIEW & Any) {
-            val dto = converter.toDTO(state)
-            requireMatchingDocumentId(mongoOperations, S_DTO::class.java, dto, id)
-            mongoOperations.save(dto)
-        }
-    }
+    val stateRepository = mongoOperationsViewStateRepository<S_VIEW, S_DTO, VIEW_ID>(mongoOperations, converter, S_DTO::class.java)
 
     val view = this
     return object : MaterializedView<E> {
@@ -204,16 +198,7 @@ fun <S_VIEW, S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>.materialized(
     converter: StateConverter<S_VIEW, S_DTO>,
     deriveViewIdFromEvent: (E) -> VIEW_ID
 ): MaterializedView<E> {
-    val viewStateRepository = object : ViewStateRepository<S_VIEW, VIEW_ID> {
-        override fun findById(id: VIEW_ID): Optional<S_VIEW & Any> = crudRepository.findById(id).map { dto ->
-            converter.fromDTO(dto as S_DTO)
-        }
-
-        override fun save(id: VIEW_ID, state: S_VIEW & Any) {
-            val dto = converter.toDTO(state)
-            crudRepository.save(dto)
-        }
-    }
+    val viewStateRepository = crudRepositoryViewStateRepository(crudRepository, converter)
 
     val view = this
     return object : MaterializedView<E> {
@@ -221,4 +206,113 @@ fun <S_VIEW, S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>.materialized(
         override fun update(metadata: EventMetadata, event: E) =
             updateFromRepository(deriveViewIdFromEvent(event), metadata, event, view, viewStateRepository)
     }
+}
+
+// Extracted out of the materialized(mongoOperations, ..) overload so a test can obtain a ViewStateRepository
+// directly and exercise findAllById/saveAll without going through MaterializedView, which never calls them itself.
+fun <S_VIEW, S_DTO : Any, VIEW_ID : Any> mongoOperationsViewStateRepository(
+    mongoOperations: MongoOperations,
+    converter: StateConverter<S_VIEW, S_DTO>,
+    dtoType: Class<S_DTO>
+): ViewStateRepository<S_VIEW, VIEW_ID> = object : ViewStateRepository<S_VIEW, VIEW_ID> {
+    override fun findById(id: VIEW_ID): Optional<S_VIEW & Any> = Optional.ofNullable(mongoOperations.findById(id, dtoType))
+        .map { dto -> converter.fromDTO(dto) }
+
+    override fun save(id: VIEW_ID, state: S_VIEW & Any) {
+        val dto = converter.toDTO(state)
+        requireMatchingDocumentId(mongoOperations, dtoType, dto, id)
+        mongoOperations.save(dto)
+    }
+
+    // One "_id in (..)" query instead of ids.size() findById round trips. Reuses the exact machinery
+    // MongoOperations.findById(id, ..) relies on for id-type coercion (a hex String resolved against an
+    // ObjectId id, for example), so the read is identical to looping findById, just batched.
+    override fun findAllById(ids: Collection<VIEW_ID>): Map<VIEW_ID, S_VIEW & Any> {
+        val result = LinkedHashMap<VIEW_ID, S_VIEW & Any>()
+        MongoBulkViewStateOperations.findAllById(mongoOperations, dtoType, ids).forEach { (id, dto) ->
+            val state = converter.fromDTO(dto)
+            if (state != null) {
+                result[id] = state
+            }
+        }
+        return result
+    }
+
+    // requireMatchingDocumentId runs for every entry before any write is issued, so a mismatched id fails the
+    // whole batch rather than the entries that would have followed it in a loop. See
+    // MongoBulkViewStateOperations for the bulk write and its optimistic-locking and duplicate-key handling.
+    override fun saveAll(states: Map<VIEW_ID, S_VIEW & Any>) {
+        val dtos = states.map { (id, state) ->
+            val dto = converter.toDTO(state)
+            requireMatchingDocumentId(mongoOperations, dtoType, dto, id)
+            dto
+        }
+        MongoBulkViewStateOperations.saveAll(mongoOperations, dtoType, dtos)
+    }
+}
+
+// As mongoOperationsViewStateRepository, extracted out of materialized(crudRepository, ..) for direct testability.
+fun <S_VIEW, S_DTO : Any, VIEW_ID : Any> crudRepositoryViewStateRepository(
+    crudRepository: CrudRepository<S_DTO, VIEW_ID>,
+    converter: StateConverter<S_VIEW, S_DTO>
+): ViewStateRepository<S_VIEW, VIEW_ID> = object : ViewStateRepository<S_VIEW, VIEW_ID> {
+    override fun findById(id: VIEW_ID): Optional<S_VIEW & Any> = crudRepository.findById(id).map { dto ->
+        converter.fromDTO(dto as S_DTO)
+    }
+
+    override fun save(id: VIEW_ID, state: S_VIEW & Any) {
+        val dto = converter.toDTO(state)
+        crudRepository.save(dto)
+    }
+
+    // Delegates to Spring Data's own findAllById, a single "id in (..)" query for the common Mongo/JPA
+    // implementations. CrudRepository has no generic way to say which id a returned entity belongs to, so
+    // pairing results back to ids falls back to the @Id-annotated field every CrudRepository entity must carry.
+    override fun findAllById(ids: Collection<VIEW_ID>): Map<VIEW_ID, S_VIEW & Any> {
+        val result = LinkedHashMap<VIEW_ID, S_VIEW & Any>()
+        if (ids.isEmpty()) {
+            return result
+        }
+        val found = crudRepository.findAllById(ids).toList()
+        if (found.isEmpty()) {
+            return result
+        }
+        val idField = requiredIdField(found.first().javaClass)
+        @Suppress("UNCHECKED_CAST")
+        val dtosById = found.associateBy { dto -> idField.get(dto) as VIEW_ID }
+        for (id in ids) {
+            val dto = dtosById[id] ?: continue
+            val state = converter.fromDTO(dto)
+            if (state == null) {
+                continue
+            }
+            result[id] = state
+        }
+        return result
+    }
+
+    // Delegates to Spring Data's own saveAll. For SimpleMongoRepository this is a real bulk insert only when
+    // every entry is new; a batch mixing new and existing entries falls back to CrudRepository.save per entry,
+    // which is exactly what the looping ViewStateRepository.saveAll default already does, so this is never
+    // worse and is strictly better for the all-new case.
+    override fun saveAll(states: Map<VIEW_ID, S_VIEW & Any>) {
+        if (states.isEmpty()) {
+            return
+        }
+        crudRepository.saveAll(states.values.map { state -> converter.toDTO(state) })
+    }
+}
+
+// Walks up to find the @Id field, the same annotation Spring Data's own repository implementations require an
+// entity to carry for findById/save/etc. to work in the first place.
+private fun requiredIdField(dtoType: Class<*>): Field {
+    var current: Class<*>? = dtoType
+    while (current != null && current != Any::class.java) {
+        current.declaredFields.firstOrNull { it.isAnnotationPresent(Id::class.java) }?.let { field ->
+            field.isAccessible = true
+            return field
+        }
+        current = current.superclass
+    }
+    throw IllegalStateException("No @${Id::class.java.name} field found on ${dtoType.name}; findAllById cannot pair its bulk result back to the ids it was queried with")
 }
