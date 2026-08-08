@@ -1,8 +1,8 @@
 schema_version: 1
 epic: archrev
-revision: 33
+revision: 34
 updated_at: '2026-08-08T18:00:00+00:00'
-updated_by: orchestrator a7c1523c (B9 delivered PR 648, ci-wait)
+updated_by: orchestrator a7c1523c (B10 delivered PR 649, both addendum PRs in ci-wait)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -601,19 +601,22 @@ units:
     issue: 636
     goal: state clearing works under EnableOccurrentTesting without hand wiring
       (verify-first, mechanism in the neutral testing module)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_6c93b055 (worktree gallant-einstein-134826)
     deliverables:
+    - check: pr_merged
+      ref: 649
+      met: false
+      evidence: null
     - check: issue_closed
       ref: 636
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_36a48005 spawned 2026-08-08, awaiting launch; reproduce
-      first, works-as-intended conclusion is an acceptable BLOCKED outcome
+    next_action: 'ci-wait on PR 649 (head 9a80cce52a2, opened CONFLICTING on the rolling changelog, worker expected to rebase keep-both-bullets); at merge review confirm the shape is wiring over the existing neutral clearing mechanism, not a Spring-only mechanism, then CAS merge on green with threads resolved'
     last_meaningful_progress_at: '2026-08-08T18:00:00+00:00'
     observed: {}
     assessment: adopted with B9 as the addendum wave per Johan's structured ask
