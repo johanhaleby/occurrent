@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccrace
-revision: 2
-updated_at: '2026-08-08T21:15:00+00:00'
-updated_by: orchestrator session b72aef49 (U1 chip spawned as task_77beca9e)
+revision: 3
+updated_at: '2026-08-08T22:05:00+00:00'
+updated_by: orchestrator session b72aef49 (U1 delivered PR 658, ci-wait)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -39,7 +39,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 658
       met: false
       evidence: null
     - check: issue_closed
@@ -47,10 +47,17 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_77beca9e spawned 2026-08-08 ~21:15Z, awaiting Johan's
-      launch; first expected observable is the unit's plan at his approval gate
-    last_meaningful_progress_at: '2026-08-08T21:10:00+00:00'
-    observed: {}
+    next_action: ci-wait on PR 658; on green with threads resolved, verify the
+      DELIVERY_RESULT, then CAS-merge pinned to the verified full head SHA
+    last_meaningful_progress_at: '2026-08-08T22:02:00+00:00'
+    observed:
+      pr_658:
+        head: bc609781d6b056edaf9b6612a7b451fdae9600d6
+        note: 'opened ~22:02Z from johan/651-competing-consumer-status-race, checks
+          running; title says the fix stops an unregistered consumer keeping the
+          lease; full readiness review happens at merge time'
+        via: monitor bu11n182l + gh pr view
+        at: '2026-08-08T22:05:00+00:00'
     assessment: 'fragile-area concurrency fix on shared internal support used by both
       the native and Spring lease strategies; the class is in an internal package so
       no public API change is expected, and any public API change the plan wants
