@@ -1,9 +1,8 @@
 schema_version: 1
 epic: archrev
-revision: 32
+revision: 33
 updated_at: '2026-08-08T18:00:00+00:00'
-updated_by: orchestrator a7c1523c (addendum wave with B9/B10 adopted per Johan's
-  structured ask, monitor re-armed as bjcvl8whr per the lifetime rule)
+updated_by: orchestrator a7c1523c (B9 delivered PR 648, ci-wait)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -578,14 +577,14 @@ units:
     issue: 629
     goal: MongoProjectionStoreProvider fail-loud on mismatched projection @Id (both
       save paths)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_fdc00803 (worktree hopeful-thompson-107352)
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 648
       met: false
       evidence: null
     - check: issue_closed
@@ -593,8 +592,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_447c3b7f spawned 2026-08-08, awaiting launch; covers single
-      save and B7's bulk saveAll, migration-guide assessment in the PR body
+    next_action: 'ci-wait on PR 648 (head 29a5aec566f, guard on both save paths, new DocumentIdGuardTest); CAS merge on green with threads resolved'
     last_meaningful_progress_at: '2026-08-08T18:00:00+00:00'
     observed: {}
     assessment: T1's side-finding filed as its own issue; adopted with B10 as the
