@@ -1,9 +1,8 @@
 schema_version: 1
 epic: archrev
-revision: 16
-updated_at: '2026-08-08T08:40:00+00:00'
-updated_by: orchestrator a7c1523c (B1 merged and swept, default-on ruled; B5/B6 adopted
-  as issues 638/639)
+revision: 17
+updated_at: '2026-08-08T09:05:00+00:00'
+updated_by: orchestrator a7c1523c (B2 conditional dispatch delegated by Johan)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -308,8 +307,13 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: hold until B3's harness exists and the numbers justify it
-    last_meaningful_progress_at: '2026-08-07T15:05:00+00:00'
+    next_action: 'DELEGATED GO/NO-GO (Johan, in-session 2026-08-08): when B3 merges,
+      the orchestrator reads the harness numbers for the multi-leaf payload-filter
+      case and dispatches the B2 chip (Sonnet/medium) without a further ask if they
+      show material per-event cost outside tests. If they do not, no dispatch; report
+      the numbers to Johan with a recommendation on closing #623 rather than closing
+      it unasked'
+    last_meaningful_progress_at: '2026-08-08T09:05:00+00:00'
     observed: {}
     assessment: verification scoped this well below the review's major
   B3:
