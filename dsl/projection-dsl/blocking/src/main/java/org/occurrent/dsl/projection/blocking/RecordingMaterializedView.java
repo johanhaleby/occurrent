@@ -42,10 +42,11 @@ final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayA
     private final AppliedPositionStore store;
     private final String projectionId;
 
-    // Every access happens on the thread driving the catch-up replay, the same invariant CoalescingMaterializedView
-    // relies on, so this class does no synchronization of its own.
-    private boolean replaying = false;
-    private long highestPositionSeenDuringReplay = 0;
+    // Volatile because the replay runs on the catch-up thread and live updates run on whichever thread delivers them,
+    // so the two hand over across threads. Only the replay thread ever writes highestPositionSeenDuringReplay, since
+    // live events are buffered elsewhere until the replay is over, so its read-modify-write cannot lose an update.
+    private volatile boolean replaying = false;
+    private volatile long highestPositionSeenDuringReplay = 0;
 
     RecordingMaterializedView(MaterializedView<E> delegate, AppliedPositionStore store, String projectionId) {
         this.delegate = delegate;
