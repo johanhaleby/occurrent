@@ -1,6 +1,6 @@
 schema_version: 1
 epic: archrev
-revision: 38
+revision: 39
 updated_at: '2026-08-08T15:40:00+00:00'
 updated_by: orchestrator a7c1523c (docs PR 50 merged, B12 spun off issue 650 and
   running as subagent, docs monitor retired, library monitor brclpl51c armed)
@@ -705,7 +705,7 @@ units:
     session: subagent a06c56779f1649b31
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 652
       met: false
       evidence: null
     - check: issue_closed
@@ -713,8 +713,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'subagent running since 2026-08-08T15:35Z; ci-wait then CAS merge
-      when its PR appears; its DELIVERY_RESULT must state the docs-site consequence'
+    next_action: 'ci-wait on PR 652 (head c1bb34d259c, guide fix plus shim regression test, analysis verdict per the title is that the 3-digit rewrite breaks the equality shim); CAS merge on green with threads resolved'
     last_meaningful_progress_at: '2026-08-08T15:35:00+00:00'
     observed: {}
     assessment: 'spun off B11 audit via the finding-routing protocol (issue 650),
