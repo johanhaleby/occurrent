@@ -358,7 +358,7 @@ units:
   B2:
     issue: 623
     goal: payload-filter memoization (benchmark-first, post-release)
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on:
@@ -422,12 +422,14 @@ units:
     deliverables:
     - check: pr_merged
       ref: 641
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T10:55Z at fbd8e309a (squash 52891ab64), all
+        green, subscribeOn wrapping verified intact; follow-up polish PR 642 merged
+        2026-08-08T11:52Z (squash 0e2429cb4)'
     - check: issue_closed
       ref: 638
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #638, verified by orchestrator'
     blocking_on: []
     next_action: none
     last_meaningful_progress_at: '2026-08-08T11:55:00+00:00'
@@ -438,7 +440,7 @@ units:
     issue: 639
     goal: measure the per-event boundedElastic hand-off in the reactor projection
       DSL (remove only if numbers justify)
-    phase: BLOCKED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on:
