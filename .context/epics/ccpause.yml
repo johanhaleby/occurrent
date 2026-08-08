@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccpause
-revision: 7
-updated_at: '2026-08-08T20:35:00+00:00'
-updated_by: orchestrator session worktree-mobile-setup-916a9c (U3 delivered PR 657, ci-wait)
+revision: 8
+updated_at: '2026-08-08T21:05:00+00:00'
+updated_by: orchestrator session worktree-mobile-setup-916a9c (U3 merged as a60cd1af8, 656 closed, sweep held for DELIVERY_RESULT)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -46,6 +46,17 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T20:10:00+00:00'
+- id: act-005
+  type: merge
+  target: 'PR 657 squash-merge pinned to verified head 382b3e09fda606c84394f3cde62be3b63b8d1d6b
+    (26/26 success, MERGEABLE, all 3 Copilot threads resolved with fixes)'
+  expected: 'PR merged, merged head equals pin, issue 656 auto-closed via Fixes;
+    DONE: squash a60cd1af8, head-at-merge equals pin verified, issue 656 CLOSED,
+    in-progress label removed, remote branch deleted by the merge'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-08T21:00:00+00:00'
 - id: act-001
   type: dispatch-chip
   target: 'U1 chip task_d649cf9f: ⌁[ccpause/U1#565] Fix waiting-consumer pause ·
@@ -134,7 +145,7 @@ units:
     goal: ReactorCheckpointStorage retries transient Mongo errors with the reactor
       stack's Retry.backoff convention, mirroring the blocking defaults (100 ms to
       2 s exponential), configurable where the blocking one is
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -142,15 +153,17 @@ units:
     deliverables:
     - check: pr_merged
       ref: 657
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T21:00Z pinned to 382b3e09f, squash a60cd1af8,
+        head-at-merge equals pin (verified), 26/26 success, 3 threads resolved with
+        fixes'
     - check: issue_closed
       ref: 656
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #656, verified; in-progress label removed'
     blocking_on: []
-    next_action: 'PR 657 checks running (ci-wait); on green with threads resolved
-      per policy, CAS merge pinned to the verified full head SHA'
+    next_action: 'hold the sweep until the session''s DELIVERY_RESULT arrives, then
+      archive session and remove worktree and local branch'
     last_meaningful_progress_at: '2026-08-08T20:33:00+00:00'
     observed:
       pr_657:
