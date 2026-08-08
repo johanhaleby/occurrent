@@ -1,9 +1,8 @@
 schema_version: 1
 epic: ccrace
-revision: 8
-updated_at: '2026-08-09T00:15:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U2 and U4 running, U4 worktree
-  reuse hazard journaled, finding-recommendation addendum relayed)'
+revision: 9
+updated_at: '2026-08-09T00:25:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (U4 delivered PR 663, ci-wait)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -181,18 +180,20 @@ units:
       unregisterCompetingConsumer in NativeMongoLeaseCompetingConsumerStrategy and
       SpringMongoLeaseCompetingConsumerStrategy, per the ADR 113 note, after
       verifying those monitors protect nothing else
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_5384c04b
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 663
       met: false
       evidence: null
     blocking_on: []
-    next_action: session running; expected observable is a PR the monitor catches
+    next_action: ci-wait on PR 663; on green with threads resolved, verify the
+      DELIVERY_RESULT and any PR-body bookkeeping claims, then CAS-merge pinned to
+      the verified full head SHA; sweep caution applies to the reused worktree
     last_meaningful_progress_at: '2026-08-09T00:10:00+00:00'
     observed:
       worktree:
