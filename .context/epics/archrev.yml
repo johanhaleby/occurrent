@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 36
-updated_at: '2026-08-08T14:15:00+00:00'
-updated_by: orchestrator a7c1523c (addendum wave complete, all 17 units done and
-  swept, monitor stopped)
+revision: 37
+updated_at: '2026-08-08T14:45:00+00:00'
+updated_by: orchestrator a7c1523c (B11 docs audit adopted per Johan, docs-repo
+  monitor armed as b8is3i855)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -210,6 +210,14 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T14:05:00+00:00'
+- id: act-021
+  type: dispatch-chip
+  target: 'B11 chip task_4653f20c: ⌁[archrev/B11#574] Audit 0.32.0 docs · Sonnet/high'
+  expected: chip visible on desktop; session enters fleet on Johan's click
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T14:45:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -652,6 +660,29 @@ units:
     observed: {}
     assessment: adopted with B9 as the addendum wave per Johan's structured ask
       2026-08-08
+  B11:
+    issue: 574
+    goal: audit occurrent.org against the released 0.32.0, fix the misses, simplify
+      touched phrasing (audit inventory on the issue before fixing)
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: issue_closed
+      ref: 574
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'chip task_4653f20c spawned 2026-08-08, awaiting launch; deliverable
+      is mergeable-now docs PR(s) against docs main, PR 49 stays held and out of
+      scope; the docs repo is watched by its own monitor b8is3i855 while this unit
+      is active (multi-repo rule)'
+    last_meaningful_progress_at: '2026-08-08T14:45:00+00:00'
+    observed: {}
+    assessment: adopted from the deferred backlog by Johan 2026-08-08 in-session;
+      post-release verification of the merged held-branch fleet plus wording pass
   B4:
     issue: 625
     goal: saga CAS amplification javadoc qualifiers (doc only)
