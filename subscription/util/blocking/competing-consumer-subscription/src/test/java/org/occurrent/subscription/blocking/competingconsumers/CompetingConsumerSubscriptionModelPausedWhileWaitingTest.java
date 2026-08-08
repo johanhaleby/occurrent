@@ -115,6 +115,26 @@ class CompetingConsumerSubscriptionModelPausedWhileWaitingTest {
                 .isTrue();
     }
 
+    @Test
+    void a_system_paused_consumer_does_not_resume_from_a_late_grant_while_the_model_is_stopped() {
+        String subscriptionId = "subscriptionId";
+        model.subscribe(SUBSCRIBER_ID, subscriptionId, null, StartAt.subscriptionModelDefault(), event -> {
+        });
+        strategy.prohibit(subscriptionId, SUBSCRIBER_ID);
+        assertThat(model.isPaused(subscriptionId)).isTrue();
+
+        model.stop();
+        strategy.calls.clear();
+
+        // The race in occurrent#651: a grant can still land for a consumer stop() just unregistered.
+        strategy.grant(subscriptionId, SUBSCRIBER_ID);
+
+        assertThat(delegate.isRunning(subscriptionId))
+                .as("the model is stopped, so a system-paused consumer must not resume delivery")
+                .isFalse();
+        assertThat(strategy.calls).containsExactly("unregister:" + subscriptionId + ":" + SUBSCRIBER_ID);
+    }
+
     /**
      * Gives a rival subscriber the lock first, so the model's own consumer for the same subscription id loses the
      * race and is left Waiting.
@@ -217,6 +237,14 @@ class CompetingConsumerSubscriptionModelPausedWhileWaitingTest {
         void grant(String subscriptionId, String subscriberId) {
             lockHolder.put(subscriptionId, subscriberId);
             listeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
+        }
+
+        /**
+         * Simulates the strategy losing the lease for a currently-held consumer with no register call from the
+         * model, the way an expired lease does in the real refresh thread.
+         */
+        void prohibit(String subscriptionId, String subscriberId) {
+            listeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
         }
 
         /**

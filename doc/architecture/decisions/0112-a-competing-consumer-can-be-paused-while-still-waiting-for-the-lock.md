@@ -70,10 +70,11 @@ middle of that sequence. The refresh thread has already read the old status and 
 the pause unregisters the consumer, and the refresh thread's write then re-inserts it as holding the lock
 and calls the grant callback anyway. If that callback only logged and returned, the model would believe the
 consumer was paused and unregistered while the strategy kept refreshing its lease forever, which is the
-same cluster-wide stall the unregister-on-pause decision exists to prevent, reached by a different road. So
-every branch of `onConsumeGranted` that would otherwise skip a consumer, a `Waiting` one while the model is
-stopped, a `Paused` one paused by the user, and the new `PausedWhileWaiting` case, now unregisters instead.
-That bounds the exposure to one extra lease round rather than an indefinite one.
+same cluster-wide stall the unregister-on-pause decision exists to prevent, reached by a different road. Four
+branches of `onConsumeGranted` find a consumer the model will not start, and all four now unregister instead
+of merely skipping. A `Waiting` one while the model is stopped, a `Paused` one paused by the user, a `Paused`
+one paused by the system while the model is stopped, and the new `PausedWhileWaiting` case all hand the lock
+back. That bounds the exposure to one extra lease round rather than an indefinite one.
 
 **The new state carries no `pausedByUser` flag.** Only a user pause can ever reach a waiting consumer. The
 one caller that pauses with `pausedByUser=false` is `onConsumeProhibited`, and it only reaches a consumer it

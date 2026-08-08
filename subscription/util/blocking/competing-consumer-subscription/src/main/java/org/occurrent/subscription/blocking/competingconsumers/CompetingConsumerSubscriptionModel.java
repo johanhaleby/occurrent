@@ -423,6 +423,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 if (paused.pausedByUser) {
                     logDebug("Won't resume CompetingConsumer, because it was paused by user (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
                     handBackGrantedLock(competingConsumer);
+                } else if (stoppedByUser.get()) {
+                    logDebug("Won't resume system-paused CompetingConsumer because subscription model was explicitly stopped by user (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+                    handBackGrantedLock(competingConsumer);
                 } else {
                     resumeSubscription(subscriptionId);
                 }
