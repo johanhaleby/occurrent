@@ -26,8 +26,10 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * {@code maxCasAttempts} also bounds dispatch amplification: because commands are dispatched before the save and a lost
  * compare-and-set retries the whole step, a single input can re-dispatch its entire command list up to
- * {@code maxCasAttempts} times. Command receivers must be idempotent and tolerate that multiplicity, not merely
- * at-least-once delivery.
+ * {@code maxCasAttempts} times. However, a timer retry re-checks if the timer is still due against the reloaded envelope
+ * before dispatching, which fences out stale timers and limits realistic amplification to roughly the number of competing
+ * nodes, not the full {@code maxCasAttempts}. Command receivers must be idempotent and tolerate that multiplicity, not
+ * merely at-least-once delivery.
  *
  * @param timerPollInterval    how often to poll for due timers
  * @param timerBatchLimit      the maximum number of due instances fired per poll

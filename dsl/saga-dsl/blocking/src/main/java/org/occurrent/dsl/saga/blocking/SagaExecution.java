@@ -157,7 +157,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         log.warn("Saga '{}' has lost its compare-and-set save {} times (of a maximum {}) to concurrent writers; each retry re-dispatches the input's commands. Sustained contention may exhaust the retries and raise SagaConcurrencyException.",
                                 sagaId, attempt.getAttemptNumber(), config.maxCasAttempts());
                     }
-                    // A lost compare-and-set, or an outcome with nothing to save: retry the whole body.
+                    // Lost compare-and-set: retry the whole body. Processed outcomes always carry an envelope.
                     throw new CasConflict();
                 });
     }
