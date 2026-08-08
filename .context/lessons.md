@@ -10,6 +10,11 @@
   touches explicitly. Commit messages and internal code comments stay technical style.
   Also fixed in the same edit: the skill wrongly listed commit messages as a gated
   surface, contradicting the global config.
+  Addendum (2026-08-08, later the same day): Johan extended the rule to commit messages
+  and internal code comments too, so nothing prose-shaped is exempt any more except
+  internal planning docs (PLAN/ORCH). For code comments the skill's own code-comment
+  surface rules apply (terse, subject-free, no semicolons, match file density), not the
+  first-person prose voice. The commit-message trailer bans are unchanged.
 
 - Sweep a worker's worktree only after its FINAL report, not after its PR merges
   (2026-08-08, B2's closeout). A clean tree is not proof the worker is finished: B2's
