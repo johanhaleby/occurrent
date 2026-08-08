@@ -19,6 +19,7 @@ package org.occurrent.testing.springboot;
 import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoTimeoutException;
 import com.mongodb.ServerAddress;
+import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -94,15 +95,20 @@ class EnableOccurrentTestingClearStateWiringTest {
 
         // Nothing listens on this port, and server selection is bounded well below JUnit's own timeout, so a flush
         // attempt against it fails fast with MongoTimeoutException instead of hanging.
-        @Bean
-        MongoTemplate mongoTemplate() {
+        @Bean(destroyMethod = "close")
+        MongoClient mongoClient() {
             MongoClientSettings settings = MongoClientSettings.builder()
                     .applyToClusterSettings(builder -> builder
                             .hosts(List.of(new ServerAddress("127.0.0.1", 1)))
                             .serverSelectionTimeout(1, java.util.concurrent.TimeUnit.SECONDS))
                     .applyToSocketSettings(builder -> builder.connectTimeout((int) Duration.ofSeconds(1).toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS))
                     .build();
-            return new MongoTemplate(MongoClients.create(settings), "unreachable");
+            return MongoClients.create(settings);
+        }
+
+        @Bean
+        MongoTemplate mongoTemplate(MongoClient mongoClient) {
+            return new MongoTemplate(mongoClient, "unreachable");
         }
     }
 }

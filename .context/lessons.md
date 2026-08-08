@@ -1,5 +1,21 @@
 # Lessons
 
+- Every user-facing documentation surface goes through /johan-writing, in worker briefs
+  too, with the surfaces NAMED per unit (2026-08-08, Johan's correction after semicolons
+  shipped in changelog entries). The orchestrator skill's prose bullet said "docs, PR
+  titles, issue comments, ADRs" and briefs compressed it to "PR title, body, issue
+  comments", so changelog and javadoc text went out unGated. The rule now in the skill:
+  docs-site content, READMEs, javadoc and KDoc, ADRs, changelog entries, migration
+  guides, PR and issue prose are all gated surfaces, and a brief lists the ones the unit
+  touches explicitly. Commit messages and internal code comments stay technical style.
+  Also fixed in the same edit: the skill wrongly listed commit messages as a gated
+  surface, contradicting the global config.
+  Addendum (2026-08-08, later the same day): Johan extended the rule to commit messages
+  and internal code comments too, so nothing prose-shaped is exempt any more except
+  internal planning docs (PLAN/ORCH). For code comments the skill's own code-comment
+  surface rules apply (terse, subject-free, no semicolons, match file density), not the
+  first-person prose voice. The commit-message trailer bans are unchanged.
+
 - Sweep a worker's worktree only after its FINAL report, not after its PR merges
   (2026-08-08, B2's closeout). A clean tree is not proof the worker is finished: B2's
   worktree was removed in the merge sweep while the agent still owed itself a trailing

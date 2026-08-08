@@ -29,7 +29,8 @@ import org.springframework.data.mongodb.core.MongoTemplate;
  * <p>
  * {@link OccurrentTestingImportSelector} imports this class only when {@link EnableOccurrentTesting#clearState()} is
  * {@code true} and both {@code occurrent-testing-mongodb} and {@code MongoTemplate} are on the classpath, so a
- * non-Mongo application never loads it and this is the only file in the module allowed to mention MongoDB types.
+ * non-Mongo application never loads it. It is the only class in the module's production code that mentions MongoDB
+ * types. The module's tests reference MongoDB directly too, because those tests need a real database to run against.
  *
  * @see EnableOccurrentTesting
  */

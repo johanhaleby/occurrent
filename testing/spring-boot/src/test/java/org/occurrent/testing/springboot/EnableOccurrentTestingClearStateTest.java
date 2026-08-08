@@ -16,6 +16,7 @@
 
 package org.occurrent.testing.springboot;
 
+import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import org.bson.Document;
@@ -112,9 +113,14 @@ class EnableOccurrentTestingClearStateTest {
             return new InMemoryEventStore(subscriptionModel);
         }
 
+        @Bean(destroyMethod = "close")
+        MongoClient mongoClient() {
+            return MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE));
+        }
+
         @Bean
-        MongoTemplate mongoTemplate() {
-            return new MongoTemplate(MongoClients.create(mongoDBContainer.getReplicaSetUrl(DATABASE)), DATABASE);
+        MongoTemplate mongoTemplate(MongoClient mongoClient) {
+            return new MongoTemplate(mongoClient, DATABASE);
         }
     }
 }

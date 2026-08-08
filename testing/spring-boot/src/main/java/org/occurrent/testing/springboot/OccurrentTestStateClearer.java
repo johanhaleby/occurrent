@@ -17,9 +17,9 @@
 package org.occurrent.testing.springboot;
 
 /**
- * Marks the bean {@link OccurrentTestingConfiguration} and {@link OccurrentReactorTestingConfiguration} hand a
- * subscriptions extension to {@code clearingStateWith(..)} when {@link EnableOccurrentTesting#clearState()} wired
- * one in.
+ * Marks the bean that {@link OccurrentTestingConfiguration} and {@link OccurrentReactorTestingConfiguration} pass to
+ * a subscriptions extension's {@code clearingStateWith(..)} once {@link EnableOccurrentTesting#clearState()} has
+ * wired one in.
  * <p>
  * A plain {@code Runnable} bean would do the same job but cannot be looked up without also matching whatever
  * unrelated {@code Runnable} bean an application already has in its context. This interface exists only to be that
