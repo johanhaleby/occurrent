@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 35
-updated_at: '2026-08-08T18:00:00+00:00'
-updated_by: orchestrator a7c1523c (B9 merged, sweep held for its DELIVERY_RESULT;
-  B10 rebased and mid-checks)
+revision: 36
+updated_at: '2026-08-08T14:15:00+00:00'
+updated_by: orchestrator a7c1523c (addendum wave complete, all 17 units done and
+  swept, monitor stopped)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -196,6 +196,20 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T13:35:00+00:00'
+- id: act-020
+  type: merge
+  target: 'PR 649 squash-merge pinned to verified head 18790a82082f9b6992f95f429010faeea8a5b1e0
+    (all green, 4 threads answered with pushed fixes, resolved by orchestrator as
+    bookkeeping, MERGEABLE; layering verified as wiring over the neutral mechanism)'
+  expected: 'PR merged, merged head equals verified head, issue 636 auto-closed via
+    Fixes; last addendum unit, so the sweep stops the monitor and closes the epic
+    again after both worker DELIVERY_RESULTs; DONE: squash e74fdc188, issue 636
+    CLOSED, both DELIVERY_RESULTs done with matching SHAs, sessions archived,
+    branches pruned, monitor bjcvl8whr stopped in the same sweep'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T14:05:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -592,7 +606,7 @@ units:
       save paths)
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_fdc00803 (worktree hopeful-thompson-107352)
     deliverables:
@@ -606,7 +620,7 @@ units:
       met: true
       evidence: 'CLOSED via Fixes #629, verified by orchestrator'
     blocking_on: []
-    next_action: 'deliverables met; archive session, remove worktree hopeful-thompson-107352 and branches only after its DELIVERY_RESULT arrives'
+    next_action: 'none'
     last_meaningful_progress_at: '2026-08-08T18:00:00+00:00'
     observed: {}
     assessment: T1's side-finding filed as its own issue; adopted with B10 as the
@@ -615,22 +629,25 @@ units:
     issue: 636
     goal: state clearing works under EnableOccurrentTesting without hand wiring
       (verify-first, mechanism in the neutral testing module)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_6c93b055 (worktree gallant-einstein-134826)
     deliverables:
     - check: pr_merged
       ref: 649
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T14:07Z at 18790a820 (squash e74fdc188), all
+        green, 4 threads answered with fixes (resolved by orchestrator as
+        bookkeeping), layering verified as wiring over the neutral clearing
+        mechanism'
     - check: issue_closed
       ref: 636
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #636, verified by orchestrator'
     blocking_on: []
-    next_action: 'ci-wait on PR 649 (head 9a80cce52a2, opened CONFLICTING on the rolling changelog, worker expected to rebase keep-both-bullets); at merge review confirm the shape is wiring over the existing neutral clearing mechanism, not a Spring-only mechanism, then CAS merge on green with threads resolved'
+    next_action: 'none'
     last_meaningful_progress_at: '2026-08-08T18:00:00+00:00'
     observed: {}
     assessment: adopted with B9 as the addendum wave per Johan's structured ask
