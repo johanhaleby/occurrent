@@ -1,18 +1,32 @@
 schema_version: 1
 epic: ccrace
-revision: 4
-updated_at: '2026-08-08T22:40:00+00:00'
-updated_by: orchestrator session b72aef49 (PR 658 verified green, merge pinned and journaled)
+revision: 5
+updated_at: '2026-08-08T23:15:00+00:00'
+updated_by: 'orchestrator session b72aef49 (U2 659 and U3 660 adopted per Johan,
+  issues filed and claimed, U2 chip journaled)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
 authority: 'see .context/orchestrator-policy.yml (standing merge, sibling leniency,
   reasoned-decline-open, memory checkpoints); epic registered from Johan''s
-  /orchestrator invocation naming issue 651 (2026-08-08); the unit is plan-first,
-  so its design decisions rest with Johan at the unit session''s plan gate;
-  issue 651 claimed at registration (in-progress label + comment 5227615207);
-  milestone deliberately skipped (single-unit epic, ccpause precedent)'
+  /orchestrator invocation naming issue 651 (2026-08-08); WIDENED by Johan
+  2026-08-08 ~23:00Z via structured ask (Adopt both): U2 #659 lease clock skew and
+  U3 #660 unused fencing token, both filed by the orchestrator because PR 658''s
+  body claimed they existed and they did not; units are plan-first, design
+  decisions rest with Johan at each unit session''s plan gate; milestone
+  deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-003
+  type: dispatch-chip
+  target: 'U2 chip: ⌁[ccrace/U2#659] Lease expiry on one clock · Sonnet/high
+    (plan-first, /johan-plan, the testing-story question named, the upsert and
+    DUPLICATE_KEY interplay named, 658 regression guard)'
+  expected: 'chip visible to Johan; session enters fleet on his click; VERIFIED:
+    spawn returned task_2f041f39, chip pending at position 1'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T23:15:00+00:00'
 - id: act-002
   type: merge
   target: 'PR 658 squash-merge pinned to verified head
@@ -82,4 +96,64 @@ units:
       no public API change is expected, and any public API change the plan wants
       escalates as BLOCKED; changelog Changes entry required (bug fix to released
       behavior); no docs-site unit expected, the unit routes a finding if the fix
-      turns out to change user-observable behavior worth documenting'
+      turns out to change user-observable behavior worth documenting. Delivered with
+      ADR 113 (per-consumer lock array, listeners told outside the lock) and
+      MongoLeaseRaceTest (deterministic interleaving). The PR body claimed two lease
+      weaknesses were filed separately when they were not, corrected by the
+      orchestrator filing #659 and #660'
+  U2:
+    issue: 659
+    goal: lease expiry is written and judged on one clock, the database clock, in
+      MongoListenerLockService, for both Mongo lease strategies, with the
+      deterministic timing-test story resolved at the plan gate
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 659
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip task_2f041f39 spawned 2026-08-08 ~23:20Z, awaiting Johan's
+      launch; first expected observable is the unit's plan at his approval gate
+    last_meaningful_progress_at: '2026-08-08T23:15:00+00:00'
+    observed: {}
+    assessment: 'contained in MongoListenerLockService but design-sensitive in two
+      places the plan must answer, how the injectable Clock test harness survives a
+      server-side clock, and whether the upsert plus DUPLICATE_KEY acquisition path
+      behaves the same with an $expr predicate'
+  U3:
+    issue: 660
+    goal: the fencing-token promise in the acquireOrRefreshFor javadoc is either
+      wired to the writes that need it or withdrawn honestly, decided at the plan
+      gate, implemented accordingly
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U2]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 660
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip spawns when U2 merges, both units change
+      MongoListenerLockService so they serialize
+    last_meaningful_progress_at: '2026-08-08T23:15:00+00:00'
+    observed: {}
+    assessment: 'the honest scope is the decision itself, wire the version through
+      checkpoint writes (cross-module design, escalates at the plan gate before
+      building) or amend the javadoc to state what a handover can redo, with a bias
+      to the smaller option per the overengineering guard'
