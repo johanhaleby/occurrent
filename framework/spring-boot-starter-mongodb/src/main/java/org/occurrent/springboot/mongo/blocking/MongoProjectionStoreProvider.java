@@ -32,12 +32,11 @@ import java.util.Optional;
  * Materializes a {@code @Projection} that declares no store into MongoDB, into the collection Spring Data derives from
  * the state type.
  * <p>
- * {@code save} looks up the document by the state's own {@code @Id}, not by the projection key it is handed. The
- * projection key is used for {@code findById} only. Give the state type an {@code @Id} field that holds the same
- * value the projection resolves as its key, or a read and a write for one instance would land on two different
- * documents and the read model would never accumulate. Since 0.33.0, {@code save} and {@code saveAll} fail fast with
- * an {@code IllegalStateException} instead when the state's {@code @Id} does not match the resolved key, so this
- * misconfiguration is caught at write time rather than silently orphaning the read model. This store does no
+ * {@code save} looks up the document by the state's own {@code @Id}, not by the projection key it is handed. Give
+ * the state type an {@code @Id} field that holds the same value the projection resolves as its key, or a read and a
+ * write for one instance would land on two different documents and the read model would never accumulate. Since
+ * 0.33.0, {@code save} and {@code saveAll} check the state's {@code @Id} against the resolved key and fail fast with
+ * an {@code IllegalStateException} on a mismatch, instead of silently orphaning the read model. This store does no
  * optimistic locking unless the state type also declares {@code @Version}, so under concurrent delivery to one
  * projection key it is last write wins. Thread a {@code RetryStrategy} through
  * {@code Projections.materializedView(..)} to recover from that once the state carries {@code @Version}.

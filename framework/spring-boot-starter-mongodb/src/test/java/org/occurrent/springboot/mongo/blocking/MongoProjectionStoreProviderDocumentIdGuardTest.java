@@ -42,11 +42,11 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * {@code save} looks up the document by the state's own {@code @Id}, and the id it is handed to write under is only
- * ever used for the corresponding {@code findById}. Proves the store {@link MongoProjectionStoreProvider} builds
- * fails loud with {@link IllegalStateException} on both the single {@code save} and the bulk {@code saveAll} path
- * when a state's {@code @Id} does not agree with the resolved key, instead of silently writing under the state's own
- * id and orphaning the read model, and that matched-id writes are unaffected.
+ * {@code save} looks up the document by the state's own {@code @Id}, not by the id it is handed to write under.
+ * Proves the store {@link MongoProjectionStoreProvider} builds fails loud with {@link IllegalStateException} on both
+ * the single {@code save} and the bulk {@code saveAll} path when a state's {@code @Id} does not agree with the
+ * resolved key, instead of silently writing under the state's own id and orphaning the read model, and that
+ * matched-id writes are unaffected.
  */
 @DisplayName("MongoProjectionStoreProvider document id guard")
 @DisplayNameGeneration(ReplaceUnderscores.class)
