@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccpause
-revision: 8
-updated_at: '2026-08-08T21:05:00+00:00'
-updated_by: orchestrator session worktree-mobile-setup-916a9c (U3 merged as a60cd1af8, 656 closed, sweep held for DELIVERY_RESULT)
+revision: 9
+updated_at: '2026-08-08T21:25:00+00:00'
+updated_by: orchestrator session worktree-mobile-setup-916a9c (closeout, all units done and swept, main matrix watch b399ywjw8 pending)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -120,22 +120,23 @@ units:
     goal: occurrent.org docs for the 565 behavior change per AGENTS.md (pages/docs/docs.md
       on a held docs branch in occurrent-org.github.io, news post only if worth
       announcing), dispatched after U1 merges
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U1]
-    session: null
+    session: local_e08cb7ec (archived)
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
-      ref: null
-      met: false
-      evidence: null
+      ref: docs/565-waiting-consumer-pause
+      met: true
+      evidence: 'held PR 53 open, non-draft, held wording in body, review-clean
+        (1 thread, 0 unresolved), verified 2026-08-08T21:15Z; deliberately frozen
+        until release, so NO docs monitor is armed (frozen work stays unwatched by
+        design, recorded here per the fleet-monitor rule)'
     blocking_on: []
-    next_action: 'chip task_9bf7ddc3 spawned 2026-08-08 ~19:48Z, awaiting launch;
-      a docs-repo monitor is armed when the session goes live (multi-repo rule);
-      the library monitor bc0cymzzm was stopped at U1 completion per the lifetime
-      invariant'
+    next_action: 'none until release day: Johan merges held PR 53 with the other
+      held docs PRs at the next release'
     last_meaningful_progress_at: '2026-08-08T16:55:00+00:00'
     observed: {}
     assessment: routed out of U1 by Johan at the unit's plan gate rather than folded
@@ -147,9 +148,9 @@ units:
       2 s exponential), configurable where the blocking one is
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: local_7d3da026 (archived)
     deliverables:
     - check: pr_merged
       ref: 657
@@ -162,8 +163,7 @@ units:
       met: true
       evidence: 'CLOSED via Fixes #656, verified; in-progress label removed'
     blocking_on: []
-    next_action: 'hold the sweep until the session''s DELIVERY_RESULT arrives, then
-      archive session and remove worktree and local branch'
+    next_action: none
     last_meaningful_progress_at: '2026-08-08T20:33:00+00:00'
     observed:
       pr_657:
