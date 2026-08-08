@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 21
-updated_at: '2026-08-08T11:00:00+00:00'
-updated_by: orchestrator a7c1523c (B5 merged, residual un-pushed polish routed back
-  to its session; B2 running as in-session subagent; B6 unblocked and chipped)
+revision: 22
+updated_at: '2026-08-08T11:35:00+00:00'
+updated_by: orchestrator a7c1523c (B7 Mongo bulk overrides and B8 docs registered
+  per Johan's multi-select approval, from the index question)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -111,6 +111,14 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T11:00:00+00:00'
+- id: act-012
+  type: dispatch-chip
+  target: 'B7 chip task_1b62745f: ⌁[archrev/B7#643] Bulk Mongo view state reads · Sonnet/medium'
+  expected: chip visible on desktop; may be superseded by a subagent start on Johan's word
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T11:35:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -448,6 +456,59 @@ units:
     observed: {}
     assessment: adopted from B1's handoff (Projections.java:92/:120/:139 vs
       ReactiveHandover.java:231) under Johan's structured-ask approval 2026-08-08
+  B7:
+    issue: 643
+    goal: bulk findAllById ($in) and saveAll (bulk write) overrides in the three
+      shipped Mongo view state repositories
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 643
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'chip spawned 2026-08-08 (act-012), awaiting launch; Sonnet/medium;
+      semantics must stay exactly the looping defaults'' including requireMatchingDocumentId
+      and DTO conversion'
+    last_meaningful_progress_at: '2026-08-08T11:35:00+00:00'
+    observed: {}
+    assessment: registered from the index-question investigation, approved by Johan
+      via multi-select structured ask 2026-08-08
+  B8:
+    issue: 644
+    goal: docs-site section for replay batching (held branch, next release), incl.
+      the no-extra-indexes note
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - B7
+    session: null
+    deliverables:
+    - check: issue_closed
+      ref: 644
+      met: false
+      evidence: null
+    blocking_on:
+    - what: 'B7 (#643) landing, so the docs describe the shipped Mongo bulk behaviour'
+      since: '2026-08-08T11:35:00+00:00'
+      recheck_after: '2026-08-09T08:00:00+00:00'
+    next_action: 'spawn the docs chip (cwd occurrent-org.github.io, Haiku-or-Sonnet/low)
+      in the tick that merges B7; deliverable is a held review-clean docs PR, issue
+      closes on review-clean not on merge; docs repo is unwatched by the monitor by
+      design (held PR)'
+    last_meaningful_progress_at: '2026-08-08T11:35:00+00:00'
+    observed: {}
+    assessment: registered from the index-question investigation, approved by Johan
+      via multi-select structured ask 2026-08-08
   B4:
     issue: 625
     goal: saga CAS amplification javadoc qualifiers (doc only)
