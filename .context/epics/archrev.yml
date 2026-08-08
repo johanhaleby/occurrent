@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 15
-updated_at: '2026-08-08T08:15:00+00:00'
-updated_by: orchestrator a7c1523c (B4 merged and swept; B1 ADR PR 637 green with an open
-  default-on question routed to Johan)
+revision: 16
+updated_at: '2026-08-08T08:40:00+00:00'
+updated_by: orchestrator a7c1523c (B1 merged and swept, default-on ruled; B5/B6 adopted
+  as issues 638/639)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -48,6 +48,26 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T07:41:00+00:00'
+- id: act-006
+  type: merge
+  target: 'PR 637 squash-merge pinned to verified head 107d56656effe0275b97d1d5149ab2b39dfc728a
+    (all green, 1 thread resolved, MERGEABLE, default-on ruled by Johan via structured
+    ask 2026-08-08)'
+  expected: 'PR merged, merged head equals verified head, issue 622 auto-closed via
+    Fixes; DONE: squash 41f950bbd, issue 622 CLOSED verified, ruling comment posted,
+    branches deleted, worktree removed, session archived'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T08:25:00+00:00'
+- id: act-007
+  type: dispatch-chip
+  target: 'B5 chip task_a6157e29: ⌁[archrev/B5#638] Implement replay batching · Sonnet/high'
+  expected: chip visible to Johan; session enters fleet on his click
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T08:40:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -248,31 +268,30 @@ units:
   B1:
     issue: 622
     goal: replay-phase batching contract (ADR-led design, post-release)
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
+    - check: pr_merged
+      ref: 637
+      met: true
+      evidence: 'MERGED 2026-08-08T08:27Z via merge API pinned to verified head
+        107d56656 (all green, 1 thread resolved), squash 41f950bbd; ADR 110 only,
+        default-on ruled by Johan via structured ask, ruling comment on the PR'
     - check: issue_closed
       ref: 622
-      met: false
-      evidence: null
-    blocking_on:
-    - what: 'Johan''s answer on the ADR''s one open question: replay batching on by
-      default (batchSize opt-out) vs opt-in'
-      since: '2026-08-08T08:15:00+00:00'
-      recheck_after: '2026-08-08T12:00:00+00:00'
-    next_action: 'PR 637 (ADR 110 only, Fixes #622) is green at head 107d56656 with
-      0 threads; merge after Johan''s default-on/opt-in answer (amend first if opt-in).
-      Handoff comment on the PR scopes the implementation follow-up (candidate B5:
-      ReplayAwareMaterializedView + reactive twin, defaulted Source replay hooks,
-      defaulted findAllById/saveAll, coalescing view) and a spin-off scheduler-hop
-      finding (candidate B6, measure-first via B3''s harness)'
-    last_meaningful_progress_at: '2026-08-08T08:10:00+00:00'
+      met: true
+      evidence: 'CLOSED via Fixes #622, verified by orchestrator'
+    blocking_on: []
+    next_action: none
+    last_meaningful_progress_at: '2026-08-08T08:40:00+00:00'
     observed: {}
-    assessment: interface question (ViewStateRepository batch ops), phase signal,
-      partial-failure semantics all open
+    assessment: 'design settled by ADR 110: batching default-on with batchSize opt-out,
+      capability interfaces over repository burden, five partial-failure rules keep
+      at-least-once. Implementation adopted as B5 (#638), scheduler-hop spin-off as
+      B6 (#639); marker-ordering asymmetry recorded as deliberate in ORCHESTRATOR.md'
   B2:
     issue: 623
     goal: payload-filter memoization (benchmark-first, post-release)
@@ -312,6 +331,55 @@ units:
     last_meaningful_progress_at: '2026-08-08T07:41:00+00:00'
     observed: {}
     assessment: cited benchmark numbers currently have no re-runnable harness
+  B5:
+    issue: 638
+    goal: implement ADR 110 replay batching (capability interfaces, Source replay
+      hooks, repository bulk defaults, coalescing view, default-on)
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 638
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'chip spawned 2026-08-08 (act-007), awaiting Johan''s launch; Sonnet/high,
+      contract fixed by ADR 110, partial-failure rules not up for redesign'
+    last_meaningful_progress_at: '2026-08-08T08:40:00+00:00'
+    observed: {}
+    assessment: adopted from B1's handoff on PR 637 under Johan's structured-ask
+      approval 2026-08-08
+  B6:
+    issue: 639
+    goal: measure the per-event boundedElastic hand-off in the reactor projection
+      DSL (remove only if numbers justify)
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - B3
+    session: null
+    deliverables:
+    - check: issue_closed
+      ref: 639
+      met: false
+      evidence: null
+    blocking_on:
+    - what: B3's JMH harness (#624), the measurement tool this unit needs
+      since: '2026-08-08T08:40:00+00:00'
+      recheck_after: '2026-08-09T08:00:00+00:00'
+    next_action: hold until B3 merges, then Sonnet/medium measure-first chip
+    last_meaningful_progress_at: '2026-08-08T08:40:00+00:00'
+    observed: {}
+    assessment: adopted from B1's handoff (Projections.java:92/:120/:139 vs
+      ReactiveHandover.java:231) under Johan's structured-ask approval 2026-08-08
   B4:
     issue: 625
     goal: saga CAS amplification javadoc qualifiers (doc only)
