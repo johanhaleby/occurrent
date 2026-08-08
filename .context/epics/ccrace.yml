@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 6
-updated_at: '2026-08-08T23:45:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U1 swept, U2 running with
-  corrections sent, duplicate issues 661/662 closed)'
+revision: 7
+updated_at: '2026-08-08T23:55:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (U4 adopted per Johan, chip
+  journaled)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,6 +16,17 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-004
+  type: dispatch-chip
+  target: 'U4 chip: ⌁[ccrace/U4] Drop strategy synchronized · Sonnet/medium (not
+    plan-first, ADR 113 carries the argument, BLOCKED if the monitors protect
+    anything else)'
+  expected: 'chip visible to Johan; session enters fleet on his click; VERIFIED:
+    spawn returned task_2f9b0ff5, chip pending at position 1'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T23:55:00+00:00'
 - id: act-003
   type: dispatch-chip
   target: 'U2 chip: ⌁[ccrace/U2#659] Lease expiry on one clock · Sonnet/high
@@ -164,3 +175,29 @@ units:
       checkpoint writes (cross-module design, escalates at the plan gate before
       building) or amend the javadoc to state what a handover can redo, with a bias
       to the smaller option per the overengineering guard'
+  U4:
+    issue: null
+    goal: remove the now-redundant synchronized from registerCompetingConsumer and
+      unregisterCompetingConsumer in NativeMongoLeaseCompetingConsumerStrategy and
+      SpringMongoLeaseCompetingConsumerStrategy, per the ADR 113 note, after
+      verifying those monitors protect nothing else
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip task_2f9b0ff5 spawned 2026-08-08 ~23:58Z, awaiting Johan's
+      launch
+    last_meaningful_progress_at: '2026-08-08T23:55:00+00:00'
+    observed: {}
+    assessment: 'adopted from U1''s DELIVERY_RESULT finding (recorded in ADR 113,
+      no tracker issue, the ADR is the durable trace); disjoint files from U2 (its
+      module is the common strategy module, these are the native and spring wrapper
+      modules) so it parallelizes; changelog collision with U2 is an expected
+      rolling conflict pr-fix resolves keep-both'
