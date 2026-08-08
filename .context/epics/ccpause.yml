@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccpause
-revision: 6
-updated_at: '2026-08-08T20:15:00+00:00'
-updated_by: orchestrator session worktree-mobile-setup-916a9c (U1 swept, U3 #656 adopted per Johan, monitor re-armed as b2vrbsyzm)
+revision: 7
+updated_at: '2026-08-08T20:35:00+00:00'
+updated_by: orchestrator session worktree-mobile-setup-916a9c (U3 delivered PR 657, ci-wait)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -141,7 +141,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 657
       met: false
       evidence: null
     - check: issue_closed
@@ -149,10 +149,16 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip task_c5308960 spawned 2026-08-08 ~20:10Z, awaiting launch;
-      monitor b2vrbsyzm (re-armed, baseline 0 PRs) catches its PR'
-    last_meaningful_progress_at: '2026-08-08T20:10:00+00:00'
-    observed: {}
+    next_action: 'PR 657 checks running (ci-wait); on green with threads resolved
+      per policy, CAS merge pinned to the verified full head SHA'
+    last_meaningful_progress_at: '2026-08-08T20:33:00+00:00'
+    observed:
+      pr_657:
+        head: 6272e607bad2ee94c6cf7969596e176cda11e511
+        note: 'opened ~20:33Z from johan/656-reactor-checkpoint-storage-retry,
+          Fixes #656, checks running'
+        via: monitor b2vrbsyzm + gh pr view
+        at: '2026-08-08T20:35:00+00:00'
     assessment: adopted by Johan from the tracker scan (vgpr spin-off orphaned by
       that epic's closure); pattern-following implementation, not plan-first, the
       issue names the shape (ReactiveMongoAppliedPositionStore's Retry.backoff)
