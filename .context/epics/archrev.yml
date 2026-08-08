@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 40
-updated_at: '2026-08-08T16:20:00+00:00'
-updated_by: orchestrator a7c1523c (B12 done and swept, B13 docs port running as the
-  approved tail, library monitor stopped per the lifetime rule)
+revision: 41
+updated_at: '2026-08-08T16:45:00+00:00'
+updated_by: orchestrator a7c1523c (final closeout, all 20 units done and swept,
+  nothing running)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -689,19 +689,21 @@ units:
     issue: 574
     goal: audit occurrent.org against the released 0.32.0, fix the misses, simplify
       touched phrasing (audit inventory on the issue before fixing)
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_6e5fd043 (docs worktree fervent-ritchie-d224c0)
     deliverables:
     - check: issue_closed
       ref: 574
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED by orchestrator with the full record after docs PR 50 merged
+        (squash 62afceb06) and the spin-off chain resolved (650 to 652 to docs PR
+        51); worker DELIVERY_RESULT was an honest blocked exit on the reasoned
+        decline, superseded by the merge'
     blocking_on: []
-    next_action: 'docs PR 50 merged (squash 62afceb06, audit inventory on the issue,
-      the merge-fallout dedup shipped); sweep after the session''s DELIVERY_RESULT
+    next_action: 'none''s DELIVERY_RESULT
       and its manual close of #574 per the cross-repo Fixes rule'
     last_meaningful_progress_at: '2026-08-08T14:45:00+00:00'
     observed: {}
@@ -740,21 +742,20 @@ units:
     issue: 653
     goal: port the fixed time-rewrite script and prose from library PR 652 into the
       docs site (pages/docs/docs.md)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: subagent a086c2d7dbf503414
     deliverables:
     - check: issue_closed
       ref: 653
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED, verified by orchestrator; docs PR 51 CAS-merged at
+        920b57b01 (squash cb2924fbf), ported script byte-identical to the guide,
+        one reasoned decline left open on pre-existing UTC normalization'
     blocking_on: []
-    next_action: 'subagent running since 2026-08-08T16:20Z as the approved session
-      tail; docs repo deliberately unwatched, the subagent completion notification
-      is the wake signal; merge its docs PR under the recorded grant, then final
-      closeout'
+    next_action: 'none'
     last_meaningful_progress_at: '2026-08-08T16:20:00+00:00'
     observed: {}
     assessment: adopted by Johan via structured ask, the mechanical consequence B12
