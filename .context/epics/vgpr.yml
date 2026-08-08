@@ -1,8 +1,8 @@
 schema_version: 1
 epic: vgpr
-revision: 7
-updated_at: '2026-08-08T18:30:00+00:00'
-updated_by: orchestrator gallant-einstein-134826 (unit A merged and verified, epic complete)
+revision: 8
+updated_at: '2026-08-08T18:45:00+00:00'
+updated_by: orchestrator gallant-einstein-134826 (sweep complete, session archived, epic closed)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -36,7 +36,7 @@ units:
       plan-first with an ADR approval gate before implementation
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_76c0400d-acbd-45a2-9384-5884090d6ae6 (chip task_571ae132)
     deliverables:
@@ -62,13 +62,11 @@ units:
       met: true
       evidence: 'issue 361 CLOSED via the Fixes reference on merge'
     blocking_on: []
-    next_action: sweep remainder, archive worker session local_76c0400d (worktree goes
-      with it), remote branch already deleted. The four decided API shapes are recorded
-      in ADR 0111 and must not be re-litigated (AppliedPositionStore name, Backoff-paced
-      wait with occurrent.projection.applied-position properties, RetryStrategy on the
-      blocking Mongo store with reactor.util.retry.Retry on the reactive one per the
-      reactive starter's own convention, neutral interface free of retry policy).
-      Post-release obligation, docs PR 52 merges at the next release only
+    next_action: none, epic closed. Session local_76c0400d archived with its worktree,
+      remote branch deleted, monitor retired, issue 656 filed unclaimed for the
+      ReactorCheckpointStorage retry gap the unit surfaced. The four decided API shapes
+      are recorded in ADR 0111 and must not be re-litigated. Post-release obligation,
+      docs PR 52 merges at the next release only
     last_meaningful_progress_at: '2026-08-08T17:45:00+00:00'
     observed:
       pr_654: {head: 57a67a7c30da61acd78d38b107666e6ca25ed6ef, mergeable: MERGEABLE,
