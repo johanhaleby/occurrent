@@ -129,11 +129,7 @@ final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implem
             Map<ID, S> updatedStates = new LinkedHashMap<>();
             for (Map.Entry<ID, List<Buffered<E>>> entry : batch.entrySet()) {
                 ID id = entry.getKey();
-                S state = currentStates.getOrDefault(id, view.initialState());
-                for (Buffered<E> event : entry.getValue()) {
-                    state = view.evolve(state, event.metadata(), event.event());
-                }
-                updatedStates.put(id, state);
+                updatedStates.put(id, fold(currentStates.getOrDefault(id, view.initialState()), entry.getValue()));
             }
             repository.saveAll(updatedStates);
         } else {
@@ -141,14 +137,18 @@ final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implem
                 ID id = entry.getKey();
                 List<Buffered<E>> events = entry.getValue();
                 retryStrategy.execute(() -> {
-                    S state = repository.findById(id).orElse(view.initialState());
-                    for (Buffered<E> event : events) {
-                        state = view.evolve(state, event.metadata(), event.event());
-                    }
+                    S state = fold(repository.findById(id).orElse(view.initialState()), events);
                     repository.save(id, state);
                 });
             }
         }
+    }
+
+    private S fold(S state, List<Buffered<E>> events) {
+        for (Buffered<E> event : events) {
+            state = view.evolve(state, event.metadata(), event.event());
+        }
+        return state;
     }
 
     private record Buffered<E>(EventMetadata metadata, E event) {

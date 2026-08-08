@@ -252,7 +252,7 @@ public final class CatchupProjectionFeed<E> {
             @Override
             public void replayStarted() {
                 if (fold instanceof ReplayAwareMaterializedView replayAware) {
-                    replayAware.replayStarted().block();
+                    replayAware.replayStarted();
                 }
             }
 
@@ -267,7 +267,7 @@ public final class CatchupProjectionFeed<E> {
             @Override
             public void replayAbandoned() {
                 if (fold instanceof ReplayAwareMaterializedView replayAware) {
-                    replayAware.replayAbandoned().block();
+                    replayAware.replayAbandoned();
                 }
             }
         }).then();

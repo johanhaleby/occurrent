@@ -35,17 +35,20 @@ import java.util.function.BiFunction;
  * single-instance twin build
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
  * Bridges the blocking {@code repository} onto {@link Schedulers#boundedElastic()}, the same as before this class
- * existed. Outside a replay it writes through per event. Once {@link #replayStarted()} has completed,
+ * existed. Outside a replay it writes through per event. Once {@link #replayStarted()} has run,
  * {@link #apply(EventMetadata, Object)} buffers instead: events are grouped by the id {@code resolveId} resolves them
  * to, in arrival order, until {@code batchSize} events have buffered across every key, at which point the batch
  * flushes before buffering resumes. {@link #replayCompleted()} flushes whatever is left; {@link #replayAbandoned()}
  * discards it instead.
  * <p>
- * Every call this class exposes hops to {@link Schedulers#boundedElastic()} and never overlaps another: the reactor
- * catch-up handover folds one replayed payload at a time through a serialized {@code concatMap}, and the lifecycle
- * calls are woven into that same serialized pipeline. {@code lock} still guards the mutable state, because a plain
- * field write on one worker thread is not guaranteed visible to whichever worker thread runs the next call, even
- * though the calls themselves never run concurrently.
+ * The reactor catch-up handover folds one replayed payload at a time through a serialized {@code concatMap}, and the
+ * lifecycle calls are woven into that same serialized pipeline, itself scheduled once onto
+ * {@link Schedulers#boundedElastic()}. {@link #apply(EventMetadata, Object)} and {@link #replayCompleted()} hop there
+ * explicitly because they do real work (a repository round trip); {@link #replayStarted()} and
+ * {@link #replayAbandoned()} do not, since the engine only ever calls them from inside that same pipeline and never
+ * awaits them (see {@link ReplayAwareMaterializedView}). {@code lock} still guards the mutable state throughout,
+ * because a plain field write on one worker thread is not guaranteed visible to whichever worker thread runs the next
+ * call, even though the calls themselves never run concurrently.
  */
 @NullMarked
 final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> implements BiFunction<EventMetadata, E, Mono<Void>>, ReplayAwareMaterializedView {
@@ -99,35 +102,36 @@ final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> impl
         }
     }
 
+    // replayStarted() and replayAbandoned() are plain signals ReactiveHandover calls inline, never Mono-wrapped or
+    // awaited, so they need no scheduler hop of their own: the engine only ever calls them from inside its own
+    // boundedElastic-scheduled pipeline (ReactiveHandover.catchUp()'s single subscribeOn covers the whole chain),
+    // which is also this class's own invariant for every other call (see the class javadoc).
     @Override
-    public Mono<Void> replayStarted() {
-        return Mono.<Void>fromRunnable(() -> {
-            synchronized (lock) {
-                replaying = true;
-            }
-        }).subscribeOn(Schedulers.boundedElastic());
+    public void replayStarted() {
+        synchronized (lock) {
+            replaying = true;
+        }
     }
 
     @Override
     public Mono<Void> replayCompleted() {
-        return Mono.fromCallable(() -> {
+        return Mono.<Void>fromRunnable(() -> {
+            Map<ID, List<Buffered<E>>> toFlush;
             synchronized (lock) {
-                Map<ID, List<Buffered<E>>> toFlush = drainLocked();
+                toFlush = drainLocked();
                 replaying = false;
-                return toFlush;
             }
-        }).subscribeOn(Schedulers.boundedElastic()).flatMap(toFlush -> Mono.<Void>fromRunnable(() -> writeBatch(toFlush)).subscribeOn(Schedulers.boundedElastic()));
+            writeBatch(toFlush);
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
-    public Mono<Void> replayAbandoned() {
-        return Mono.<Void>fromRunnable(() -> {
-            synchronized (lock) {
-                buffered.clear();
-                bufferedCount = 0;
-                replaying = false;
-            }
-        }).subscribeOn(Schedulers.boundedElastic());
+    public void replayAbandoned() {
+        synchronized (lock) {
+            buffered.clear();
+            bufferedCount = 0;
+            replaying = false;
+        }
     }
 
     // Must be called holding lock.
