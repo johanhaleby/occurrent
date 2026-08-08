@@ -189,12 +189,13 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
-    void can_pause_and_resume_subscription_that_is_in_waiting_state() {
+    void can_pause_and_resume_subscription_that_is_in_waiting_state() throws InterruptedException {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+        Duration leaseTime = Duration.ofSeconds(1);
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(leaseTime).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(leaseTime).build()));
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
@@ -204,21 +205,30 @@ class CompetingConsumerSubscriptionModelTest {
         NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "name", "my name1");
         NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "name", "my name2");
 
-        // When
         eventStore.write("streamId", serialize(nameDefined));
+        await("waiting for the first event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
 
-        // SM2 subscription is in waiting state, but we still want to allow pause!
+        // When SM2, still waiting for the lock, is paused
         competingConsumerSubscriptionModel2.pauseSubscription(subscriptionId);
-        competingConsumerSubscriptionModel1.stop();
 
+        // Then SM2 reports the pause truthfully
+        assertThat(competingConsumerSubscriptionModel2.isPaused(subscriptionId)).isTrue();
+        assertThat(competingConsumerSubscriptionModel2.isRunning(subscriptionId)).isFalse();
+
+        // When SM1 gives up the lock
+        competingConsumerSubscriptionModel1.stop();
         eventStore.write("streamId", serialize(nameWasChanged1));
 
-        competingConsumerSubscriptionModel2.resumeSubscription(subscriptionId);
+        // Then SM2 stays paused rather than taking over, for comfortably longer than one lease refresh round
+        Thread.sleep(leaseTime.multipliedBy(3).toMillis());
+        assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1");
 
+        // When resumed
+        competingConsumerSubscriptionModel2.resumeSubscription(subscriptionId);
         eventStore.write("streamId", serialize(nameWasChanged2));
 
-        // Then
-        await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1", "2", "3"));
+        // Then SM2 catches up on what it missed and keeps delivering
+        await("waiting for the remaining events").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1", "2", "3"));
     }
 
     @Test
