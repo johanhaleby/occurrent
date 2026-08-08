@@ -17,9 +17,15 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.dsl.view.internal.MongoBulkViewStateOperations;
 import org.occurrent.springboot.blocking.DefaultProjectionStoreProvider;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.mongodb.core.MongoOperations;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Materializes a {@code @Projection} that declares no store into MongoDB, into the collection Spring Data derives from
@@ -45,10 +51,31 @@ class MongoProjectionStoreProvider implements DefaultProjectionStoreProvider {
     public <S, ID> ViewStateRepository<S, ID> createDefaultProjectionStore(String projectionId, Class<S> stateType) {
         // Resolved on use rather than injected, so a store that is never defaulted to is never created.
         MongoOperations mongoOperations = applicationContext.getBean(MongoOperations.class);
-        return ViewStateRepository.create(
-                instanceId -> mongoOperations.findById(instanceId, stateType),
-                // instanceId is not passed to save: the document id used is whatever @Id is set on state itself. See
-                // the class javadoc.
-                (instanceId, state) -> mongoOperations.save(state));
+        // An anonymous implementation rather than ViewStateRepository.create(find, save): that lambda factory can
+        // only build the two single-entry methods, and findAllById/saveAll below need a real MongoOperations handle
+        // to batch into one round trip instead of looping.
+        return new ViewStateRepository<S, ID>() {
+            @Override
+            public Optional<S> findById(ID id) {
+                return Optional.ofNullable(mongoOperations.findById(id, stateType));
+            }
+
+            @Override
+            public void save(ID id, S state) {
+                // id is not used: the document id used is whatever @Id is set on state itself. See the class javadoc.
+                mongoOperations.save(state);
+            }
+
+            @Override
+            public Map<ID, S> findAllById(Collection<ID> ids) {
+                return MongoBulkViewStateOperations.findAllById(mongoOperations, stateType, ids);
+            }
+
+            @Override
+            public void saveAll(Map<ID, S> states) {
+                // Same as save: the map's ID keys are not used, every state is written under its own @Id.
+                MongoBulkViewStateOperations.saveAll(mongoOperations, stateType, new ArrayList<>(states.values()));
+            }
+        };
     }
 }
