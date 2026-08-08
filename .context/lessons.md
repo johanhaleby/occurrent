@@ -9,6 +9,14 @@
   scan (gh issue list --search created:>last-scan) and routes each unclaimed,
   unregistered issue to adopt-or-ask. An epic does not close with an unrouted issue
   filed during its lifetime.
+  Addendum (2026-08-08, from the cross-review via Johan, both adopted): the cursor
+  advances to the previous scan's START time, never its completion, because the search
+  index lags and a mid-scan issue would be skipped forever, and the overlap is
+  idempotent for free since routing changes the issue's state. The candidate filter is
+  mode-scoped: solo repositories sweep every unclaimed unregistered issue, shared
+  repositories (marked by local-only tracking mode) sweep only fleet-produced traces
+  and epic references, and the recorded scope decisions in ORCHESTRATOR.md serve as
+  the decline-register so a declined adoption does not re-ask every sweep.
 
 - Every user-facing documentation surface goes through /johan-writing, in worker briefs
   too, with the surfaces NAMED per unit (2026-08-08, Johan's correction after semicolons
