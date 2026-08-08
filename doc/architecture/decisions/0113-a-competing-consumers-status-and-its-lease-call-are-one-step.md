@@ -84,8 +84,11 @@ for that same consumer, which is one MongoDB round trip, or its retry backoff wh
 Handing a subscription over to another node is that much slower in a window where it used to be wrong.
 
 The `synchronized` on `registerCompetingConsumer` and `unregisterCompetingConsumer` in both strategy
-classes is redundant now that the support serializes every caller including the refresh thread. It is
-harmless, so it stays.
+classes is no longer needed for correctness, now that the support serializes every caller including the
+refresh thread. It is not free either. It is one monitor for the whole strategy, so two subscriptions
+registering at the same time still wait for each other, which is the cost the locks here were shaped to
+avoid, and release and the refresh thread never go through it anyway. Taking it off is a change to two
+public classes in other modules, so it stays for now and comes out on its own.
 
 Two threads can still deliver their callbacks in the other order, in the window between one of them
 releasing the lock and making its call. The model tolerates it, since `onConsumeGranted` looks the

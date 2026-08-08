@@ -62,18 +62,12 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private final Set<CompetingConsumerListener> competingConsumerListeners;
     private final RetryStrategy retryStrategy;
     // Reading a consumer's status, making the MongoDB call that status decides, and writing the result back is one
-    // step per consumer, and this is what makes it one. Without it the refresh thread and an application thread both
-    // sit in that sequence for the same consumer, and the slower one writes a result it computed against a status
-    // that has since gone.
+    // step per consumer, and this is what makes it one. Striped rather than a map from consumer to lock, which has no
+    // safe moment to drop an entry from, and rather than one lock for the whole instance, which would make
+    // registering one subscription wait for another subscription's round trip.
     //
-    // Striped rather than one lock per consumer in a map, because such a map has no safe moment to drop an entry
-    // from, so it grows for as long as the process lives. One lock for the whole instance would do as well for
-    // correctness, but it would make registering one subscription wait for another subscription's round trip, which
-    // under the default retry strategy is seconds. Two consumers landing on the same stripe is that single lock
-    // again, for that pair only.
-    //
-    // None of this coordinates nodes. The lease document does that, and only that. This keeps one node's view of its
-    // own consumers honest about the calls that node made.
+    // None of this coordinates nodes. The lease document does that. This keeps one node's view of its own consumers
+    // honest about the calls that node made.
     private final ReentrantLock[] consumerLocks;
 
     private volatile boolean running;
@@ -138,7 +132,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
 
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
-        Outcome outcome = inConsumerLock(competingConsumer, () -> acquireLease(collection, competingConsumer));
+        Outcome outcome = inConsumerLock(competingConsumer, () -> acquireLease(collection, competingConsumer, competingConsumers.get(competingConsumer)));
         notifyListeners(outcome, subscriptionId, subscriberId);
         return outcome.acquired();
     }
@@ -184,13 +178,12 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     /**
-     * Take the lease, or refresh one already held, and work out what that changed. Shared by registering and by the
-     * scheduled refresh, which is the reason a consumer already in the map is left where it is rather than added.
+     * Take the lease, or refresh one already held, and work out what that changed. The status the consumer had comes
+     * from the caller, which has already read it under the same lock.
      */
-    private Outcome acquireLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer) {
+    private Outcome acquireLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status oldStatus) {
         String subscriptionId = competingConsumer.subscriptionId;
         String subscriberId = competingConsumer.subscriberId;
-        Status oldStatus = competingConsumers.get(competingConsumer);
         boolean acquired = MongoListenerLockService.acquireOrRefreshFor(collection, clock, retryStrategy, leaseTime, subscriptionId, subscriberId).isPresent();
         logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
         competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
@@ -256,11 +249,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     private Outcome refreshOne(MongoCollection<BsonDocument> collection, CompetingConsumer cc) {
-        // Read again here rather than trust what the iteration handed over. The iteration reads a consumer without
-        // its lock, so another thread can unregister or release it between that read and this taking the lock, and
-        // acting on the older answer registers a consumer the subscription model has already forgotten. That
-        // consumer then holds the lease and refreshes it for as long as the process lives, with nothing left to
-        // unregister it and no node able to take the subscription over.
+        // Read again rather than trust what the iteration handed over, which it read without this lock. A consumer
+        // unregistered in between would otherwise be written back here, and then nothing is left to unregister it
+        // and no node can take that subscription over.
         Status status = competingConsumers.get(cc);
         logDebug("Status {} (subscriberId={}, subscriptionId={})", status, cc.subscriberId, cc.subscriptionId);
         if (status == null) {
@@ -285,7 +276,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
                 yield Outcome.NOTHING;
             }
-            case LOCK_NOT_ACQUIRED -> acquireLease(collection, cc);
+            case LOCK_NOT_ACQUIRED -> acquireLease(collection, cc, status);
         };
     }
 
@@ -327,7 +318,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
 
     /**
      * What a step did to the lease, and what the listeners have to be told about it once the consumer's lock is out
-     * of the way.
+     * of the way. Only registering has a use for {@code acquired}, and it has to come from inside the lock, since
+     * reading the status again afterwards is the very thing the lock is here to stop.
      */
     private record Outcome(boolean acquired, Notification notification) {
         private static final Outcome NOTHING = new Outcome(false, Notification.NONE);

@@ -25,7 +25,6 @@ import org.bson.BsonArray;
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
 import org.bson.conversions.Bson;
-import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.retry.RetryStrategy;
@@ -397,48 +396,18 @@ class MongoLeaseRaceTest {
     }
 
     /**
-     * Every call the strategy makes to the server filters on the subscription id, which is the lock document's id.
+     * Every call the strategy makes to the server filters on the subscription id, which is the lock document's id,
+     * and the driver renders each of those filters as an {@code $and}. Throws rather than answering null if that ever
+     * stops being true, since a test that silently held the wrong consumer would look like the code under test broke.
      */
-    private static @Nullable String subscriptionIdIn(Object[] args) {
-        if (args == null || args.length == 0 || !(args[0] instanceof Bson filter)) {
-            return null;
-        }
-        BsonDocument asDocument = filter.toBsonDocument(BsonDocument.class, MongoClientSettings.getDefaultCodecRegistry());
-        if (asDocument.containsKey("_id")) {
-            return asDocument.getString("_id").getValue();
-        }
-        return asDocument.getArray("$and", new BsonArray()).stream()
+    private static String subscriptionIdIn(Object[] args) {
+        BsonDocument filter = ((Bson) args[0]).toBsonDocument(BsonDocument.class, MongoClientSettings.getDefaultCodecRegistry());
+        return filter.getArray("$and", new BsonArray()).stream()
                 .map(BsonValue::asDocument)
                 .filter(document -> document.containsKey("_id"))
                 .map(document -> document.getString("_id").getValue())
                 .findFirst()
-                .orElse(null);
+                .orElseThrow(() -> new IllegalStateException("Found no subscription id in " + filter.toJson()));
     }
 
-    private static class MutableClock extends Clock {
-        private volatile Instant now;
-
-        private MutableClock(Instant now) {
-            this.now = now;
-        }
-
-        private void advanceBy(Duration duration) {
-            now = now.plus(duration);
-        }
-
-        @Override
-        public ZoneId getZone() {
-            return ZoneOffset.UTC;
-        }
-
-        @Override
-        public Clock withZone(ZoneId zone) {
-            throw new UnsupportedOperationException("This clock is UTC and the code under test never asks for another zone");
-        }
-
-        @Override
-        public Instant instant() {
-            return now;
-        }
-    }
 }
