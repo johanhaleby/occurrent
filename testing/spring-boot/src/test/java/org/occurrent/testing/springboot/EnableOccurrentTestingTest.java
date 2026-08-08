@@ -23,6 +23,9 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -92,6 +95,29 @@ class EnableOccurrentTestingTest {
         }
     }
 
+    // Reproduces #636: the context holds exactly one CheckpointStorage bean, which is the case a hand-wired
+    // clearingCheckpoints(..) call exists to cover, yet the bean @EnableOccurrentTesting hands back today never
+    // learns about it. A checkpoint a prior test left behind survives into this one without the workaround the
+    // issue's docs show, an @Autowired method that mutates the prototype-scoped extension bean itself.
+    @Test
+    void the_extension_bean_clears_the_contexts_lone_checkpoint_storage_before_each_test_with_no_hand_wiring() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(AppWithCheckpointStorage.class)) {
+            InMemorySubscriptionModel subscriptionModel = context.getBean(InMemorySubscriptionModel.class);
+            subscriptionModel.subscribe("orders", event -> {
+            });
+
+            CheckpointStorage checkpointStorage = context.getBean(CheckpointStorage.class);
+            checkpointStorage.save("orders", new StringBasedCheckpoint("left-behind-by-a-previous-test"));
+
+            OccurrentSubscriptionsExtension subscriptions = context.getBean(OccurrentSubscriptionsExtension.class);
+            subscriptions.beforeEach(unusedExtensionContext());
+
+            assertThat(checkpointStorage.exists("orders"))
+                    .as("checkpoint left behind by an earlier test must be cleared with no hand wiring beyond @EnableOccurrentTesting")
+                    .isFalse();
+        }
+    }
+
     // beforeEach does not read the ExtensionContext today, but a null argument would silently hide it if it started
     // to. A proxy that throws on any access fails the test loudly instead.
     private static ExtensionContext unusedExtensionContext() {
@@ -127,6 +153,26 @@ class EnableOccurrentTestingTest {
         @Bean
         InMemoryEventStore eventStore(InMemorySubscriptionModel subscriptionModel) {
             return new InMemoryEventStore(subscriptionModel);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableOccurrentTesting
+    static class AppWithCheckpointStorage {
+
+        @Bean
+        InMemorySubscriptionModel subscriptionModel() {
+            return new InMemorySubscriptionModel();
+        }
+
+        @Bean
+        InMemoryEventStore eventStore(InMemorySubscriptionModel subscriptionModel) {
+            return new InMemoryEventStore(subscriptionModel);
+        }
+
+        @Bean
+        CheckpointStorage checkpointStorage() {
+            return new InMemoryCheckpointStorage();
         }
     }
 }

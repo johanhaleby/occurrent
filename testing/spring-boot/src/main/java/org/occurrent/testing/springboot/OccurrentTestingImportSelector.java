@@ -17,6 +17,7 @@
 package org.occurrent.testing.springboot;
 
 import org.springframework.context.annotation.ImportSelector;
+import org.springframework.core.annotation.AnnotationAttributes;
 import org.springframework.core.type.AnnotationMetadata;
 import org.springframework.util.ClassUtils;
 
@@ -26,7 +27,8 @@ import java.util.List;
 /**
  * Registers the blocking configuration, the reactor configuration, or both, depending on which neutral testing
  * artifact is on the classpath, so {@link EnableOccurrentTesting} works on a blocking application, a reactive one, or
- * one using both stacks at once without failing to start on the stack it does not use.
+ * one using both stacks at once without failing to start on the stack it does not use. Also registers a
+ * {@link EnableOccurrentTesting#clearState()} store integration the same way, when one was asked for.
  * <p>
  * Neither {@code occurrent-testing-junit-jupiter-blocking} nor {@code occurrent-testing-junit-jupiter-reactor} is a
  * required dependency of this module. Adding one, or both, is how an application opts into that stack's wiring. That
@@ -38,6 +40,8 @@ final class OccurrentTestingImportSelector implements ImportSelector {
 
     private static final String BLOCKING_EXTENSION = "org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension";
     private static final String REACTOR_EXTENSION = "org.occurrent.testing.junit.reactor.OccurrentSubscriptionsExtension";
+    private static final String MONGO_FLUSH = "org.occurrent.testing.mongodb.OccurrentMongoFlush";
+    private static final String MONGO_TEMPLATE = "org.springframework.data.mongodb.core.MongoTemplate";
 
     @Override
     public String[] selectImports(AnnotationMetadata importingClassMetadata) {
@@ -53,6 +57,22 @@ final class OccurrentTestingImportSelector implements ImportSelector {
             throw new IllegalStateException("@" + EnableOccurrentTesting.class.getSimpleName() + " found neither "
                     + "occurrent-testing-junit-jupiter-blocking nor occurrent-testing-junit-jupiter-reactor on the "
                     + "classpath, so it has nothing to wire. Add one of them, or both, as a test dependency.");
+        }
+
+        AnnotationAttributes attributes = AnnotationAttributes.fromMap(
+                importingClassMetadata.getAnnotationAttributes(EnableOccurrentTesting.class.getName()));
+        boolean clearState = attributes != null && attributes.getBoolean("clearState");
+        if (clearState) {
+            boolean mongoFlushAvailable = ClassUtils.isPresent(MONGO_FLUSH, classLoader)
+                    && ClassUtils.isPresent(MONGO_TEMPLATE, classLoader);
+            if (!mongoFlushAvailable) {
+                throw new IllegalStateException("@" + EnableOccurrentTesting.class.getSimpleName() + "(clearState = "
+                        + "true) found no store integration on the classpath to flush with. Add "
+                        + "occurrent-testing-mongodb and a MongoTemplate bean (spring-data-mongodb) as test "
+                        + "dependencies, or set clearState back to false and clear the store by hand with "
+                        + "clearingStateWith(..).");
+            }
+            imports.add(OccurrentMongoFlushTestingConfiguration.class.getName());
         }
         return imports.toArray(new String[0]);
     }

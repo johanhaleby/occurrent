@@ -16,6 +16,7 @@
 
 package org.occurrent.testing.springboot;
 
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.testing.junit.blocking.OccurrentSubscriptionsExtension;
 import org.springframework.beans.factory.ObjectProvider;
@@ -45,20 +46,40 @@ public class OccurrentTestingConfiguration {
      * <p>
      * It is a prototype bean because the extension accumulates the subscription ids a test told it about, and a test
      * class registering it with {@code @RegisterExtension} should not inherit the ids another test class named.
+     * <p>
+     * It also clears state on its own where the context already holds what that takes. Exactly one
+     * {@code CheckpointStorage} bean is auto-applied with {@code clearingCheckpoints(..)}, the ambiguous case of more
+     * than one left for a test to wire by hand with {@code clearingCheckpointsFor(..)}. A
+     * {@code clearState = true} store integration, {@code OccurrentMongoFlushTestingConfiguration} for MongoDB today,
+     * is auto-applied with {@code clearingStateWith(..)} the same way.
      *
      * @param subscriptionModels every {@code SubscriptionModelLifeCycle} bean in the application context
+     * @param checkpointStorages every {@code CheckpointStorage} bean in the application context
+     * @param stateClearers      the {@code clearState = true} store integration's clearer, if one was wired
      * @return an extension to register with {@code @RegisterExtension}
-     * @throws IllegalStateException if the context has no such bean, so there is nothing to stop
+     * @throws IllegalStateException if the context has no {@code SubscriptionModelLifeCycle} bean, so there is
+     *                                nothing to stop
      */
     @Bean
     @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
-    public OccurrentSubscriptionsExtension occurrentSubscriptionsExtension(ObjectProvider<SubscriptionModelLifeCycle> subscriptionModels) {
+    public OccurrentSubscriptionsExtension occurrentSubscriptionsExtension(ObjectProvider<SubscriptionModelLifeCycle> subscriptionModels,
+                                                                            ObjectProvider<CheckpointStorage> checkpointStorages,
+                                                                            ObjectProvider<OccurrentTestStateClearer> stateClearers) {
         List<SubscriptionModelLifeCycle> models = subscriptionModels.orderedStream().toList();
         if (models.isEmpty()) {
             throw new IllegalStateException("No " + SubscriptionModelLifeCycle.class.getSimpleName() + " bean found in "
                     + "the application context, so there is nothing for @" + EnableOccurrentTesting.class.getSimpleName()
                     + " to stop.");
         }
-        return OccurrentSubscriptionsExtension.stoppedByDefault(models);
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(models);
+        CheckpointStorage checkpointStorage = checkpointStorages.getIfUnique();
+        if (checkpointStorage != null) {
+            extension.clearingCheckpoints(checkpointStorage);
+        }
+        OccurrentTestStateClearer stateClearer = stateClearers.getIfUnique();
+        if (stateClearer != null) {
+            extension.clearingStateWith(stateClearer);
+        }
+        return extension;
     }
 }
