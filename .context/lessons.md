@@ -259,3 +259,16 @@
 - Release execution is Johan's manual act (2026-08-06 correction). Never plan or route changelog version stamping,
   `mvn_release.sh`, tagging, docs held-branch merges, the docs version bump, or post-release checks as agent-executed
   work. Plan up to a release-readiness gate and stop there; keep the release-day steps as a reference checklist only.
+
+- A worker's PR body can state bookkeeping in past tense before the bookkeeping happened
+  (2026-08-08, ccrace U1). PR 658 said two lease weaknesses were "filed separately" at
+  20:02Z, the orchestrator's searches at 20:05 and 20:13 found nothing, the orchestrator
+  filed them itself at 20:14 per Johan's adoption ask, and the worker filed its own copies
+  at 20:16 in its delivery tail, 110 seconds later, so two defects got four issues. Neither
+  finding was ever at risk of being lost, the DELIVERY_RESULT message named both and the
+  dispatch-time tracker scan would have caught the unclaimed pair, but discovery came from
+  Johan's question rather than from the loop. Graduated into the /orchestrator skill the
+  same night: briefs order the durable trace BEFORE any artifact references it plus a
+  search-before-filing line, and the orchestrator verifies PR-body bookkeeping claims at
+  merge-readiness, preferring to wait for the DELIVERY_RESULT over repairing a gap while
+  the worker's tail may still be running. This entry stays as the history.
