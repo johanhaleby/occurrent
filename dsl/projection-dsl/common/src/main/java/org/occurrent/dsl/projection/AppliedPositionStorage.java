@@ -85,7 +85,7 @@ public interface AppliedPositionStorage {
      * match the projection's selector, is never reached, and the wait times out. That is the correct answer rather
      * than a defect, since a projection that never sees the event has no effect for the caller to read.
      *
-     * @param position     the position to wait for, following <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0084-what-a-position-guarantees.md">ADR 84</a>.
+     * @param position     the position to wait for, must be positive, following <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0084-what-a-position-guarantees.md">ADR 84</a>.
      * @param timeout      how long to wait before giving up.
      * @param pollInterval how often to re-check the stored position.
      */
@@ -93,18 +93,24 @@ public interface AppliedPositionStorage {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(timeout, "timeout cannot be null");
         requireNonNull(pollInterval, "pollInterval cannot be null");
+        if (position <= 0) {
+            throw new IllegalArgumentException("position must be positive but was " + position);
+        }
         long deadline = System.nanoTime() + timeout.toNanos();
         while (true) {
             OptionalLong applied = appliedPosition(projectionId);
             if (applied.isPresent() && applied.getAsLong() >= position) {
                 return true;
             }
-            long remaining = deadline - System.nanoTime();
-            if (remaining <= 0) {
+            long remainingNanos = deadline - System.nanoTime();
+            if (remainingNanos <= 0) {
                 return false;
             }
+            // toMillis() rather than toNanos() precision would truncate a sub-millisecond pollInterval or remaining
+            // time to Thread.sleep(0), which never actually sleeps and spins the loop instead.
+            long sleepNanos = Math.min(pollInterval.toNanos(), remainingNanos);
             try {
-                Thread.sleep(Math.min(pollInterval.toMillis(), Duration.ofNanos(remaining).toMillis()));
+                Thread.sleep(sleepNanos / 1_000_000, (int) (sleepNanos % 1_000_000));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;

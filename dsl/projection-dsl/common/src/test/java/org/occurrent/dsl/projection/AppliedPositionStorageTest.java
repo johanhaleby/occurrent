@@ -66,6 +66,14 @@ class AppliedPositionStorageTest {
     }
 
     @Test
+    void waitUntilApplied_rejects_a_non_positive_position() {
+        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> storage.waitUntilApplied("orders", 0, Duration.ofSeconds(5))))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void waitUntilApplied_returns_true_immediately_when_the_position_is_already_applied() {
         AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
         storage.advance("orders", 42);
