@@ -1,5 +1,16 @@
 # Lessons
 
+- A subagent's background processes die with its turn, and nothing wakes it for them
+  (2026-08-08, B2 and B6 both lost detached JMH runs the same hour). A worker SESSION can
+  run an hour-long benchmark in the background because the harness re-invokes sessions on
+  task completion, but an in-session subagent that ends its turn on a detached process
+  sleeps forever and the process is killed. Rule for briefs: any long-running command a
+  subagent needs runs as sequential FOREGROUND chunks, each under the 10-minute Bash cap
+  (JMH include regexes or -p subsets, appending to one results file). The orchestrator
+  detects the trap by a completion notification whose result text says "waiting for" a
+  background task, and recovers with a SendMessage nudge after confirming the process is
+  gone.
+
 - The unit-not-PR, verify-side-effects, and stalled-detection rules graduated into the /orchestrator
   skill's epic-state model on 2026-08-07 (schema v1, `.context/epics/<epic>.yml`, durable pending
   actions, computed completion). The entries below remain as history of how they were learned.
