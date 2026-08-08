@@ -1,8 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 9
-updated_at: '2026-08-09T00:25:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U4 delivered PR 663, ci-wait)'
+revision: 10
+updated_at: '2026-08-09T00:55:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (U2 delivered PR 664 ci-wait, U4
+  green at d6b2b448 with merge held for its DELIVERY_RESULT)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -130,7 +131,7 @@ units:
     session: local_3fc0e844
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 664
       met: false
       evidence: null
     - check: issue_closed
@@ -138,10 +139,18 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: session running the plan-first flow; first expected observable is
-      the unit's plan at Johan's approval gate, then a PR the monitor catches
-    last_meaningful_progress_at: '2026-08-08T23:40:00+00:00'
-    observed: {}
+    next_action: ci-wait on PR 664; on green with threads resolved, verify the
+      DELIVERY_RESULT and any PR-body bookkeeping claims, then CAS-merge pinned to
+      the verified full head SHA; U3's chip spawns in the sweep that verifies this
+      merge
+    last_meaningful_progress_at: '2026-08-09T00:50:00+00:00'
+    observed:
+      pr_664:
+        head: b9d37acaeac94c3eb64df50387ce6b4ed1950ebc
+        note: opened ~00:50Z from johan/priceless-bardeen-535c2c, checks running,
+          plan gate evidently cleared in the unit session
+        via: monitor bu11n182l + gh pr view
+        at: '2026-08-09T00:55:00+00:00'
     assessment: 'contained in MongoListenerLockService but design-sensitive in two
       places the plan must answer, how the injectable Clock test harness survives a
       server-side clock, and whether the upsert plus DUPLICATE_KEY acquisition path
@@ -191,9 +200,14 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: ci-wait on PR 663; on green with threads resolved, verify the
-      DELIVERY_RESULT and any PR-body bookkeeping claims, then CAS-merge pinned to
-      the verified full head SHA; sweep caution applies to the reused worktree
+    next_action: 'PR 663 is green at head ece619739 after a rerun (both JDK
+      variants of the subscription-mongodb-spring shard failed once, the shard
+      covering exactly this PR''s touched code, then passed on rerun with the head
+      unchanged); merge HELD until the worker''s DELIVERY_RESULT arrives, because
+      its flake-vs-real verdict is material for a synchronization-removal change;
+      if no DELIVERY_RESULT or session end by the next heartbeat, read the session
+      tail; then CAS-merge pinned to the verified full head SHA; sweep caution
+      applies to the reused worktree'
     last_meaningful_progress_at: '2026-08-09T00:10:00+00:00'
     observed:
       worktree:
