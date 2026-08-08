@@ -1,5 +1,15 @@
 # Lessons
 
+- An unclaimed issue with no unit and no PR is invisible to the whole loop (2026-08-08,
+  Johan asked how #629 and #636 went unadopted for a day). The finding-routing protocol
+  tells workers to file a durable trace, but sweeps iterate the epic state file's units
+  and the monitor watches open PRs, so nothing ever read the trace: #629 (T1's side
+  finding, filed 08-07) sat unrouted until a human asked what was queued. The rule now
+  in the skill: every dispatch-time hygiene sweep and every epic closeout runs a tracker
+  scan (gh issue list --search created:>last-scan) and routes each unclaimed,
+  unregistered issue to adopt-or-ask. An epic does not close with an unrouted issue
+  filed during its lifetime.
+
 - Every user-facing documentation surface goes through /johan-writing, in worker briefs
   too, with the surfaces NAMED per unit (2026-08-08, Johan's correction after semicolons
   shipped in changelog entries). The orchestrator skill's prose bullet said "docs, PR
