@@ -1,5 +1,20 @@
 # Lessons
 
+- A plan is not ready for approval until it has survived one adversarial self-review
+  (2026-08-08, Johan had to ask "anything missing?" on the ccpause plan and the answer
+  was four real gaps, all findable from evidence already in hand: a lifecycle door the
+  fix direction left open, a missing overengineering scope guard, the central design
+  question unnamed, unstated bookkeeping mechanics). Exploration, write, exit is not a
+  planning process. Before ExitPlanMode, re-read the plan against the exploration
+  evidence and hunt for what is missing the way a reviewer would: uncovered state
+  transitions, scope guards, the question the unit actually hinges on, mechanics left
+  to improvisation. The /johan-plan skill's self-review discipline is the model even
+  when that skill is not formally invoked.
+  Graduated into the /orchestrator skill the same day (with a routing correction from
+  Johan: a cross-repo rule recorded only in a repo lessons.md is invisible everywhere
+  else, since every repo's lessons file is a different file; the skill now carries the
+  planning-review rule and the lesson-routing rule itself). This entry stays as history.
+
 - An unclaimed issue with no unit and no PR is invisible to the whole loop (2026-08-08,
   Johan asked how #629 and #636 went unadopted for a day). The finding-routing protocol
   tells workers to file a durable trace, but sweeps iterate the epic state file's units
