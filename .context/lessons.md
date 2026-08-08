@@ -1,5 +1,17 @@
 # Lessons
 
+- A delivered store-backed component is checked for resilience parity with its closest
+  sibling before merge (2026-08-08, Johan asked about DB-outage behavior on the
+  applied-position store and the answer was a gap). The unit shipped Mongo
+  implementations with no RetryStrategy while NativeMongoCheckpointStorage, the nearest
+  structural sibling, carries one with an exponential default. Neither the brief nor
+  the integration review asked the question. The rule is now a design intention in
+  AGENTS.md (production-ready means surviving transient store outages, configurable
+  retries where they make sense, starters auto-apply defaults), and the orchestrator
+  side of it is a review check: when a unit adds a component that talks to a store,
+  compare its failure handling against the nearest sibling component before the merge
+  gate, not after a user question.
+
 - A plan is not ready for approval until it has survived one adversarial self-review
   (2026-08-08, Johan had to ask "anything missing?" on the ccpause plan and the answer
   was four real gaps, all findable from evidence already in hand: a lifecycle door the

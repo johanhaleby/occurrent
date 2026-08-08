@@ -98,6 +98,20 @@ acknowledgement, and every consumer behind it either never sees the message or l
 it. Check a push or fan-out design against this before anything else. It is what decided the one-sink-per-consumer
 topology in ADR 90.
 
+**Every component ships production-ready, and that includes surviving a transient outage of the store it talks
+to.** A component that reads or writes an external store (MongoDB, Redis, a broker) accepts a configurable
+`RetryStrategy` wherever retrying makes sense, and its default constructor applies a sensible one rather than none.
+`NativeMongoCheckpointStorage` is the template. A constructor overload takes the strategy, and the default wraps
+every store operation in exponential backoff from 100 ms up to 2 seconds. The Spring Boot starters apply appropriate
+defaults to the components they auto-configure, so a zero-config application gets resilience without asking for it.
+Two boundaries keep the rule from being cargo-culted. Error policy stays out of neutral capability interfaces,
+because an in-memory implementation has nothing to retry, so the `RetryStrategy` belongs on the store-backed
+implementation, not the SPI. And a retry guards an operation against transient failure rather than pacing a poll,
+so it never replaces a deliberate polling schedule such as a `Backoff`. The near miss that wrote this rule down was
+the applied-position store, first built with bare Mongo implementations while its closest sibling,
+`NativeMongoCheckpointStorage`, already carried the retry overload, a gap that surfaced only when the maintainer
+asked about outage behavior in review.
+
 **Aim for the best long-term answer, not the cheapest one that passes.** An easier solution is fine when it yields
 roughly the same result. It is not fine when the gap is isolation or correctness.
 
