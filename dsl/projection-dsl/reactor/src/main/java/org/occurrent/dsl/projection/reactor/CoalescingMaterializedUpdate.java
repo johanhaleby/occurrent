@@ -19,6 +19,7 @@ package org.occurrent.dsl.projection.reactor;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
 import reactor.core.publisher.Mono;
