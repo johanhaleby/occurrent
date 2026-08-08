@@ -35,8 +35,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Common operations for MongoDB lease-based competing consumer strategies
@@ -48,12 +50,25 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";
     public static final Duration DEFAULT_LEASE_TIME = Duration.ofSeconds(20);
 
+    /**
+     * Enough that the handful of subscriptions one instance runs rarely collide, small enough to be worth no thought.
+     */
+    private static final int CONSUMER_LOCKS = 16;
+
     private final Clock clock;
     private final Duration leaseTime;
     private final ScheduledRefresh scheduledRefresh;
     private final ConcurrentMap<CompetingConsumer, Status> competingConsumers;
     private final Set<CompetingConsumerListener> competingConsumerListeners;
     private final RetryStrategy retryStrategy;
+    // Reading a consumer's status, making the MongoDB call that status decides, and writing the result back is one
+    // step per consumer, and this is what makes it one. Striped rather than a map from consumer to lock, which has no
+    // safe moment to drop an entry from, and rather than one lock for the whole instance, which would make
+    // registering one subscription wait for another subscription's round trip.
+    //
+    // None of this coordinates nodes. The lease document does that. This keeps one node's view of its own consumers
+    // honest about the calls that node made.
+    private final ReentrantLock[] consumerLocks;
 
     private volatile boolean running;
 
@@ -78,6 +93,10 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         this.running = true;
         this.competingConsumerListeners = Collections.newSetFromMap(new ConcurrentHashMap<>());
         this.competingConsumers = new ConcurrentHashMap<>();
+        this.consumerLocks = new ReentrantLock[CONSUMER_LOCKS];
+        for (int i = 0; i < CONSUMER_LOCKS; i++) {
+            this.consumerLocks[i] = new ReentrantLock();
+        }
 
         if (retryStrategy instanceof RetryImpl retry) {
             this.retryStrategy = retry.mapRetryPredicate(currentPredicate -> currentPredicate.and(__ -> running));
@@ -113,26 +132,19 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
 
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
-        Status oldStatus = competingConsumers.get(competingConsumer);
-        boolean acquired = MongoListenerLockService.acquireOrRefreshFor(collection, clock, retryStrategy, leaseTime, subscriptionId, subscriberId).isPresent();
-        logDebug("registerCompetingConsumer: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
-        competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
-        if (oldStatus != Status.LOCK_ACQUIRED && acquired) {
-            logDebug("registerCompetingConsumer: Consumption granted (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            competingConsumerListeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
-        } else if (oldStatus == Status.LOCK_ACQUIRED && !acquired) {
-            logDebug("registerCompetingConsumer: Consumption prohibited (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
-        }
-        return acquired;
+        Outcome outcome = inConsumerLock(competingConsumer, () -> acquireLease(collection, competingConsumer, competingConsumers.get(competingConsumer)));
+        notifyListeners(outcome, subscriptionId, subscriberId);
+        return outcome.acquired();
     }
 
     public void unregisterCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
         logDebug("Unregistering consumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-        Status status = competingConsumers.remove(new CompetingConsumer(subscriptionId, subscriberId));
-        releaseCompetingConsumer(collection, subscriptionId, subscriberId, status);
+
+        CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
+        Outcome outcome = inConsumerLock(competingConsumer, () -> giveUpLease(collection, competingConsumer, competingConsumers.remove(competingConsumer)));
+        notifyListeners(outcome, subscriptionId, subscriberId);
     }
 
     /**
@@ -141,18 +153,13 @@ public class MongoLeaseCompetingConsumerStrategySupport {
      * rather than by a user rests on, since nothing will explicitly resume it.
      */
     public void releaseCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId) {
-        releaseCompetingConsumer(collection, subscriptionId, subscriberId, null);
-    }
-
-    private void releaseCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId, @Nullable Status suppliedStatus) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
-        logDebug("Releasing consumer (subscriberId={}, subscriptionId={}, suppliedStatus={})", subscriberId, subscriptionId, suppliedStatus);
+        logDebug("Releasing consumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
 
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
-        final Status status;
-        if (suppliedStatus == null) {
-            status = competingConsumers.get(competingConsumer);
+        Outcome outcome = inConsumerLock(competingConsumer, () -> {
+            Status status = competingConsumers.get(competingConsumer);
             if (status == Status.LOCK_ACQUIRED) {
                 // A release keeps the consumer in the map, so it stays a candidate, but the lease below is about to go
                 // and it does not have it any more. Leaving the status alone would make hasLock answer yes for a
@@ -165,21 +172,47 @@ public class MongoLeaseCompetingConsumerStrategySupport {
                 // took it back before anybody else had a chance to look has not given it up in any useful sense.
                 competingConsumers.put(competingConsumer, Status.LOCK_RELEASED);
             }
-        } else {
-            status = suppliedStatus;
-        }
+            return giveUpLease(collection, competingConsumer, status);
+        });
+        notifyListeners(outcome, subscriptionId, subscriberId);
+    }
 
+    /**
+     * Take the lease, or refresh one already held, and work out what that changed. The status the consumer had comes
+     * from the caller, which has already read it under the same lock.
+     */
+    private Outcome acquireLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status oldStatus) {
+        String subscriptionId = competingConsumer.subscriptionId;
+        String subscriberId = competingConsumer.subscriberId;
+        boolean acquired = MongoListenerLockService.acquireOrRefreshFor(collection, clock, retryStrategy, leaseTime, subscriptionId, subscriberId).isPresent();
+        logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
+        competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
+        if (oldStatus != Status.LOCK_ACQUIRED && acquired) {
+            return new Outcome(true, Notification.GRANTED);
+        } else if (oldStatus == Status.LOCK_ACQUIRED && !acquired) {
+            return new Outcome(false, Notification.PROHIBITED);
+        }
+        return new Outcome(acquired, Notification.NONE);
+    }
+
+    /**
+     * Drop the lease in MongoDB and work out what that changed. What happens to the consumer's own entry differs
+     * between unregistering and releasing and has been decided by the caller.
+     */
+    private Outcome giveUpLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status status) {
+        String subscriptionId = competingConsumer.subscriptionId;
+        String subscriberId = competingConsumer.subscriberId;
         if (status == null) {
             logDebug("Failed to find consumer status (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            return;
+            return Outcome.NOTHING;
         }
         MongoListenerLockService.remove(collection, retryStrategy, subscriptionId, subscriberId);
         if (status == Status.LOCK_ACQUIRED) {
             logDebug("Lock status was {}, will invoke onConsumeProhibited for listeners (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
-            competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
-        } else {
-            logDebug("Lock status was {}, will NOT invoke onConsumeProhibited for listeners (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
+            return new Outcome(false, Notification.PROHIBITED);
         }
+        logDebug("Lock status was {}, will NOT invoke onConsumeProhibited for listeners (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
+        return Outcome.NOTHING;
     }
 
     public boolean hasLock(String subscriptionId, String subscriberId) {
@@ -209,29 +242,91 @@ public class MongoLeaseCompetingConsumerStrategySupport {
 
     private void refreshOrAcquireLease(MongoCollection<BsonDocument> collection) {
         logDebug("In refreshOrAcquireLease with {} competing consumers", competingConsumers.size());
-        competingConsumers.forEach((cc, status) -> {
-            logDebug("Status {} (subscriberId={}, subscriptionId={})", status, cc.subscriberId, cc.subscriptionId);
-            if (status == Status.LOCK_ACQUIRED) {
-                boolean stillHasLock = MongoListenerLockService.commit(collection, clock, retryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId);
-                if (!stillHasLock) {
-                    logDebug("Lost lock! (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
-                    competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
-                    competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId));
-                    logDebug("Completed calling onConsumeProhibited for all listeners (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
-                }
-            } else if (status == Status.LOCK_RELEASED) {
-                // The round this consumer stands down for after releasing. It is an ordinary candidate again from the
-                // next round on, so nothing is reported here: it neither holds the lease nor has just stopped holding
-                // it, and the release already told the listeners about that.
-                logDebug("Consumer stood down for this round after releasing (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
-                competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
-            } else {
-                registerCompetingConsumer(collection, cc.subscriptionId, cc.subscriberId);
-            }
+        competingConsumers.forEach((cc, __) -> {
+            Outcome outcome = inConsumerLock(cc, () -> refreshOne(collection, cc));
+            notifyListeners(outcome, cc.subscriptionId, cc.subscriberId);
         });
     }
 
+    private Outcome refreshOne(MongoCollection<BsonDocument> collection, CompetingConsumer cc) {
+        // Read again rather than trust what the iteration handed over, which it read without this lock. A consumer
+        // unregistered in between would otherwise be written back here, and then nothing is left to unregister it
+        // and no node can take that subscription over.
+        Status status = competingConsumers.get(cc);
+        logDebug("Status {} (subscriberId={}, subscriptionId={})", status, cc.subscriberId, cc.subscriptionId);
+        if (status == null) {
+            logDebug("Consumer is no longer registered, skipping it this round (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
+            return Outcome.NOTHING;
+        }
+        return switch (status) {
+            case LOCK_ACQUIRED -> {
+                boolean stillHasLock = MongoListenerLockService.commit(collection, clock, retryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId);
+                if (stillHasLock) {
+                    yield Outcome.NOTHING;
+                }
+                logDebug("Lost lock! (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
+                competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
+                yield new Outcome(false, Notification.PROHIBITED);
+            }
+            // The round this consumer stands down for after releasing. It is an ordinary candidate again from the
+            // next round on, and nothing is reported here. It neither holds the lease nor has just stopped holding
+            // it, and the release already told the listeners about that.
+            case LOCK_RELEASED -> {
+                logDebug("Consumer stood down for this round after releasing (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
+                competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
+                yield Outcome.NOTHING;
+            }
+            case LOCK_NOT_ACQUIRED -> acquireLease(collection, cc, status);
+        };
+    }
+
+    private Outcome inConsumerLock(CompetingConsumer competingConsumer, Supplier<Outcome> action) {
+        ReentrantLock lock = consumerLocks[Math.floorMod(competingConsumer.hashCode(), consumerLocks.length)];
+        lock.lock();
+        try {
+            return action.get();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Tell the listeners what the last step changed, and never while holding that consumer's lock. A listener runs
+     * straight into the subscription model, which is synchronized on itself and calls back into this class from those
+     * callbacks, while an application thread pausing or registering holds that same monitor before it arrives here.
+     * Notifying under the lock closes that cycle, and the refresh thread and the application thread deadlock.
+     */
+    private void notifyListeners(Outcome outcome, String subscriptionId, String subscriberId) {
+        switch (outcome.notification()) {
+            case GRANTED -> {
+                logDebug("Consumption granted (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+                competingConsumerListeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
+                logDebug("Completed calling onConsumeGranted for all listeners (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            }
+            case PROHIBITED -> {
+                logDebug("Consumption prohibited (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+                competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
+                logDebug("Completed calling onConsumeProhibited for all listeners (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            }
+            case NONE -> {
+            }
+        }
+    }
+
     private record CompetingConsumer(String subscriptionId, String subscriberId) {
+    }
+
+    /**
+     * What a step did to the lease, and what the listeners have to be told about it once the consumer's lock is out
+     * of the way. Only registering has a use for {@code acquired}, and it has to come from inside the lock, since
+     * reading the status again afterwards is the very thing the lock is here to stop.
+     */
+    private record Outcome(boolean acquired, Notification notification) {
+        private static final Outcome NOTHING = new Outcome(false, Notification.NONE);
+    }
+
+    private enum Notification {
+        GRANTED, PROHIBITED, NONE
     }
 
     private enum Status {

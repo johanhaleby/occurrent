@@ -87,8 +87,6 @@ class MongoLeaseTimingTest {
     @BeforeEach
     void startWithNoLocks() {
         locks = database.getCollection("competing-consumer-locks-" + UUID.randomUUID(), BsonDocument.class);
-        // One clock for every consumer in a test, since two instances of an application see the same wall clock give
-        // or take skew, and a lease means nothing if they do not.
         clock = new MutableClock(Instant.parse("2026-08-05T12:00:00Z"));
     }
 
@@ -287,30 +285,4 @@ class MongoLeaseTimingTest {
         }
     }
 
-    private static class MutableClock extends Clock {
-        private volatile Instant now;
-
-        private MutableClock(Instant now) {
-            this.now = now;
-        }
-
-        private void advanceBy(Duration duration) {
-            now = now.plus(duration);
-        }
-
-        @Override
-        public ZoneId getZone() {
-            return ZoneOffset.UTC;
-        }
-
-        @Override
-        public Clock withZone(ZoneId zone) {
-            throw new UnsupportedOperationException("This clock is UTC and the code under test never asks for another zone");
-        }
-
-        @Override
-        public Instant instant() {
-            return now;
-        }
-    }
 }
