@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 37
-updated_at: '2026-08-08T14:45:00+00:00'
-updated_by: orchestrator a7c1523c (B11 docs audit adopted per Johan, docs-repo
-  monitor armed as b8is3i855)
+revision: 38
+updated_at: '2026-08-08T15:40:00+00:00'
+updated_by: orchestrator a7c1523c (docs PR 50 merged, B12 spun off issue 650 and
+  running as subagent, docs monitor retired, library monitor brclpl51c armed)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -218,6 +218,18 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T14:45:00+00:00'
+- id: act-022
+  type: merge
+  target: 'docs PR occurrent-org.github.io#50 squash-merge pinned to verified head
+    852a13c2ee785b1555a15f30f9ba45a7c57f2aa6 (checks done, 2 threads fixed and
+    resolved, 1 open reasoned decline anchored to #650, MERGEABLE)'
+  expected: 'PR merged under the recorded mergeable-now docs grant; DONE: squash
+    62afceb06, docs monitor stopped after its closure event, B11 sweep held for its
+    DELIVERY_RESULT and the manual close of #574'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T15:30:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -668,21 +680,47 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_6e5fd043 (docs worktree fervent-ritchie-d224c0)
     deliverables:
     - check: issue_closed
       ref: 574
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip task_4653f20c spawned 2026-08-08, awaiting launch; deliverable
-      is mergeable-now docs PR(s) against docs main, PR 49 stays held and out of
-      scope; the docs repo is watched by its own monitor b8is3i855 while this unit
-      is active (multi-repo rule)'
+    next_action: 'docs PR 50 merged (squash 62afceb06, audit inventory on the issue,
+      the merge-fallout dedup shipped); sweep after the session''s DELIVERY_RESULT
+      and its manual close of #574 per the cross-repo Fixes rule'
     last_meaningful_progress_at: '2026-08-08T14:45:00+00:00'
     observed: {}
     assessment: adopted from the deferred backlog by Johan 2026-08-08 in-session;
       post-release verification of the merged held-branch fleet plus wording pass
+  B12:
+    issue: 650
+    goal: migration guide time-rewrite consistency (analysis-first vs the two-form
+      shim, then reword or fix the script)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: subagent a06c56779f1649b31
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 650
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'subagent running since 2026-08-08T15:35Z; ci-wait then CAS merge
+      when its PR appears; its DELIVERY_RESULT must state the docs-site consequence'
+    last_meaningful_progress_at: '2026-08-08T15:35:00+00:00'
+    observed: {}
+    assessment: 'spun off B11 audit via the finding-routing protocol (issue 650),
+      adopted by Johan via structured ask as this session final unit. The library
+      monitor brclpl51c is repo-wide and will also see vgpr and ccpause PRs, whose
+      deltas this sweep ignores, sibling orchestrators own them'
   B4:
     issue: 625
     goal: saga CAS amplification javadoc qualifiers (doc only)
