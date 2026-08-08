@@ -1,8 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 34
+revision: 35
 updated_at: '2026-08-08T18:00:00+00:00'
-updated_by: orchestrator a7c1523c (B10 delivered PR 649, both addendum PRs in ci-wait)
+updated_by: orchestrator a7c1523c (B9 merged, sweep held for its DELIVERY_RESULT;
+  B10 rebased and mid-checks)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -183,6 +184,18 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T18:00:00+00:00'
+- id: act-019
+  type: merge
+  target: 'PR 648 squash-merge pinned to verified head 91fc4b04ec879190e45a32a0d471c0233b8de45e
+    (all green, 2 javadoc threads fixed and resolved, MERGEABLE)'
+  expected: 'PR merged, merged head equals verified head, issue 629 auto-closed via
+    Fixes, then B9 sweep after its DELIVERY_RESULT is confirmed; MERGED: squash
+    a36cd683b, issue 629 CLOSED, session messaged to conclude, sweep pending its
+    final report per the hold-the-worktree lesson'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T13:35:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -577,7 +590,7 @@ units:
     issue: 629
     goal: MongoProjectionStoreProvider fail-loud on mismatched projection @Id (both
       save paths)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -585,14 +598,15 @@ units:
     deliverables:
     - check: pr_merged
       ref: 648
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T13:36Z at 91fc4b04e (squash a36cd683b), all
+        green, 2 javadoc threads fixed and resolved'
     - check: issue_closed
       ref: 629
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #629, verified by orchestrator'
     blocking_on: []
-    next_action: 'ci-wait on PR 648 (head 29a5aec566f, guard on both save paths, new DocumentIdGuardTest); CAS merge on green with threads resolved'
+    next_action: 'deliverables met; archive session, remove worktree hopeful-thompson-107352 and branches only after its DELIVERY_RESULT arrives'
     last_meaningful_progress_at: '2026-08-08T18:00:00+00:00'
     observed: {}
     assessment: T1's side-finding filed as its own issue; adopted with B10 as the
