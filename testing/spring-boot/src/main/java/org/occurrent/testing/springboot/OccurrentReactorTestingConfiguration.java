@@ -16,6 +16,7 @@
 
 package org.occurrent.testing.springboot;
 
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.occurrent.testing.junit.reactor.OccurrentSubscriptionsExtension;
 import org.springframework.beans.factory.ObjectProvider;
@@ -45,20 +46,41 @@ public class OccurrentReactorTestingConfiguration {
      * It is a prototype bean for the same reason the blocking one is. The extension accumulates the subscription ids a
      * test told it about, and a test class registering it with {@code @RegisterExtension} should not inherit the ids
      * another test class named.
+     * <p>
+     * It also clears state on its own where the context already holds what that takes, the same way
+     * {@link OccurrentTestingConfiguration#occurrentSubscriptionsExtension} does for the blocking stack. Exactly one
+     * reactive {@code CheckpointStorage} bean is auto-applied with {@code clearingCheckpoints(..)}, and a
+     * {@code clearState = true} store integration's clearer is auto-applied with {@code clearingStateWith(..)}. A
+     * mixed application sharing one store integration between both stacks gets the flush run from each extension's
+     * {@code beforeEach}. That runs the flush twice rather than once, which costs a little time but clears nothing
+     * incorrectly, since deleting every document again the second time leaves the same empty collections behind.
      *
      * @param subscriptionModels every reactive {@code SubscriptionModelLifeCycle} bean in the application context
+     * @param checkpointStorages every reactive {@code CheckpointStorage} bean in the application context
+     * @param stateClearers      the {@code clearState = true} store integration's clearer, if one was wired
      * @return an extension to register with {@code @RegisterExtension}
      * @throws IllegalStateException if the context has no such bean, so there is nothing to stop
      */
     @Bean
     @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
-    public OccurrentSubscriptionsExtension occurrentReactorSubscriptionsExtension(ObjectProvider<SubscriptionModelLifeCycle> subscriptionModels) {
+    public OccurrentSubscriptionsExtension occurrentReactorSubscriptionsExtension(ObjectProvider<SubscriptionModelLifeCycle> subscriptionModels,
+                                                                                   ObjectProvider<CheckpointStorage> checkpointStorages,
+                                                                                   ObjectProvider<OccurrentTestStateClearer> stateClearers) {
         List<SubscriptionModelLifeCycle> models = subscriptionModels.orderedStream().toList();
         if (models.isEmpty()) {
             throw new IllegalStateException("No " + SubscriptionModelLifeCycle.class.getSimpleName() + " bean found in "
                     + "the application context, so there is nothing for @" + EnableOccurrentTesting.class.getSimpleName()
                     + " to stop.");
         }
-        return OccurrentSubscriptionsExtension.stoppedByDefault(models);
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(models);
+        CheckpointStorage checkpointStorage = checkpointStorages.getIfUnique();
+        if (checkpointStorage != null) {
+            extension.clearingCheckpoints(checkpointStorage);
+        }
+        OccurrentTestStateClearer stateClearer = stateClearers.getIfUnique();
+        if (stateClearer != null) {
+            extension.clearingStateWith(stateClearer);
+        }
+        return extension;
     }
 }

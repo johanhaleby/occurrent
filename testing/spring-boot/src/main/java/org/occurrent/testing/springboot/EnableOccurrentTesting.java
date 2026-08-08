@@ -57,6 +57,13 @@ import java.lang.annotation.*;
  * classpath. Whichever context is present, every {@code SubscriptionModelLifeCycle} bean in it is stopped, because a
  * Spring context can hold more than one life-cycle bearing model, for example a durable model and a
  * {@code SynchronousSubscriptionModel}, and deny-by-default means stopping every one of them.
+ * <p>
+ * The extension bean also clears state it can reach on its own. Exactly one {@code CheckpointStorage} bean in the
+ * context is applied with {@code clearingCheckpoints(..)} without {@link #clearState()}, since deleting a checkpoint
+ * a test never wrote a document for is harmless and the ambiguous case of more than one such bean is left to a test
+ * naming the one it means with {@code clearingCheckpointsFor(..)}. Flushing the event store itself is not harmless
+ * the same way, since a wrong flush is a silently passing test rather than a failing one, so it is behind
+ * {@link #clearState()} instead.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -64,4 +71,20 @@ import java.lang.annotation.*;
 @Inherited
 @Import(OccurrentTestingImportSelector.class)
 public @interface EnableOccurrentTesting {
+
+    /**
+     * Flush the store between tests as well as stopping subscriptions and clearing checkpoints, for a test that
+     * writes events and needs the next test to start from an empty store rather than accumulating fixtures across
+     * a cached Spring test context.
+     * <p>
+     * Requires a store integration on the test classpath that knows how to flush. {@code occurrent-testing-mongodb}
+     * plus a {@code MongoTemplate} bean is the one this module wires today, with
+     * {@code OccurrentMongoFlush.everyCollectionIn(..)} against that template's database. Set to {@code true} with
+     * neither on the classpath and {@link OccurrentTestingImportSelector} fails context refresh rather than leaving
+     * the flush silently unwired.
+     *
+     * @return {@code false} by default, since flushing is store-specific and destructive where a checkpoint delete is
+     * neither
+     */
+    boolean clearState() default false;
 }

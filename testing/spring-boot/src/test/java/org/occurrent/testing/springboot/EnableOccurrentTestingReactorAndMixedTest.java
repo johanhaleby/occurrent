@@ -23,7 +23,10 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -105,6 +108,27 @@ class EnableOccurrentTestingReactorAndMixedTest {
         }
     }
 
+    // The reactive counterpart of the #636 reproduction in EnableOccurrentTestingTest, over
+    // org.occurrent.subscription.api.reactor.CheckpointStorage instead of the blocking one.
+    @Test
+    void the_reactor_extension_bean_clears_the_contexts_lone_checkpoint_storage_before_each_test_with_no_hand_wiring() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(ReactiveAppWithCheckpointStorage.class)) {
+            SynchronousSubscriptionModel model = context.getBean(SynchronousSubscriptionModel.class);
+            model.subscribe("order-projection", event -> Mono.empty());
+
+            CheckpointStorage checkpointStorage = context.getBean(CheckpointStorage.class);
+            checkpointStorage.save("order-projection", new StringBasedCheckpoint("left-behind-by-a-previous-test")).block();
+
+            org.occurrent.testing.junit.reactor.OccurrentSubscriptionsExtension subscriptions =
+                    context.getBean(org.occurrent.testing.junit.reactor.OccurrentSubscriptionsExtension.class);
+            subscriptions.beforeEach(unusedExtensionContext());
+
+            assertThat(checkpointStorage.read("order-projection").blockOptional())
+                    .as("checkpoint left behind by an earlier test must be cleared with no hand wiring beyond @EnableOccurrentTesting")
+                    .isEmpty();
+        }
+    }
+
     // beforeEach does not read the ExtensionContext today, but a null argument would silently hide it if it started
     // to. A proxy that throws on any access fails the test loudly instead.
     private static ExtensionContext unusedExtensionContext() {
@@ -153,6 +177,21 @@ class EnableOccurrentTestingReactorAndMixedTest {
         @Bean
         SynchronousSubscriptionModel reactorSubscriptionModel() {
             return new SynchronousSubscriptionModel();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableOccurrentTesting
+    static class ReactiveAppWithCheckpointStorage {
+
+        @Bean
+        SynchronousSubscriptionModel subscriptionModel() {
+            return new SynchronousSubscriptionModel();
+        }
+
+        @Bean
+        CheckpointStorage checkpointStorage() {
+            return new InMemoryCheckpointStorage();
         }
     }
 }
