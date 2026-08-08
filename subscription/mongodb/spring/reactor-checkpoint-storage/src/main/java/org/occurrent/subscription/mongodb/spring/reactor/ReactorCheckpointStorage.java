@@ -29,6 +29,9 @@ import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+
+import java.time.Duration;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer.ID;
@@ -45,18 +48,34 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
 
     private final ReactiveMongoOperations mongo;
     private final String checkpointCollection;
+    private final Retry retry;
 
     /**
-     * Create a new instance of {@link ReactorCheckpointStorage}
+     * Create a new instance of {@link ReactorCheckpointStorage}. Uses a default {@link Retry} with exponential
+     * backoff, starting at 100 ms and capping at 2 seconds, up to 5 attempts before the original failure is
+     * rethrown, mirroring the blocking {@code SpringMongoCheckpointStorage}'s default.
      *
      * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting checkpoints to MongoDB.
      * @param checkpointCollection The collection that will contain the checkpoint for each subscriber.
      */
     public ReactorCheckpointStorage(ReactiveMongoOperations mongo, String checkpointCollection) {
+        this(mongo, checkpointCollection, defaultRetry());
+    }
+
+    /**
+     * Create a new instance of {@link ReactorCheckpointStorage}.
+     *
+     * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting checkpoints to MongoDB.
+     * @param checkpointCollection The collection that will contain the checkpoint for each subscriber.
+     * @param retry                       The {@link Retry} to use if there's a problem reading/saving/deleting the checkpoint in MongoDB.
+     */
+    public ReactorCheckpointStorage(ReactiveMongoOperations mongo, String checkpointCollection, Retry retry) {
         requireNonNull(mongo, ReactiveMongoOperations.class.getSimpleName() + " cannot be null");
         requireNonNull(checkpointCollection, "checkpointCollection cannot be null");
+        requireNonNull(retry, Retry.class.getSimpleName() + " cannot be null");
         this.mongo = mongo;
         this.checkpointCollection = checkpointCollection;
+        this.retry = retry;
     }
 
     @Override
@@ -76,7 +95,7 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
 
     @Override
     public Mono<Void> delete(String subscriptionId) {
-        return mongo.remove(query(where(ID).is(subscriptionId)), checkpointCollection).then();
+        return mongo.remove(query(where(ID).is(subscriptionId)), checkpointCollection).retryWhen(retry).then();
     }
 
     private Mono<Document> persistResumeTokenStreamPosition(String subscriptionId, BsonDocument resumeToken) {
@@ -96,12 +115,20 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
         // adapter's replaceOne.
         return mongo.upsert(query(where(ID).is(subscriptionId)),
                 Update.fromDocument(document),
-                checkpointCollection);
+                checkpointCollection)
+                .retryWhen(retry);
     }
 
     @Override
     public Mono<Checkpoint> read(String subscriptionId) {
         return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, checkpointCollection)
+                .retryWhen(retry)
                 .map(MongoCommons::calculateCheckpointFromMongoStreamPositionDocument);
+    }
+
+    private static Retry defaultRetry() {
+        return Retry.backoff(5, Duration.ofMillis(100))
+                .maxBackoff(Duration.ofSeconds(2))
+                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
     }
 }
