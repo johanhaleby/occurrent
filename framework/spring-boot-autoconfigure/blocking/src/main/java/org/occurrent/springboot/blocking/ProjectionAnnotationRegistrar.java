@@ -24,7 +24,7 @@ import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
-import org.occurrent.dsl.projection.AppliedPositionStorage;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
@@ -426,7 +426,7 @@ class ProjectionAnnotationRegistrar {
     private <E, S, ID> MaterializedView<E> resolveStore(org.occurrent.annotation.Projection annotation, Method factoryMethod, Projection<S, E, ID> projection, String id) {
         MaterializedView<E> materializedView = resolveStoreView(annotation, factoryMethod, projection, id);
         if (annotation.recordAppliedPosition()) {
-            return Projections.recordingAppliedPosition(materializedView, resolveAppliedPositionStorage(id), id);
+            return Projections.recordingAppliedPosition(materializedView, resolveAppliedPositionStore(id), id);
         }
         return materializedView;
     }
@@ -458,18 +458,18 @@ class ProjectionAnnotationRegistrar {
 
     // getIfAvailable rather than getBean, applies @Primary/@Fallback resolution and only throws when the container
     // genuinely cannot pick, the same pattern defaultProjectionStore uses for DefaultProjectionStoreProvider.
-    private AppliedPositionStorage resolveAppliedPositionStorage(String id) {
-        final AppliedPositionStorage storage;
+    private AppliedPositionStore resolveAppliedPositionStore(String id) {
+        final AppliedPositionStore store;
         try {
-            storage = applicationContext.getBeanProvider(AppliedPositionStorage.class).getIfAvailable();
+            store = applicationContext.getBeanProvider(AppliedPositionStore.class).getIfAvailable();
         } catch (NoUniqueBeanDefinitionException e) {
-            String[] names = applicationContext.getBeanNamesForType(AppliedPositionStorage.class);
-            throw new IllegalStateException(("@Projection '%s' sets recordAppliedPosition = true and found %d AppliedPositionStorage beans (%s) and cannot pick one. Mark one @Primary.").formatted(id, names.length, String.join(", ", names)), e);
+            String[] names = applicationContext.getBeanNamesForType(AppliedPositionStore.class);
+            throw new IllegalStateException(("@Projection '%s' sets recordAppliedPosition = true and found %d AppliedPositionStore beans (%s) and cannot pick one. Mark one @Primary.").formatted(id, names.length, String.join(", ", names)), e);
         }
-        if (storage == null) {
-            throw new IllegalStateException(("@Projection '%s' sets recordAppliedPosition = true, which needs an AppliedPositionStorage bean, and there is none. Declare one (AppliedPositionStorage.inMemory() to get started), or use the Mongo starter's zero-config default.").formatted(id));
+        if (store == null) {
+            throw new IllegalStateException(("@Projection '%s' sets recordAppliedPosition = true, which needs an AppliedPositionStore bean, and there is none. Declare one (AppliedPositionStore.inMemory() to get started), or use the Mongo starter's zero-config default.").formatted(id));
         }
-        return storage;
+        return store;
     }
 
     private <S, ID> ViewStateRepository<S, ID> defaultProjectionStore(Class<S> stateType, String id) {

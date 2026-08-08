@@ -44,7 +44,7 @@ import static java.util.Objects.requireNonNull;
  * or {@link #waitUntilApplied(String, long, Duration)}.
  */
 @NullMarked
-public interface AppliedPositionStorage {
+public interface AppliedPositionStore {
 
     /**
      * The default interval {@link #waitUntilApplied(String, long, Duration)} polls at.
@@ -119,11 +119,11 @@ public interface AppliedPositionStorage {
     }
 
     /**
-     * An {@code AppliedPositionStorage} backed by a plain map, for tests and single-process applications with no
+     * An {@code AppliedPositionStore} backed by a plain map, for tests and single-process applications with no
      * store of their own to persist the position in. The recorded position does not survive a restart.
      */
-    static AppliedPositionStorage inMemory() {
-        return new AppliedPositionStorage() {
+    static AppliedPositionStore inMemory() {
+        return new AppliedPositionStore() {
             private final Map<String, Long> positions = new ConcurrentHashMap<>();
 
             @Override

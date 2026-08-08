@@ -23,7 +23,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.occurrent.dsl.projection.AppliedPositionStorage;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -42,15 +42,15 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Exercises {@link MongoAppliedPositionStorage} against a real MongoDB replica set, since {@code $max} upsert
- * behaviour, one document per projection id, and cross-instance visibility of {@link AppliedPositionStorage#advance}
+ * Exercises {@link MongoAppliedPositionStore} against a real MongoDB replica set, since {@code $max} upsert
+ * behaviour, one document per projection id, and cross-instance visibility of {@link AppliedPositionStore#advance}
  * are not something an in-memory fake would catch.
  */
-@DisplayName("MongoAppliedPositionStorage")
+@DisplayName("MongoAppliedPositionStore")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Testcontainers
 @Timeout(60)
-class MongoAppliedPositionStorageTest {
+class MongoAppliedPositionStoreTest {
 
     private static ConfigurableApplicationContext context;
     private static MongoOperations mongoOperations;
@@ -68,20 +68,20 @@ class MongoAppliedPositionStorageTest {
         }
     }
 
-    private AppliedPositionStorage storage(String collection) {
-        return new MongoAppliedPositionStorage(mongoOperations, collection);
+    private AppliedPositionStore storage(String collection) {
+        return new MongoAppliedPositionStore(mongoOperations, collection);
     }
 
     @Test
     void appliedPosition_is_empty_for_a_projection_that_has_never_advanced() {
-        AppliedPositionStorage storage = storage(freshCollection());
+        AppliedPositionStore storage = storage(freshCollection());
 
         assertThat(storage.appliedPosition("orders")).isEmpty();
     }
 
     @Test
     void advance_records_the_position_and_appliedPosition_reads_it_back() {
-        AppliedPositionStorage storage = storage(freshCollection());
+        AppliedPositionStore storage = storage(freshCollection());
 
         storage.advance("orders", 42);
 
@@ -90,7 +90,7 @@ class MongoAppliedPositionStorageTest {
 
     @Test
     void advance_never_moves_the_recorded_position_backwards() {
-        AppliedPositionStorage storage = storage(freshCollection());
+        AppliedPositionStore storage = storage(freshCollection());
 
         storage.advance("orders", 50);
         storage.advance("orders", 10);
@@ -100,7 +100,7 @@ class MongoAppliedPositionStorageTest {
 
     @Test
     void advance_rejects_a_non_positive_position() {
-        AppliedPositionStorage storage = storage(freshCollection());
+        AppliedPositionStore storage = storage(freshCollection());
 
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> storage.advance("orders", 0)))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -109,7 +109,7 @@ class MongoAppliedPositionStorageTest {
     @Test
     void each_projection_id_gets_its_own_document_in_the_same_collection() {
         String collection = freshCollection();
-        AppliedPositionStorage storage = storage(collection);
+        AppliedPositionStore storage = storage(collection);
 
         storage.advance("orders", 10);
         storage.advance("shipments", 20);
@@ -122,8 +122,8 @@ class MongoAppliedPositionStorageTest {
     @Test
     void waitUntilApplied_observes_a_position_advanced_by_a_different_storage_instance_reading_the_same_collection() {
         String collection = freshCollection();
-        AppliedPositionStorage writer = storage(collection);
-        AppliedPositionStorage reader = storage(collection);
+        AppliedPositionStore writer = storage(collection);
+        AppliedPositionStore reader = storage(collection);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         try {
             scheduler.schedule(() -> writer.advance("orders", 42), 100, TimeUnit.MILLISECONDS);

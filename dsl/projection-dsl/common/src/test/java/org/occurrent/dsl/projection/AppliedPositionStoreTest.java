@@ -29,18 +29,18 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class AppliedPositionStorageTest {
+class AppliedPositionStoreTest {
 
     @Test
     void appliedPosition_is_empty_for_a_projection_that_has_never_advanced() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
 
         assertThat(storage.appliedPosition("orders")).isEmpty();
     }
 
     @Test
     void advance_records_the_position_and_appliedPosition_reads_it_back() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
 
         storage.advance("orders", 42);
 
@@ -49,7 +49,7 @@ class AppliedPositionStorageTest {
 
     @Test
     void advance_never_moves_the_recorded_position_backwards() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
 
         storage.advance("orders", 50);
         storage.advance("orders", 10);
@@ -59,7 +59,7 @@ class AppliedPositionStorageTest {
 
     @Test
     void advance_rejects_a_non_positive_position() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
 
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> storage.advance("orders", 0)))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -67,7 +67,7 @@ class AppliedPositionStorageTest {
 
     @Test
     void waitUntilApplied_rejects_a_non_positive_position() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
 
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> storage.waitUntilApplied("orders", 0, Duration.ofSeconds(5))))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -75,7 +75,7 @@ class AppliedPositionStorageTest {
 
     @Test
     void waitUntilApplied_returns_true_immediately_when_the_position_is_already_applied() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
         storage.advance("orders", 42);
 
         boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofSeconds(5));
@@ -85,7 +85,7 @@ class AppliedPositionStorageTest {
 
     @Test
     void waitUntilApplied_returns_true_once_a_position_at_or_beyond_the_requested_one_is_advanced_to() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         try {
             scheduler.schedule(() -> storage.advance("orders", 42), 50, TimeUnit.MILLISECONDS);
@@ -100,7 +100,7 @@ class AppliedPositionStorageTest {
 
     @Test
     void waitUntilApplied_returns_false_on_timeout_rather_than_throwing_when_the_position_never_arrives() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
 
         boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofMillis(100), Duration.ofMillis(10));
 
@@ -109,7 +109,7 @@ class AppliedPositionStorageTest {
 
     @Test
     void waitUntilApplied_returns_true_for_a_position_lower_than_the_one_already_applied() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
         storage.advance("orders", 100);
 
         boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofSeconds(5));
@@ -119,7 +119,7 @@ class AppliedPositionStorageTest {
 
     @Test
     void an_interrupted_wait_returns_false_and_restores_the_interrupt_flag() throws InterruptedException {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
         CountDownLatch started = new CountDownLatch(1);
         boolean[] result = new boolean[1];
         boolean[] interruptedAfterwards = new boolean[1];

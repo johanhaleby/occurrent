@@ -206,7 +206,7 @@ public @interface Projection {
      * it. {@code false} by default, since it costs one extra store write per delivered event.
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>)
      * <p>
-     * Requires an {@code AppliedPositionStorage} bean, resolved the same way {@link #store()} resolves a read-model
+     * Requires an {@code AppliedPositionStore} bean, resolved the same way {@link #store()} resolves a read-model
      * store, the unique bean of that type, or the store starter's zero-config default when one is configured.
      * Mutually exclusive with {@link Mode#SYNCHRONOUS}, since a synchronous projection has already updated the read
      * model by the time the command returns and recording a position for it buys nothing. An event whose metadata

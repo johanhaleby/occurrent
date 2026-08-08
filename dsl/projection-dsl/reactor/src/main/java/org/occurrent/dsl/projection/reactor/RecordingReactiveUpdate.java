@@ -19,16 +19,16 @@ package org.occurrent.dsl.projection.reactor;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.dsl.projection.AppliedPositionStorage;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import reactor.core.publisher.Mono;
 
 import java.util.function.BiFunction;
 
 /**
- * The reactive update {@link Projections#recordingAppliedPosition(BiFunction, AppliedPositionStorage, String)}
+ * The reactive update {@link Projections#recordingAppliedPosition(BiFunction, AppliedPositionStore, String)}
  * builds
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
- * Applies the wrapped update and then advances {@code storage}, so the recorded position is written only after the
+ * Applies the wrapped update and then advances {@code store}, so the recorded position is written only after the
  * state it describes.
  * <p>
  * Implements {@link ReplayAwareMaterializedView} and forwards every lifecycle call to the delegate when it implements
@@ -42,16 +42,16 @@ import java.util.function.BiFunction;
 final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReplayAwareMaterializedView {
 
     private final BiFunction<EventMetadata, E, Mono<Void>> delegate;
-    private final AppliedPositionStorage storage;
+    private final AppliedPositionStore store;
     private final String projectionId;
 
     private final Object lock = new Object();
     private boolean replaying = false;
     private long highestPositionSeenDuringReplay = 0;
 
-    RecordingReactiveUpdate(BiFunction<EventMetadata, E, Mono<Void>> delegate, AppliedPositionStorage storage, String projectionId) {
+    RecordingReactiveUpdate(BiFunction<EventMetadata, E, Mono<Void>> delegate, AppliedPositionStore store, String projectionId) {
         this.delegate = delegate;
-        this.storage = storage;
+        this.store = store;
         this.projectionId = projectionId;
     }
 
@@ -75,7 +75,7 @@ final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, M
             }
         }
         if (!stillReplaying) {
-            storage.advance(projectionId, position);
+            store.advance(projectionId, position);
         }
     }
 
@@ -100,7 +100,7 @@ final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, M
                 replaying = false;
             }
             if (highest > 0) {
-                storage.advance(projectionId, highest);
+                store.advance(projectionId, highest);
             }
         }));
     }

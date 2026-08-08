@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.reactor;
+package org.occurrent.springboot.mongo.blocking;
 
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.dsl.projection.AppliedPositionStorage;
-import org.springframework.data.mongodb.core.ReactiveMongoOperations;
+import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 
 import java.util.OptionalLong;
@@ -29,27 +29,24 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
- * The {@link AppliedPositionStorage} the reactive Mongo starter contributes as
- * {@code @Projection(recordAppliedPosition = true)}'s zero-config default. {@link AppliedPositionStorage} is a
- * blocking-shaped interface on both stacks, called from the reactor recorder's {@code doOnSuccess} callback, which
- * already runs on {@code boundedElastic}, so blocking on the underlying reactive Mongo call here is the same bridge
- * the rest of this reactor stack makes in the other direction.
+ * The {@link AppliedPositionStore} the Mongo starter contributes as {@code @Projection(recordAppliedPosition = true)}'s
+ * zero-config default. One document per projection id, {@code _id} the projection id and {@code position} the applied
+ * position.
  * <p>
- * One document per projection id, {@code _id} the projection id and {@code position} the applied position.
  * {@link #advance(String, long)} writes with MongoDB's {@code $max} update operator in one round trip, so the
- * never-moves-backwards guarantee holds under concurrent advances for the same projection id, with no
- * read-modify-write race.
+ * never-moves-backwards guarantee {@link AppliedPositionStore#advance(String, long)} makes holds even under
+ * concurrent advances for the same projection id, with no read-modify-write race.
  */
 @NullMarked
-class ReactiveMongoAppliedPositionStorage implements AppliedPositionStorage {
+class MongoAppliedPositionStore implements AppliedPositionStore {
 
     private static final String ID = "_id";
     private static final String POSITION = "position";
 
-    private final ReactiveMongoOperations mongoOperations;
+    private final MongoOperations mongoOperations;
     private final String collection;
 
-    ReactiveMongoAppliedPositionStorage(ReactiveMongoOperations mongoOperations, String collection) {
+    MongoAppliedPositionStore(MongoOperations mongoOperations, String collection) {
         this.mongoOperations = requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collection = requireNonNull(collection, "collection cannot be null");
     }
@@ -57,7 +54,7 @@ class ReactiveMongoAppliedPositionStorage implements AppliedPositionStorage {
     @Override
     public OptionalLong appliedPosition(String projectionId) {
         requireNonNull(projectionId, "projectionId cannot be null");
-        Document document = mongoOperations.findOne(query(where(ID).is(projectionId)), Document.class, collection).block();
+        Document document = mongoOperations.findOne(query(where(ID).is(projectionId)), Document.class, collection);
         if (document == null) {
             return OptionalLong.empty();
         }
@@ -71,6 +68,6 @@ class ReactiveMongoAppliedPositionStorage implements AppliedPositionStorage {
         if (position <= 0) {
             throw new IllegalArgumentException("position must be positive but was " + position);
         }
-        mongoOperations.upsert(query(where(ID).is(projectionId)), new Update().max(POSITION, position), collection).block();
+        mongoOperations.upsert(query(where(ID).is(projectionId)), new Update().max(POSITION, position), collection);
     }
 }

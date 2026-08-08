@@ -19,15 +19,15 @@ package org.occurrent.dsl.projection.blocking;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.dsl.projection.AppliedPositionStorage;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAwareMaterializedView;
 
 /**
- * The {@link MaterializedView} {@link Projections#recordingAppliedPosition(MaterializedView, AppliedPositionStorage, String)}
+ * The {@link MaterializedView} {@link Projections#recordingAppliedPosition(MaterializedView, AppliedPositionStore, String)}
  * builds
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
- * Delegates every update to the wrapped view and then advances {@code storage}, so the recorded position is written
+ * Delegates every update to the wrapped view and then advances {@code store}, so the recorded position is written
  * only after the state it describes.
  * <p>
  * Implements {@link ReplayAwareMaterializedView} and forwards every lifecycle call to the delegate when it implements
@@ -39,7 +39,7 @@ import org.occurrent.dsl.view.ReplayAwareMaterializedView;
 final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayAwareMaterializedView {
 
     private final MaterializedView<E> delegate;
-    private final AppliedPositionStorage storage;
+    private final AppliedPositionStore store;
     private final String projectionId;
 
     // Every access happens on the thread driving the catch-up replay, the same invariant CoalescingMaterializedView
@@ -47,9 +47,9 @@ final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayA
     private boolean replaying = false;
     private long highestPositionSeenDuringReplay = 0;
 
-    RecordingMaterializedView(MaterializedView<E> delegate, AppliedPositionStorage storage, String projectionId) {
+    RecordingMaterializedView(MaterializedView<E> delegate, AppliedPositionStore store, String projectionId) {
         this.delegate = delegate;
-        this.storage = storage;
+        this.store = store;
         this.projectionId = projectionId;
     }
 
@@ -72,7 +72,7 @@ final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayA
                 highestPositionSeenDuringReplay = position;
             }
         } else {
-            storage.advance(projectionId, position);
+            store.advance(projectionId, position);
         }
     }
 
@@ -91,7 +91,7 @@ final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayA
             replayAware.replayCompleted();
         }
         if (highestPositionSeenDuringReplay > 0) {
-            storage.advance(projectionId, highestPositionSeenDuringReplay);
+            store.advance(projectionId, highestPositionSeenDuringReplay);
         }
         replaying = false;
     }

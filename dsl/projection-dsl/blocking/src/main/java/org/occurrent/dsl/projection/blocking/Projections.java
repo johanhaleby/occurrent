@@ -20,7 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
-import org.occurrent.dsl.projection.AppliedPositionStorage;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
@@ -286,7 +286,7 @@ public final class Projections {
     }
 
     /**
-     * Wraps {@code view} so every update also advances {@code storage} with the applied event's global position,
+     * Wraps {@code view} so every update also advances {@code store} with the applied event's global position,
      * after the delegate has written its state
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
      * Works with any {@link MaterializedView}, framework-built or your own, including one that batches its writes
@@ -298,14 +298,14 @@ public final class Projections {
      * event arrived on a path that carries no metadata. Recording is opt-in, so a projection that cannot supply a
      * position should not wrap its view with this in the first place.
      *
-     * @param projectionId the id {@code storage} records the position under, read back with
-     *                      {@link AppliedPositionStorage#appliedPosition(String)} or
-     *                      {@link AppliedPositionStorage#waitUntilApplied(String, long, java.time.Duration)}.
+     * @param projectionId the id {@code store} records the position under, read back with
+     *                      {@link AppliedPositionStore#appliedPosition(String)} or
+     *                      {@link AppliedPositionStore#waitUntilApplied(String, long, java.time.Duration)}.
      */
-    public static <E> MaterializedView<E> recordingAppliedPosition(MaterializedView<E> view, AppliedPositionStorage storage, String projectionId) {
+    public static <E> MaterializedView<E> recordingAppliedPosition(MaterializedView<E> view, AppliedPositionStore store, String projectionId) {
         requireNonNull(view, "view cannot be null");
-        requireNonNull(storage, "storage cannot be null");
+        requireNonNull(store, "store cannot be null");
         requireNonNull(projectionId, "projectionId cannot be null");
-        return new RecordingMaterializedView<>(view, storage, projectionId);
+        return new RecordingMaterializedView<>(view, store, projectionId);
     }
 }

@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.dsl.projection.AppliedPositionStorage;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import reactor.core.publisher.Mono;
 
 import java.util.ArrayList;
@@ -39,7 +39,7 @@ class RecordingReactiveUpdateTest {
     void a_live_update_advances_storage_with_the_events_position_after_the_delegate_mono_completes() {
         List<String> calls = new ArrayList<>();
         BiFunction<EventMetadata, String, Mono<Void>> delegate = recordingDelegate(calls);
-        AppliedPositionStorage storage = recordingStorage(calls);
+        AppliedPositionStore storage = recordingStorage(calls);
         BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
 
         recording.apply(metadataWithPosition(42), "event-1").block();
@@ -52,7 +52,7 @@ class RecordingReactiveUpdateTest {
     void an_event_with_no_position_errors_and_never_reaches_the_delegate() {
         List<String> calls = new ArrayList<>();
         BiFunction<EventMetadata, String, Mono<Void>> delegate = recordingDelegate(calls);
-        AppliedPositionStorage storage = recordingStorage(calls);
+        AppliedPositionStore storage = recordingStorage(calls);
         BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
 
         assertThatThrownBy(() -> recording.apply(EventMetadata.empty(), "event-1").block())
@@ -65,7 +65,7 @@ class RecordingReactiveUpdateTest {
     void a_replay_buffers_the_highest_position_seen_and_advances_storage_once_in_replayCompleted_after_the_delegate_flushes() {
         List<String> calls = new ArrayList<>();
         BiFunction<EventMetadata, String, Mono<Void>> delegate = recordingDelegate(calls);
-        AppliedPositionStorage storage = recordingStorage(calls);
+        AppliedPositionStore storage = recordingStorage(calls);
         BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
         ReplayAwareMaterializedView replayAware = (ReplayAwareMaterializedView) recording;
 
@@ -84,7 +84,7 @@ class RecordingReactiveUpdateTest {
     void a_replay_that_is_abandoned_discards_the_buffered_position_instead_of_advancing_storage() {
         List<String> calls = new ArrayList<>();
         BiFunction<EventMetadata, String, Mono<Void>> delegate = recordingDelegate(calls);
-        AppliedPositionStorage storage = recordingStorage(calls);
+        AppliedPositionStore storage = recordingStorage(calls);
         BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
         ReplayAwareMaterializedView replayAware = (ReplayAwareMaterializedView) recording;
 
@@ -100,7 +100,7 @@ class RecordingReactiveUpdateTest {
     void a_delegate_that_is_itself_replay_aware_is_flushed_before_storage_advances() {
         List<String> calls = new ArrayList<>();
         DelegateWithReplayAwareness delegate = new DelegateWithReplayAwareness(calls);
-        AppliedPositionStorage storage = recordingStorage(calls);
+        AppliedPositionStore storage = recordingStorage(calls);
         BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
         ReplayAwareMaterializedView replayAware = (ReplayAwareMaterializedView) recording;
 
@@ -113,7 +113,7 @@ class RecordingReactiveUpdateTest {
 
     @Test
     void advance_never_moves_the_recorded_position_backwards() {
-        AppliedPositionStorage storage = AppliedPositionStorage.inMemory();
+        AppliedPositionStore storage = AppliedPositionStore.inMemory();
         BiFunction<EventMetadata, String, Mono<Void>> delegate = recordingDelegate(new ArrayList<>());
         BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
 
@@ -161,9 +161,9 @@ class RecordingReactiveUpdateTest {
 
     // A storage that both persists in memory and appends "advance:<position>" to the shared call log, so ordering
     // against the delegate's own log entries can be asserted.
-    private static AppliedPositionStorage recordingStorage(List<String> calls) {
-        AppliedPositionStorage inMemory = AppliedPositionStorage.inMemory();
-        return new AppliedPositionStorage() {
+    private static AppliedPositionStore recordingStorage(List<String> calls) {
+        AppliedPositionStore inMemory = AppliedPositionStore.inMemory();
+        return new AppliedPositionStore() {
             @Override
             public OptionalLong appliedPosition(String projectionId) {
                 return inMemory.appliedPosition(projectionId);

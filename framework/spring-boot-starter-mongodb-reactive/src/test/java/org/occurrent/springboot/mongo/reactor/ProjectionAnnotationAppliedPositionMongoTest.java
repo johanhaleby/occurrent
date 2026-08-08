@@ -27,7 +27,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
-import org.occurrent.dsl.projection.AppliedPositionStorage;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
@@ -60,7 +60,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Verifies {@code @Projection(recordAppliedPosition = true)} end to end on the reactor stack: the registrar wraps the
  * resolved store's reactive update with the recorder, resolves the zero-config
- * {@link ReactiveMongoAppliedPositionStorage}, and a client can wait for the projection to reach a position it
+ * {@link ReactiveMongoAppliedPositionStore}, and a client can wait for the projection to reach a position it
  * already knows about
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
  * Docker-based, run by the CI/integration step.
@@ -78,7 +78,7 @@ class ProjectionAnnotationAppliedPositionMongoTest {
         try (ConfigurableApplicationContext context = SpringApplication.run(new Class<?>[]{RecordingApplication.class}, new String[]{"--spring.main.web-application-type=none"})) {
             EventStore eventStore = context.getBean(EventStore.class);
             CloudEventConverter<OrderPlaced> converter = context.getBean(CloudEventConverter.class);
-            AppliedPositionStorage storage = context.getBean(AppliedPositionStorage.class);
+            AppliedPositionStore storage = context.getBean(AppliedPositionStore.class);
 
             List<CloudEvent> cloudEvents = converter.toCloudEvents(List.of(new OrderPlaced()));
             eventStore.write("order-1", Flux.fromIterable(cloudEvents)).block();
