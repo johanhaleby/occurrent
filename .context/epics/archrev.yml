@@ -1,8 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 27
+revision: 28
 updated_at: '2026-08-08T13:40:00+00:00'
-updated_by: orchestrator a7c1523c (B7 merged and swept, B8 docs subagent dispatched)
+updated_by: orchestrator a7c1523c (B2 delivered PR 647 with the expected changelog
+  conflict; subagent ids recorded in session fields)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -368,21 +369,24 @@ units:
   B2:
     issue: 623
     goal: payload-filter memoization (benchmark-first, post-release)
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
     - B3
     - T4
-    session: null
+    session: subagent a513cf11f03fc9fa2
     deliverables:
+    - check: pr_merged
+      ref: 647
+      met: false
+      evidence: null
     - check: issue_closed
       ref: 623
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip spawned under the delegated go-ruling (act-009), awaiting
-      Johan''s launch'
+    next_action: 'ci-wait on PR 647 (head 865cda526c2, JacksonDataFieldReader readAll override + FilterMatcher one-pass AND); opened CONFLICTING on the expected rolling changelog conflict vs the B7 merge, worker mid-turn and expected to rebase keep-both-bullets; nudge if it stops without resolving''s launch'
     last_meaningful_progress_at: '2026-08-08T10:30:00+00:00'
     observed: {}
     assessment: 'GO ruled by orchestrator 2026-08-08 under Johan''s delegation, from
@@ -456,7 +460,7 @@ units:
     depends_on:
     - B3
     - B5
-    session: null
+    session: subagent a58cef13540673ffe
     deliverables:
     - check: pr_merged
       ref: 645
@@ -507,7 +511,7 @@ units:
     swept: false
     depends_on:
     - B7
-    session: null
+    session: subagent af7daa4872ed405ab
     deliverables:
     - check: issue_closed
       ref: 644
