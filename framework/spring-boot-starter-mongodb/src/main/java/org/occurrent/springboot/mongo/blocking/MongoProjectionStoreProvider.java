@@ -17,6 +17,7 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.dsl.view.internal.DocumentIdsKt;
 import org.occurrent.dsl.view.internal.MongoBulkViewStateOperations;
 import org.occurrent.springboot.blocking.DefaultProjectionStoreProvider;
 import org.springframework.context.ApplicationContext;
@@ -33,11 +34,13 @@ import java.util.Optional;
  * <p>
  * {@code save} looks up the document by the state's own {@code @Id}, not by the projection key it is handed. The
  * projection key is used for {@code findById} only. Give the state type an {@code @Id} field that holds the same
- * value the projection resolves as its key, or a read and a write for one instance land on two different documents
- * and the read model never accumulates. This store does no optimistic locking unless the state type also declares
- * {@code @Version}, so under concurrent delivery to one projection key it is last write wins. Thread a
- * {@code RetryStrategy} through {@code Projections.materializedView(..)} to recover from that once the state carries
- * {@code @Version}.
+ * value the projection resolves as its key, or a read and a write for one instance would land on two different
+ * documents and the read model would never accumulate. Since 0.33.0, {@code save} and {@code saveAll} fail fast with
+ * an {@code IllegalStateException} instead when the state's {@code @Id} does not match the resolved key, so this
+ * misconfiguration is caught at write time rather than silently orphaning the read model. This store does no
+ * optimistic locking unless the state type also declares {@code @Version}, so under concurrent delivery to one
+ * projection key it is last write wins. Thread a {@code RetryStrategy} through
+ * {@code Projections.materializedView(..)} to recover from that once the state carries {@code @Version}.
  */
 class MongoProjectionStoreProvider implements DefaultProjectionStoreProvider {
 
@@ -62,7 +65,9 @@ class MongoProjectionStoreProvider implements DefaultProjectionStoreProvider {
 
             @Override
             public void save(ID id, S state) {
-                // id is not used: the document id used is whatever @Id is set on state itself. See the class javadoc.
+                // The document id used is whatever @Id is set on state itself, not id. See the class javadoc. Verify
+                // the two agree before writing, or a mismatch would read one document and write another.
+                DocumentIdsKt.requireMatchingDocumentId(mongoOperations, stateType, state, id);
                 mongoOperations.save(state);
             }
 
@@ -73,7 +78,10 @@ class MongoProjectionStoreProvider implements DefaultProjectionStoreProvider {
 
             @Override
             public void saveAll(Map<ID, S> states) {
-                // Same as save: the map's ID keys are not used, every state is written under its own @Id.
+                // Same as save: every state is written under its own @Id, not the map's ID keys. Verify every entry
+                // before any write is issued, so a mismatched id fails the whole batch rather than the entries that
+                // would have followed it in a loop.
+                states.forEach((id, state) -> DocumentIdsKt.requireMatchingDocumentId(mongoOperations, stateType, state, id));
                 MongoBulkViewStateOperations.saveAll(mongoOperations, stateType, new ArrayList<>(states.values()));
             }
         };
