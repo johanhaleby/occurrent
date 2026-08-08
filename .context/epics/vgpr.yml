@@ -1,8 +1,8 @@
 schema_version: 1
 epic: vgpr
-revision: 5
-updated_at: '2026-08-08T17:35:00+00:00'
-updated_by: orchestrator gallant-einstein-134826 (backoff-with-Backoff-reuse decision relayed)
+revision: 6
+updated_at: '2026-08-08T18:05:00+00:00'
+updated_by: orchestrator gallant-einstein-134826 (rename verified, changelog brief error conceded)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -66,12 +66,18 @@ units:
       docs PR 52 review-clean and sweep
     last_meaningful_progress_at: '2026-08-08T17:45:00+00:00'
     observed:
-      pr_654: {head: 7f11d5e4448f7ed20001448d2b8ae21fd2a2859e, mergeable: MERGEABLE,
-        rollup: running, review: NOREVIEW, via: "vgpr monitor + gh pr view", at: '2026-08-08T16:35:00+00:00'}
+      pr_654: {head: 57a67a7c30da61acd78d38b107666e6ca25ed6ef, mergeable: MERGEABLE,
+        rollup: running, review: NOREVIEW, via: "gh pr view after worker report", at: '2026-08-08T18:00:00+00:00'}
       docs_pr_52: {branch: docs/vgpr-361-version-gated-projection-reads, state: OPEN,
-        via: "gh pr list", at: '2026-08-08T16:38:00+00:00'}
+        head: f4b86f1a0, via: "worker report, sweep re-verifies at merge", at: '2026-08-08T18:00:00+00:00'}
       adr: {file: doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md,
         in_pr: 654, via: "gh pr view --json files", at: '2026-08-08T16:38:00+00:00'}
-    assessment: side-channel AppliedPositionStorage design landed (not in-document);
-      manual_approval needs evidence from the unit session's plan gate before it is met,
-      the implementation existing is inference, not proof of the gate
+      rename: {done: true, verified_head: 57a67a7c30da61acd78d38b107666e6ca25ed6ef,
+        via: "worker report matching gh pr view head", at: '2026-08-08T18:00:00+00:00'}
+    assessment: side-channel AppliedPositionStore design landed (not in-document).
+      Copilot threads one and three fixed and resolved by the worker, thread two
+      resolved by AGREEING with Copilot, the orchestrator's Highlights-only line was
+      a brief compression error the worker refuted from AGENTS.md and PR 300, conceded
+      and recorded in lessons. Decisions two through four (Backoff wait, Spring
+      properties, Mongo RetryStrategy) still owed on the PR. manual_approval still
+      needs plan-gate evidence from the unit session before it is met
