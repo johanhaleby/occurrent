@@ -24,6 +24,7 @@ import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
@@ -216,6 +217,9 @@ class ProjectionAnnotationRegistrar {
                 annotation.startAtGlobalPosition() >= 0,
                 annotation.resumeBehavior() != ResumeBehavior.DEFAULT,
                 annotation.startupMode() != StartupMode.DEFAULT);
+        if (synchronous && annotation.recordAppliedPosition()) {
+            throw new IllegalArgumentException("@Projection '%s' combines mode = SYNCHRONOUS with recordAppliedPosition = true. A synchronous projection has already updated the read model by the time the command returns, so recording a position for it buys a write and nothing else. Drop recordAppliedPosition.".formatted(id));
+        }
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = invokeFactory(method, bean);
@@ -419,8 +423,16 @@ class ProjectionAnnotationRegistrar {
     // Resolve the read-model store into a MaterializedView. Selected by store() type or storeName() when set, otherwise
     // the unique bean of type MaterializedView, then ViewStateRepository, then Spring Data CrudRepository (any backend),
     // and finally the zero-config default the store starter contributes. All non-default options are first-class.
-    @SuppressWarnings("unchecked")
     private <E, S, ID> MaterializedView<E> resolveStore(org.occurrent.annotation.Projection annotation, Method factoryMethod, Projection<S, E, ID> projection, String id) {
+        MaterializedView<E> materializedView = resolveStoreView(annotation, factoryMethod, projection, id);
+        if (annotation.recordAppliedPosition()) {
+            return Projections.recordingAppliedPosition(materializedView, resolveAppliedPositionStore(id), id);
+        }
+        return materializedView;
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E, S, ID> MaterializedView<E> resolveStoreView(org.occurrent.annotation.Projection annotation, Method factoryMethod, Projection<S, E, ID> projection, String id) {
         Object referencedStore = resolveStoreBeanByReference(annotation, id);
         if (referencedStore != null) {
             return toMaterializedView(referencedStore, projection, id);
@@ -442,6 +454,22 @@ class ProjectionAnnotationRegistrar {
         // a missing provider.
         Class<S> stateType = (Class<S>) reflectStateType(factoryMethod, id);
         return Projections.materializedView(projection, defaultProjectionStore(stateType, id), id);
+    }
+
+    // getIfAvailable rather than getBean, applies @Primary/@Fallback resolution and only throws when the container
+    // genuinely cannot pick, the same pattern defaultProjectionStore uses for DefaultProjectionStoreProvider.
+    private AppliedPositionStore resolveAppliedPositionStore(String id) {
+        final AppliedPositionStore store;
+        try {
+            store = applicationContext.getBeanProvider(AppliedPositionStore.class).getIfAvailable();
+        } catch (NoUniqueBeanDefinitionException e) {
+            String[] names = applicationContext.getBeanNamesForType(AppliedPositionStore.class);
+            throw new IllegalStateException(("@Projection '%s' sets recordAppliedPosition = true and found %d AppliedPositionStore beans (%s) and cannot pick one. Mark one @Primary.").formatted(id, names.length, String.join(", ", names)), e);
+        }
+        if (store == null) {
+            throw new IllegalStateException(("@Projection '%s' sets recordAppliedPosition = true, which needs an AppliedPositionStore bean, and there is none. Declare one (AppliedPositionStore.inMemory() to get started), or use the Mongo starter's zero-config default.").formatted(id));
+        }
+        return store;
     }
 
     private <S, ID> ViewStateRepository<S, ID> defaultProjectionStore(Class<S> stateType, String id) {

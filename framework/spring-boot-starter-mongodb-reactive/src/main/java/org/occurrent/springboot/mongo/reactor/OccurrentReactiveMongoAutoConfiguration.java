@@ -31,6 +31,7 @@ import org.occurrent.application.service.reactor.generic.GenericApplicationServi
 import org.occurrent.application.service.spring.reactor.SpringReactiveTransactionExecutor;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
+import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
@@ -155,6 +156,16 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointStorage occurrentCheckpointStorage(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
         return new ReactorCheckpointStorage(mongo, occurrentProperties.getSubscription().getCollection());
+    }
+
+    /**
+     * The zero-config {@link AppliedPositionStore} a {@code @Projection(recordAppliedPosition = true)} resolves
+     * when the application declares none.
+     */
+    @Bean
+    @ConditionalOnMissingBean(AppliedPositionStore.class)
+    public AppliedPositionStore occurrentAppliedPositionStore(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
+        return new ReactiveMongoAppliedPositionStore(mongo, occurrentProperties.getProjection().getAppliedPositionCollection());
     }
 
     /**

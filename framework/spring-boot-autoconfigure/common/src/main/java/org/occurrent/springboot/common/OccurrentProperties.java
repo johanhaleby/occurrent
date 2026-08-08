@@ -58,6 +58,11 @@ public class OccurrentProperties {
      */
     private SagaProperties saga = new SagaProperties();
 
+    /**
+     * Projection Configuration (the {@code @Projection} read model, both stacks)
+     */
+    private ProjectionProperties projection = new ProjectionProperties();
+
 
     public static class ApplicationServiceProperties {
 
@@ -411,6 +416,31 @@ public class OccurrentProperties {
 
     public void setSaga(SagaProperties saga) {
         this.saga = saga;
+    }
+
+    public ProjectionProperties getProjection() {
+        return projection;
+    }
+
+    public void setProjection(ProjectionProperties projection) {
+        this.projection = projection;
+    }
+
+    public static class ProjectionProperties {
+
+        /**
+         * The collection a {@code @Projection(recordAppliedPosition = true)} records its applied position into, on
+         * the Mongo starter's zero-config {@code AppliedPositionStore}. One document per projection id.
+         */
+        private String appliedPositionCollection = "appliedPositions";
+
+        public String getAppliedPositionCollection() {
+            return appliedPositionCollection;
+        }
+
+        public void setAppliedPositionCollection(String appliedPositionCollection) {
+            this.appliedPositionCollection = appliedPositionCollection;
+        }
     }
 
     public static class SagaProperties {
