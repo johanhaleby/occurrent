@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 30
-updated_at: '2026-08-08T16:05:00+00:00'
-updated_by: orchestrator a7c1523c (B8 done, held docs PR 49 review-clean, issue 644
-  closed per its convention; only B2 remains)
+revision: 31
+updated_at: '2026-08-08T17:20:00+00:00'
+updated_by: orchestrator a7c1523c (B2 merged, Wave B complete, monitor and heartbeat
+  stopped, epic closeout)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -154,6 +154,20 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T15:30:00+00:00'
+- id: act-016
+  type: merge
+  target: 'PR 647 squash-merge pinned to verified head 34512da062a3a4debc86a77153e7ea47df76631d
+    (all green, 4 threads, 3 resolved with fixes incl. a real array-traversal bug the
+    equivalence question surfaced, 1 open measured reasoned decline on dedup, covered
+    by the standing visible-disagreement rule)'
+  expected: 'PR merged, merged head equals verified head, issue 623 auto-closed via
+    Fixes; last Wave B unit, so the sweep then stops the monitor and heartbeat and
+    runs epic closeout; DONE: squash 1132eb72d, issue 623 CLOSED, worktree and
+    branches removed, monitor bhcw34z9t and heartbeat stopped in the same sweep'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T17:10:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -381,9 +395,9 @@ units:
   B2:
     issue: 623
     goal: payload-filter memoization (benchmark-first, post-release)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - B3
     - T4
@@ -391,15 +405,18 @@ units:
     deliverables:
     - check: pr_merged
       ref: 647
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T17:12Z at 34512da06 (squash 1132eb72d), all
+        green; 3 threads fixed (incl. a real array-of-objects traversal bug in read()
+        the equivalence question surfaced), 1 open measured reasoned decline (dedup
+        14% slower in the no-duplicate case); before/after table on #623'
     - check: issue_closed
       ref: 623
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #623, verified by orchestrator'
     blocking_on: []
-    next_action: 'ci-wait on PR 647 (head 865cda526c2, JacksonDataFieldReader readAll override + FilterMatcher one-pass AND); opened CONFLICTING on the expected rolling changelog conflict vs the B7 merge, worker mid-turn and expected to rebase keep-both-bullets; nudge if it stops without resolving''s launch'
-    last_meaningful_progress_at: '2026-08-08T10:30:00+00:00'
+    next_action: 'none''s launch'
+    last_meaningful_progress_at: '2026-08-08T17:12:00+00:00'
     observed: {}
     assessment: 'GO ruled by orchestrator 2026-08-08 under Johan''s delegation, from
       the #624 numbers: byte-backed multi-leaf evaluation pays one full payload parse
