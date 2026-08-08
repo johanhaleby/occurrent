@@ -136,21 +136,18 @@ class JacksonDataFieldReaderReadAllTest {
     }
 
     @Test
-    void readAll_is_more_correct_than_read_on_a_pre_existing_array_traversal_defect_this_change_does_not_touch() {
-        // A known, independent defect in resolve()'s array-of-objects traversal, found by the property tests above
-        // and deliberately not fixed here (out of scope for #623, a performance issue, not this one). Once
-        // advanceToField finds a target field that is not an element's last field, nothing skips the rest of that
-        // element before the array loop resumes scanning for the next one, so a later sibling field whose own value
-        // happens to hold a field of the same name is misread as a further match. readAll does not share that
-        // defect (its object scan always finishes each field before moving to the next), so it answers correctly
-        // here where read() does not. This test pins down and documents the divergence rather than hiding it.
+    void read_and_readAll_agree_when_a_later_sibling_field_holds_a_nested_field_of_the_same_name() {
+        // A target field that is not an element's last field, followed by a sibling whose own value holds a
+        // nested field of the same name, used to leak that nested field into the match: found by the property
+        // tests above, and fixed by having the object scan always finish the rest of its own fields with
+        // skipChildren() before an enclosing array loop resumes, rather than leaving that to accidental luck.
         CloudEvent event = eventWithJson("{\"items\":[{\"id\":1,\"meta\":{\"id\":\"nested\"}}]}");
 
         Optional<Object> viaRead = reader.read(event, "items.id");
         Map<String, Object> viaReadAll = reader.readAll(event, List.of("items.id"));
 
-        assertThat(viaRead).as("the pre-existing defect, a nested field of the same name leaking into the match").contains(List.of(1, "nested"));
-        assertThat(viaReadAll).as("readAll does not reproduce it").containsExactly(Map.entry("items.id", List.of(1)));
+        assertThat(viaRead).contains(List.of(1));
+        assertThat(viaReadAll).containsExactly(Map.entry("items.id", List.of(1)));
     }
 
     @Test
@@ -232,72 +229,47 @@ class JacksonDataFieldReaderReadAllTest {
 
     /**
      * Builds random JSON-object shapes (nested objects, arrays of objects with several fields, shared field names
-     * at different levels so generated paths actually share prefixes) and candidate paths over them, real and
-     * fabricated, for the property-style comparison above.
-     * <p>
-     * Field names are drawn from a disjoint slice per nesting depth, so no field name ever reappears deeper inside
-     * its own subtree. That sidesteps a pre-existing, independent defect in {@link JacksonDataFieldReader#resolve}'s
-     * array-of-objects traversal (not something this change introduces or is meant to fix): after
-     * {@code advanceToField} finds a target field that is not an element's last field, the code that resumes
-     * scanning for the array's next element does not first skip the rest of that element, so a later sibling field
-     * whose own value happens to contain a field of the same name is misread as if it were a further match. Flagged
-     * separately; a generator that lets a name recur at a deeper level would fail this test not because
-     * {@link JacksonDataFieldReader#readAll} disagrees with a trustworthy oracle, but because the oracle
-     * ({@link JacksonDataFieldReader#read}) is the one that is wrong on that specific shape.
+     * at every nesting depth so generated paths share prefixes and a target field can collide with a nested field
+     * of the same name inside a later sibling) and candidate paths over them, real and fabricated, for the
+     * property-style comparison above.
      */
     private static final class RandomJson {
 
-        private static final String[] FIELD_NAME_POOL = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"};
-        private static final int NAMES_PER_LEVEL = 4;
+        private static final String[] FIELD_NAME_POOL = {"a", "b", "c", "d"};
 
         private RandomJson() {
         }
 
         static Map<String, Object> randomObject(Random random, int depth) {
-            return randomObject(random, depth, 0);
-        }
-
-        private static Map<String, Object> randomObject(Random random, int depth, int level) {
-            String[] names = namesAt(level);
             Map<String, Object> object = new LinkedHashMap<>();
-            int fieldCount = 1 + random.nextInt(names.length);
+            int fieldCount = 1 + random.nextInt(FIELD_NAME_POOL.length);
             for (int i = 0; i < fieldCount; i++) {
-                object.put(names[i], randomValue(random, depth, level + 1));
+                object.put(FIELD_NAME_POOL[i], randomValue(random, depth));
             }
             return object;
         }
 
-        private static String[] namesAt(int level) {
-            int start = (level * NAMES_PER_LEVEL) % FIELD_NAME_POOL.length;
-            String[] names = new String[NAMES_PER_LEVEL];
-            for (int i = 0; i < NAMES_PER_LEVEL; i++) {
-                names[i] = FIELD_NAME_POOL[(start + i) % FIELD_NAME_POOL.length];
-            }
-            return names;
-        }
-
-        private static Object randomValue(Random random, int depth, int level) {
+        private static Object randomValue(Random random, int depth) {
             int choice = depth <= 0 ? random.nextInt(3) : random.nextInt(5);
             return switch (choice) {
                 case 0 -> "value" + random.nextInt(5);
                 case 1 -> random.nextInt(100);
                 case 2 -> random.nextBoolean();
-                case 3 -> randomObject(random, depth - 1, level);
-                default -> randomArrayOfObjects(random, depth - 1, level);
+                case 3 -> randomObject(random, depth - 1);
+                default -> randomArrayOfObjects(random, depth - 1);
             };
         }
 
-        private static List<Object> randomArrayOfObjects(Random random, int depth, int level) {
-            String[] names = namesAt(level);
+        private static List<Object> randomArrayOfObjects(Random random, int depth) {
             int elementCount = random.nextInt(4);
             List<Object> elements = new ArrayList<>();
             for (int i = 0; i < elementCount; i++) {
                 // Every element gets at least two fields, so the target field is not always last in its object,
                 // exercising the array-of-multi-field-objects traversal rather than the simpler single-field case.
                 Map<String, Object> element = new LinkedHashMap<>();
-                int fieldCount = 2 + random.nextInt(names.length - 1);
+                int fieldCount = 2 + random.nextInt(FIELD_NAME_POOL.length - 1);
                 for (int f = 0; f < fieldCount; f++) {
-                    element.put(names[f], randomValue(random, Math.max(0, depth - 1), level + 1));
+                    element.put(FIELD_NAME_POOL[f], randomValue(random, Math.max(0, depth - 1)));
                 }
                 elements.add(element);
             }

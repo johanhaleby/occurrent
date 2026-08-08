@@ -286,7 +286,7 @@ public class JacksonDataFieldReader implements DataFieldReader {
                 // not that, it is the whole thing being queried, so it is opaque here the same way it is on Mongo.
                 return Optional.empty();
             }
-            return resolve(parser, segments, 0);
+            return resolve(parser, segments, 0, true);
         } catch (IOException e) {
             // Malformed JSON, or bytes that are not JSON at all. A single bad payload must not fail a query.
             return Optional.empty();
@@ -321,41 +321,46 @@ public class JacksonDataFieldReader implements DataFieldReader {
     // a bare string, ...) is an opaque value with no field to step into, which covers a non-object root on the
     // first segment and a path that continues past a value with no fields of its own on a later one; MongoDB stops
     // the same way, but only for that case, not for the array case above it.
-    private Optional<Object> resolve(JsonParser parser, String[] segments, int segmentIndex) throws IOException {
+    //
+    // The object branch always finishes scanning its own fields once it has found a match, skipping whatever comes
+    // after with skipChildren(), except at the top level, where nothing reads the parser again once this call
+    // returns, so scanning past a large trailing field there would be pure waste. Finishing the scan everywhere
+    // else matters for an object reached through an array: without it, a field after the matched one that happens
+    // to hold a nested object or array is left for the array loop's own next nextToken() call to stumble into,
+    // which can misread that leftover structure as a further array element and pull a nested field of the same
+    // name into the result.
+    private Optional<Object> resolve(JsonParser parser, String[] segments, int segmentIndex, boolean topLevel) throws IOException {
         if (segmentIndex == segments.length) {
             return Optional.ofNullable(objectMapper.readValue(parser, Object.class));
         }
         if (parser.currentToken() == JsonToken.START_ARRAY) {
             List<Object> matched = new ArrayList<>();
             while (parser.nextToken() != JsonToken.END_ARRAY) {
-                resolve(parser, segments, segmentIndex).ifPresent(matched::add);
+                resolve(parser, segments, segmentIndex, false).ifPresent(matched::add);
             }
             return matched.isEmpty() ? Optional.empty() : Optional.of(matched);
         }
         if (parser.currentToken() != JsonToken.START_OBJECT) {
             return Optional.empty();
         }
-        if (!advanceToField(parser, segments[segmentIndex])) {
-            return Optional.empty();
-        }
-        return resolve(parser, segments, segmentIndex + 1);
-    }
 
-    /**
-     * Scans the object the parser is positioned inside of for a field named {@code fieldName}, leaving the parser at
-     * its value token and returning {@code true} if found. On duplicate field names within one object, which valid
-     * JSON should not contain, the first occurrence wins here rather than the last one a full tree parse would keep.
-     */
-    private static boolean advanceToField(JsonParser parser, String fieldName) throws IOException {
+        String fieldName = segments[segmentIndex];
+        Optional<Object> result = Optional.empty();
+        boolean found = false;
         while (parser.nextToken() == JsonToken.FIELD_NAME) {
             String currentField = parser.currentName();
             parser.nextToken();
-            if (currentField.equals(fieldName)) {
-                return true;
+            if (!found && currentField.equals(fieldName)) {
+                found = true;
+                result = resolve(parser, segments, segmentIndex + 1, false);
+                if (topLevel) {
+                    break;
+                }
+            } else {
+                parser.skipChildren();
             }
-            parser.skipChildren();
         }
-        return false;
+        return result;
     }
 
     private static boolean isJson(@Nullable String dataContentType) {
