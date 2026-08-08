@@ -16,6 +16,7 @@
 
 package org.occurrent.benchmark.reactorhandoff;
 
+import org.occurrent.benchmark.handover.BusySpin;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.reactor.Projections;
@@ -72,24 +73,9 @@ import java.util.function.BiFunction;
 @OutputTimeUnit(TimeUnit.SECONDS)
 public class ReactorProjectionHandoffBenchmark {
 
-    /**
-     * Stands in for a real fold's per-event work (a repository round trip), the same role and the same
-     * nanosecond-deadline shape ADR 108's own benchmark uses: a fixed wall-clock duration is closer to the ADR's
-     * stated 50/200 microsecond workloads than a JMH token count, and folding a counter into {@code sink} on every
-     * iteration keeps the loop from being eligible for dead-code elimination.
-     */
-    private static void spinMicros(long micros, LongAdder sink) {
-        long deadlineNanos = System.nanoTime() + (micros * 1_000L);
-        long iterations = 0;
-        while (System.nanoTime() < deadlineNanos) {
-            iterations++;
-        }
-        sink.add(iterations);
-    }
-
     private static View<Long, Long> spinningView(long workMicros, LongAdder sink) {
         return View.create(0L, (state, event) -> {
-            spinMicros(workMicros, sink);
+            BusySpin.spinMicros(workMicros, sink);
             return state + 1;
         });
     }
@@ -103,7 +89,7 @@ public class ReactorProjectionHandoffBenchmark {
     private static Projection<Long, Long, String> singletonProjection(long workMicros, LongAdder sink) {
         return Projection.<Long, Long>singletonBuilder(0L)
                 .on(Long.class, (state, event) -> {
-                    spinMicros(workMicros, sink);
+                    BusySpin.spinMicros(workMicros, sink);
                     return state + 1;
                 })
                 .build();
@@ -193,9 +179,12 @@ public class ReactorProjectionHandoffBenchmark {
     }
 
     /**
-     * The same read-fold-save sequence {@code CoalescingMaterializedUpdate.apply}'s write-through branch runs, called
-     * directly on the calling thread with no {@code Mono}/{@code subscribeOn} hop, the shape removing the wrapping
-     * would leave.
+     * The same per-event work {@code CoalescingMaterializedUpdate.apply}'s write-through branch runs
+     * ({@code resolveId}, the {@code synchronized(lock)} replaying check, then read-fold-save), called directly on
+     * the calling thread with no {@code Mono}/{@code subscribeOn} hop, the shape removing the wrapping would leave.
+     * Reproducing that bookkeeping here, rather than only the read-fold-save, keeps the wrapped/unwrapped delta
+     * isolating the hand-off cost: the lock is uncontended cheap work at 1 thread but real contention at 2, 4 and 8,
+     * and skipping it would have let the wrapped column absorb that contention cost too.
      */
     @State(Scope.Benchmark)
     public static class CoalescingUnwrappedState {
@@ -205,6 +194,8 @@ public class ReactorProjectionHandoffBenchmark {
 
         private View<Long, Long> view;
         private ViewStateRepository<Long, String> repository;
+        private BiFunction<EventMetadata, Long, String> resolveId;
+        private final Object lock = new Object();
         private final LongAdder sink = new LongAdder();
         private final AtomicLong idSequence = new AtomicLong();
 
@@ -212,12 +203,23 @@ public class ReactorProjectionHandoffBenchmark {
         public void setUp() {
             view = singletonProjection(workMicros, sink).view();
             repository = newRepository();
+            resolveId = (metadata, event) -> "singleton";
         }
 
         void applyOnePayload() {
             Long event = idSequence.getAndIncrement();
-            Long currentState = repository.findById("singleton").orElse(view.initialState());
-            repository.save("singleton", view.evolve(currentState, EventMetadata.empty(), event));
+            String id = resolveId.apply(EventMetadata.empty(), event);
+            if (id == null) {
+                return;
+            }
+            boolean writeThrough;
+            synchronized (lock) {
+                writeThrough = true;
+            }
+            if (writeThrough) {
+                Long currentState = repository.findById(id).orElse(view.initialState());
+                repository.save(id, view.evolve(currentState, EventMetadata.empty(), event));
+            }
         }
     }
 

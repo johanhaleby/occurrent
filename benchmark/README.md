@@ -1,6 +1,6 @@
 # occurrent-benchmark
 
-JMH benchmarks that make two previously ad-hoc, uncommitted measurements re-runnable:
+JMH benchmarks that make previously ad-hoc, uncommitted measurements re-runnable:
 
 - `BlockingHandoverThroughputBenchmark`: the throughput comparison behind
   [ADR 108](../doc/architecture/decisions/0108-a-live-push-handler-runs-outside-the-handover-lock.md), the handover
@@ -12,7 +12,7 @@ JMH benchmarks that make two previously ad-hoc, uncommitted measurements re-runn
   hand-off cost the reactor projection DSL's fold pays at
   [#639](https://github.com/johanhaleby/occurrent/issues/639), wrapped against unwrapped, for both wrapping sites.
 
-Both benchmarks run entirely in-process. No Docker, no MongoDB, no other container is required.
+All three benchmarks run entirely in-process. No Docker, no MongoDB, no other container is required.
 
 ## Why this module is not part of a normal build
 

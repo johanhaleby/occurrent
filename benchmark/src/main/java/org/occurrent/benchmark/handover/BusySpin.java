@@ -19,12 +19,13 @@ package org.occurrent.benchmark.handover;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * Stands in for a real push handler's per-event work, the same role ADR 108's own benchmark used a busy spin for:
- * "a busy-spin standing in for real per-event work". A fixed nanosecond deadline is used rather than a JMH
+ * Stands in for a real push handler's or fold's per-event work, the same role ADR 108's own benchmark used a busy
+ * spin for: "a busy-spin standing in for real per-event work". A fixed nanosecond deadline is used rather than a JMH
  * {@code Blackhole} token count, since a token is only an approximate proxy for a fixed wall-clock duration, and the
- * ADR's workloads are stated in microseconds (1, 50, 200).
+ * ADR's workloads are stated in microseconds (1, 50, 200). Shared across the benchmark module's classes rather than
+ * reimplemented per benchmark, so every benchmark's simulated work stays the same shape.
  */
-final class BusySpin {
+public final class BusySpin {
 
     private BusySpin() {
     }
@@ -33,7 +34,7 @@ final class BusySpin {
      * Spins until {@code micros} has elapsed, folding a counter into {@code sink} on every iteration so the loop is
      * not eligible for dead-code elimination.
      */
-    static void spinMicros(long micros, LongAdder sink) {
+    public static void spinMicros(long micros, LongAdder sink) {
         long deadlineNanos = System.nanoTime() + (micros * 1_000L);
         long iterations = 0;
         while (System.nanoTime() < deadlineNanos) {
