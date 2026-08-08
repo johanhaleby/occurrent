@@ -1,0 +1,59 @@
+schema_version: 1
+epic: ccrace
+revision: 2
+updated_at: '2026-08-08T21:15:00+00:00'
+updated_by: orchestrator session b72aef49 (U1 chip spawned as task_77beca9e)
+baseline:
+  repo: johanhaleby/occurrent
+  branch: main
+authority: 'see .context/orchestrator-policy.yml (standing merge, sibling leniency,
+  reasoned-decline-open, memory checkpoints); epic registered from Johan''s
+  /orchestrator invocation naming issue 651 (2026-08-08); the unit is plan-first,
+  so its design decisions rest with Johan at the unit session''s plan gate;
+  issue 651 claimed at registration (in-progress label + comment 5227615207);
+  milestone deliberately skipped (single-unit epic, ccpause precedent)'
+pending_actions:
+- id: act-001
+  type: dispatch-chip
+  target: 'U1 chip: ⌁[ccrace/U1#651] Fix register-refresh race · Opus/high
+    (plan-first, /johan-plan, full brief with the interaction-matrix demand, the
+    late-acquire hand-back pattern, ADR 0112/105/106 constraints, deterministic
+    ScheduledRefresh+Clock test harness)'
+  expected: 'chip visible to Johan; session enters fleet on his click; VERIFIED:
+    spawn returned task_77beca9e, chip pending at position 1'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T21:10:00+00:00'
+units:
+  U1:
+    issue: 651
+    goal: MongoLeaseCompetingConsumerStrategySupport serializes register, unregister,
+      release and refresh per consumer so no thread acts on a stale status, closing
+      both interleavings in issue 651, without regressing the 655 pause hand-back or
+      the LOCK_RELEASED stand-down semantics, for both Mongo lease strategies
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 651
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip task_77beca9e spawned 2026-08-08 ~21:15Z, awaiting Johan's
+      launch; first expected observable is the unit's plan at his approval gate
+    last_meaningful_progress_at: '2026-08-08T21:10:00+00:00'
+    observed: {}
+    assessment: 'fragile-area concurrency fix on shared internal support used by both
+      the native and Spring lease strategies; the class is in an internal package so
+      no public API change is expected, and any public API change the plan wants
+      escalates as BLOCKED; changelog Changes entry required (bug fix to released
+      behavior); no docs-site unit expected, the unit routes a finding if the fix
+      turns out to change user-observable behavior worth documenting'
