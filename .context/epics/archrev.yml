@@ -1,8 +1,8 @@
 schema_version: 1
 epic: archrev
-revision: 25
+revision: 26
 updated_at: '2026-08-08T13:40:00+00:00'
-updated_by: orchestrator a7c1523c (B6 delivered PR 645, benchmark-only keep-decision)
+updated_by: orchestrator a7c1523c (B7 delivered PR 646, both Wave B PRs in ci-wait)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -472,7 +472,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 646
       met: false
       evidence: null
     - check: issue_closed
@@ -480,7 +480,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'running as in-session subagent (worktree-isolated, Sonnet) since 2026-08-08T12:10Z, chip task_1b62745f withdrawn; ci-wait then CAS merge when its PR appears'' including requireMatchingDocumentId
+    next_action: 'ci-wait on PR 646 (head 077adf0ee09, three sites + tests + shared internal MongoBulkViewStateOperations helper + changelog); CAS merge on green with threads resolved, then unblock B8 docs chip'' including requireMatchingDocumentId
       and DTO conversion'
     last_meaningful_progress_at: '2026-08-08T11:35:00+00:00'
     observed: {}
