@@ -98,17 +98,20 @@ class CompetingConsumerSubscriptionModelPausedWhileWaitingTest {
     }
 
     @Test
-    void a_stop_and_start_round_trip_preserves_the_pause_and_leaves_it_waiting_again() {
+    void a_stop_and_start_round_trip_keeps_the_pause_through_stop_then_resumes_it_on_start() {
         String subscriptionId = subscribeAsWaiting();
         model.pauseSubscription(subscriptionId);
 
         model.stop();
-        model.start(true);
+        assertThat(model.isPaused(subscriptionId))
+                .as("stop() converts only running consumers to paused, so an already-paused waiting consumer stays paused")
+                .isTrue();
 
+        model.start(true);
         assertThat(model.isPaused(subscriptionId)).isFalse();
         assertThat(model.isRunning(subscriptionId)).isFalse();
         assertThat(strategy.isRegistered(subscriptionId, SUBSCRIBER_ID))
-                .as("start() re-registers a consumer that was still waiting when it was paused")
+                .as("start() resumes every paused consumer, including one that was waiting when it was paused")
                 .isTrue();
     }
 
@@ -237,10 +240,10 @@ class CompetingConsumerSubscriptionModelPausedWhileWaitingTest {
             if (acquired) {
                 lockHolder.put(subscriptionId, subscriberId);
             }
+            // wasHolder implies acquired here (it is one of the ORed terms above), so a holder can never lose the
+            // lock through its own register call, only onConsumeGranted is reachable from this method.
             if (!wasHolder && acquired) {
                 listeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
-            } else if (wasHolder && !acquired) {
-                listeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
             }
             return acquired;
         }
