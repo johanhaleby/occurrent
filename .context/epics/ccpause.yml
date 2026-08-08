@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccpause
-revision: 5
-updated_at: '2026-08-08T19:50:00+00:00'
-updated_by: orchestrator session worktree-mobile-setup-916a9c (U1 merged and closed, U2 chipped, library monitor stopped)
+revision: 6
+updated_at: '2026-08-08T20:15:00+00:00'
+updated_by: orchestrator session worktree-mobile-setup-916a9c (U1 swept, U3 #656 adopted per Johan, monitor re-armed as b2vrbsyzm)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -10,7 +10,9 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   reasoned-decline-open, memory checkpoints); plan approved by Johan 2026-08-08 via
   structured ask after a two-round adversarial review (round 2 APPROVE); plan at
   /Users/johan/.claude/plans/https-github-com-johanhaleby-occurrent-i-lucky-canyon.md;
-  epic scoped to issue 565 alone, milestone deliberately skipped (one-unit epic)'
+  epic scoped to issue 565 alone at registration, WIDENED by Johan 2026-08-08
+  ~20:05Z via structured ask to adopt issue 656 as U3 (vgpr spin-off, reactor
+  checkpoint retry); milestone deliberately skipped'
 pending_actions:
 - id: act-002
   type: merge
@@ -35,6 +37,15 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T19:48:00+00:00'
+- id: act-004
+  type: dispatch-chip
+  target: 'U3 chip task_c5308960: ⌁[ccpause/U3#656] Reactor checkpoint retry ·
+    Sonnet/high (issue 656 claimed: label + comment 5227564173)'
+  expected: chip visible to Johan; session enters fleet on his click
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T20:10:00+00:00'
 - id: act-001
   type: dispatch-chip
   target: 'U1 chip task_d649cf9f: ⌁[ccpause/U1#565] Fix waiting-consumer pause ·
@@ -53,9 +64,9 @@ units:
       105/106 constraints and the saga-timer hard constraint
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_21600c19
+    session: local_21600c19 (archived)
     deliverables:
     - check: pr_merged
       ref: 655
@@ -69,9 +80,7 @@ units:
       evidence: 'CLOSED via Fixes #565, verified by orchestrator; in-progress label
         removed'
     blocking_on: []
-    next_action: 'hold the sweep until the session''s DELIVERY_RESULT arrives
-      (lesson: a merged PR is not a finished worker), then archive the session and
-      remove its worktree and local branch'
+    next_action: none
     last_meaningful_progress_at: '2026-08-08T17:33:00+00:00'
     observed:
       pr_655:
@@ -120,3 +129,30 @@ units:
     observed: {}
     assessment: routed out of U1 by Johan at the unit's plan gate rather than folded
       into its PR (separate repo)
+  U3:
+    issue: 656
+    goal: ReactorCheckpointStorage retries transient Mongo errors with the reactor
+      stack's Retry.backoff convention, mirroring the blocking defaults (100 ms to
+      2 s exponential), configurable where the blocking one is
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 656
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'chip task_c5308960 spawned 2026-08-08 ~20:10Z, awaiting launch;
+      monitor b2vrbsyzm (re-armed, baseline 0 PRs) catches its PR'
+    last_meaningful_progress_at: '2026-08-08T20:10:00+00:00'
+    observed: {}
+    assessment: adopted by Johan from the tracker scan (vgpr spin-off orphaned by
+      that epic's closure); pattern-following implementation, not plan-first, the
+      issue names the shape (ReactiveMongoAppliedPositionStore's Retry.backoff)
