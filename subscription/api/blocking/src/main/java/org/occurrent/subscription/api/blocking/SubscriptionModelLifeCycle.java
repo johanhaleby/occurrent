@@ -111,11 +111,17 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      * position it had reached and deliver that event, at the price of handing over an event a second time if
      * something else consumed it in the meantime. A model that dispatches events as they arrive has nowhere to
      * hold them, so the event never reaches that handler at all.
+     * <p>
+     * Not currently delivering is not by itself a reason to refuse this call. A subscription that has started
+     * can be paused even while it is not delivering right now, for example a competing consumer that is still
+     * waiting for its lock
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0112-a-competing-consumer-can-be-paused-while-still-waiting-for-the-lock.md">ADR 112</a>).
+     * A registration that has not started yet is a different case, and a model can still refuse that one.
      *
      * @param subscriptionId The id of the subscription to pause.
      * @throws UnknownSubscriptionException   If this subscription model has no subscription with that id.
-     * @throws SubscriptionNotRunningException If the subscription exists here but is not running, because it is
-     *                                         already paused, was never started, or the whole model is stopped.
+     * @throws SubscriptionNotRunningException If the subscription exists here but has not started, or is
+     *                                         already paused.
      */
     void pauseSubscription(String subscriptionId);
 

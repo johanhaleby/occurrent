@@ -57,6 +57,12 @@ import static java.util.function.Predicate.not;
  * That is also the scope of the usual "a subscription id identifies one subscription" rule here: it holds within one
  * {@link CompetingConsumerSubscriptionModel} instance, which refuses a subscription id it already has, and says nothing
  * about the other instances, which are meant to use the very same id.
+ * <br>
+ * <br>
+ * {@link #pauseSubscription(String)} works on a node that has not won the lock, not only on the one delivering events.
+ * Pausing such a node records the pause and stops it from competing until it is explicitly resumed, so cluster-wide
+ * pause is calling {@link #pauseSubscription(String)} on every node
+ * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0112-a-competing-consumer-can-be-paused-while-still-waiting-for-the-lock.md">ADR 112</a>).
  */
 @NullMarked
 public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel, CompetingConsumerListener {
@@ -155,7 +161,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         unregisterAllCompetingConsumers(cc -> {
             logDebug("Stopped CompetingConsumer subscription (subscriberId={}, subscriptionId={})", cc.getSubscriberId(), cc.getSubscriptionId());
             if (cc.isRunning()) {
-                competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused());
+                competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused(true));
             }
         });
     }
@@ -183,15 +189,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                                 logDebug("Starting CompetingConsumer subscription (subscriberId={}, subscriptionId={}, state={})", cc.getSubscriberId(), cc.getSubscriptionId(), cc.state.getClass().getSimpleName());
                                 // Only change state when permitted to consume
                                 if (cc.isWaiting()) {
-                                    // Registering a competing consumer starts the subscription through onConsumeGranted if the
-                                    // lock was acquired. That callback only fires on a change of status, so a consumer already
-                                    // holding the lock gets none. Read the answer from the return value, and re-read the state
-                                    // to see whether the callback already started it.
-                                    boolean acquiredLock = competingConsumerStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
-                                    CompetingConsumer current = competingConsumers.get(cc.subscriptionIdAndSubscriberId);
-                                    if (acquiredLock && current != null && current.isWaiting()) {
-                                        startWaitingConsumer(current);
-                                    }
+                                    registerAndStartIfGranted(cc);
                                 } else if (cc.isPaused()) {
                                     resumeSubscription(cc.getSubscriptionId());
                                 }
@@ -234,7 +232,10 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      */
     @Override
     public boolean isPaused(String subscriptionId) {
-        return delegate.isPaused(subscriptionId);
+        // A consumer paused before it ever won the lock is only known here, since the delegate was never told
+        // about it. subscriptionIds() merges both sources for the same reason.
+        boolean pausedHere = findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId) && cc.isPaused()).isPresent();
+        return pausedHere || delegate.isPaused(subscriptionId);
     }
 
     /**
@@ -257,6 +258,15 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         logDebug("Finding first competing consumer that matches the subscription (subscriptionId={})", subscriptionId);
         return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId))
                 .map(competingConsumer -> {
+                    if (competingConsumer.isPausedWhileWaiting()) {
+                        // Restore the Waiting this consumer was paused from before anything else runs, so every
+                        // branch below treats it exactly like a plain resume of a waiting consumer. The write has
+                        // to land before any strategy call, because registering can grant the lock and call
+                        // onConsumeGranted synchronously on this thread, and that callback only starts a consumer
+                        // it finds Waiting in the map.
+                        competingConsumer = competingConsumer.restoreWaiting();
+                        competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer);
+                    }
                     final Subscription subscription;
                     String subscriberId = competingConsumer.getSubscriberId();
                     boolean hasLock = hasLock(subscriptionId, subscriberId);
@@ -270,10 +280,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                             subscription = delegate.resumeSubscription(subscriptionId);
                         }
                     } else if (competingConsumer.isWaiting()) {
-                        // A waiting consumer has nothing to resume, since it never subscribed. Registering is all it
-                        // takes, because onConsumeGranted subscribes it if the lock is granted.
-                        registerCompetingConsumer(subscriptionId, subscriberId);
-                        subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
+                        subscription = registerAndStartIfGranted(competingConsumer);
                     } else if (registerAsRunning(competingConsumer)) {
                         // Safe because it was already checked to be paused above
                         subscription = delegate.resumeSubscription(subscriptionId);
@@ -344,7 +351,16 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 // this branch, so returning quietly was the wrapper answering for the delegate, and answering wrongly.
                 throw new SubscriptionNotRunningException(subscriptionId);
             } else if (competingConsumer.isWaiting()) {
-                logDebug("CompetingConsumer in waiting state, will ignore (subscriptionId={}, subscriberId={}, pausedByUser={})", subscriptionId, competingConsumer.getSubscriberId(), pausedByUser);
+                logDebug("CompetingConsumer in waiting state, pausing and unregistering from the strategy so the lock passes to another consumer (subscriptionId={}, subscriberId={}, pausedByUser={})", subscriptionId, competingConsumer.getSubscriberId(), pausedByUser);
+                // Only pausedByUser=true reaches a waiting consumer here. The other caller, onConsumeProhibited,
+                // only pauses a consumer it already found running, and a waiting one never is. Recorded first, so
+                // a synchronous onConsumeProhibited out of the unregister below finds this consumer already
+                // paused rather than still waiting.
+                competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerPausedWhileWaiting());
+                // Staying registered would mean competing for the lock while paused. The strategy's own refresh
+                // re-registers every consumer that lacks the lock, so a registered-but-paused consumer would win
+                // it back and sit on it, and every other node would stay locked out until this one is resumed.
+                competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
             } else {
                 delegate.pauseSubscription(subscriptionId);
                 pauseConsumer(competingConsumer, pausedByUser);
@@ -394,20 +410,42 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             return;
         }
 
-        if (competingConsumer.isWaiting()) {
-            if (stoppedByUser.get()) {
-                logDebug("Won't start waiting consumer because subscription model was explicitly stopped by user (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            } else {
-                startWaitingConsumer(competingConsumer);
+        switch (competingConsumer.state) {
+            case CompetingConsumerState.Waiting waiting -> {
+                if (stoppedByUser.get()) {
+                    logDebug("Won't start waiting consumer because subscription model was explicitly stopped by user (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+                    handBackGrantedLock(competingConsumer);
+                } else {
+                    startWaitingConsumer(competingConsumer);
+                }
             }
-        } else if (competingConsumer.isPaused()) {
-            CompetingConsumerState.Paused state = (CompetingConsumerState.Paused) competingConsumer.state;
-            if (state.pausedByUser) {
-                logDebug("Won't resume CompetingConsumer, because it was paused by user (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            } else {
-                resumeSubscription(subscriptionId);
+            case CompetingConsumerState.Paused paused -> {
+                if (paused.pausedByUser) {
+                    logDebug("Won't resume CompetingConsumer, because it was paused by user (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+                    handBackGrantedLock(competingConsumer);
+                } else {
+                    resumeSubscription(subscriptionId);
+                }
+            }
+            case CompetingConsumerState.PausedWhileWaiting pausedWhileWaiting -> {
+                logDebug("Won't start CompetingConsumer, because it was paused while waiting for the lock (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+                handBackGrantedLock(competingConsumer);
+            }
+            case CompetingConsumerState.Running running -> {
+                // Grant callbacks only fire on a change of status, so a consumer already running should not
+                // reach here. If it somehow does, there is nothing to do since it already has what this
+                // callback would give it.
             }
         }
+    }
+
+    /**
+     * Unregisters a consumer the strategy just granted the lock to but that the model will not let consume right
+     * now, so the lock passes on rather than being held by a consumer that will never act on it.
+     */
+    private void handBackGrantedLock(CompetingConsumer cc) {
+        logDebug("Handing the granted lock back because CompetingConsumer is not allowed to consume right now (subscriberId={}, subscriptionId={})", cc.getSubscriberId(), cc.getSubscriptionId());
+        competingConsumerStrategy.unregisterCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
     }
 
     @Override
@@ -443,6 +481,25 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         return ((CompetingConsumerState.Waiting) cc.state).startSubscription();
     }
 
+    /**
+     * Registers a waiting consumer with the strategy and starts it if that grants the lock there and then.
+     * <p>
+     * Registering can win the lock synchronously, and {@link #onConsumeGranted(String, String)} then starts
+     * the consumer itself, but only on a change of status. A register that finds the lock already held gets no
+     * callback, so the answer is read from the return value, and the state is re-read afterwards to see
+     * whether the callback already acted on it.
+     */
+    private Subscription registerAndStartIfGranted(CompetingConsumer cc) {
+        String subscriptionId = cc.getSubscriptionId();
+        String subscriberId = cc.getSubscriberId();
+        boolean acquiredLock = registerCompetingConsumer(subscriptionId, subscriberId);
+        CompetingConsumer current = competingConsumers.get(cc.subscriptionIdAndSubscriberId);
+        if (acquiredLock && current != null && current.isWaiting()) {
+            return startWaitingConsumer(current);
+        }
+        return new CompetingConsumerSubscription(subscriptionId, subscriberId);
+    }
+
     void pauseConsumer(CompetingConsumer cc, boolean pausedByUser) {
         logDebug("Pausing CompetingConsumer (subscriberId={}, subscriptionId={}, pausedByUser={})", cc.getSubscriberId(), cc.getSubscriptionId(), pausedByUser);
         SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(cc);
@@ -472,7 +529,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         boolean isPaused() {
-            return state instanceof CompetingConsumerState.Paused;
+            return state instanceof CompetingConsumerState.Paused || state instanceof CompetingConsumerState.PausedWhileWaiting;
         }
 
         boolean isRunning() {
@@ -481,6 +538,10 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
         boolean isWaiting() {
             return state instanceof CompetingConsumerState.Waiting;
+        }
+
+        boolean isPausedWhileWaiting() {
+            return state instanceof CompetingConsumerState.PausedWhileWaiting;
         }
 
         boolean isPausedFor(String subscriptionId) {
@@ -499,24 +560,27 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             return new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Running());
         }
 
-        CompetingConsumer registerPaused() {
-            return registerPaused(state.hasPermissionToConsume());
-        }
-
         CompetingConsumer registerPaused(boolean pausedByUser) {
             return new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Paused(pausedByUser));
+        }
+
+        // Only for a currently-Waiting consumer. The Waiting is kept rather than discarded, because it holds
+        // the start supplier that is the only way to bring this consumer up. It never subscribed, so there is
+        // nothing for delegate.resumeSubscription to resume.
+        CompetingConsumer registerPausedWhileWaiting() {
+            return new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.PausedWhileWaiting((CompetingConsumerState.Waiting) state));
+        }
+
+        // Only for a currently-PausedWhileWaiting consumer. Restores the Waiting it was paused from, supplier
+        // intact.
+        CompetingConsumer restoreWaiting() {
+            return new CompetingConsumer(subscriptionIdAndSubscriberId, ((CompetingConsumerState.PausedWhileWaiting) state).waiting);
         }
     }
 
     sealed interface CompetingConsumerState {
 
-        boolean hasPermissionToConsume();
-
         final class Running implements CompetingConsumerState {
-            @Override
-            public boolean hasPermissionToConsume() {
-                return true;
-            }
         }
 
         final class Waiting implements CompetingConsumerState {
@@ -524,11 +588,6 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
             Waiting(Supplier<Subscription> supplier) {
                 this.supplier = supplier;
-            }
-
-            @Override
-            public boolean hasPermissionToConsume() {
-                return false;
             }
 
             private Subscription startSubscription() {
@@ -542,10 +601,13 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             Paused(boolean pausedByUser) {
                 this.pausedByUser = pausedByUser;
             }
+        }
 
-            @Override
-            public boolean hasPermissionToConsume() {
-                return pausedByUser;
+        final class PausedWhileWaiting implements CompetingConsumerState {
+            private final Waiting waiting;
+
+            PausedWhileWaiting(Waiting waiting) {
+                this.waiting = waiting;
             }
         }
     }
