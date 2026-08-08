@@ -51,9 +51,9 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
     private final Retry retry;
 
     /**
-     * Create a new instance of {@link ReactorCheckpointStorage}. Uses a default {@link Retry} with exponential
-     * backoff, starting at 100 ms and capping at 2 seconds, up to 5 attempts before the original failure is
-     * rethrown, mirroring the blocking {@code SpringMongoCheckpointStorage}'s default.
+     * Create a new instance of {@link ReactorCheckpointStorage}. Uses a default {@link Retry} with the same
+     * exponential backoff interval as the blocking {@code SpringMongoCheckpointStorage}, 100 ms up to 2 seconds,
+     * but bounded to 5 attempts before the original failure is rethrown, rather than retrying without limit.
      *
      * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting checkpoints to MongoDB.
      * @param checkpointCollection The collection that will contain the checkpoint for each subscriber.

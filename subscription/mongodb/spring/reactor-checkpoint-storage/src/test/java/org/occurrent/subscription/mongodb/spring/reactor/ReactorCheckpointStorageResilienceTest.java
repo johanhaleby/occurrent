@@ -97,21 +97,20 @@ class ReactorCheckpointStorageResilienceTest {
      * subscription (a retry) behaves exactly like the real operations. {@code attempts} exposes how many times each
      * operation was actually subscribed to.
      */
-    @SuppressWarnings("unchecked")
     private ReactiveMongoOperations operationsThatFailFirstSubscription(RuntimeException exception, Attempts attempts) {
         ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
         when(throwingOperations.findOne(any(Query.class), eq(Document.class), eq(CHECKPOINT_COLLECTION)))
                 .thenAnswer(invocation -> Mono.defer(() -> attempts.findOne.getAndIncrement() == 0
                         ? Mono.error(exception)
-                        : realMongoOperations.findOne(invocation.getArgument(0), Document.class, CHECKPOINT_COLLECTION)));
+                        : realMongoOperations.findOne(invocation.getArgument(0, Query.class), Document.class, CHECKPOINT_COLLECTION)));
         when(throwingOperations.upsert(any(Query.class), any(UpdateDefinition.class), eq(CHECKPOINT_COLLECTION)))
                 .thenAnswer(invocation -> Mono.defer(() -> attempts.upsert.getAndIncrement() == 0
                         ? Mono.error(exception)
-                        : realMongoOperations.upsert(invocation.getArgument(0), invocation.getArgument(1), CHECKPOINT_COLLECTION)));
+                        : realMongoOperations.upsert(invocation.getArgument(0, Query.class), invocation.getArgument(1, UpdateDefinition.class), CHECKPOINT_COLLECTION)));
         when(throwingOperations.remove(any(Query.class), eq(CHECKPOINT_COLLECTION)))
                 .thenAnswer(invocation -> Mono.defer(() -> attempts.remove.getAndIncrement() == 0
                         ? Mono.error(exception)
-                        : realMongoOperations.remove((Query) invocation.getArgument(0), CHECKPOINT_COLLECTION)));
+                        : realMongoOperations.remove(invocation.getArgument(0, Query.class), CHECKPOINT_COLLECTION)));
         return throwingOperations;
     }
 
