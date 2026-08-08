@@ -46,10 +46,12 @@ in-repo implementation is a plain adapter over those two operations, the Spring 
 (`ProjectionAnnotationRegistrar.java:528-532`), and an in-memory example. Adding abstract batch methods would break
 every implementation outside this repository, and Occurrent cannot see those.
 
-**No phase signal reaches the fold.** The blocking feed's payload carrier is a private record whose `live` and
-`replayed` factories construct identical values (`CatchupProjectionFeed.java:316-332`), and `deliver` collapses the
-distinction further, to "has metadata or not", because that is what picks the `MaterializedView` overload
-(`:193-204`). The replay/live distinction does exist elsewhere. `ReplayAwareSubscriptionModel.isCatchingUp`
+**No phase signal reaches the fold.** The blocking feed's payload carrier is a private record with three factories
+(`CatchupProjectionFeed.java:316-332`). `replayed(EventMetadata, E)` and `live(EventMetadata, E)` build the same value,
+and `live(E)` differs from both only in having no metadata, so what the payload records is whether metadata arrived with
+the event rather than which phase it belongs to. `deliver` then reads it exactly that way, as "has metadata or not",
+because that is what picks the `MaterializedView` overload (`:193-204`). The replay/live distinction does exist
+elsewhere. `ReplayAwareSubscriptionModel.isCatchingUp`
 (`ReplayAwareSubscriptionModel.java:48`) answers it, reached through
 `static Optional<ReplayAwareSubscriptionModel> of(Object)` (`:58-65`). But its only consumers are the Spring registrars
 and the saga timer check (`SagaAnnotationRegistrar.java:226-227`). Nothing in the projection DSL, in `MaterializedView`,
