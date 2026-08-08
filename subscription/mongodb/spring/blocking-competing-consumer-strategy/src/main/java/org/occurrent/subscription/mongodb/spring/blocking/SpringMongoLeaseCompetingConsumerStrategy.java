@@ -67,7 +67,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
      * @return <code>true</code> if the registered competing consumer has access (lock) to consume events, <code>false</code> otherwise.
      */
     @Override
-    public synchronized boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
+    public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
         return withCompetingConsumerLocksCollectionReturn(collection -> support.registerCompetingConsumer(collection, subscriptionId, subscriberId));
     }
 
@@ -79,7 +79,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
      * @param subscriberId   The unique of of the subscriber
      */
     @Override
-    public synchronized void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+    public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
         withCompetingConsumerLocksCollectionDo(collection -> support.unregisterCompetingConsumer(collection, subscriptionId, subscriberId));
     }
 

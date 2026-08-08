@@ -59,7 +59,7 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
      * @return <code>true</code> if the registered competing consumer has access (lock) to consume events, <code>false</code> otherwise.
      */
     @Override
-    public synchronized boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
+    public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
         return support.registerCompetingConsumer(collection, subscriptionId, subscriberId);
     }
 
@@ -71,7 +71,7 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
      * @param subscriberId   The unique of of the subscriber
      */
     @Override
-    public synchronized void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
+    public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
         support.unregisterCompetingConsumer(collection, subscriptionId, subscriberId);
     }
 
