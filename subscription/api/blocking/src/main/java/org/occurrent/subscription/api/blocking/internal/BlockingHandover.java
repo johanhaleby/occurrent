@@ -88,6 +88,31 @@ public final class BlockingHandover<T> {
         default boolean keepReplaying() {
             return true;
         }
+
+        /**
+         * The replay is about to start delivering events. Called once, before the first {@link #replay()} item is
+         * folded, and only when a replay actually runs (not on a restart that skips straight to
+         * {@link #isAlreadyCaughtUp()}). The default does nothing, so a source with no replay-aware view pays nothing
+         * for this hook (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
+         */
+        default void replayStarted() {
+        }
+
+        /**
+         * The replay finished folding every event. Called after the last {@link #replay()} item has been folded and
+         * before the live buffer is drained, so anything a replay-aware view buffered is durable before a drained live
+         * payload is folded and before {@link #markCaughtUp()} runs.
+         */
+        default void replayCompleted() {
+        }
+
+        /**
+         * The replay was stopped before it finished, that is, {@link #keepReplaying()} returned {@code false}. Called
+         * instead of {@link #replayCompleted()}, so anything buffered since {@link #replayStarted()} is discarded
+         * rather than written, the same discard-on-stop contract {@link #keepReplaying()} documents. Must not throw.
+         */
+        default void replayAbandoned() {
+        }
     }
 
     private final Consumer<T> deliver;
@@ -182,12 +207,18 @@ public final class BlockingHandover<T> {
             // again rather than only by building a new one.
             stopped = false;
         }
+        // Tracks whether replayStarted() ran and replayCompleted() has not yet closed it out, so the catch block below
+        // knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned() after
+        // a clean replayCompleted() has already told the view its batch is durable.
+        boolean replayOpen = false;
         try {
             if (source.isAlreadyCaughtUp()) {
                 drainBufferAndGoLive();
                 return true;
             }
             boolean stoppedMidReplay = false;
+            source.replayStarted();
+            replayOpen = true;
             try (Stream<T> history = source.replay()) {
                 Iterator<T> replaying = history.iterator();
                 while (replaying.hasNext()) {
@@ -210,11 +241,16 @@ public final class BlockingHandover<T> {
             if (stoppedMidReplay) {
                 // No drain, no going live, and no marker. Recording completion here is the one thing that would make
                 // the next start skip a history it never finished folding.
+                abandonReplayWithoutMasking(source);
                 synchronized (lock) {
                     stopped = true;
                 }
                 return false;
             }
+            // Ordered before the live buffer drain and before markCaughtUp(), so anything a replay-aware view
+            // buffered is durable before either runs (ADR 110).
+            source.replayCompleted();
+            replayOpen = false;
             drainBufferAndGoLive();
             source.markCaughtUp();
             return true;
@@ -227,10 +263,23 @@ public final class BlockingHandover<T> {
             // that keeps buffering live payloads and returning normally, which acknowledges them into a replay that is
             // never coming back. That is the loss the refusal exists to prevent, and something like a
             // NoClassDefFoundError out of the fold is exactly how it would arrive.
+            if (replayOpen) {
+                abandonReplayWithoutMasking(source);
+            }
             synchronized (lock) {
                 catchUpFailure = e;
             }
             throw e;
+        }
+    }
+
+    // Guarded so that a source's own replayAbandoned() throwing cannot replace the failure (or stop) that made the
+    // engine call it in the first place; the contract asks the source not to throw here, but this engine does not
+    // trust that.
+    private void abandonReplayWithoutMasking(Source<T> source) {
+        try {
+            source.replayAbandoned();
+        } catch (RuntimeException | Error ignored) {
         }
     }
 

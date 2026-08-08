@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.projection.DcbProjection;
+import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.ProjectionKeys;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
@@ -62,9 +63,13 @@ public final class Projections {
      * still a lost update on this overload, since nothing here retries it. That is reachable wherever a live push sink
      * is fed by more than one thread. Use {@link #materializedView(Projection, ViewStateRepository, RetryStrategy)} to
      * recover from it, and read what it says about what retry can and cannot fix.
+     * <p>
+     * During a catch-up replay this view coalesces its reads and writes per key rather than paying one of each per
+     * event; see {@link MaterializedViewOptions} and {@link #materializedView(Projection, ViewStateRepository, RetryStrategy, MaterializedViewOptions)}
+     * for the setting and what it changes.
      */
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
-        return materializedView(projection, repository, RetryStrategy.none());
+        return materializedView(projection, repository, RetryStrategy.none(), MaterializedViewOptions.defaults());
     }
 
     /**
@@ -90,28 +95,43 @@ public final class Projections {
      * {@code materialized(..)} builds an equivalent view with its own duplicate-key and optimistic-locking policy.
      */
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, RetryStrategy retryStrategy) {
+        return materializedView(projection, repository, retryStrategy, MaterializedViewOptions.defaults());
+    }
+
+    /**
+     * As {@link #materializedView(Projection, ViewStateRepository, RetryStrategy)}, with explicit {@code options} for
+     * how the view batches its store calls during a catch-up replay
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
+     * <p>
+     * During a replay this view buffers events per key instead of writing through immediately, and flushes the buffer
+     * (read each buffered key's state once, fold its buffered events onto it in arrival order, write once) whenever
+     * {@link MaterializedViewOptions#batchSize()} events have buffered across every key, and once more when the replay
+     * finishes. The live path (no replay in progress) is never batched. Pass {@code new MaterializedViewOptions(1)} to
+     * write through per event during a replay too, the same as before this behaviour existed.
+     * <p>
+     * {@code retryStrategy} still recovers a lost update the same way it does outside a replay, described above, but a
+     * batch flush only retries the affected key rather than the batch it belongs to: passing a {@code retryStrategy}
+     * other than {@link RetryStrategy#none()} makes a flush re-read and re-write one key at a time instead of using
+     * {@link ViewStateRepository#findAllById(java.util.Collection)} and {@link ViewStateRepository#saveAll(Map)} in one
+     * call each, because a repository that overrides those for a real bulk round trip reports no per-key outcome to
+     * retry against.
+     */
+    public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, RetryStrategy retryStrategy, MaterializedViewOptions options) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
         requireNonNull(retryStrategy, "retryStrategy cannot be null");
+        requireNonNull(options, "options cannot be null");
         BiFunction<EventMetadata, E, @Nullable ID> id = projection.idWithMetadata();
         requireNonNull(id, "projection is single-instance; use materializedView(projection, repository, singletonKey)");
         View<S, E> view = projection.view();
-        return new MaterializedView<>() {
-            @Override
-            public void update(E event) {
-                update(EventMetadata.empty(), event);
+        BiFunction<EventMetadata, E, @Nullable ID> resolveId = (metadata, event) -> {
+            @Nullable ID instanceId = id.apply(metadata, event);
+            if (instanceId == null) {
+                ProjectionKeys.failIfKeyNeededMetadata(projection.metadataKeyed(), metadata);
             }
-
-            @Override
-            public void update(EventMetadata metadata, E event) {
-                @Nullable ID instanceId = id.apply(metadata, event);
-                if (instanceId == null) {
-                    ProjectionKeys.failIfKeyNeededMetadata(projection.metadataKeyed(), metadata);
-                    return;
-                }
-                updateFromRepository(instanceId, metadata, event, view, repository, retryStrategy);
-            }
+            return instanceId;
         };
+        return new CoalescingMaterializedView<>(view, repository, retryStrategy, options.batchSize(), resolveId);
     }
 
     /**
@@ -121,7 +141,7 @@ public final class Projections {
      * {@code @Projection} id).
      */
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
-        return materializedView(projection, repository, singletonKey, RetryStrategy.none());
+        return materializedView(projection, repository, singletonKey, RetryStrategy.none(), MaterializedViewOptions.defaults());
     }
 
     /**
@@ -130,28 +150,30 @@ public final class Projections {
      * {@link #materializedView(Projection, ViewStateRepository, RetryStrategy)} for what retry does and does not
      * recover.
      */
-    @SuppressWarnings("unchecked")
     public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey, RetryStrategy retryStrategy) {
+        return materializedView(projection, repository, singletonKey, retryStrategy, MaterializedViewOptions.defaults());
+    }
+
+    /**
+     * As {@link #materializedView(Projection, ViewStateRepository, String, RetryStrategy)}, with explicit
+     * {@code options} for how the view batches its store calls during a catch-up replay. See
+     * {@link #materializedView(Projection, ViewStateRepository, RetryStrategy, MaterializedViewOptions)} for what
+     * batching does and how it interacts with {@code retryStrategy}.
+     */
+    @SuppressWarnings("unchecked")
+    public static <S extends @Nullable Object, E, ID> MaterializedView<E> materializedView(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey, RetryStrategy retryStrategy, MaterializedViewOptions options) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
         requireNonNull(retryStrategy, "retryStrategy cannot be null");
+        requireNonNull(options, "options cannot be null");
         if (projection.id() != null) {
-            return materializedView(projection, repository, retryStrategy);
+            return materializedView(projection, repository, retryStrategy, options);
         }
         requireNonNull(singletonKey, "singletonKey cannot be null");
         View<S, E> view = projection.view();
         ID key = (ID) singletonKey; // a single-instance projection is Projection<S, E, String>
-        return new MaterializedView<>() {
-            @Override
-            public void update(E event) {
-                update(EventMetadata.empty(), event);
-            }
-
-            @Override
-            public void update(EventMetadata metadata, E event) {
-                updateFromRepository(key, metadata, event, view, repository, retryStrategy);
-            }
-        };
+        BiFunction<EventMetadata, E, @Nullable ID> resolveId = (metadata, event) -> key;
+        return new CoalescingMaterializedView<>(view, repository, retryStrategy, options.batchSize(), resolveId);
     }
 
     /**

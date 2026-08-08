@@ -396,25 +396,22 @@ class DomainEventFeedTest {
     @Test
     void stopping_a_catch_up_mid_replay_does_not_write_the_marker_and_a_later_catch_up_replays_from_the_beginning() throws InterruptedException {
         InMemoryEventStore store = new InMemoryEventStore();
-        CloudEventConverter<Counted> converter = counterConverter();
-        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        store.write("s", counterConverter().toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
 
         CountDownLatch parked = new CountDownLatch(1);
         CountDownLatch proceed = new CountDownLatch(1);
+        AtomicInteger converted = new AtomicInteger();
+        // The projection's materialized view coalesces replayed updates rather than writing one through per event
+        // (ADR 110), so parking on the store write would never land mid-replay for a two-event history: nothing is
+        // written until the replay finishes. Parking on the decode instead still lands after the first event and
+        // before the second, which is what lets the test call stopCatchUp() on a replay genuinely still in flight.
+        CloudEventConverter<Counted> converter = parkingConverter(converted, parked, proceed);
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
-        AtomicInteger deliveries = new AtomicInteger();
-        // Blocks the replay right after it folds the first event, before the loop rechecks whether to keep going, so
-        // the test can call stopCatchUp() while a replay is genuinely still in flight instead of racing a sleep
-        // against it. Counts deliveries rather than reading the cumulative counter's final value, because a projection
-        // that folds "+1" onto its current state (like this one) double-counts once a second full replay folds on top
-        // of what the first, aborted one already wrote.
+        AtomicInteger saves = new AtomicInteger();
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, (id, state) -> {
+            saves.incrementAndGet();
             repo.put(id, state);
-            if (deliveries.incrementAndGet() == 1) {
-                parked.countDown();
-                awaitUninterruptibly(proceed);
-            }
         });
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId, marker);
         feed.register("counter", projection(), repository);
@@ -427,18 +424,45 @@ class DomainEventFeedTest {
         replay.join(TimeUnit.SECONDS.toMillis(5));
 
         assertThat(replay.isAlive()).isFalse();
-        // Only the first event was folded, because the stop landed before the second one.
-        assertThat(deliveries.get()).isEqualTo(1);
+        // A stop discards whatever the coalescing view had buffered instead of writing it, so nothing was saved even
+        // though the first event was already decoded and folded into the buffer.
+        assertThat(saves.get()).isZero();
+        assertThat(repo).isEmpty();
         // A partial replay is never recorded as a finished one.
         assertThat(marker.exists("counter")).isFalse();
 
-        // The feed is still usable: a later catch-up replays the whole history again, from the beginning, so both
-        // events are folded once more rather than only the one the stop skipped.
+        // The feed is still usable: a later catch-up (the same converter, which only parks once) replays the whole
+        // history again, from the beginning.
         feed.catchUpAll();
-        assertThat(deliveries.get()).isEqualTo(3);
+        assertThat(repo.get("counter")).isEqualTo(2);
 
         feed.accept(new Counted("3"));
-        assertThat(deliveries.get()).isEqualTo(4);
+        assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
+    private static CloudEventConverter<Counted> parkingConverter(AtomicInteger converted, CountDownLatch parked, CountDownLatch proceed) {
+        CloudEventConverter<Counted> delegate = counterConverter();
+        return new CloudEventConverter<>() {
+            @Override
+            public CloudEvent toCloudEvent(Counted domainEvent) {
+                return delegate.toCloudEvent(domainEvent);
+            }
+
+            @Override
+            public Counted toDomainEvent(CloudEvent cloudEvent) {
+                Counted event = delegate.toDomainEvent(cloudEvent);
+                if (converted.incrementAndGet() == 1) {
+                    parked.countDown();
+                    awaitUninterruptibly(proceed);
+                }
+                return event;
+            }
+
+            @Override
+            public String getCloudEventType(Class<? extends Counted> type) {
+                return delegate.getCloudEventType(type);
+            }
+        };
     }
 
     private static void awaitUninterruptibly(CountDownLatch latch) {

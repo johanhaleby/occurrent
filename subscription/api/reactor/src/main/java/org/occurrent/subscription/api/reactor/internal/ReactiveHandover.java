@@ -31,6 +31,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -93,6 +94,33 @@ public final class ReactiveHandover<T> {
          */
         default boolean keepReplaying() {
             return true;
+        }
+
+        /**
+         * The replay is about to start delivering events. Called once, before the first {@link #replay()} item is
+         * folded, and only when a replay actually runs (not on a restart that skips straight to
+         * {@link #isAlreadyCaughtUp()}). The default does nothing, so a source with no replay-aware view pays nothing
+         * for this hook (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
+         */
+        default void replayStarted() {
+        }
+
+        /**
+         * The replay finished folding every event. The returned {@link Mono} is awaited before the catch-up marker is
+         * recorded and before the buffered live payloads are drained, so anything a replay-aware view buffered is
+         * durable first. {@code Mono<Void>} rather than a synchronous signal, so the write it triggers can be
+         * asynchronous. The default completes immediately.
+         */
+        default Mono<Void> replayCompleted() {
+            return Mono.empty();
+        }
+
+        /**
+         * The replay was stopped before it finished, that is, {@link #keepReplaying()} returned {@code false}. Called
+         * instead of {@link #replayCompleted()}, so anything buffered since {@link #replayStarted()} is discarded
+         * rather than written, the same discard-on-stop contract {@link #keepReplaying()} documents. Must not throw.
+         */
+        default void replayAbandoned() {
         }
     }
 
@@ -205,20 +233,33 @@ public final class ReactiveHandover<T> {
         // Evaluate the marker once and reuse it, so the replay and the "record marker" step agree, and the marker is
         // written only when the replay actually ran (not on a restart that skips it).
         Mono<Boolean> alreadyDone = source.isAlreadyCaughtUp().cache();
+        // Tracks whether replayStarted() ran and replayCompleted() has not yet closed it out, so the error handler
+        // below knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned()
+        // after a clean replayCompleted() has already told the view its batch is durable (ADR 110).
+        AtomicBoolean replayOpen = new AtomicBoolean(false);
         // Three sequential phases, not stages of one Flux.concat. The marker must not be written until every replayed
         // payload has actually been folded, and a concat sibling cannot express that: concatMap's prefetch drains the
         // replay into its queue, so the replay Flux completes as soon as its items are emitted and concat moves on to
         // the next sibling while the folds are still running. That wrote the marker mid-replay for an asynchronous
         // fold, and since the marker makes a restart skip the replay, the unfolded events were lost with no error.
-        Mono<Void> replayFolded = alreadyDone
-                .flatMapMany(done -> done
-                        ? Flux.<Item>empty()
-                        : source.replay().map(this::replayedItem))
-                // Checked inside the concatMap function rather than upstream of it. An upstream takeWhile would run at
-                // emission, and concatMap prefetches, so it could race far ahead of the folds. This is serialized per
-                // payload with the fold itself, which is the same reason the three phases below are sequential.
-                .concatMap(item -> source.keepReplaying() ? deliver(item) : Mono.error(CatchupStopped.INSTANCE))
-                .then();
+        Mono<Void> replayFolded = alreadyDone.flatMap(done -> {
+            if (done) {
+                return Mono.empty();
+            }
+            source.replayStarted();
+            replayOpen.set(true);
+            return source.replay().map(this::replayedItem)
+                    // Checked inside the concatMap function rather than upstream of it. An upstream takeWhile would run
+                    // at emission, and concatMap prefetches, so it could race far ahead of the folds. This is
+                    // serialized per payload with the fold itself, which is the same reason the phases here are
+                    // sequential.
+                    .concatMap(item -> source.keepReplaying() ? deliver(item) : Mono.error(CatchupStopped.INSTANCE))
+                    .then()
+                    // Ordered before the marker and before the live buffer drain, so anything a replay-aware view
+                    // buffered is durable before either runs.
+                    .then(Mono.defer(source::replayCompleted))
+                    .doOnSuccess(ignored -> replayOpen.set(false));
+        });
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp());
 
         replayFolded
@@ -236,6 +277,7 @@ public final class ReactiveHandover<T> {
                         // usable. The buffered acks still have to be resolved or their callers hang forever; they
                         // complete rather than fail, because the payload was dropped rather than rejected.
                         stopped = true;
+                        abandonReplayWithoutMasking(source, replayOpen);
                         catchupDone.tryEmitValue(false);
                         pendingLiveAcks.forEach(MonoSink::success);
                         return;
@@ -246,6 +288,7 @@ public final class ReactiveHandover<T> {
                     // that phase cannot be reported through it and reaches no caller. This module has no logger to
                     // fall back on either. Live folds are guarded by onErrorResume, so the reachable triggers are
                     // narrow, and closing it means moving the completion signal off the marker phase.
+                    abandonReplayWithoutMasking(source, replayOpen);
                     terminalError.set(error);
                     catchupDone.tryEmitError(error);
                     // Wrapped like the later refusals in accept(..): the caller sees the same "this is terminal, and
@@ -255,6 +298,19 @@ public final class ReactiveHandover<T> {
                 });
 
         return catchupDone.asMono();
+    }
+
+    // Guarded so that a source's own replayAbandoned() throwing cannot replace the failure (or stop) that made the
+    // engine call it in the first place; the contract asks the source not to throw here, but this engine does not
+    // trust that. compareAndSet so a clean replayCompleted() (which already cleared replayOpen) is never followed by
+    // an abandon call for a lifecycle that already closed successfully.
+    private void abandonReplayWithoutMasking(Source<T> source, AtomicBoolean replayOpen) {
+        if (replayOpen.compareAndSet(true, false)) {
+            try {
+                source.replayAbandoned();
+            } catch (RuntimeException | Error ignored) {
+            }
+        }
     }
 
     /**

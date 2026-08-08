@@ -280,22 +280,19 @@ class DomainEventFeedTest {
 
     @Test
     void stopping_a_catch_up_mid_replay_does_not_write_the_marker_and_a_later_catch_up_replays_from_the_beginning() throws InterruptedException {
-        CloudEventConverter<Counted> converter = countedConverter();
         CountDownLatch parked = new CountDownLatch(1);
         CountDownLatch proceed = new CountDownLatch(1);
+        AtomicInteger converted = new AtomicInteger();
+        // The projection's materialized update coalesces replayed updates rather than writing one through per event
+        // (ADR 110), so parking on the store write would never land mid-replay for a two-event history: nothing is
+        // written until the replay finishes. Parking on the decode instead still lands after the first event and
+        // before the second, which is what lets the test call stopCatchUp() on a replay genuinely still in flight.
+        CloudEventConverter<Counted> converter = parkingConverter(converted, parked, proceed);
         Map<String, Integer> repo = new ConcurrentHashMap<>();
-        AtomicInteger deliveries = new AtomicInteger();
-        // Blocks the replay's fold for the first event before it returns, so the catch-up is genuinely still running
-        // (on boundedElastic) when the test calls stopCatchUp(), landing the stop deterministically rather than by
-        // racing a sleep against it. Counts deliveries rather than reading the cumulative counter's final value,
-        // because a projection that folds "+1" onto its current state (like this one) double-counts once a second
-        // full replay folds on top of what the first, aborted one already wrote.
+        AtomicInteger saves = new AtomicInteger();
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, (id, state) -> {
+            saves.incrementAndGet();
             repo.put(id, state);
-            if (deliveries.incrementAndGet() == 1) {
-                parked.countDown();
-                awaitUninterruptibly(proceed);
-            }
         });
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId, marker);
@@ -304,26 +301,28 @@ class DomainEventFeedTest {
         CountDownLatch catchUpFinished = new CountDownLatch(1);
         // doFinally is a real join on the stopped catch-up, unlike subscribe()'s own return: it counts down only once
         // the Mono has actually terminated, so awaiting it proves the stop landed instead of polling for a side effect
-        // (the fold's increment, which is what releases "parked" below) that already happened before stopCatchUp() was
-        // even called.
+        // that already happened before stopCatchUp() was even called.
         feed.catchUpAll().doFinally(signal -> catchUpFinished.countDown()).subscribe(); // runs on boundedElastic, so this returns before it finishes
         parked.await();
         feed.stopCatchUp();
         proceed.countDown();
 
         assertThat(catchUpFinished.await(5, TimeUnit.SECONDS)).isTrue();
-        assertThat(deliveries.get()).isEqualTo(1);
+        // A stop discards whatever the coalescing update had buffered instead of writing it, so nothing was saved
+        // even though the first event was already decoded and folded into the buffer.
+        assertThat(saves.get()).isZero();
+        assertThat(repo).isEmpty();
         // A partial replay is never recorded as a finished one.
         assertThat(marker.read("counter").blockOptional()).isEmpty();
 
-        // The feed is still usable: a later catch-up replays the whole history again, from the beginning, so both
-        // events are folded once more rather than only the one the stop skipped. block() already joins the fold, so
-        // the assertion right after it needs no additional wait.
+        // The feed is still usable: a later catch-up (the same converter, which only parks once) replays the whole
+        // history again, from the beginning. block() already joins the fold, so the assertion right after it needs no
+        // additional wait.
         feed.catchUpAll().block();
-        assertThat(deliveries.get()).isEqualTo(3);
+        assertThat(repo.get("counter")).isEqualTo(2);
 
         feed.accept(new Counted("3")).block();
-        assertThat(deliveries.get()).isEqualTo(4);
+        assertThat(repo.get("counter")).isEqualTo(3);
     }
 
     private static void awaitUninterruptibly(CountDownLatch latch) {
@@ -333,6 +332,31 @@ class DomainEventFeedTest {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
         }
+    }
+
+    private static CloudEventConverter<Counted> parkingConverter(AtomicInteger converted, CountDownLatch parked, CountDownLatch proceed) {
+        CloudEventConverter<Counted> delegate = countedConverter();
+        return new CloudEventConverter<>() {
+            @Override
+            public CloudEvent toCloudEvent(Counted domainEvent) {
+                return delegate.toCloudEvent(domainEvent);
+            }
+
+            @Override
+            public Counted toDomainEvent(CloudEvent cloudEvent) {
+                Counted event = delegate.toDomainEvent(cloudEvent);
+                if (converted.incrementAndGet() == 1) {
+                    parked.countDown();
+                    awaitUninterruptibly(proceed);
+                }
+                return event;
+            }
+
+            @Override
+            public String getCloudEventType(Class<? extends Counted> type) {
+                return delegate.getCloudEventType(type);
+            }
+        };
     }
 
 
