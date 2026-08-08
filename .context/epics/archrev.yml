@@ -330,10 +330,18 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip task_40ee2d9c spawned 2026-08-08, awaiting Johan''s launch;
-      harness also covers the payload-filter path so B2''s go/no-go reads from it'
-    last_meaningful_progress_at: '2026-08-08T07:41:00+00:00'
-    observed: {}
+    next_action: 'session local_4b9e6645 (worktree hungry-kowalevski-a8c288, branch
+      johan/archrev-b3-jmh-benchmarks) is mid-run: a 48-combination JMH suite runs
+      in its background (~66 min, started ~08:23Z), PR follows once numbers are
+      recorded on #624. Idle session is NOT stalled before ~09:45Z; re-read its tail
+      only after that'
+    last_meaningful_progress_at: '2026-08-08T08:25:00+00:00'
+    observed:
+      session_tail:
+        note: benchmark task buixu8git running inside the worker session, payload-filter
+          combinations included
+        via: list_events tail read at 09:12Z
+        at: '2026-08-08T09:12:00+00:00'
     assessment: cited benchmark numbers currently have no re-runnable harness
   B5:
     issue: 638
