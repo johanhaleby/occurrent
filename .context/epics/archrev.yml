@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 20
-updated_at: '2026-08-08T10:30:00+00:00'
-updated_by: orchestrator a7c1523c (B3 merged and swept; delegated B2 go-ruling made
-  on the numbers, B2 chipped; B6 waits for B5's merge due to file overlap)
+revision: 21
+updated_at: '2026-08-08T11:00:00+00:00'
+updated_by: orchestrator a7c1523c (B5 merged, residual un-pushed polish routed back
+  to its session; B2 running as in-session subagent; B6 unblocked and chipped)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -87,6 +87,30 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T10:30:00+00:00'
+- id: act-010
+  type: merge
+  target: 'PR 641 squash-merge pinned to verified head fbd8e309ad4935e74da7deb6239ea72978724177
+    (all green, 3 threads: 2 resolved, 1 open reasoned decline on changelog Highlights,
+    verified factual and covered by the standing visible-disagreement rule; reactor
+    Projections.java subscribeOn wrapping confirmed intact in the diff)'
+  expected: 'PR merged, merged head equals verified head, issue 638 auto-closed via
+    Fixes; DONE: squash 52891ab64, issue 638 CLOSED, remote branch deleted. Session
+    NOT archived and worktree NOT removed: two un-pushed polish files found mid-test
+    in the worktree, routed back to the session via send_message (follow-up PR from
+    a fresh branch, or discard and conclude)'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T10:55:00+00:00'
+- id: act-011
+  type: dispatch-chip
+  target: 'B6 chip task_0769a30e: ⌁[archrev/B6#639] Measure reactor hand-off · Sonnet/medium'
+  expected: chip visible on desktop; may be superseded by a subagent start on Johan's
+    word while he is on mobile
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T11:00:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -385,12 +409,19 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'ci-wait on PR 641 (head fbd8e309ad4935e74da7deb6239ea72978724177,
-      session local_b7330376, worktree angry-germain-e89c88); at merge review, confirm
-      the reactor Projections.java diff leaves the subscribeOn wrapping intact (B6
-      scope), then CAS merge on green with threads resolved'
-    last_meaningful_progress_at: '2026-08-08T10:05:00+00:00'
-    observed: {}
+    next_action: 'deliverables met (PR 641 squash 52891ab64, issue 638 closed,
+      subscribeOn wrapping verified intact). Sweep held open: session local_b7330376
+      still holds two un-pushed polish files (two @NonNull params, one import) and
+      was messaged to follow-up-or-discard and emit DELIVERY_RESULT; archive session,
+      remove worktree angry-germain-e89c88 and local branch only after it concludes'
+    last_meaningful_progress_at: '2026-08-08T10:57:00+00:00'
+    observed:
+      worktree_residual:
+        note: 'uncommitted at merge time: ViewStateRepository.java (+2 @NonNull),
+          CoalescingMaterializedUpdate.java (+1 import); worker mid-test with its
+          own wakeup armed'
+        via: git status + diff + list_events tail
+        at: '2026-08-08T10:57:00+00:00'
     assessment: adopted from B1's handoff on PR 637 under Johan's structured-ask
       approval 2026-08-08
   B6:
@@ -409,13 +440,10 @@ units:
       ref: 639
       met: false
       evidence: null
-    blocking_on:
-    - what: PR 641 (B5) merging, because it rewrites the same reactor Projections.java
-        this unit measures and edits (B3's harness dependency is met)
-      since: '2026-08-08T10:30:00+00:00'
-      recheck_after: '2026-08-08T14:00:00+00:00'
-    next_action: spawn the Sonnet/medium measure-first chip in the tick that merges
-      PR 641
+    blocking_on: []
+    next_action: 'chip spawned 2026-08-08 ~11:00Z (act-011), awaiting launch; Johan
+      is on mobile where chips do not render, so the orchestrator may start it as an
+      in-session subagent on his word, as B2 was'
     last_meaningful_progress_at: '2026-08-08T08:40:00+00:00'
     observed: {}
     assessment: adopted from B1's handoff (Projections.java:92/:120/:139 vs
