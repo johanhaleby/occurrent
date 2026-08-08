@@ -1,8 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 19
-updated_at: '2026-08-08T10:05:00+00:00'
-updated_by: orchestrator a7c1523c (B5 delivered PR 641, ci-wait alongside PR 640)
+revision: 20
+updated_at: '2026-08-08T10:30:00+00:00'
+updated_by: orchestrator a7c1523c (B3 merged and swept; delegated B2 go-ruling made
+  on the numbers, B2 chipped; B6 waits for B5's merge due to file overlap)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -67,6 +68,25 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T08:40:00+00:00'
+- id: act-008
+  type: merge
+  target: 'PR 640 squash-merge pinned to verified head eaa38158aa2d5b228b1c49422dcef25ea58991ab
+    (all green, 0 threads, MERGEABLE)'
+  expected: 'PR merged, merged head equals verified head, issue 624 auto-closed via
+    Fixes; DONE: merged via gh pr merge CAS pin (permission rule now in place), merge
+    32fb7a6c7, issue 624 CLOSED, branches deleted, worktree removed, session archived'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T10:20:00+00:00'
+- id: act-009
+  type: dispatch-chip
+  target: 'B2 chip task_e6d53a82: ⌁[archrev/B2#623] Memoize filter reads · Sonnet/medium'
+  expected: chip visible to Johan; session enters fleet on his click
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T10:30:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -307,46 +327,45 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'DELEGATED GO/NO-GO (Johan, in-session 2026-08-08): when B3 merges,
-      the orchestrator reads the harness numbers for the multi-leaf payload-filter
-      case and dispatches the B2 chip (Sonnet/medium) without a further ask if they
-      show material per-event cost outside tests. If they do not, no dispatch; report
-      the numbers to Johan with a recommendation on closing #623 rather than closing
-      it unasked'
-    last_meaningful_progress_at: '2026-08-08T09:05:00+00:00'
+    next_action: 'chip spawned under the delegated go-ruling (act-009), awaiting
+      Johan''s launch'
+    last_meaningful_progress_at: '2026-08-08T10:30:00+00:00'
     observed: {}
-    assessment: verification scoped this well below the review's major
+    assessment: 'GO ruled by orchestrator 2026-08-08 under Johan''s delegation, from
+      the #624 numbers: byte-backed multi-leaf evaluation pays one full payload parse
+      per leaf (522us at 5 leaves, 2031us at 20 leaves on 256KB, 1770x the Map-backed
+      cost), on the shipped in-memory store and in-process subscription models any
+      external caller can run in production, and T4''s readAll SPI widening exists
+      precisely for the single-parse override. Map-backed Mongo path unaffected,
+      which bounds the fix''s blast radius'
   B3:
     issue: 624
     goal: committed JMH harness reproducing the ADR 108 and PR 615 numbers
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
     - check: pr_merged
       ref: 640
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T10:22Z at eaa38158a via gh pr merge pin, merge
+        32fb7a6c7, all green, 0 threads; benchmark/ behind opt-in benchmarks profile
+        plus maven.deploy.skip, ADR 108 shape confirmed (7.3x to 7.9x at 8 threads),
+        full payload-filter protocol on #624'
     - check: issue_closed
       ref: 624
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #624, verified by orchestrator'
     blocking_on: []
-    next_action: 'ci-wait on PR 640 (head eaa38158aa2d5b228b1c49422dcef25ea58991ab,
-      benchmark/ module behind opt-in benchmarks profile + maven.deploy.skip, numbers
-      on #624); CAS merge on green with threads resolved, then sweep, then evaluate
-      the delegated B2 go/no-go from the #624 payload-filter numbers and dispatch
-      B6''s measure chip'
-    last_meaningful_progress_at: '2026-08-08T08:25:00+00:00'
-    observed:
-      session_tail:
-        note: benchmark task buixu8git running inside the worker session, payload-filter
-          combinations included
-        via: list_events tail read at 09:12Z
-        at: '2026-08-08T09:12:00+00:00'
-    assessment: cited benchmark numbers currently have no re-runnable harness
+    next_action: none
+    last_meaningful_progress_at: '2026-08-08T10:22:00+00:00'
+    observed: {}
+    assessment: 'harness re-runnable without Docker; ADR 108 numbers reproduced in
+      shape on different hardware, no contradiction. Payload-filter verdict: re-parse
+      cost confined to byte-backed payloads (Map-backed production Mongo path flat
+      under 1.5us), byte-backed multi-leaf linear at ~100us per leaf on 256KB'
   B5:
     issue: 638
     goal: implement ADR 110 replay batching (capability interfaces, Source replay
@@ -383,6 +402,7 @@ units:
     swept: false
     depends_on:
     - B3
+    - B5
     session: null
     deliverables:
     - check: issue_closed
@@ -390,10 +410,12 @@ units:
       met: false
       evidence: null
     blocking_on:
-    - what: B3's JMH harness (#624), the measurement tool this unit needs
-      since: '2026-08-08T08:40:00+00:00'
-      recheck_after: '2026-08-09T08:00:00+00:00'
-    next_action: hold until B3 merges, then Sonnet/medium measure-first chip
+    - what: PR 641 (B5) merging, because it rewrites the same reactor Projections.java
+        this unit measures and edits (B3's harness dependency is met)
+      since: '2026-08-08T10:30:00+00:00'
+      recheck_after: '2026-08-08T14:00:00+00:00'
+    next_action: spawn the Sonnet/medium measure-first chip in the tick that merges
+      PR 641
     last_meaningful_progress_at: '2026-08-08T08:40:00+00:00'
     observed: {}
     assessment: adopted from B1's handoff (Projections.java:92/:120/:139 vs
