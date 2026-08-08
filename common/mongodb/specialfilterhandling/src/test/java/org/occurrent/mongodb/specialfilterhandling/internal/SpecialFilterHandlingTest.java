@@ -18,6 +18,7 @@ package org.occurrent.mongodb.specialfilterhandling.internal;
 
 import org.junit.jupiter.api.Test;
 import org.occurrent.condition.Condition;
+import org.occurrent.condition.Condition.InOperandCondition;
 import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.occurrent.filter.Filter;
@@ -26,6 +27,7 @@ import org.occurrent.filter.Filter.SingleConditionFilter;
 import java.sql.Date;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.mongodb.specialfilterhandling.internal.SpecialFilterHandling.resolveSpecialCases;
@@ -60,6 +62,31 @@ class SpecialFilterHandlingTest {
     void in_expands_every_operand_to_canonical_and_legacy_shape() {
         Condition<?> resolved = resolveRfc3339(Condition.in(INSTANT, OTHER_INSTANT));
         assertThat(resolved).isEqualTo(Condition.in(CANONICAL, LEGACY, OTHER_CANONICAL, OTHER_LEGACY));
+    }
+
+    // Simulates the doc/migration/upgrading-to-0.32.0.md "optional rewrite" script: $dateFromString parses the
+    // stored string into a BSON date (millisecond precision), and $dateToString with %L formats it back with
+    // exactly three fractional digits, regardless of how many fractional digits the original string carried.
+    @Test
+    void a_three_digit_rewritten_value_matches_neither_shape_the_shim_generates_for_a_microsecond_instant() {
+        // An event written pre-upgrade with microsecond precision, in the legacy variable-width shape. Legacy and
+        // canonical genuinely differ here (".123456" versus ".123456000"), unlike a nanosecond-precision instant,
+        // where both shapes happen to print identically.
+        OffsetDateTime microsecondInstant = OffsetDateTime.of(2024, 1, 1, 10, 0, 30, 123_456_000, ZoneOffset.UTC);
+        String storedBeforeRewrite = microsecondInstant.toString();
+        assertThat(storedBeforeRewrite).isEqualTo("2024-01-01T10:00:30.123456Z");
+        String storedAfterRewrite = storedBeforeRewrite.substring(0, 23) + "Z";
+        assertThat(storedAfterRewrite).isEqualTo("2024-01-01T10:00:30.123Z");
+
+        Condition<?> resolved = resolveRfc3339(Condition.eq(microsecondInstant));
+        @SuppressWarnings("unchecked")
+        List<String> matchedShapes = (List<String>) ((InOperandCondition<?>) resolved).operand();
+
+        // Before the rewrite, the shim's legacy branch matches the event exactly as stored.
+        assertThat(matchedShapes).contains(storedBeforeRewrite);
+        // After the rewrite, the event's new stored value matches neither the canonical nor the legacy shape the
+        // shim generates for this instant, so the rewrite turns a match into a miss.
+        assertThat(matchedShapes).doesNotContain(storedAfterRewrite);
     }
 
     @Test

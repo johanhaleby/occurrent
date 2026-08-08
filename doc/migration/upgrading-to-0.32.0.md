@@ -157,15 +157,25 @@ aggregation pipeline update. Replace `events` with your collection name, and tak
 
 ```js
 db.events.updateMany(
-  { time: { $type: "string" } },
+  {
+    $and: [
+      { time: { $type: "string" } },
+      { time: { $not: /\.\d{4,}/ } }
+    ]
+  },
   [
     {
       $set: {
         time: {
-          $dateToString: {
-            date: { $dateFromString: { dateString: "$time" } },
-            format: "%Y-%m-%dT%H:%M:%S.%LZ"
-          }
+          $concat: [
+            {
+              $dateToString: {
+                date: { $dateFromString: { dateString: "$time" } },
+                format: "%Y-%m-%dT%H:%M:%S.%L"
+              }
+            },
+            "000000Z"
+          ]
         }
       }
     }
@@ -173,17 +183,22 @@ db.events.updateMany(
 )
 ```
 
-Two caveats worth reading before you run it.
+The match stage skips a value whose fractional part already has more than three digits. `$dateFromString` parses
+into a BSON date, which only holds milliseconds, so touching a value that already carries more precision than that
+would throw the extra digits away. That protects two kinds of document from the same mistake. One is an event whose
+original timestamp genuinely had sub-millisecond precision. The other is an event 0.32.0 already wrote in the
+canonical nine-digit shape, which this script must not touch a second time either.
 
-`$dateFromString` parses into a BSON date, which holds milliseconds, so this loses any precision finer than a
-millisecond that was in the stored string. If your events carry microseconds or nanoseconds and you need them, do the
-rewrite in application code instead, reading each `time` with `OffsetDateTime.parse` and writing it back formatted with
-nine fractional digits.
+For an event the script does rewrite, it pads the three digits `$dateToString` produces out to nine with zeroes, so
+the result has the canonical fixed width and sorts correctly against the values 0.32.0 writes for new events. Those
+zeroes are filler, not real digits, so a rewritten value equals the canonical shape a filter checks only when the
+original event had no sub-millisecond precision to lose in the first place.
 
-`%L` emits three fractional digits, not nine, so the rewritten values are canonical in shape but not identical to what
-0.32.0 writes for new events. Comparisons still behave, because all rewritten values share one shape and sort against
-each other correctly, but an exact filter built from a nanosecond instant will not match a rewritten value. Use the
-application-code route if you need exact matching against these older events.
+An event the script skips keeps the shape it already had. An equality filter still matches it exactly as it did
+before you ran anything, through the legacy shape described above, because its stored value never changed. What
+stays open for it is the range-query gap. If you want that fixed too, rewrite it in application code instead, reading
+it with `OffsetDateTime.parse` and writing it back with nine real fractional digits, since only that route can supply
+digits `$dateFromString` would otherwise discard.
 
 ### Time range queries and UTC offsets
 
