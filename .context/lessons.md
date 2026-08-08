@@ -1,5 +1,30 @@
 # Lessons
 
+- A convention relayed to a worker is quoted from its source, never paraphrased from
+  memory (2026-08-08, the vgpr brief and a thread-triage message both said "unreleased
+  capabilities get Highlights only", and the worker refuted it with AGENTS.md:71, the
+  0.32.0 precedent, and PR 300's actual body). The real rule distinguishes dev-churn
+  on an unreleased feature (folded, no Changes entry) from announcing a new capability
+  (a Changes entry plus a Highlights teaser, always), and the compression collapsed
+  the two. Same failure family as the johan-writing surface-compression lesson: a
+  paraphrase of a nuanced rule becomes a wrong absolute exactly when it enters a brief.
+  When a dispatch or triage message states a convention, quote the governing sentence
+  from AGENTS.md or the memory file rather than restating it, and when a worker pushes
+  back with sources, verify before defending. The worker's evidence-first refusal was
+  correct behavior, not insubordination.
+
+- A delivered store-backed component is checked for resilience parity with its closest
+  sibling before merge (2026-08-08, Johan asked about DB-outage behavior on the
+  applied-position store and the answer was a gap). The unit shipped Mongo
+  implementations with no RetryStrategy while NativeMongoCheckpointStorage, the nearest
+  structural sibling, carries one with an exponential default. Neither the brief nor
+  the integration review asked the question. The rule is now a design intention in
+  AGENTS.md (production-ready means surviving transient store outages, configurable
+  retries where they make sense, starters auto-apply defaults), and the orchestrator
+  side of it is a review check: when a unit adds a component that talks to a store,
+  compare its failure handling against the nearest sibling component before the merge
+  gate, not after a user question.
+
 - A plan is not ready for approval until it has survived one adversarial self-review
   (2026-08-08, Johan had to ask "anything missing?" on the ccpause plan and the answer
   was four real gaps, all findable from evidence already in hand: a lifecycle door the

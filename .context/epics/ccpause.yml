@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccpause
-revision: 2
-updated_at: '2026-08-08T16:55:00+00:00'
-updated_by: orchestrator session worktree-mobile-setup-916a9c (U1 plan gate cleared, U2 docs adopted, finding 651 routed)
+revision: 3
+updated_at: '2026-08-08T17:35:00+00:00'
+updated_by: orchestrator session worktree-mobile-setup-916a9c (U1 PR 655 opened, ci-wait)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -35,7 +35,7 @@ units:
     session: local_21600c19
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 655
       met: false
       evidence: null
     - check: issue_closed
@@ -43,11 +43,19 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'implementation in progress; next observable is the PR (monitor
-      bc0cymzzm catches PR-OPENED); on green with threads resolved, CAS merge under
-      standing authority'
-    last_meaningful_progress_at: '2026-08-08T16:50:00+00:00'
+    next_action: 'PR 655 checks running (ci-wait); worker runs pr-fix with autostop;
+      on green with threads resolved per policy, CAS merge pinned to the verified
+      full head SHA, then verify issue 565 closed via Fixes'
+    last_meaningful_progress_at: '2026-08-08T17:33:00+00:00'
     observed:
+      pr_655:
+        head: fd1de62a621043ff2889534920f37481bc314828
+        note: 'opened ~17:33Z from johan/hungry-northcutt-f1c0db, Fixes #565, files
+          exactly within the brief: model, two test classes, SubscriptionModelLifeCycle
+          javadoc (approved amendment), new ADR 0112, ADR 0105 amendment, changelog;
+          checks running'
+        via: monitor bc0cymzzm + gh pr view
+        at: '2026-08-08T17:35:00+00:00'
       plan_gate:
         note: 'cleared by Johan 2026-08-08 ~16:50Z in the unit session: the
           SubscriptionModelLifeCycle.pauseSubscription contract amendment is

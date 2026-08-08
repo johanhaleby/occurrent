@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 39
-updated_at: '2026-08-08T15:40:00+00:00'
-updated_by: orchestrator a7c1523c (docs PR 50 merged, B12 spun off issue 650 and
-  running as subagent, docs monitor retired, library monitor brclpl51c armed)
+revision: 41
+updated_at: '2026-08-08T16:45:00+00:00'
+updated_by: orchestrator a7c1523c (final closeout, all 20 units done and swept,
+  nothing running)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -230,6 +230,19 @@ pending_actions:
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-08T15:30:00+00:00'
+- id: act-023
+  type: merge
+  target: 'PR 652 squash-merge pinned to verified head c1bb34d259cf20f9bfb4cedc032ae7a7e01b6dc3
+    (all green, 0 unresolved threads, MERGEABLE)'
+  expected: 'PR merged, merged head equals verified head, issue 650 auto-closed via
+    Fixes; then B12 sweep after its DELIVERY_RESULT, and the epic final closeout;
+    DONE: squash f9ad4a36f, issue 650 CLOSED, DELIVERY_RESULT done with matching SHA
+    and the docs-site consequence declared, worktree and branches swept, monitor
+    brclpl51c stopped, consequence adopted as B13 (issue 653) per structured ask'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T16:05:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 635 squash-merge pinned to verified head 7e522ca4c5e85caef6dfe235e7686a7875b9a671
@@ -676,19 +689,21 @@ units:
     issue: 574
     goal: audit occurrent.org against the released 0.32.0, fix the misses, simplify
       touched phrasing (audit inventory on the issue before fixing)
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_6e5fd043 (docs worktree fervent-ritchie-d224c0)
     deliverables:
     - check: issue_closed
       ref: 574
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED by orchestrator with the full record after docs PR 50 merged
+        (squash 62afceb06) and the spin-off chain resolved (650 to 652 to docs PR
+        51); worker DELIVERY_RESULT was an honest blocked exit on the reasoned
+        decline, superseded by the merge'
     blocking_on: []
-    next_action: 'docs PR 50 merged (squash 62afceb06, audit inventory on the issue,
-      the merge-fallout dedup shipped); sweep after the session''s DELIVERY_RESULT
+    next_action: 'none''s DELIVERY_RESULT
       and its manual close of #574 per the cross-repo Fixes rule'
     last_meaningful_progress_at: '2026-08-08T14:45:00+00:00'
     observed: {}
@@ -698,28 +713,53 @@ units:
     issue: 650
     goal: migration guide time-rewrite consistency (analysis-first vs the two-form
       shim, then reword or fix the script)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: subagent a06c56779f1649b31
     deliverables:
     - check: pr_merged
       ref: 652
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08T16:05Z at c1bb34d259c (squash f9ad4a36f), all
+        green, 0 threads; analysis proved the 3-digit rewrite matches neither shim
+        form (mutation-tested), script now pads to 9 digits and skips sub-millisecond
+        values'
     - check: issue_closed
       ref: 650
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes, verified by orchestrator'
     blocking_on: []
-    next_action: 'ci-wait on PR 652 (head c1bb34d259c, guide fix plus shim regression test, analysis verdict per the title is that the 3-digit rewrite breaks the equality shim); CAS merge on green with threads resolved'
+    next_action: 'none'
     last_meaningful_progress_at: '2026-08-08T15:35:00+00:00'
     observed: {}
     assessment: 'spun off B11 audit via the finding-routing protocol (issue 650),
       adopted by Johan via structured ask as this session final unit. The library
       monitor brclpl51c is repo-wide and will also see vgpr and ccpause PRs, whose
       deltas this sweep ignores, sibling orchestrators own them'
+  B13:
+    issue: 653
+    goal: port the fixed time-rewrite script and prose from library PR 652 into the
+      docs site (pages/docs/docs.md)
+    phase: DONE
+    health: PROGRESSING
+    swept: true
+    depends_on: []
+    session: subagent a086c2d7dbf503414
+    deliverables:
+    - check: issue_closed
+      ref: 653
+      met: true
+      evidence: 'CLOSED, verified by orchestrator; docs PR 51 CAS-merged at
+        920b57b01 (squash cb2924fbf), ported script byte-identical to the guide,
+        one reasoned decline left open on pre-existing UTC normalization'
+    blocking_on: []
+    next_action: 'none'
+    last_meaningful_progress_at: '2026-08-08T16:20:00+00:00'
+    observed: {}
+    assessment: adopted by Johan via structured ask, the mechanical consequence B12
+      declared in its DELIVERY_RESULT
   B4:
     issue: 625
     goal: saga CAS amplification javadoc qualifiers (doc only)
