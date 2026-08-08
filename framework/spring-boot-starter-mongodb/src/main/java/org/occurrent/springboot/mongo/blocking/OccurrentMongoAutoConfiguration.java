@@ -37,6 +37,7 @@ import org.occurrent.command.StreamIdResolver;
 import org.occurrent.command.annotation.AnnotationStreamIdResolver;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
+import org.occurrent.dsl.projection.AppliedPositionStorage;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -173,6 +174,16 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointStorage occurrentCheckpointStorage(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
         return new SpringMongoCheckpointStorage(mongoTemplate, occurrentProperties.getSubscription().getCollection());
+    }
+
+    /**
+     * The zero-config {@link AppliedPositionStorage} a {@code @Projection(recordAppliedPosition = true)} resolves
+     * when the application declares none.
+     */
+    @Bean
+    @ConditionalOnMissingBean(AppliedPositionStorage.class)
+    public AppliedPositionStorage occurrentAppliedPositionStorage(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
+        return new MongoAppliedPositionStorage(mongoTemplate, occurrentProperties.getProjection().getAppliedPositionCollection());
     }
 
     @Bean

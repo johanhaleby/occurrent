@@ -1,5 +1,9 @@
 ### Changelog next version
 
+#### Highlights
+
+* Read-your-writes for async projections. `@Projection(recordAppliedPosition = true)` records the position a projection has applied, and `AppliedPositionStorage.waitUntilApplied(..)` blocks until it reaches a position you already hold, such as one a command returned. See [ADR 111](doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md). Resolves [#361](https://github.com/johanhaleby/occurrent/issues/361).
+
 #### Changes
 
 * **A framework-built materialized view now batches its store calls during a catch-up replay.** A history of N events over K projection keys used to cost one read and one write per event. It now costs about one of each per key, and about two calls per batch when the repository does real bulk operations (the shipped Mongo ones below do). `Projections.materializedView` (blocking) and `Projections.reactiveUpdateWithMetadata` (reactor) build such views with batching on by default, sized by `batchSize` on the new `MaterializedViewOptions`, and a batch size of `1` restores the old write-through behaviour. A view of your own opts in by implementing the new `ReplayAwareMaterializedView` capability (a reactive twin lives in the reactor projection DSL). `ViewStateRepository` gains defaulted `findAllById` and `saveAll`, so an existing repository keeps working unchanged. What a partly failed batch write leaves behind, and why that stays within the at-least-once replay contract, is defined in [ADR 110](doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md). Resolves [#638](https://github.com/johanhaleby/occurrent/issues/638).

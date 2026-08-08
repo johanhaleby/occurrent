@@ -199,4 +199,19 @@ public @interface Projection {
      * that type exist. An empty string (the default) means unset. Ignored for {@link Source#EVENT_STORE}.
      */
     String subscriptionModelName() default "";
+
+    /**
+     * Records the global position this projection has applied, so a caller that holds a position (for example one
+     * returned by the command that wrote the event) can read it back or wait until the projection has caught up to
+     * it. {@code false} by default, since it costs one extra store write per delivered event.
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>)
+     * <p>
+     * Requires an {@code AppliedPositionStorage} bean, resolved the same way {@link #store()} resolves a read-model
+     * store, the unique bean of that type, or the store starter's zero-config default when one is configured.
+     * Mutually exclusive with {@link Mode#SYNCHRONOUS}, since a synchronous projection has already updated the read
+     * model by the time the command returns and recording a position for it buys nothing. An event whose metadata
+     * carries no position (the event store has position writing turned off, or the delivery path carries no
+     * metadata) fails the projection rather than recording nothing for it.
+     */
+    boolean recordAppliedPosition() default false;
 }
