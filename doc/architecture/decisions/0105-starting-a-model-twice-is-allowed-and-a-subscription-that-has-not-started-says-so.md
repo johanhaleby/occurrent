@@ -155,6 +155,11 @@ type those refusals use.
 > says which of the three it is, and that a competing consumer whose lock another node holds stays an
 > `IllegalStateException`, because that is not a mistake in the calling code.
 
+> **Extended on 2026-08-08 by [ADR 112](0112-a-competing-consumer-can-be-paused-while-still-waiting-for-the-lock.md).**
+> The has-started answer for a competing consumer that has not won the lock, decided above, stays exactly as
+> written. ADR 112 builds the paused-while-waiting state on top of it, and answers the two questions this ADR left
+> open for that state, what `isRunning(id)` and `isPaused(id)` say about it, and what pausing it does.
+
 ## Consequences
 
 **Four released behaviours change, and each gets its own changelog entry.** All four shipped in
