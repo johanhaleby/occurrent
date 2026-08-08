@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 7
-updated_at: '2026-08-08T23:55:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U4 adopted per Johan, chip
-  journaled)'
+revision: 8
+updated_at: '2026-08-09T00:15:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (U2 and U4 running, U4 worktree
+  reuse hazard journaled, finding-recommendation addendum relayed)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -192,10 +192,19 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_2f9b0ff5 spawned 2026-08-08 ~23:58Z, awaiting Johan's
-      launch
-    last_meaningful_progress_at: '2026-08-08T23:55:00+00:00'
-    observed: {}
+    next_action: session running; expected observable is a PR the monitor catches
+    last_meaningful_progress_at: '2026-08-09T00:10:00+00:00'
+    observed:
+      worktree:
+        note: 'the host REUSED the archived ccpause orchestrator session''s
+          worktree (worktree-mobile-setup-916a9c) instead of creating a fresh one,
+          checked out as branch ccrace/u4-remove-wrapper-synchronized with U4''s
+          edits in flight; the ccpause session is archived so nothing else writes
+          there, but at sweep time this worktree is removed only after confirming
+          the ccpause session was not reopened into it, and never while dirty'
+        via: git worktree list + session list + a bounced message (ccpause session
+          archived)
+        at: '2026-08-09T00:10:00+00:00'
     assessment: 'adopted from U1''s DELIVERY_RESULT finding (recorded in ADR 113,
       no tracker issue, the ADR is the durable trace); disjoint files from U2 (its
       module is the common strategy module, these are the native and spring wrapper
