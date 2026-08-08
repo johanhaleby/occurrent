@@ -1,8 +1,8 @@
 schema_version: 1
 epic: ccrace
-revision: 3
-updated_at: '2026-08-08T22:05:00+00:00'
-updated_by: orchestrator session b72aef49 (U1 delivered PR 658, ci-wait)
+revision: 4
+updated_at: '2026-08-08T22:40:00+00:00'
+updated_by: orchestrator session b72aef49 (PR 658 verified green, merge pinned and journaled)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -13,6 +13,18 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   issue 651 claimed at registration (in-progress label + comment 5227615207);
   milestone deliberately skipped (single-unit epic, ccpause precedent)'
 pending_actions:
+- id: act-002
+  type: merge
+  target: 'PR 658 squash-merge pinned to verified head
+    bc609781d6b056edaf9b6612a7b451fdae9600d6 (27/27 success, MERGEABLE, Copilot
+    review COMMENTED with zero threads, in-progress label dropped)'
+  expected: 'PR merged, merged head equals pin, issue 651 auto-closed via Fixes;
+    DONE: squash c50bd24825c7724c47ab14bc5d8f88a1d6992cf3, headAtMerge equals pin
+    (verified), issue 651 CLOSED (verified), remote branch deleted by the merge'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-08T22:40:00+00:00'
 - id: act-001
   type: dispatch-chip
   target: 'U1 chip: ⌁[ccrace/U1#651] Fix register-refresh race · Opus/high
@@ -32,7 +44,7 @@ units:
       release and refresh per consumer so no thread acts on a stale status, closing
       both interleavings in issue 651, without regressing the 655 pause hand-back or
       the LOCK_RELEASED stand-down semantics, for both Mongo lease strategies
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -40,15 +52,22 @@ units:
     deliverables:
     - check: pr_merged
       ref: 658
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-08 ~22:42Z pinned to bc609781d, squash
+        c50bd24825c7724c47ab14bc5d8f88a1d6992cf3, headAtMerge equals pin
+        (verified), 27/27 success, Copilot review had zero threads'
     - check: issue_closed
       ref: 651
-      met: false
-      evidence: null
+      met: true
+      evidence: CLOSED via Fixes, verified by orchestrator; in-progress label was
+        dropped by the worker at PR open
     blocking_on: []
-    next_action: ci-wait on PR 658; on green with threads resolved, verify the
-      DELIVERY_RESULT, then CAS-merge pinned to the verified full head SHA
+    next_action: 'hold the session sweep until the worker''s DELIVERY_RESULT
+      arrives or the session is confirmed stopped; verify main matrix on squash
+      c50bd2482; open claim in the PR body is UNVERIFIED: the two lease weaknesses
+      it says were filed separately do not exist as issues yet (fencing-token
+      version with no callers, expiry judged against the asking node''s clock),
+      adoption ask routed to Johan'
     last_meaningful_progress_at: '2026-08-08T22:02:00+00:00'
     observed:
       pr_658:
