@@ -298,6 +298,103 @@ class BlockingHandoverTest {
         assertThat(delivered).containsExactly("R1", "R1", "R2", "L1");
     }
 
+    @Test
+    void replay_lifecycle_is_started_then_completed_before_the_buffer_drain_and_the_marker() {
+        List<String> log = Collections.synchronizedList(new ArrayList<>());
+        BlockingHandover<String> handover = BlockingHandover.create(log::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.accept("L1");
+        FakeSource source = source(List.of("R1"), false);
+        source.onReplayStarted = () -> log.add("started");
+        source.onReplayCompleted = () -> log.add("completed");
+        source.onMarkCaughtUp = () -> log.add("marker");
+
+        handover.catchUp(source);
+
+        assertThat(log).containsExactly("started", "R1", "completed", "L1", "marker");
+        assertThat(source.replayAbandonedCallCount).isZero();
+    }
+
+    @Test
+    void replay_lifecycle_methods_are_never_called_when_already_caught_up() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of("R1"), true);
+
+        handover.catchUp(source);
+
+        assertThat(source.replayStartedCallCount).isZero();
+        assertThat(source.replayCompletedCallCount).isZero();
+        assertThat(source.replayAbandonedCallCount).isZero();
+    }
+
+    @Test
+    void a_stopped_replay_calls_replay_abandoned_instead_of_replay_completed() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of("R1", "R2", "R3"), false);
+        source.stopAfter(2);
+
+        handover.catchUp(source);
+
+        assertThat(source.replayStartedCallCount).isEqualTo(1);
+        assertThat(source.replayCompletedCallCount).isZero();
+        assertThat(source.replayAbandonedCallCount).isEqualTo(1);
+    }
+
+    @Test
+    void a_failed_replay_calls_replay_abandoned_before_the_failure_propagates() {
+        BlockingHandover<String> handover = handover(new ArrayList<>());
+        RuntimeException replayFailure = new RuntimeException("replay boom");
+        FakeSource source = source(List.of(), false);
+        source.replayFailure = replayFailure;
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source));
+
+        assertThat(thrown).isSameAs(replayFailure);
+        assertThat(source.replayAbandonedCallCount).isEqualTo(1);
+        assertThat(source.replayCompletedCallCount).isZero();
+    }
+
+    // A source's replayAbandoned() throwing must not replace the failure that made the engine call it: the caller
+    // still sees the original replay failure, not whatever replayAbandoned() itself threw.
+    @Test
+    void a_replay_abandoned_that_itself_throws_does_not_mask_the_failure_that_triggered_it() {
+        BlockingHandover<String> handover = handover(new ArrayList<>());
+        RuntimeException replayFailure = new RuntimeException("replay boom");
+        FakeSource source = source(List.of(), false);
+        source.replayFailure = replayFailure;
+        source.onReplayAbandoned = () -> {
+            throw new IllegalStateException("replayAbandoned boom");
+        };
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source));
+
+        assertThat(thrown).isSameAs(replayFailure);
+    }
+
+    // Once replayCompleted() has run successfully, a later failure (e.g. from the live buffer drain) must not call
+    // replayAbandoned() again: that lifecycle already closed cleanly.
+    @Test
+    void a_failure_after_a_successful_replay_completed_does_not_call_replay_abandoned() {
+        AtomicBoolean replayFinished = new AtomicBoolean(false);
+        BlockingHandover<String> handover = BlockingHandover.create(
+                payload -> {
+                    if (replayFinished.get()) {
+                        throw new RuntimeException("live drain boom");
+                    }
+                },
+                payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.accept("L1");
+        FakeSource source = source(List.of("R1"), false);
+        source.onReplayCompleted = () -> replayFinished.set(true);
+
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source));
+
+        assertThat(thrown).hasMessage("live drain boom");
+        assertThat(source.replayCompletedCallCount).isEqualTo(1);
+        assertThat(source.replayAbandonedCallCount).isZero();
+    }
+
     private static BlockingHandover<String> handover(List<String> delivered) {
         return BlockingHandover.create(delivered::add, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
     }
@@ -311,10 +408,16 @@ class BlockingHandoverTest {
         private final boolean alreadyCaughtUp;
         private RuntimeException replayFailure;
         private Runnable onMarkCaughtUp;
+        private Runnable onReplayStarted;
+        private Runnable onReplayCompleted;
+        private Runnable onReplayAbandoned;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
         private int stopAfter = Integer.MAX_VALUE;
         private int keepReplayingCallCount = 0;
+        private int replayStartedCallCount = 0;
+        private int replayCompletedCallCount = 0;
+        private int replayAbandonedCallCount = 0;
 
         private void stopAfter(int deliveries) {
             this.stopAfter = deliveries;
@@ -353,6 +456,30 @@ class BlockingHandoverTest {
             markCaughtUpCallCount++;
             if (onMarkCaughtUp != null) {
                 onMarkCaughtUp.run();
+            }
+        }
+
+        @Override
+        public void replayStarted() {
+            replayStartedCallCount++;
+            if (onReplayStarted != null) {
+                onReplayStarted.run();
+            }
+        }
+
+        @Override
+        public void replayCompleted() {
+            replayCompletedCallCount++;
+            if (onReplayCompleted != null) {
+                onReplayCompleted.run();
+            }
+        }
+
+        @Override
+        public void replayAbandoned() {
+            replayAbandonedCallCount++;
+            if (onReplayAbandoned != null) {
+                onReplayAbandoned.run();
             }
         }
     }

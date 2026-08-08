@@ -360,15 +360,91 @@ class ReactiveHandoverTest {
         assertThat(delivered).containsExactly("R1", "R1", "R2", "L1");
     }
 
+    @Test
+    void replay_lifecycle_is_started_then_completed_before_the_marker() throws Exception {
+        List<String> log = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> log.add(payload)), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        FakeSource source = source(List.of("R1"), false);
+        source.onReplayStarted = () -> log.add("started");
+        source.onReplayCompleted = () -> log.add("completed");
+        source.onMarkCaughtUp = () -> log.add("marker");
+
+        handover.catchUp(source).block(Duration.ofSeconds(5));
+
+        assertThat(log).containsExactly("started", "R1", "completed", "marker");
+        assertThat(source.replayAbandonedCallCount).isZero();
+    }
+
+    @Test
+    void replay_lifecycle_methods_are_never_called_when_already_caught_up() throws Exception {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of("R1"), true);
+
+        handover.catchUp(source).block(Duration.ofSeconds(5));
+
+        assertThat(source.replayStartedCallCount).isZero();
+        assertThat(source.replayCompletedCallCount).isZero();
+        assertThat(source.replayAbandonedCallCount).isZero();
+    }
+
+    @Test
+    void a_stopped_replay_calls_replay_abandoned_instead_of_replay_completed() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of("R1", "R2", "R3"), false);
+        source.stopAfter(2);
+
+        StepVerifier.create(handover.catchUp(source)).expectNext(false).verifyComplete();
+
+        assertThat(source.replayStartedCallCount).isEqualTo(1);
+        assertThat(source.replayCompletedCallCount).isZero();
+        assertThat(source.replayAbandonedCallCount).isEqualTo(1);
+    }
+
+    @Test
+    void a_failed_replay_calls_replay_abandoned_before_the_failure_propagates() {
+        ReactiveHandover<String> handover = handover(new ArrayList<>());
+        RuntimeException replayFailure = new RuntimeException("replay boom");
+        FakeSource source = source(List.of(), false);
+        source.replayFailure = replayFailure;
+
+        StepVerifier.create(handover.catchUp(source)).verifyErrorMessage("replay boom");
+
+        assertThat(source.replayAbandonedCallCount).isEqualTo(1);
+        assertThat(source.replayCompletedCallCount).isZero();
+    }
+
+    // A source's replayAbandoned() erroring must not replace the failure that made the engine call it.
+    @Test
+    void a_replay_abandoned_that_itself_errors_does_not_mask_the_failure_that_triggered_it() {
+        ReactiveHandover<String> handover = handover(new ArrayList<>());
+        RuntimeException replayFailure = new RuntimeException("replay boom");
+        FakeSource source = source(List.of(), false);
+        source.replayFailure = replayFailure;
+        source.onReplayAbandoned = () -> {
+            throw new IllegalStateException("replayAbandoned boom");
+        };
+
+        StepVerifier.create(handover.catchUp(source)).verifyErrorMessage("replay boom");
+    }
+
     private static final class FakeSource implements ReactiveHandover.Source<String> {
         private final List<String> history;
         private final boolean alreadyCaughtUp;
         private RuntimeException replayFailure;
         private Runnable onMarkCaughtUp;
+        private Runnable onReplayStarted;
+        private Runnable onReplayCompleted;
+        private Runnable onReplayAbandoned;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
         private int stopAfter = Integer.MAX_VALUE;
         private int keepReplayingCallCount = 0;
+        private int replayStartedCallCount = 0;
+        private int replayCompletedCallCount = 0;
+        private int replayAbandonedCallCount = 0;
 
         private void stopAfter(int deliveries) {
             this.stopAfter = deliveries;
@@ -410,6 +486,32 @@ class ReactiveHandoverTest {
                     onMarkCaughtUp.run();
                 }
             });
+        }
+
+        @Override
+        public void replayStarted() {
+            replayStartedCallCount++;
+            if (onReplayStarted != null) {
+                onReplayStarted.run();
+            }
+        }
+
+        @Override
+        public Mono<Void> replayCompleted() {
+            replayCompletedCallCount++;
+            return Mono.fromRunnable(() -> {
+                if (onReplayCompleted != null) {
+                    onReplayCompleted.run();
+                }
+            });
+        }
+
+        @Override
+        public void replayAbandoned() {
+            replayAbandonedCallCount++;
+            if (onReplayAbandoned != null) {
+                onReplayAbandoned.run();
+            }
         }
     }
 }

@@ -74,22 +74,43 @@ public final class Projections {
      * The metadata-aware form of {@link #reactiveUpdate(Projection, ViewStateRepository)}: keys the view instance with
      * the projection's {@link Projection#idWithMetadata() metadata-aware id} and folds through
      * {@link View#evolve(Object, EventMetadata, Object)}, so a projection can be keyed by metadata such as the stream id.
+     * <p>
+     * During a catch-up replay this update coalesces its reads and writes per key rather than paying one of each per
+     * event; see {@link MaterializedViewOptions} and
+     * {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository, MaterializedViewOptions)} for the setting and
+     * what it changes.
      */
     public static <S extends @Nullable Object, E, ID> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+        return reactiveUpdateWithMetadata(projection, repository, MaterializedViewOptions.defaults());
+    }
+
+    /**
+     * As {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository)}, with explicit {@code options} for how
+     * the update batches its store calls during a catch-up replay
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
+     * <p>
+     * During a replay this update buffers events per key instead of writing through immediately, and flushes the
+     * buffer (read each buffered key's state once, fold its buffered events onto it in arrival order, write once)
+     * whenever {@link MaterializedViewOptions#batchSize()} events have buffered across every key, and once more when
+     * the replay finishes. The live path (no replay in progress) is never batched. Pass
+     * {@code new MaterializedViewOptions(1)} to write through per event during a replay too, the same as before this
+     * behaviour existed.
+     */
+    public static <S extends @Nullable Object, E, ID> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, MaterializedViewOptions options) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
+        requireNonNull(options, "options cannot be null");
         BiFunction<EventMetadata, E, @Nullable ID> id = projection.idWithMetadata();
         requireNonNull(id, "projection is single-instance, pass a singletonKey: reactiveUpdate(projection, repository, singletonKey) or reactiveUpdateWithMetadata(projection, repository, singletonKey)");
         View<S, E> view = projection.view();
-        return (metadata, event) -> Mono.<Void>fromRunnable(() -> {
+        BiFunction<EventMetadata, E, @Nullable ID> resolveId = (metadata, event) -> {
             @Nullable ID instanceId = id.apply(metadata, event);
             if (instanceId == null) {
                 ProjectionKeys.failIfKeyNeededMetadata(projection.metadataKeyed(), metadata);
-                return;
             }
-            S currentState = repository.findById(instanceId).orElse(view.initialState());
-            repository.save(instanceId, view.evolve(currentState, metadata, event));
-        }).subscribeOn(Schedulers.boundedElastic());
+            return instanceId;
+        };
+        return new CoalescingMaterializedUpdate<>(view, repository, options.batchSize(), resolveId);
     }
 
     /**
@@ -104,20 +125,29 @@ public final class Projections {
     /**
      * The metadata-aware form of {@link #reactiveUpdate(Projection, ViewStateRepository, String)}.
      */
-    @SuppressWarnings("unchecked")
     public static <S extends @Nullable Object, E, ID> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey) {
+        return reactiveUpdateWithMetadata(projection, repository, singletonKey, MaterializedViewOptions.defaults());
+    }
+
+    /**
+     * As {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository, String)}, with explicit {@code options}
+     * for how the update batches its store calls during a catch-up replay. See
+     * {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository, MaterializedViewOptions)} for what batching
+     * does.
+     */
+    @SuppressWarnings("unchecked")
+    public static <S extends @Nullable Object, E, ID> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, String singletonKey, MaterializedViewOptions options) {
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(repository, "repository cannot be null");
+        requireNonNull(options, "options cannot be null");
         if (projection.id() != null) {
-            return reactiveUpdateWithMetadata(projection, repository);
+            return reactiveUpdateWithMetadata(projection, repository, options);
         }
         requireNonNull(singletonKey, "singletonKey cannot be null");
         View<S, E> view = projection.view();
         ID key = (ID) singletonKey; // a single-instance projection is Projection<S, E, String>
-        return (metadata, event) -> Mono.<Void>fromRunnable(() -> {
-            S currentState = repository.findById(key).orElse(view.initialState());
-            repository.save(key, view.evolve(currentState, metadata, event));
-        }).subscribeOn(Schedulers.boundedElastic());
+        BiFunction<EventMetadata, E, @Nullable ID> resolveId = (metadata, event) -> key;
+        return new CoalescingMaterializedUpdate<>(view, repository, options.batchSize(), resolveId);
     }
 
     /**
