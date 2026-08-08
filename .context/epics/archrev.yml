@@ -1,9 +1,9 @@
 schema_version: 1
 epic: archrev
-revision: 29
-updated_at: '2026-08-08T13:40:00+00:00'
-updated_by: orchestrator a7c1523c (B6 merged and swept, keep-decision recorded in
-  the register)
+revision: 30
+updated_at: '2026-08-08T16:05:00+00:00'
+updated_by: orchestrator a7c1523c (B8 done, held docs PR 49 review-clean, issue 644
+  closed per its convention; only B2 remains)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -521,22 +521,22 @@ units:
     issue: 644
     goal: docs-site section for replay batching (held branch, next release), incl.
       the no-extra-indexes note
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - B7
     session: subagent af7daa4872ed405ab
     deliverables:
     - check: issue_closed
       ref: 644
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED on review-clean per the issue''s stated convention (verified
+        by orchestrator): held docs PR occurrent-org/occurrent-org.github.io#49 open,
+        non-draft, mergeStateStatus CLEAN, Copilot finding fixed and resolved, docs
+        main untouched. PR merges at the next release'
     blocking_on: []
-    next_action: 'running as in-session subagent since 2026-08-08T14:25Z in the docs
-      repo checkout; deliverable is a held review-clean docs PR, issue 644 closes on
-      review-clean; docs repo unwatched by the monitor by design, the subagent
-      completion notification is the wake signal'
+    next_action: 'none for the epic; RELEASE-DAY REMINDER carried in the ORCHESTRATOR.md archrev bullet: merge held docs PR 49 and add the js/_partials/main.js addedTags entry for the new version (flagged in the PR body)'
     last_meaningful_progress_at: '2026-08-08T14:25:00+00:00'
     observed: {}
     assessment: registered from the index-question investigation, approved by Johan
