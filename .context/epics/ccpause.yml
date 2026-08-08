@@ -1,0 +1,55 @@
+schema_version: 1
+epic: ccpause
+revision: 1
+updated_at: '2026-08-08T15:55:00+00:00'
+updated_by: orchestrator session worktree-mobile-setup-916a9c (ccpause registration)
+baseline:
+  repo: johanhaleby/occurrent
+  branch: main
+authority: 'see .context/orchestrator-policy.yml (standing merge, sibling leniency,
+  reasoned-decline-open, memory checkpoints); plan approved by Johan 2026-08-08 via
+  structured ask after a two-round adversarial review (round 2 APPROVE); plan at
+  /Users/johan/.claude/plans/https-github-com-johanhaleby-occurrent-i-lucky-canyon.md;
+  epic scoped to issue 565 alone, milestone deliberately skipped (one-unit epic)'
+pending_actions:
+- id: act-001
+  type: dispatch-chip
+  target: 'U1 chip task_d649cf9f: ⌁[ccpause/U1#565] Fix waiting-consumer pause ·
+    Opus/high (plan-first, /johan-plan, full brief with ADR 105 constraints, contract
+    ask at plan gate, saga-timer hard constraint)'
+  expected: chip visible to Johan; session enters fleet on his click
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T15:52:00+00:00'
+units:
+  U1:
+    issue: 565
+    goal: CompetingConsumerSubscriptionModel remembers and honours a pause of a
+      consumer waiting for the lock, with truthful introspection, within the ADR
+      105/106 constraints and the saga-timer hard constraint
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 565
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'chip task_d649cf9f spawned 2026-08-08 ~15:52Z, awaiting launch;
+      issue 565 claimed by orchestrator (in-progress label + comment 5226684082);
+      plan-first, so the first observable after launch is the unit plan at Johan''s
+      approval gate carrying the SubscriptionModelLifeCycle contract ask and the
+      downshift recommendation'
+    last_meaningful_progress_at: '2026-08-08T15:52:00+00:00'
+    observed: {}
+    assessment: fragile-area state-model change on shipped 0.32.0 API; the two-round
+      plan review is folded into the brief, so the unit starts constrained rather
+      than blank-slate
