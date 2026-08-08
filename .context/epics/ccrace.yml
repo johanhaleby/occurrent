@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 5
-updated_at: '2026-08-08T23:15:00+00:00'
-updated_by: 'orchestrator session b72aef49 (U2 659 and U3 660 adopted per Johan,
-  issues filed and claimed, U2 chip journaled)'
+revision: 10
+updated_at: '2026-08-09T00:55:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (U2 delivered PR 664 ci-wait, U4
+  green at d6b2b448 with merge held for its DELIVERY_RESULT)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,13 +16,28 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-004
+  type: dispatch-chip
+  target: 'U4 chip: ⌁[ccrace/U4] Drop strategy synchronized · Sonnet/medium (not
+    plan-first, ADR 113 carries the argument, BLOCKED if the monitors protect
+    anything else)'
+  expected: 'chip visible to Johan; session enters fleet on his click; VERIFIED:
+    spawn returned task_2f9b0ff5, chip pending at position 1'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-08T23:55:00+00:00'
 - id: act-003
   type: dispatch-chip
   target: 'U2 chip: ⌁[ccrace/U2#659] Lease expiry on one clock · Sonnet/high
     (plan-first, /johan-plan, the testing-story question named, the upsert and
     DUPLICATE_KEY interplay named, 658 regression guard)'
   expected: 'chip visible to Johan; session enters fleet on his click; VERIFIED:
-    spawn returned task_2f041f39, chip pending at position 1'
+    chip task_2f041f39 started by Johan as session local_3fc0e844 (branch
+    johan/priceless-bardeen-535c2c); its brief carried a dead orchestrator id, a
+    correction message was queued to the session (real id local_f74d8561, the 662
+    dedup, two out-of-scope additions), and the corrected replacement chip
+    task_794b9bfb was dismissed as superseded'
   status: VERIFIED
   attempts: 1
   safe_to_repeat: false
@@ -60,9 +75,9 @@ units:
       the LOCK_RELEASED stand-down semantics, for both Mongo lease strategies
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: local_02717196 (archived)
     deliverables:
     - check: pr_merged
       ref: 658
@@ -76,12 +91,15 @@ units:
       evidence: CLOSED via Fixes, verified by orchestrator; in-progress label was
         dropped by the worker at PR open
     blocking_on: []
-    next_action: 'hold the session sweep until the worker''s DELIVERY_RESULT
-      arrives or the session is confirmed stopped; verify main matrix on squash
-      c50bd2482; open claim in the PR body is UNVERIFIED: the two lease weaknesses
-      it says were filed separately do not exist as issues yet (fencing-token
-      version with no callers, expiry judged against the asking node''s clock),
-      adoption ask routed to Johan'
+    next_action: 'none; DELIVERY_RESULT received (done, head bc609781d matched the
+      merge pin), main matrix on squash c50bd2482 verified 27/27 green, session
+      archived, worktree removed, both local branches deleted, remote branch
+      deleted by the merge. The PR-body filing claim resolved: the worker filed
+      661/662 in parallel with the orchestrator''s 660/659, duplicates closed in
+      favor of the claimed pair. Worker severity note recorded: the resurrected
+      consumer kept the lease for the process lifetime because the model
+      unregisters from its own map first, one subscription out of service
+      cluster-wide until restart'
     last_meaningful_progress_at: '2026-08-08T22:02:00+00:00'
     observed:
       pr_658:
@@ -106,14 +124,14 @@ units:
     goal: lease expiry is written and judged on one clock, the database clock, in
       MongoListenerLockService, for both Mongo lease strategies, with the
       deterministic timing-test story resolved at the plan gate
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_3fc0e844
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 664
       met: false
       evidence: null
     - check: issue_closed
@@ -121,10 +139,18 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_2f041f39 spawned 2026-08-08 ~23:20Z, awaiting Johan's
-      launch; first expected observable is the unit's plan at his approval gate
-    last_meaningful_progress_at: '2026-08-08T23:15:00+00:00'
-    observed: {}
+    next_action: ci-wait on PR 664; on green with threads resolved, verify the
+      DELIVERY_RESULT and any PR-body bookkeeping claims, then CAS-merge pinned to
+      the verified full head SHA; U3's chip spawns in the sweep that verifies this
+      merge
+    last_meaningful_progress_at: '2026-08-09T00:50:00+00:00'
+    observed:
+      pr_664:
+        head: b9d37acaeac94c3eb64df50387ce6b4ed1950ebc
+        note: opened ~00:50Z from johan/priceless-bardeen-535c2c, checks running,
+          plan gate evidently cleared in the unit session
+        via: monitor bu11n182l + gh pr view
+        at: '2026-08-09T00:55:00+00:00'
     assessment: 'contained in MongoListenerLockService but design-sensitive in two
       places the plan must answer, how the injectable Clock test harness survives a
       server-side clock, and whether the upsert plus DUPLICATE_KEY acquisition path
@@ -157,3 +183,45 @@ units:
       checkpoint writes (cross-module design, escalates at the plan gate before
       building) or amend the javadoc to state what a handover can redo, with a bias
       to the smaller option per the overengineering guard'
+  U4:
+    issue: null
+    goal: remove the now-redundant synchronized from registerCompetingConsumer and
+      unregisterCompetingConsumer in NativeMongoLeaseCompetingConsumerStrategy and
+      SpringMongoLeaseCompetingConsumerStrategy, per the ADR 113 note, after
+      verifying those monitors protect nothing else
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_5384c04b
+    deliverables:
+    - check: pr_merged
+      ref: 663
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'PR 663 is green at head ece619739 after a rerun (both JDK
+      variants of the subscription-mongodb-spring shard failed once, the shard
+      covering exactly this PR''s touched code, then passed on rerun with the head
+      unchanged); merge HELD until the worker''s DELIVERY_RESULT arrives, because
+      its flake-vs-real verdict is material for a synchronization-removal change;
+      if no DELIVERY_RESULT or session end by the next heartbeat, read the session
+      tail; then CAS-merge pinned to the verified full head SHA; sweep caution
+      applies to the reused worktree'
+    last_meaningful_progress_at: '2026-08-09T00:10:00+00:00'
+    observed:
+      worktree:
+        note: 'the host REUSED the archived ccpause orchestrator session''s
+          worktree (worktree-mobile-setup-916a9c) instead of creating a fresh one,
+          checked out as branch ccrace/u4-remove-wrapper-synchronized with U4''s
+          edits in flight; the ccpause session is archived so nothing else writes
+          there, but at sweep time this worktree is removed only after confirming
+          the ccpause session was not reopened into it, and never while dirty'
+        via: git worktree list + session list + a bounced message (ccpause session
+          archived)
+        at: '2026-08-09T00:10:00+00:00'
+    assessment: 'adopted from U1''s DELIVERY_RESULT finding (recorded in ADR 113,
+      no tracker issue, the ADR is the durable trace); disjoint files from U2 (its
+      module is the common strategy module, these are the native and spring wrapper
+      modules) so it parallelizes; changelog collision with U2 is an expected
+      rolling conflict pr-fix resolves keep-both'
