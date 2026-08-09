@@ -121,3 +121,8 @@ computes a version for each lease and its own javadoc says a caller needs it as 
 until its next refresh. And whether a lease has expired is judged against the asking node's own clock
 while `expiresAt` was written from the holder's, so a node whose clock runs fast can take a healthy lease.
 Both are filed separately.
+
+> **Superseded in part by [ADR 116](0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md).**
+> `ListenerLock.version()` now has a caller. `MongoLeaseCompetingConsumerStrategySupport.acquireLease` reads
+> it to record the version behind each granted lease, which a checkpoint write is compared against. The
+> clock-skew weakness is unaffected and stays filed separately.
