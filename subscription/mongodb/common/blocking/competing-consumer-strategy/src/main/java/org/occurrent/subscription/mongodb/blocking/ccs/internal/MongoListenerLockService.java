@@ -160,7 +160,7 @@ class MongoListenerLockService {
      */
     static UpdateResult remove(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, String subscriptionId, String subscriberId) {
         return retryStrategy.execute(() -> {
-            logDebug("Before removing lock (subscriptionId={})", subscriptionId);
+            logDebug("Before releasing lock (subscriptionId={})", subscriptionId);
             return collection.updateOne(
                     and(eq("_id", subscriptionId), eq("subscriberId", subscriberId)),
                     combine(unset("subscriberId"), unset("expiresAt")));
