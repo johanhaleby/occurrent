@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 4
-updated_at: '2026-08-09T10:10:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F0 merged on Johan''s wording
-  confirmation, worktree swept)'
+revision: 5
+updated_at: '2026-08-09T10:35:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F1 DELIVERY_RESULT received,
+  PR 675 awaiting CI)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -145,9 +145,21 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: in-session subagent running (chip task_42b4ec6d dismissed, Johan on mobile); on its DELIVERY_RESULT, verify the PR and babysit CI via monitor bciv33mhs
-    last_meaningful_progress_at: '2026-08-09T09:55:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 675 pinned to dc7af83190cd9cddc8c6b8fecd2241c310efd50d
+      when checks complete green and review threads allow; worker finished
+      (DELIVERY_RESULT done, 4 mutation-verified named tests, forbidden-path
+      diff empty), its worktree held until the merge in case a fix round is
+      needed
+    last_meaningful_progress_at: '2026-08-09T10:30:00+00:00'
+    observed:
+      pr_675:
+        head: dc7af83190cd9cddc8c6b8fecd2241c310efd50d
+        note: 'opened ~10:25Z from johan/665-strategy-fencing-token, checks
+          running at first observation; DELIVERY_RESULT done with matching
+          SHA; targeted -am builds green across the four touched modules,
+          21 plus 13 plus 13 tests green locally'
+        via: monitor bciv33mhs + gh pr view + worker DELIVERY_RESULT
+        at: '2026-08-09T10:30:00+00:00'
     assessment: 'additive strategy-side unit; Sonnet/high; changelog Changes
       entry; dispatched in parallel with F2 per Johan''s start-the-chips ask
       (never a code dependency, only changelog keep-both conflicts expected)'
