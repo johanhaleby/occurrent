@@ -181,7 +181,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                             // If nothing is stored, or the stored position is a DCB position (written by this catch-up),
                             // save the live change-stream position so the wrapped subscription resumes from there.
                             if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
-                                position = cfg.storage().save(subscriptionId, globalCheckpoint);
+                                position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
                             } else if (position == null) {
                                 return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                             }
@@ -229,7 +229,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                     .peek(action)
                     .filter(returnIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class, CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
                     .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
-                            cfg -> cfg.storage().save(subscriptionId, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)))));
+                            cfg -> cfg.storage().save(subscriptionId, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)), writeConditionFor(cfg, subscriptionId))));
         }
     }
 

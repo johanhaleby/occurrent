@@ -323,7 +323,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                             // Nothing stored, or a time-based position from catch-up: save globalCheckpoint, since
                             // the wrapped subscription may not support time-based positions.
                             if ((position == null || isTimeBasedCheckpoint(position)) && globalCheckpoint != null) {
-                                position = cfg.storage().save(subscriptionId, globalCheckpoint);
+                                position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
                             } else if (position == null) {
                                 // globalCheckpoint is also null: start at subscriptionModelDefault if the delegate may subscribe
                                 return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
@@ -427,7 +427,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                             // catch-up), save the live change-stream position so the wrapped subscription resumes
                             // from there.
                             if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
-                                position = cfg.storage().save(subscriptionId, globalCheckpoint);
+                                position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
                             } else if (position == null) {
                                 return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                             }
@@ -525,7 +525,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             takeWhile
                     .peek(action)
                     .filter(returnIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
-                    .forEach(e -> doIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, positionToPersist.apply(e))));
+                    .forEach(e -> doIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, positionToPersist.apply(e), writeConditionFor(cfg, subscriptionId))));
         }
     }
 

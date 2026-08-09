@@ -41,6 +41,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
@@ -846,9 +847,9 @@ public class CatchupSubscriptionModelTest {
         storage = new NativeMongoCheckpointStorage(database, "storage") {
             @NullMarked
             @Override
-            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
                 numberOfSavedPositions.incrementAndGet();
-                return super.save(subscriptionId, checkpoint);
+                return super.save(subscriptionId, checkpoint, condition);
             }
         };
 

@@ -18,7 +18,9 @@ package org.occurrent.subscription.blocking.durable.catchup;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.util.Objects;
@@ -58,7 +60,21 @@ public sealed interface CheckpointStorageConfig {
      * @return A {@link UseCheckpointInStorage} instance.
      */
     static UseCheckpointInStorage useCheckpointStorage(CheckpointStorage storage) {
-        return new UseOnlyCheckpointInStorage(storage);
+        return new UseOnlyCheckpointInStorage(storage, null);
+    }
+
+    /**
+     * Use a specific storage instance, stamping every checkpoint write this configuration triggers with a version
+     * from {@code writeVersionSource} (see ADR 116). Otherwise the same as {@link #useCheckpointStorage(CheckpointStorage)}.
+     *
+     * @param storage            The storage to use. Must be the same instance as used by the wrapped subscription in order to allow continuing from the checkpoint
+     *                           on application restart.
+     * @param writeVersionSource Asked for a version before each checkpoint write. A version stamps the write
+     *                           {@code notOlderThan} it, an empty answer or no source at all stamps it {@code any()}.
+     * @return A {@link UseCheckpointInStorage} instance.
+     */
+    static UseCheckpointInStorage useCheckpointStorage(CheckpointStorage storage, CheckpointWriteVersionSource writeVersionSource) {
+        return new UseOnlyCheckpointInStorage(storage, writeVersionSource);
     }
 
     record DontUseCheckpointInStorage() implements CheckpointStorageConfig {
@@ -66,6 +82,15 @@ public sealed interface CheckpointStorageConfig {
 
     sealed interface UseCheckpointInStorage extends CheckpointStorageConfig {
         CheckpointStorage storage();
+
+        /**
+         * The source asked for a version before every checkpoint write this configuration triggers, or
+         * {@code null} for none, in which case every write is unconditional. Set by
+         * {@link #useCheckpointStorage(CheckpointStorage, CheckpointWriteVersionSource)}.
+         *
+         * @return The configured {@link CheckpointWriteVersionSource}, or {@code null}.
+         */
+        @Nullable CheckpointWriteVersionSource checkpointWriteVersionSource();
 
         /**
          * Configure the catch-up subscription to periodically store the event position in a storage in case
@@ -79,7 +104,7 @@ public sealed interface CheckpointStorageConfig {
          * @see EveryN
          */
         default PersistCheckpointDuringCatchupPhase andPersistCheckpointDuringCatchupPhaseWhen(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
-            return new PersistCheckpointDuringCatchupPhase(storage(), persistCloudEventPositionPredicate);
+            return new PersistCheckpointDuringCatchupPhase(storage(), persistCloudEventPositionPredicate, checkpointWriteVersionSource());
         }
 
         /**
@@ -92,7 +117,7 @@ public sealed interface CheckpointStorageConfig {
          * @return An instance of {@link PersistCheckpointDuringCatchupPhase}
          */
         default PersistCheckpointDuringCatchupPhase andPersistCheckpointDuringCatchupPhaseForEveryNEvents(int persistPositionForEveryNCloudEvent) {
-            return new PersistCheckpointDuringCatchupPhase(storage(), EveryN.every(persistPositionForEveryNCloudEvent));
+            return new PersistCheckpointDuringCatchupPhase(storage(), EveryN.every(persistPositionForEveryNCloudEvent), checkpointWriteVersionSource());
         }
     }
 
@@ -100,18 +125,24 @@ public sealed interface CheckpointStorageConfig {
      * @param storage                            The storage that will maintain the checkpoint during catch-up mode.
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
      *                                           Supply a predicate that always returns {@code false} to never store the position.
+     * @param checkpointWriteVersionSource       Asked for a version before every checkpoint write this configuration triggers, or {@code null} for none.
      * @see UseCheckpointInStorage#andPersistCheckpointDuringCatchupPhaseWhen(Predicate)
      * @see UseCheckpointInStorage#andPersistCheckpointDuringCatchupPhaseForEveryNEvents(int)
      */
     record PersistCheckpointDuringCatchupPhase(CheckpointStorage storage,
-                                                         Predicate<CloudEvent> persistCloudEventPositionPredicate) implements UseCheckpointInStorage {
+                                                         Predicate<CloudEvent> persistCloudEventPositionPredicate,
+                                                         @Nullable CheckpointWriteVersionSource checkpointWriteVersionSource) implements UseCheckpointInStorage {
         public PersistCheckpointDuringCatchupPhase {
             Objects.requireNonNull(storage, CheckpointStorage.class.getSimpleName() + " cannot be null");
             Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
         }
     }
 
-    record UseOnlyCheckpointInStorage(CheckpointStorage storage) implements UseCheckpointInStorage {
+    /**
+     * @param storage                      The storage to use.
+     * @param checkpointWriteVersionSource Asked for a version before every checkpoint write this configuration triggers, or {@code null} for none.
+     */
+    record UseOnlyCheckpointInStorage(CheckpointStorage storage, @Nullable CheckpointWriteVersionSource checkpointWriteVersionSource) implements UseCheckpointInStorage {
         public UseOnlyCheckpointInStorage {
             Objects.requireNonNull(storage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         }
