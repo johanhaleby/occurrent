@@ -27,6 +27,7 @@ import org.springframework.data.mongodb.core.query.Update;
 
 import java.time.Duration;
 import java.util.OptionalLong;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -44,10 +45,11 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * concurrent advances for the same projection id, with no read-modify-write race.
  * <p>
  * Two different mechanisms pace two different things here, and they do not overlap. The {@link RetryStrategy} retries
- * a read or a write that failed, so a transient store error neither fails the projection's delivery on the fold path
- * nor ends a caller's wait on the read path. The {@link Backoff} decides how long
- * {@link #waitUntilApplied(String, long, Duration)} sleeps between polls that succeeded and simply found the
- * projection still behind.
+ * a read or a write that failed, so a transient store error neither fails {@link #advance(String, long)} nor a plain
+ * {@link #appliedPosition(String)} call. {@link #waitUntilApplied(String, long, Duration)} is the one exception. Its
+ * own reads retry on the same {@link RetryStrategy}, but bounded to the wait's deadline, so a sustained store outage
+ * still surfaces as a timeout rather than an unbounded block. The {@link Backoff} decides how long a wait sleeps
+ * between polls that succeeded and simply found the projection still behind.
  */
 @NullMarked
 class MongoAppliedPositionStore implements AppliedPositionStore {
@@ -80,15 +82,33 @@ class MongoAppliedPositionStore implements AppliedPositionStore {
     @Override
     public OptionalLong appliedPosition(String projectionId) {
         requireNonNull(projectionId, "projectionId cannot be null");
-        Supplier<OptionalLong> read = () -> {
-            Document document = mongoOperations.findOne(query(where(ID).is(projectionId)), Document.class, collection);
-            if (document == null) {
-                return OptionalLong.empty();
-            }
-            Number position = document.get(POSITION, Number.class);
-            return position == null ? OptionalLong.empty() : OptionalLong.of(position.longValue());
-        };
+        Supplier<OptionalLong> read = () -> readOnce(projectionId);
         return requireNonNull(executeWithRetry(read, __ -> !shutdown, retryStrategy).get());
+    }
+
+    private OptionalLong readOnce(String projectionId) {
+        Document document = mongoOperations.findOne(query(where(ID).is(projectionId)), Document.class, collection);
+        if (document == null) {
+            return OptionalLong.empty();
+        }
+        Number position = document.get(POSITION, Number.class);
+        return position == null ? OptionalLong.empty() : OptionalLong.of(position.longValue());
+    }
+
+    /**
+     * A read for {@link #waitUntilApplied(String, long, Duration, Backoff)} whose retries stop once {@code deadlineNanos}
+     * ({@link System#nanoTime()} scale) passes, rather than continuing on {@link #retryStrategy}'s own unbounded
+     * schedule. A store that is still failing once the deadline arrives answers empty instead of retrying past it,
+     * so the wait's own deadline check is what ends the wait.
+     */
+    private OptionalLong readOnceBoundedBy(String projectionId, long deadlineNanos) {
+        Supplier<OptionalLong> read = () -> readOnce(projectionId);
+        Predicate<Throwable> notShutdownAndBeforeDeadline = __ -> !shutdown && System.nanoTime() < deadlineNanos;
+        try {
+            return requireNonNull(executeWithRetry(read, notShutdownAndBeforeDeadline, retryStrategy).get());
+        } catch (RuntimeException e) {
+            return OptionalLong.empty();
+        }
     }
 
     @Override
@@ -104,6 +124,52 @@ class MongoAppliedPositionStore implements AppliedPositionStore {
     @Override
     public boolean waitUntilApplied(String projectionId, long position, Duration timeout) {
         return waitUntilApplied(projectionId, position, timeout, pollBackoff);
+    }
+
+    /**
+     * Overrides {@link AppliedPositionStore}'s default loop so each poll's read retries against {@link #retryStrategy}
+     * bounded to this wait's own deadline, rather than {@link #retryStrategy}'s unbounded schedule. Without this, a
+     * sustained store outage keeps a single read retrying forever and the wait never reaches the deadline check that
+     * is supposed to end it. The loop shape (read, check, sleep, grow the backoff) otherwise matches the interface
+     * default. Only the read is store-specific.
+     */
+    @Override
+    public boolean waitUntilApplied(String projectionId, long position, Duration timeout, Backoff backoff) {
+        requireNonNull(projectionId, "projectionId cannot be null");
+        requireNonNull(timeout, "timeout cannot be null");
+        requireNonNull(backoff, "backoff cannot be null");
+        if (position <= 0) {
+            throw new IllegalArgumentException("position must be positive but was " + position);
+        }
+        if (backoff instanceof Backoff.None) {
+            throw new IllegalArgumentException("backoff cannot be Backoff.none(), a wait polls the store and needs a delay between polls. Use Backoff.fixed(..) or Backoff.exponential(..).");
+        }
+        long deadlineNanos = System.nanoTime() + timeout.toNanos();
+        long intervalNanos = switch (backoff) {
+            case Backoff.Fixed fixed -> Duration.ofMillis(fixed.millis).toNanos();
+            case Backoff.Exponential exponential -> exponential.initial.toNanos();
+            case Backoff.None ignored -> throw new IllegalStateException("unreachable, rejected above");
+        };
+        while (true) {
+            OptionalLong applied = readOnceBoundedBy(projectionId, deadlineNanos);
+            if (applied.isPresent() && applied.getAsLong() >= position) {
+                return true;
+            }
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                return false;
+            }
+            long sleepNanos = Math.min(intervalNanos, remainingNanos);
+            try {
+                Thread.sleep(sleepNanos / 1_000_000, (int) (sleepNanos % 1_000_000));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            if (backoff instanceof Backoff.Exponential exponential) {
+                intervalNanos = Math.min((long) (intervalNanos * exponential.multiplier), exponential.max.toNanos());
+            }
+        }
     }
 
     @PreDestroy

@@ -49,6 +49,12 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * {@link #waitUntilApplied(String, long, Duration)} sleeps between polls that succeeded and simply found the
  * projection still behind. {@link Retry} rather than the blocking {@code RetryStrategy} because this is the reactive
  * stack, matching how the reactive starter retries elsewhere.
+ * <p>
+ * {@link #defaultRetry()} gives up after a fixed number of attempts rather than retrying forever, a deliberate
+ * divergence from the blocking store's default. This store has no {@code waitUntilApplied} override with a
+ * wait-local deadline to fall back on, so bounding the retry itself is what keeps a sustained outage from blocking
+ * {@link #appliedPosition(String)} and {@link #advance(String, long)} indefinitely. The two stores do not behave
+ * the same way under a sustained outage, and an application that needs parity should supply its own {@link Retry}.
  */
 @NullMarked
 class ReactiveMongoAppliedPositionStore implements AppliedPositionStore {
@@ -62,8 +68,12 @@ class ReactiveMongoAppliedPositionStore implements AppliedPositionStore {
     private final Backoff pollBackoff;
 
     /**
-     * Retries a failing read or write with exponential backoff from 100 ms up to 2 seconds, mirroring the blocking
-     * store's default, and polls a wait at {@link AppliedPositionStore#DEFAULT_POLL_BACKOFF}.
+     * Retries a failing read or write with backoff from 100 ms up to 2 seconds, giving up after 5 retries (6
+     * attempts total) and surfacing the last failure. The blocking store does not give up this way.
+     * {@code MongoAppliedPositionStore} retries the same backoff forever, since it keeps {@code advance(..)} durable
+     * under an outage and bounds only {@code waitUntilApplied(..)}'s own reads to the wait's deadline instead. This
+     * store has no such wait-local bound, so its default retries a fixed number of times rather than forever, and
+     * polls a wait at {@link AppliedPositionStore#DEFAULT_POLL_BACKOFF}.
      */
     ReactiveMongoAppliedPositionStore(ReactiveMongoOperations mongoOperations, String collection) {
         this(mongoOperations, collection, defaultRetry(), DEFAULT_POLL_BACKOFF);
