@@ -64,6 +64,23 @@ public interface CheckpointStorageFixture {
     boolean preservesCheckpointType(Checkpoint checkpoint);
 
     /**
+     * Whether this storage evaluates a {@link org.occurrent.subscription.CheckpointWriteCondition} for real.
+     * <p>
+     * {@code true}, the default, means {@code notOlderThan} and {@code ifAbsent} are both accepted and refused as
+     * documented, and {@code any()} leaves a stored version untouched and carries it forward. {@code false} means
+     * this storage refuses every condition but {@link org.occurrent.subscription.CheckpointWriteCondition#any()}
+     * with {@link UnsupportedOperationException}, which is the interim answer some of Occurrent's own storages give
+     * until a sibling change teaches them the real comparison.
+     * <p>
+     * This is a declaration rather than a question put to the storage, the same reason
+     * {@link #preservesCheckpointType(Checkpoint)} is one: it is a property of what the storage was built to do, and
+     * nothing on {@code CheckpointStorage} reports it back.
+     */
+    default boolean evaluatesWriteConditions() {
+        return true;
+    }
+
+    /**
      * Checkpoint types of the implementation's own, round-tripped in addition to the two the suite always covers.
      * <p>
      * The suite covers {@code StringBasedCheckpoint} and {@code GlobalCheckpoint} for every storage, because both live

@@ -22,6 +22,8 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
@@ -29,10 +31,12 @@ import org.occurrent.tck.FailureNamesTheTestClass;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The contract every {@link CheckpointStorage} owes. A checkpoint saved for a subscription id can be read back, is
@@ -356,6 +360,120 @@ public abstract class CheckpointStorageConformance {
                     .as("a subscription that was cancelled and registered again must be able to store a position, so "
                             + "delete cannot leave a tombstone that refuses later saves")
                     .isEqualTo("again");
+        }
+    }
+
+    @Nested
+    @DisplayName("write conditions")
+    class WriteConditions {
+
+        @Test
+        void not_older_than_is_accepted_when_nothing_is_stored_yet() {
+            String id = subscriptionId();
+
+            if (!fixture().evaluatesWriteConditions()) {
+                assertThatThrownBy(() -> checkpointStorage().save(id, new StringBasedCheckpoint("v"), CheckpointWriteCondition.notOlderThan(0)))
+                        .as("a storage that declares it does not evaluate write conditions refuses anything but any()")
+                        .isInstanceOf(UnsupportedOperationException.class);
+                return;
+            }
+
+            checkpointStorage().save(id, new StringBasedCheckpoint("first-ever"), CheckpointWriteCondition.notOlderThan(0));
+
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString())
+                    .as("nothing stored means a checkpoint written before this condition existed, so the write must "
+                            + "be accepted whatever version it offers")
+                    .isEqualTo("first-ever");
+            assertThat(checkpointStorage().writeVersion(id))
+                    .as("the offered version becomes the stored one")
+                    .isEqualTo(OptionalLong.of(0));
+        }
+
+        @Test
+        void not_older_than_accepts_a_version_not_below_the_one_stored_and_refuses_a_lower_one() {
+            String id = subscriptionId();
+
+            if (!fixture().evaluatesWriteConditions()) {
+                assertThatThrownBy(() -> checkpointStorage().save(id, new StringBasedCheckpoint("v"), CheckpointWriteCondition.notOlderThan(5)))
+                        .as("a storage that declares it does not evaluate write conditions refuses anything but any()")
+                        .isInstanceOf(UnsupportedOperationException.class);
+                return;
+            }
+
+            checkpointStorage().save(id, new StringBasedCheckpoint("at-5"), CheckpointWriteCondition.notOlderThan(5));
+            checkpointStorage().save(id, new StringBasedCheckpoint("at-7"), CheckpointWriteCondition.notOlderThan(7));
+
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString())
+                    .as("a version not below the stored one is accepted and its checkpoint written")
+                    .isEqualTo("at-7");
+            assertThat(checkpointStorage().writeVersion(id))
+                    .as("the accepted version becomes the stored one")
+                    .isEqualTo(OptionalLong.of(7));
+
+            assertThatThrownBy(() -> checkpointStorage().save(id, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(3)))
+                    .as("a version below the stored one is refused, which is what keeps a node whose lease moved on "
+                            + "from writing a checkpoint over a newer one")
+                    .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString())
+                    .as("a refused write must not change the stored checkpoint")
+                    .isEqualTo("at-7");
+            assertThat(checkpointStorage().writeVersion(id))
+                    .as("a refused write must not change the stored version")
+                    .isEqualTo(OptionalLong.of(7));
+        }
+
+        @Test
+        void if_absent_is_accepted_only_when_nothing_is_stored() {
+            String id = subscriptionId();
+
+            if (!fixture().evaluatesWriteConditions()) {
+                assertThatThrownBy(() -> checkpointStorage().save(id, new StringBasedCheckpoint("v"), CheckpointWriteCondition.ifAbsent()))
+                        .as("a storage that declares it does not evaluate write conditions refuses anything but any()")
+                        .isInstanceOf(UnsupportedOperationException.class);
+                return;
+            }
+
+            checkpointStorage().save(id, new StringBasedCheckpoint("pinned"), CheckpointWriteCondition.ifAbsent());
+
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString())
+                    .as("nothing was stored for this subscription id, so the pinning write must be accepted")
+                    .isEqualTo("pinned");
+
+            assertThatThrownBy(() -> checkpointStorage().save(id, new StringBasedCheckpoint("overwrite"), CheckpointWriteCondition.ifAbsent()))
+                    .as("a checkpoint already exists for this subscription id, so a second ifAbsent write must be refused")
+                    .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString())
+                    .as("a refused write must not change the stored checkpoint")
+                    .isEqualTo("pinned");
+        }
+
+        @Test
+        void any_leaves_the_stored_version_untouched_and_carries_it_forward() {
+            String id = subscriptionId();
+
+            if (!fixture().evaluatesWriteConditions()) {
+                // any() is the one condition every storage is required to support, whatever it declares.
+                checkpointStorage().save(id, new StringBasedCheckpoint("unconditional"), CheckpointWriteCondition.any());
+                assertThat(requireNonNull(checkpointStorage().read(id)).asString()).isEqualTo("unconditional");
+                return;
+            }
+
+            checkpointStorage().save(id, new StringBasedCheckpoint("fenced"), CheckpointWriteCondition.notOlderThan(9));
+
+            checkpointStorage().save(id, new StringBasedCheckpoint("unconditional"), CheckpointWriteCondition.any());
+
+            assertThat(requireNonNull(checkpointStorage().read(id)).asString())
+                    .as("any() writes the checkpoint")
+                    .isEqualTo("unconditional");
+            assertThat(checkpointStorage().writeVersion(id))
+                    .as("any() must leave the stored version exactly as it was, carrying it forward rather than "
+                            + "clearing it, since an unconditional write from a hand-wired caller or a node mid-deploy "
+                            + "must not re-arm the fence at zero")
+                    .isEqualTo(OptionalLong.of(9));
+
+            assertThatThrownBy(() -> checkpointStorage().save(id, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(4)))
+                    .as("the version any() carried forward must still be enforced by a later conditional write")
+                    .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
         }
     }
 }

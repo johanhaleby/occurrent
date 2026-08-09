@@ -34,6 +34,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
@@ -400,8 +401,13 @@ class ReactiveAnnotationFailFastTest {
                 }
 
                 @Override
-                public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
                     return Mono.just(checkpoint);
+                }
+
+                @Override
+                public Mono<Long> writeVersion(String subscriptionId) {
+                    return Mono.empty();
                 }
 
                 @Override

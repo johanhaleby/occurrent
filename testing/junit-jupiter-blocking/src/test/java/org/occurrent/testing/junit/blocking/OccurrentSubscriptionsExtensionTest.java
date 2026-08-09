@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
@@ -35,6 +36,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -508,7 +510,7 @@ class OccurrentSubscriptionsExtensionTest {
                 });
     }
 
-    // CheckpointStorage has four methods, so this cannot be a lambda. Only delete is exercised here, and the rest
+    // CheckpointStorage has five methods, so this cannot be a lambda. Only delete is exercised here, and the rest
     // throw rather than returning a default, so a future change that starts calling them says so.
     private record RecordingCheckpointStorage(List<String> deleted, String prefix) implements CheckpointStorage {
 
@@ -522,8 +524,13 @@ class OccurrentSubscriptionsExtensionTest {
         }
 
         @Override
-        public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
             throw new UnsupportedOperationException("save");
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            throw new UnsupportedOperationException("writeVersion");
         }
 
         @Override

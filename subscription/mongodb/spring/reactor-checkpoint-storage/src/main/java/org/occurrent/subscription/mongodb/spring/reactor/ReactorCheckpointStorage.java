@@ -22,6 +22,7 @@ import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
@@ -79,7 +80,13 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
-    public Mono<Checkpoint> save(String subscriptionId, Checkpoint changeStreamPosition) {
+    public Mono<Checkpoint> save(String subscriptionId, Checkpoint changeStreamPosition, CheckpointWriteCondition condition) {
+        // This storage does not evaluate a condition yet, so only the unconditional one is honoured.
+        if (!(condition instanceof CheckpointWriteCondition.Any)) {
+            return Mono.error(new UnsupportedOperationException(
+                    ReactorCheckpointStorage.class.getSimpleName() + " cannot evaluate " + condition + " yet, only "
+                            + CheckpointWriteCondition.any() + " is supported."));
+        }
         Mono<?> result;
         if (changeStreamPosition instanceof MongoResumeTokenCheckpoint mongoResumeTokenCheckpoint) {
             result = persistResumeTokenStreamPosition(subscriptionId, mongoResumeTokenCheckpoint.resumeToken);
@@ -91,6 +98,12 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
             result = persistDocumentStreamPosition(subscriptionId, document);
         }
         return result.thenReturn(changeStreamPosition);
+    }
+
+    @Override
+    public Mono<Long> writeVersion(String subscriptionId) {
+        // No version is recorded yet, since this storage does not evaluate a condition. See save(..).
+        return Mono.empty();
     }
 
     @Override

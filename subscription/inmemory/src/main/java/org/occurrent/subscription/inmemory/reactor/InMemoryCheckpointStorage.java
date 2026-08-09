@@ -18,11 +18,15 @@ package org.occurrent.subscription.inmemory.reactor;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import reactor.core.publisher.Mono;
 
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static java.util.Objects.requireNonNull;
 
@@ -38,11 +42,17 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Every returned {@code Mono} is cold, so nothing is read, stored, or deleted until it is subscribed to. Arguments are
  * still validated eagerly, so a {@code null} fails the calling code and not a subscriber far away.
+ * <p>
+ * {@link CheckpointWriteCondition} is evaluated for real, not refused. The checkpoint and its version are two
+ * separate maps, since {@link CheckpointWriteCondition#any()} writes the former and leaves the latter untouched. A
+ * refusal signals {@link Mono#error(Throwable)} rather than throwing from assembly.
  */
 @NullMarked
 public class InMemoryCheckpointStorage implements CheckpointStorage {
 
     private final Map<String, Checkpoint> checkpoints = new ConcurrentHashMap<>();
+    private final Map<String, Long> versions = new ConcurrentHashMap<>();
+    private final ReentrantLock lock = new ReentrantLock();
 
     @Override
     public Mono<Checkpoint> read(String subscriptionId) {
@@ -51,18 +61,55 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
-    public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+    public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
+        requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
         return Mono.fromSupplier(() -> {
-            checkpoints.put(subscriptionId, checkpoint);
-            return checkpoint;
+            lock.lock();
+            try {
+                if (condition instanceof CheckpointWriteCondition.NotOlderThan notOlderThan) {
+                    Long stored = versions.get(subscriptionId);
+                    if (stored != null && stored > notOlderThan.writeVersion()) {
+                        throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(stored), condition);
+                    }
+                    checkpoints.put(subscriptionId, checkpoint);
+                    versions.put(subscriptionId, notOlderThan.writeVersion());
+                } else if (condition instanceof CheckpointWriteCondition.IfAbsent) {
+                    if (checkpoints.containsKey(subscriptionId)) {
+                        Long stored = versions.get(subscriptionId);
+                        OptionalLong storedVersion = stored == null ? OptionalLong.empty() : OptionalLong.of(stored);
+                        throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, condition);
+                    }
+                    checkpoints.put(subscriptionId, checkpoint);
+                } else {
+                    // CheckpointWriteCondition.Any: the stored version, if any, is carried forward untouched.
+                    checkpoints.put(subscriptionId, checkpoint);
+                }
+                return checkpoint;
+            } finally {
+                lock.unlock();
+            }
         });
+    }
+
+    @Override
+    public Mono<Long> writeVersion(String subscriptionId) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return Mono.fromSupplier(() -> versions.get(subscriptionId));
     }
 
     @Override
     public Mono<Void> delete(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        return Mono.fromRunnable(() -> checkpoints.remove(subscriptionId));
+        return Mono.fromRunnable(() -> {
+            lock.lock();
+            try {
+                checkpoints.remove(subscriptionId);
+                versions.remove(subscriptionId);
+            } finally {
+                lock.unlock();
+            }
+        });
     }
 }
