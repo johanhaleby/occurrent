@@ -1,5 +1,16 @@
 # Lessons
 
+- A principle cited in a recommendation is checked against its source and its qualifiers,
+  not recalled (2026-08-09, the #681 adoption reversal). The orchestrator recommended
+  mechanizing an edge-case fix "per the unknown-callers principle" and an ADR quote, both
+  from memory. Johan asked for the AGENTS.md investigation first, and the source's own
+  qualifier ("an easier solution is fine when it yields roughly the same result. It is not
+  fine when the gap is isolation or correctness") cut the other way: no correctness gap
+  existed, and the fix would have bound every storage implementer through a permanent TCK
+  case. Same family as the quote-conventions-verbatim lesson, applied to the orchestrator's
+  own asks to Johan rather than to worker briefs. Before an adopt-or-defer recommendation
+  leans on a principle, open the file and read the principle's boundary conditions.
+
 - A convention relayed to a worker is quoted from its source, never paraphrased from
   memory (2026-08-08, the vgpr brief and a thread-triage message both said "unreleased
   capabilities get Highlights only", and the worker refuted it with AGENTS.md:71, the
