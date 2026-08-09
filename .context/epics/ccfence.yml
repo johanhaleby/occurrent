@@ -1,9 +1,8 @@
 schema_version: 1
 epic: ccfence
-revision: 9
-updated_at: '2026-08-09T12:10:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F2b delivered as PR 677;
-  F4 nudged back to foreground after its background build died with its turn)'
+revision: 10
+updated_at: '2026-08-09T12:30:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F2b merged and swept)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -29,6 +28,19 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   each wave boundary, stop and ask if the ceiling nears (spend at wave-1 close:
   ~1.0M across the plan review, F0, F1, F2)'
 pending_actions:
+- id: act-007
+  type: merge
+  target: 'PR 677 squash-merge pinned to verified head
+    25fd6fd0e2c240da76038beb600790aa8b5c3c53 (all checks complete 0 failed,
+    MERGEABLE, zero reviews, DELIVERY_RESULT done with matching SHA)'
+  expected: 'PR merged; DONE: squash 9206f3cc688fad673c8c1b17287d1a1966e8ac61,
+    state MERGED, remote branch deleted, worktree clean and removed, local
+    branches deleted; matrix watch on the squash running; F3/F4/F5 open
+    branches now expect changelog and migration-guide keep-both conflicts'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T12:28:00+00:00'
 - id: act-006
   type: merge
   target: 'PR 676 squash-merge pinned to verified head
@@ -223,20 +235,21 @@ units:
       two new CheckpointStorage members plus a review comment, wired into the
       UpgradeToOccurrent umbrella for the fence release, per the
       MigrateStreamToList precedent
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F2]
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 2)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 677
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~12:28Z pinned to 25fd6fd0e, squash
+        9206f3cc688fad673c8c1b17287d1a1966e8ac61, all checks complete 0
+        failed, zero review threads, DELIVERY_RESULT done with matching SHA,
+        62 recipe tests green'
     blocking_on: []
-    next_action: CAS-merge PR 677 pinned to 25fd6fd0e2c240da76038beb600790aa8b5c3c53
-      when checks complete green; worker finished (DELIVERY_RESULT done, 62
-      recipe tests, prose greps clean), worktree held until the merge
+    next_action: none pending the main-matrix result on the squash
     last_meaningful_progress_at: '2026-08-09T12:05:00+00:00'
     observed:
       pr_677:
