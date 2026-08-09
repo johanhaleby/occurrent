@@ -25,6 +25,8 @@ import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -210,6 +212,49 @@ class ReactorCheckpointStorageResilienceTest {
             // Then
             assertThat(thrown).hasCauseInstanceOf(MongoSocketReadException.class);
             assertThat(attempts.upsert.get()).isEqualTo(1);
+        }
+    }
+
+    /**
+     * See ADR 116, "A refused write throws, and it must never be retried": {@code save} places
+     * {@code assertCheckpointWriteSucceeded} outside {@code retryWhen}, in the {@code .map} that follows it, so a
+     * refusal is thrown from there rather than from inside the retried source. A refusal is a successful
+     * {@code findOneAndUpdate}, the pipeline chose {@code $$ROOT} over the new document, not a driver error, so
+     * {@code retryWhen} has no error signal to react to regardless of where the throw sits. What breaks if the throw
+     * moves back inside the retried source is that a synchronous throw there becomes an error signal
+     * {@code retryWhen} does see, and it would retry a write that is refused deterministically every single time,
+     * turning one refusal into up to six identical attempts before the same exception finally surfaces.
+     */
+    @Nested
+    @DisplayName("a refused conditional write")
+    class RefusedConditionalWrite {
+
+        @Test
+        void is_never_retried() {
+            // Given: a version already stored higher than the one about to be offered, so the write is refused.
+            String subscriptionId = UUID.randomUUID().toString();
+            ReactorCheckpointStorage seedStorage = new ReactorCheckpointStorage(realMongoOperations, CHECKPOINT_COLLECTION);
+            seedStorage.save(subscriptionId, new StringBasedCheckpoint("fenced"), CheckpointWriteCondition.notOlderThan(9)).block();
+
+            AtomicInteger attempts = new AtomicInteger();
+            ReactiveMongoOperations countingOperations = mock(ReactiveMongoOperations.class);
+            when(countingOperations.getCollection(eq(CHECKPOINT_COLLECTION)))
+                    .thenAnswer(invocation -> Mono.defer(() -> {
+                        attempts.incrementAndGet();
+                        return realMongoOperations.getCollection(CHECKPOINT_COLLECTION);
+                    }));
+            ReactorCheckpointStorage storage = new ReactorCheckpointStorage(countingOperations, CHECKPOINT_COLLECTION);
+
+            // When
+            Throwable thrown = catchThrowable(() -> storage.save(subscriptionId, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(4)).block());
+
+            // Then
+            assertThat(thrown).isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
+            assertThat(attempts.get())
+                    .as("a refusal is not a transient failure, so it must reach the caller after exactly one "
+                            + "findOneAndUpdate, not after retryWhen mistook a deterministic refusal for one and "
+                            + "spent its budget repeating it")
+                    .isEqualTo(1);
         }
     }
 }
