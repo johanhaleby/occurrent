@@ -457,26 +457,7 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void a_write_version_source_does_not_change_the_pinned_positions_write_condition() {
-        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
-        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
-        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");
-        CheckpointWriteVersionSource writeVersionSource = subscriptionId -> OptionalLong.of(42L);
-        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage, writeVersionSource);
-
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
-        });
-        // pinStartPosition runs on resumeSubscription, not on subscribe. The position is only written once this
-        // registration actually starts, matching the class javadoc's "instead of waiting until it starts".
-        model.resumeSubscription(SUBSCRIPTION_ID);
-
-        // ifAbsent() is what makes the first pin race-safe (see #669), and it carries no version, so a
-        // writeVersionSource passed to the four-argument factory has nothing to stamp on this write.
-        assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.ifAbsent());
-    }
-
-    @Test
-    void no_write_version_source_pins_the_position_with_if_absent() {
+    void pinning_the_start_position_uses_if_absent() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");

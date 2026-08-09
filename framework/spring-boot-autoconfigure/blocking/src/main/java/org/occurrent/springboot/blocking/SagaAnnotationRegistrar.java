@@ -389,13 +389,16 @@ class SagaAnnotationRegistrar {
     }
 
     // Gate the saga timer poller on the shared competing-consumer lease so only one instance polls, mirroring the
-    // subscription model. On by default, opt out with occurrent.saga.competing-consumer.enabled=false. When disabled, or
-    // when no strategy bean exists (for example subscriptions disabled), the poller runs on every instance as before.
+    // subscription model. On by default, opt out with occurrent.saga.competing-consumer.enabled=false. When disabled,
+    // when no strategy bean exists (for example subscriptions disabled), or when two strategy beans exist and neither
+    // is @Primary, the poller runs on every instance as before, mirroring how CompetingConsumerCheckpointWriteVersionSource
+    // stands down rather than failing startup. getIfUnique() rather than getIfAvailable(), so a @Saga in an application
+    // with two strategy beans still starts.
     private CompetingConsumerStrategy resolveSagaCompetingConsumerStrategy() {
         if (!occurrentProperties().getSaga().getCompetingConsumer().isEnabled()) {
             return null;
         }
-        return applicationContext.getBeanProvider(CompetingConsumerStrategy.class).getIfAvailable();
+        return applicationContext.getBeanProvider(CompetingConsumerStrategy.class).getIfUnique();
     }
 
     private OccurrentProperties occurrentProperties() {
