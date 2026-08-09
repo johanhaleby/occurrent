@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 16
-updated_at: '2026-08-09T08:25:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (667 merged pinned, U6 done,
-  findings 668 and 669 routed leave-for-later)'
+revision: 18
+updated_at: '2026-08-09T09:10:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (U5 delivered and swept, U3
+  swept, docs monitor retired, U7 chip on hold pending the U6 discussion)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,6 +16,18 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-012
+  type: dispatch-chip
+  target: 'U7 chip: ⌁[ccrace/U7] Lease lock survives release · Sonnet/high (not
+    plan-first, ADR 116 survival section is the approved plan, Refs 665 keep
+    label, 0.33.0 gates on it)'
+  expected: 'chip visible to Johan; session enters fleet on his click; VERIFIED:
+    spawn returned task_4dcefbd5, then placed on hold pending the U6 ADR
+    discussion'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-09T08:50:00+00:00'
 - id: act-011
   type: merge
   target: 'PR 667 squash-merge pinned to verified head
@@ -246,9 +258,9 @@ units:
     goal: the fencing-token promise in the acquireOrRefreshFor javadoc is either
       wired to the writes that need it or withdrawn honestly, decided at the plan
       gate, implemented accordingly
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U2]
     session: local_260d02c2
     deliverables:
@@ -263,10 +275,8 @@ units:
       met: true
       evidence: CLOSED via Fixes, verified by orchestrator
     blocking_on: []
-    next_action: 'hold the session sweep until the DELIVERY_RESULT arrives or the
-      session is confirmed stopped; its worktree is the shared
-      worktree-mobile-setup-916a9c (third tenant), detach rather than remove at
-      sweep'
+    next_action: 'none; session archived, shared worktree detached in place,
+      local branches deleted, remote branch deleted by the merge'
     last_meaningful_progress_at: '2026-08-09T06:45:00+00:00'
     observed:
       pr_666:
@@ -339,17 +349,23 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_4133f037 (archived)
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
-      ref: null
-      met: false
-      evidence: null
+      ref: 54
+      met: true
+      evidence: 'held PR 54 open review-clean at 932730f80174104f1c98aaa6ec37ec6d8c550f69,
+        DELIVERY_RESULT done (pr-fix not_run, repo has no CI, matching siblings);
+        news post, occurrentversion 0.33.0, addedTags, and the gap fills on top of
+        held PRs 49/52/53; Jekyll build verified with the locale workaround;
+        CAVEAT for release day: the news post date 2026-08-24 is a placeholder,
+        correct it at the release-day merge; worker self-reported and restored a
+        brief disturbance of the shared docs main checkout, no content landed'
     blocking_on: []
-    next_action: chip task_2d7f4004 spawned 2026-08-09 ~06:20Z, awaiting Johan's
-      launch; the docs-repo monitor arms at launch; first expected observable is
-      the coverage map at his plan gate
+    next_action: 'none; the held PR merges at release day alongside 49/52/53; the
+      docs monitor b85lx8mde was armed late (detection gap, U5 delivered
+      unobserved) and stopped in this same sweep under the lifetime rule'
     last_meaningful_progress_at: '2026-08-09T06:15:00+00:00'
     observed: {}
     assessment: 'adopted per Johan (chat request 2026-08-09 morning); deliverable
@@ -403,3 +419,33 @@ units:
       saying exactly that; both target interfaces shipped, so the design must
       carry the migration conventions (OpenRewrite recipe, migration guide,
       third-party implementer story for CompetingConsumerStrategy)'
+  U7:
+    issue: 665
+    goal: the lease lock document survives a release, remove unsets subscriberId
+      and expiresAt instead of deleting so the version increments forever, per ADR
+      116 section "The lock document survives a release", shipped IN 0.33.0 so the
+      fence can land in 0.34.0
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: 'chip task_4dcefbd5 spawned but ON HOLD per the orchestrator:
+      Johan is mid-discussion with the U6 session about ADR 116 changes he did
+      not like, and this unit implements that ADR''s survival section verbatim,
+      so it launches only after that discussion settles (re-verify the brief
+      against any ADR amendment first)'
+    last_meaningful_progress_at: '2026-08-09T08:50:00+00:00'
+    observed: {}
+    assessment: 'adopted per Johan (structured ask): 0.33.0 becomes the hardening
+      release that also carries the fence groundwork, pulling the fence itself to
+      0.34.0; scope is STRICTLY the survival section (no fence, no strategy
+      default method, no token flow); issue 665 stays open with its label (Refs
+      not Fixes); the 0.33.0 release and U5''s held docs PR now both gate on this
+      merge; U5''s audit notified of the incoming changelog entry'
