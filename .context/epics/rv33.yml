@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 6
-updated_at: 2026-08-09T20:18:00Z
+revision: 7
+updated_at: 2026-08-09T20:30:00Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -115,16 +115,16 @@ units:
   U5:
     issue: null
     goal: "ADR-fidelity pass: amend ADR 116 (A1+B4), status line on ADR 115, banners on ADR 110 and ADR 94 (A3, M2), ADR 113 note, ADR 111 sentence for M3, view-dsl ReplayAwareMaterializedView javadoc"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_95a13c51-2737-43e2-ae8c-752494756768
     deliverables:
-      - {check: pr_merged, ref: 695, met: false, evidence: null}
-      - {check: manual_approval, ref: "prose design gate: Johan confirms wording before merge (standing rule + plan decision 2026-08-09)", met: false, evidence: null}
+      - {check: pr_merged, ref: 695, met: true, evidence: "squash 35def4baa, merged head equals verified 674599cd4, CAS pin honoured, closed #696, 2026-08-09 ~20:28Z"}
+      - {check: manual_approval, ref: "prose design gate: Johan confirms wording before merge (standing rule + plan decision 2026-08-09)", met: true, evidence: "structured ask answered 'Wording confirmed, merge it' 2026-08-09 ~20:27Z, covering the fold-in round"}
     blocking_on: []
-    next_action: "fold-in round sent to worker (adopt #696 banner, wrap-order sentence, banner dates); on push re-verify, then Johan's wording confirm, then CAS merge closing #696"
+    next_action: "sweep: archive session, branch auto-deleted"
     last_meaningful_progress_at: 2026-08-09T19:56:00Z
     observed:
       pr_695: {head: 6a964b1b1a7b29a629265b24d6ff812ffadacff2, rollup: running, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T19:57:00Z}
