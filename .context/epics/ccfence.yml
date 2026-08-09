@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 29
-updated_at: '2026-08-09T20:45:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (ceiling raised to 5.5M by
-  structured ask, F12 dispatched, F9 dispatches at PR 687 merge)'
+revision: 30
+updated_at: '2026-08-09T21:10:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F8 merged, 665 CLOSED, F9
+  planning phase dispatched on Opus)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -30,6 +30,20 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   ~1.0M across the plan review, F0, F1, F2); RAISED to 5.5M by structured ask
   2026-08-09 ~20:35Z at measured ~4.4M with F12 and F9 remaining'
 pending_actions:
+- id: act-015
+  type: merge
+  target: 'PR 687 squash-merge pinned to verified head
+    26efaf14d3f32561ee8aca59bf81cd7201e18406 (all checks complete 0 failed,
+    MERGEABLE, zero reviews, DELIVERY_RESULT done with matching SHA, four
+    scenarios green, hard rule mutation-proved)'
+  expected: 'PR merged, issue 665 auto-closed via Fixes; DONE: squash
+    1b1fbcede431399b2772a5a27d89fcd1c6751214, state MERGED, 665 CLOSED
+    (verified), worktree clean and removed, branches deleted; matrix watch
+    with count guard running; F9 planning phase dispatched'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T21:05:00+00:00'
 - id: act-014
   type: merge
   target: 'PR 685 squash-merge pinned to verified head
@@ -610,23 +624,22 @@ units:
       that one refused write never stops lease refresh or delivery for other
       subscriptions, with a named test proven to fail when F6''s exclusion is
       reverted, covering the registrar-driven starter paths
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F7]
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 5)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 687
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~21:05Z pinned to 26efaf14d, squash 1b1fbcede431399b2772a5a27d89fcd1c6751214, all checks complete 0 failed, zero review threads, four e2e scenarios green, hard rule mutation-proved'
     - check: issue_closed
       ref: 665
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes, verified by the orchestrator after the merge'
     blocking_on: []
-    next_action: CAS-merge PR 687 pinned to 26efaf14d3f32561ee8aca59bf81cd7201e18406
-      when checks complete green (closes 665); worktree held until the merge
+    next_action: none pending the main-matrix result on the squash
     last_meaningful_progress_at: '2026-08-09T20:25:00+00:00'
     observed:
       pr_687:
@@ -647,11 +660,11 @@ units:
       checkpoint rather than continuing its old subscription, plan-first with
       johan-plan, ADR 112/105/113 and the ccpause hand-back semantics carried as
       constraints and none reopened
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F8]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (planning phase, Opus, read-only)
     deliverables:
     - check: pr_merged
       ref: null
@@ -662,8 +675,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 6
-    last_meaningful_progress_at: null
+    next_action: planning subagent running since ~21:10Z, its plan routes to Johan at a structured ask before implementation
+    last_meaningful_progress_at: '2026-08-09T21:10:00+00:00'
     observed: {}
     assessment: 'Sonnet/high, plan-first; touches
       CompetingConsumerSubscriptionModel resume and the catch-up models
