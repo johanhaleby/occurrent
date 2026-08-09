@@ -31,6 +31,10 @@ class ListenerLock {
         this.version = version.longValue();
     }
 
+    /**
+     * Increments on a genuine takeover and stays put on a refresh. Nothing reads this yet (ADR 115),
+     * so it does not currently reject a write from a subscriber whose lease has already moved on.
+     */
     public long version() {
         return version;
     }
