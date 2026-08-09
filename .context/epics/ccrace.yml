@@ -1,8 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 21
+revision: 22
 updated_at: '2026-08-09T09:10:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U7 delivered PR 672, ci-wait)'
+updated_by: 'orchestrator session local_f74d8561 (PR 673 HELD by Johan, design
+  discussion still open)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -452,7 +453,14 @@ units:
       (CheckpointWriteCondition, VersionedCheckpointStorage), the fence stays
       competing-consumer-side (FencedCheckpointStorage, the only type knowing
       both halves); the unit split stands, only the storage-capability unit''s
-      naming and ownership change; survival section untouched so U7 proceeds'
+      naming and ownership change; survival section untouched so U7 proceeds.
+      Second amendment PR 671 (squash 01e699ed4) removed FencedCheckpointStorage,
+      models stamp their own writes. THIRD amendment PR 673 (head bc16316f1,
+      write condition onto CheckpointStorage itself, migration accepted) is OPEN
+      and HELD by Johan via structured ask 2026-08-09, the design discussion is
+      still running in the U6 session; NO merge until he or that session signals
+      final, and the implementation-epic registration input is whatever ADR 116
+      says after the last amendment merges'
   U7:
     issue: 665
     goal: the lease lock document survives a release, remove unsets subscriberId
