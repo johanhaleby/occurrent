@@ -27,11 +27,13 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
 import java.time.Duration;
+import java.util.OptionalLong;
 import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.eq;
@@ -115,7 +117,13 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
 
     @Override
     @NullMarked
-    public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+    public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+        // This storage does not evaluate a condition yet, so only the unconditional one is honoured.
+        if (!(condition instanceof CheckpointWriteCondition.Any)) {
+            throw new UnsupportedOperationException(
+                    NativeMongoCheckpointStorage.class.getSimpleName() + " cannot evaluate " + condition + " yet, only "
+                            + CheckpointWriteCondition.any() + " is supported.");
+        }
         Supplier<Checkpoint> save = () -> {
             if (checkpoint instanceof MongoResumeTokenCheckpoint) {
                 persistResumeTokenCheckpoint(subscriptionId, ((MongoResumeTokenCheckpoint) checkpoint).resumeToken);
@@ -130,6 +138,12 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
         };
 
         return requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
+    }
+
+    @Override
+    public OptionalLong writeVersion(String subscriptionId) {
+        // No version is recorded yet, since this storage does not evaluate a condition. See save(..).
+        return OptionalLong.empty();
     }
 
     @Override

@@ -21,11 +21,13 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.springframework.data.redis.core.RedisOperations;
 
 import java.time.Duration;
+import java.util.OptionalLong;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -81,9 +83,16 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
-    public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+    public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
+        requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
+        // This storage does not evaluate a condition yet, so only the unconditional one is honoured.
+        if (!(condition instanceof CheckpointWriteCondition.Any)) {
+            throw new UnsupportedOperationException(
+                    SpringRedisCheckpointStorage.class.getSimpleName() + " cannot evaluate " + condition + " yet, only "
+                            + CheckpointWriteCondition.any() + " is supported.");
+        }
 
         Supplier<Checkpoint> save = () -> {
             String changeStreamPositionAsString = checkpoint.asString();
@@ -92,6 +101,12 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         };
 
         return requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
+    }
+
+    @Override
+    public OptionalLong writeVersion(String subscriptionId) {
+        // No version is recorded yet, since this storage does not evaluate a condition. See save(..).
+        return OptionalLong.empty();
     }
 
     @Override

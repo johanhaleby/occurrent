@@ -35,6 +35,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
@@ -152,8 +153,13 @@ public class ReactorDurableSubscriptionModelTest {
             }
 
             @Override
-            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
                 return Mono.fromRunnable(numberOfWritesToSubscriptionStorage::incrementAndGet).thenReturn(checkpoint);
+            }
+
+            @Override
+            public Mono<Long> writeVersion(String subscriptionId) {
+                return Mono.empty();
             }
 
             @Override
@@ -192,8 +198,13 @@ public class ReactorDurableSubscriptionModelTest {
             }
 
             @Override
-            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
                 return Mono.fromRunnable(numberOfWritesToSubscriptionStorage::incrementAndGet).thenReturn(checkpoint);
+            }
+
+            @Override
+            public Mono<Long> writeVersion(String subscriptionId) {
+                return Mono.empty();
             }
 
             @Override

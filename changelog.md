@@ -19,6 +19,10 @@
 * **A composed `AND` filter with several `data` payload leaves no longer reparses a byte-backed event's payload once per leaf.** Every leaf is now read in one pass, roughly 18 times faster for a 20-leaf filter over a 256 KB payload. An already-decoded, Map-backed event, the production MongoDB path, is unaffected. Resolves [#623](https://github.com/johanhaleby/occurrent/issues/623).
 * **A dotted path through an array of objects on a byte-backed event no longer picks up a same-named field nested inside a later sibling.** A filter on such a path could match the wrong events. Pre-existing, found and fixed as part of the filter work above.
 
+#### Breaking changes
+
+* **A checkpoint write now states its condition, so this changes behaviour that every `CheckpointStorage` implementation ships.** The existing two-argument `save` is unchanged, still an unconditional write. `save(subscriptionId, checkpoint, CheckpointWriteCondition)` also accepts `notOlderThan(long)`, refused once a newer version is already stored, and `ifAbsent()`, accepted only when nothing is stored yet. `writeVersion(subscriptionId)` reads back the version a condition is judged against. A refused write throws `CheckpointWriteConditionNotFulfilledException` on the blocking stack and signals it as a `Mono.error` on the reactive one. Occurrent's own Mongo and Redis storages accept only the unconditional form for now and refuse the other two with `UnsupportedOperationException`, both in-memory storages evaluate every condition for real. This is the foundation for the fencing token in [ADR 116](doc/architecture/decisions/0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md), and nothing writes a conditional checkpoint yet, so behaviour is otherwise unchanged. If you implement `CheckpointStorage` yourself, see [Upgrading to 0.33.0](doc/migration/upgrading-to-0.33.0.md). Part of [#665](https://github.com/johanhaleby/occurrent/issues/665).
+
 ### 0.32.0 (2026-08-08)
 
 #### Highlights

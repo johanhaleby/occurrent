@@ -20,7 +20,11 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
+
+import java.util.OptionalLong;
 
 /**
  * A {@code CheckpointStorage} provides means to read and write the checkpoint to storage.
@@ -51,11 +55,52 @@ public interface CheckpointStorage {
     @Nullable
     Checkpoint read(@NonNull String subscriptionId);
 
-    /*
-     * Save the checkpoint for the supplied subscriptionId to storage and then return it for easier chaining.
+    /**
+     * Save the checkpoint for the supplied subscriptionId to storage, unconditionally, and then return it for
+     * easier chaining. This is the same as calling {@link #save(String, Checkpoint, CheckpointWriteCondition)} with
+     * {@link CheckpointWriteCondition#any()}, so it always succeeds and leaves the stored version untouched.
+     *
+     * @param subscriptionId The id of the subscription whose checkpoint to save
+     * @param checkpoint     The checkpoint to save
+     * @return The checkpoint that was saved, for chaining
      */
     @NullMarked
-    Checkpoint save(String subscriptionId, Checkpoint checkpoint);
+    default Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+        return save(subscriptionId, checkpoint, CheckpointWriteCondition.any());
+    }
+
+    /**
+     * Save the checkpoint for the supplied subscriptionId to storage if {@code condition} is fulfilled, and then
+     * return it for easier chaining.
+     * <p>
+     * A store that can evaluate only {@link CheckpointWriteCondition#any()} refuses every other condition with
+     * {@link UnsupportedOperationException}, the same answer an event store gives for a capability it was not built
+     * with. Check the implementation's own documentation for whether it evaluates conditions.
+     *
+     * @param subscriptionId The id of the subscription whose checkpoint to save
+     * @param checkpoint     The checkpoint to save
+     * @param condition      What must be true of the stored version for the write to be allowed
+     * @return The checkpoint that was saved, for chaining
+     * @throws CheckpointWriteConditionNotFulfilledException if {@code condition} was not fulfilled
+     * @throws UnsupportedOperationException                 if this storage cannot evaluate {@code condition}
+     */
+    @NullMarked
+    Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition);
+
+    /**
+     * Read the version currently stored for the supplied subscriptionId, the one a {@link CheckpointWriteCondition}
+     * is evaluated against.
+     * <p>
+     * This is not needed to evaluate a condition, since {@link #save(String, Checkpoint, CheckpointWriteCondition)}
+     * does that itself. It exists so a caller can find out which version is stored and why a write keeps being
+     * refused, without reading the underlying database by hand.
+     *
+     * @param subscriptionId The id of the subscription whose stored version to find
+     * @return The version stored, or empty if none is stored, including for a storage that cannot evaluate
+     * conditions and therefore never records one
+     */
+    @NullMarked
+    OptionalLong writeVersion(String subscriptionId);
 
     /**
      * Delete the {@link Checkpoint} for the supplied {@code subscriptionId}.

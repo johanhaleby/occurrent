@@ -108,6 +108,14 @@ class NativeMongoCheckpointStorageConformanceTest extends CheckpointStorageConfo
                     new MongoOperationTimeCheckpoint(new BsonTimestamp(1735689600, 1)));
         }
 
+        /**
+         * Interim: this storage does not evaluate a write condition yet, see {@link NativeMongoCheckpointStorage#save}.
+         */
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return false;
+        }
+
         @Override
         public void close() {
             collection.drop();

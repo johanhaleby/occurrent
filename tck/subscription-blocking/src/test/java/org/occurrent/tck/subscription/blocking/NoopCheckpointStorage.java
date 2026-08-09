@@ -17,7 +17,10 @@
 package org.occurrent.tck.subscription.blocking;
 
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+
+import java.util.OptionalLong;
 
 /**
  * A checkpoint storage that honours none of the contract. Run a suite against it and every single test must fail.
@@ -42,7 +45,12 @@ class NoopCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
-    public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+    public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+        throw new UnsupportedOperationException("NoopCheckpointStorage implements nothing on purpose");
+    }
+
+    @Override
+    public OptionalLong writeVersion(String subscriptionId) {
         throw new UnsupportedOperationException("NoopCheckpointStorage implements nothing on purpose");
     }
 

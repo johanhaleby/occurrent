@@ -39,6 +39,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
@@ -61,6 +62,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -277,9 +279,15 @@ public class SpringMongoCheckpointStorageTest {
 
             @Override
             @NullMarked
-            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
                 numberOfWritesToBlockingSubscriptionStorage.incrementAndGet();
                 return checkpoint;
+            }
+
+            @Override
+            @NullMarked
+            public OptionalLong writeVersion(String subscriptionId) {
+                return OptionalLong.empty();
             }
 
             @Override
@@ -328,9 +336,15 @@ public class SpringMongoCheckpointStorageTest {
 
             @Override
             @NullMarked
-            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
                 numberOfWritesToBlockingSubscriptionStorage.incrementAndGet();
                 return checkpoint;
+            }
+
+            @Override
+            @NullMarked
+            public OptionalLong writeVersion(String subscriptionId) {
+                return OptionalLong.empty();
             }
 
             @Override
