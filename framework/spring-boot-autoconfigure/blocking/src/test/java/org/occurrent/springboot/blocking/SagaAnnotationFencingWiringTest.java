@@ -96,10 +96,6 @@ class SagaAnnotationFencingWiringTest {
         runner.withBean("primaryStrategy", CompetingConsumerStrategy.class, () -> strategy)
                 .withBean("rivalStrategy", CompetingConsumerStrategy.class, RivalCompetingConsumerStrategy::new)
                 .withBean(CheckpointStorage.class, () -> checkpointStorage)
-                // Unrelated to the fence under test. resolveSagaCompetingConsumerStrategy gates the saga timer
-                // poller with getIfAvailable(), which throws on an ambiguous strategy rather than standing down the
-                // way getIfUnique() does, the same sidestep SagaAnnotationRegistrarTest uses.
-                .withPropertyValues("occurrent.saga.competing-consumer.enabled=false")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     verify(checkpointStorage).save(eq(SUBSCRIPTION_ID), any(), eq(CheckpointWriteCondition.any()));
