@@ -3,9 +3,10 @@
 `CheckpointStorage` and its reactor twin gain a conditional write. This is a real break, and every implementation of
 either interface, in this repository and outside it, now has two more members to answer. No calling code changes,
 because the two-argument `save` you already call stays exactly as it was, as a default that delegates to the new
-one. There is no recipe, because filling in a method body is not a rename a recipe could apply.
-[ADR 116](../architecture/decisions/0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) has the
-reasoning.
+one. `UpgradeToOccurrent_0_33` stubs the two new members for you on a class it finds missing them, a throwing
+placeholder plus a review comment each, so the module compiles again. Filling in real behaviour is still yours, see
+section 2. [ADR 116](../architecture/decisions/0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md)
+has the reasoning.
 
 ## 1. What changed
 
@@ -34,8 +35,10 @@ for that subscription id, whatever version it would carry, and refuses the same 
 
 ## 2. If you implement `CheckpointStorage` yourself, this one does not compile
 
-Add the `save` overload and `writeVersion`. A store that only ever wrote unconditionally can keep doing exactly
-that and refuse the rest:
+Run `UpgradeToOccurrent_0_33` first. On every implementation it finds missing them, it adds the `save` overload and
+`writeVersion` as a throwing stub, each marked with a `TODO [Occurrent 0.33 upgrade]` comment, so the module
+compiles again without a manual pass. Filling in the stub is still yours. A store that only ever wrote
+unconditionally can keep doing exactly that and refuse the rest:
 
 ```java
 @Override
