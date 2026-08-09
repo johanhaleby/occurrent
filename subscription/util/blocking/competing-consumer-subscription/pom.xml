@@ -87,6 +87,33 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- The native stack, test-only: scenario 3 of the checkpoint-fence end-to-end proof (#665) reverts
+             NativeMongoSubscriptionModel's retry exclusion locally to prove the mutation, so it needs the native
+             models rather than the Spring ones every other test here uses. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-mongodb-native-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-mongodb-native-blocking-competing-consumer-strategy</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-mongodb-native-blocking-checkpoint-storage</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-mongodb-native</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
