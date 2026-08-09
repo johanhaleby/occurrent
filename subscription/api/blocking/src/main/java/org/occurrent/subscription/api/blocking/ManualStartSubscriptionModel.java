@@ -66,7 +66,6 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     private final SubscriptionModel delegate;
     private final @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource;
     private final @Nullable CheckpointStorage checkpointStorage;
-    private final @Nullable CheckpointWriteVersionSource writeVersionSource;
 
     private final ConcurrentMap<String, Registration> registrations = new ConcurrentHashMap<>();
     // Registration order, so start(true) brings subscriptions up in the order they were declared rather than in
@@ -86,11 +85,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     private final Object stateLock = new Object();
 
     private ManualStartSubscriptionModel(SubscriptionModel delegate, @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
-                                         @Nullable CheckpointStorage checkpointStorage, @Nullable CheckpointWriteVersionSource writeVersionSource) {
+                                         @Nullable CheckpointStorage checkpointStorage) {
         this.delegate = requireNonNull(delegate, SubscriptionModel.class.getSimpleName() + " cannot be null");
         this.positionSource = positionSource;
         this.checkpointStorage = checkpointStorage;
-        this.writeVersionSource = writeVersionSource;
     }
 
     /**
@@ -103,13 +101,17 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      * @param delegate The subscription model to register with once a subscription is started.
      */
     public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate) {
-        return new ManualStartSubscriptionModel(delegate, null, null, null);
+        return new ManualStartSubscriptionModel(delegate, null, null);
     }
 
     /**
      * A model that registers subscriptions without starting them, and records where a subscription running for the
      * first time will start from, so that starting it later still delivers the events written since registration
      * instead of skipping them.
+     * <p>
+     * The recorded position is pinned with {@link CheckpointWriteCondition#ifAbsent() ifAbsent()}, which only ever
+     * writes a subscription's very first checkpoint against nothing stored. A fence condition has nothing to add to a
+     * write like that, so this factory takes no {@link CheckpointWriteVersionSource} (see ADR 116).
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -120,32 +122,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      */
     public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
                                                                 CheckpointStorage checkpointStorage) {
-        return stoppedByDefault(delegate, positionSource, checkpointStorage, null);
-    }
-
-    /**
-     * A model that registers subscriptions without starting them and records where a subscription running for the
-     * first time will start from (see ADR 116).
-     * <p>
-     * The recorded position is pinned with {@link CheckpointWriteCondition#ifAbsent() ifAbsent()}, which only ever
-     * writes a subscription's very first checkpoint, so {@code writeVersionSource} is not asked for a version and
-     * has no effect on this write. It is accepted here so a caller already holding one for the fence does not need a
-     * different overload; nothing in this model currently has a write for it to stamp.
-     *
-     * @param delegate           The subscription model to register with once a subscription is started.
-     * @param positionSource     Supplies the position to record. Typically the innermost model, the one reading the feed.
-     *                           Only {@link GlobalCheckpointSource#globalCheckpoint()} is called, so a caller can pass
-     *                           anything that exposes it, such as a {@link CheckpointAwareSubscriptionModel}, without
-     *                           this method demanding the full subscription model that happens to implement it.
-     * @param checkpointStorage  Where the recorded position is written, which must be the storage the wrapped models read.
-     * @param writeVersionSource Not consulted. See above.
-     */
-    public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
-                                                                CheckpointStorage checkpointStorage, @Nullable CheckpointWriteVersionSource writeVersionSource) {
         return new ManualStartSubscriptionModel(delegate,
                 requireNonNull(positionSource, GlobalCheckpointSource.class.getSimpleName() + " cannot be null"),
-                requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null"),
-                writeVersionSource);
+                requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null"));
     }
 
     /**
@@ -408,10 +387,6 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     // the first node's write can succeed. The second gets CheckpointWriteConditionNotFulfilledException, which is
     // swallowed here rather than surfaced, because the stored pin is exactly what this node would have written too:
     // both nodes read the same position source before either of them raced to store it.
-    //
-    // This does not consult writeVersionSource. ifAbsent() and notOlderThan() are different conditions for different
-    // problems, first-pin atomicity versus a lease fence, and CheckpointWriteCondition carries exactly one of them
-    // per write. A version source passed to the four-argument stoppedByDefault has no effect on this write.
     private void pinStartPosition(String subscriptionId, @Nullable Checkpoint positionToPin) {
         if (positionToPin == null || checkpointStorage == null) {
             return;

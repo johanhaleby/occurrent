@@ -409,11 +409,14 @@ conformance suite something to run without a container.
 ### The Spring Boot starter supplies the source wherever it builds a model
 
 The starter builds checkpoint-writing models in more places than the one that takes the storage bean.
-`occurrentCompetingDurableSubscriptionModel` builds the durable model and the catch-up config, the
+`occurrentCompetingDurableSubscriptionModel` builds the durable model and the catch-up config, and the
 projection and saga registrars each pull `CheckpointStorage` out of the application context and build
-a `CatchupThenPushSubscriptionModel`, and `ManualStartSubscriptionModel.stoppedByDefault` records a
-start position. Each of those is a place the source has to reach, and there is no single bean to wrap
-that reaches them all.
+a `CatchupThenPushSubscriptionModel`. Each of those is a place the source has to reach, and there is no
+single bean to wrap that reaches them all. `ManualStartSubscriptionModel.stoppedByDefault` writes a
+checkpoint too, the start position it records on a subscription's first run, but that write only ever
+uses `ifAbsent()` against a key with nothing stored yet, and `notOlderThan()` would accept the same
+write there. A fence condition has nothing to add to that write, so the source does not need to reach
+it.
 
 **So the starter passes `strategy::fencingToken` at each of them, and the checkpoint storage bean stays
 an ordinary checkpoint storage.** That is more sites than a wrapper would have needed and it is the

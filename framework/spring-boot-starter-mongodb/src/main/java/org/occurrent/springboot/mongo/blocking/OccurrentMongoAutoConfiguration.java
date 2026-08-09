@@ -258,7 +258,7 @@ public class OccurrentMongoAutoConfiguration<E> {
         // replay reads the event store directly, so a subscription resuming from a stored checkpoint would deliver
         // history to a handler nobody started. The Mongo model supplies the position to pin, since it is the one
         // reading the feed.
-        return ManualStartSubscriptionModel.stoppedByDefault(competingConsumerSubscriptionModel, mongoSubscriptionModel, storage, writeVersionSource);
+        return ManualStartSubscriptionModel.stoppedByDefault(competingConsumerSubscriptionModel, mongoSubscriptionModel, storage);
     }
 
     @Bean

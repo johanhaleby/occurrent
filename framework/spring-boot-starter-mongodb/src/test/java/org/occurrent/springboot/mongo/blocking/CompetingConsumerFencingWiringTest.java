@@ -27,7 +27,6 @@ import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
@@ -96,24 +95,6 @@ class CompetingConsumerFencingWiringTest {
                     UseCheckpointInStorage catchupPhaseConfig = (UseCheckpointInStorage) catchupConfig.subscriptionStorageConfig;
                     assertThat(catchupPhaseConfig.checkpointWriteVersionSource()).isNotNull();
                     assertThat(catchupPhaseConfig.checkpointWriteVersionSource().writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(42L));
-                });
-    }
-
-    @Test
-    void one_strategy_bean_wires_a_working_source_into_the_manual_start_position_pin() {
-        SpringMongoLeaseCompetingConsumerStrategy strategy = mock(SpringMongoLeaseCompetingConsumerStrategy.class);
-        when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(99L));
-
-        contextRunner
-                .withBean(SpringMongoLeaseCompetingConsumerStrategy.class, () -> strategy)
-                .withPropertyValues("occurrent.subscription.mode=manual")
-                .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    SubscriptionModel subscriptionModel = context.getBean(SubscriptionModel.class);
-                    assertThat(subscriptionModel).isInstanceOf(ManualStartSubscriptionModel.class);
-
-                    CheckpointWriteVersionSource source = getField(subscriptionModel, "writeVersionSource", CheckpointWriteVersionSource.class);
-                    assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(99L));
                 });
     }
 
