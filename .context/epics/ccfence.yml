@@ -655,9 +655,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 6 (shares ManualStartSubscriptionModel with
-      F7''s fourth site)
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~18:30Z
+    last_meaningful_progress_at: '2026-08-09T18:30:00+00:00'
     observed: {}
     assessment: 'Sonnet/medium; small because the condition case already exists
       by then'
