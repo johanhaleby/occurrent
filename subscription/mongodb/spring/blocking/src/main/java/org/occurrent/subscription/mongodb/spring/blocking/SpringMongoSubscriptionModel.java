@@ -30,6 +30,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
@@ -67,6 +68,7 @@ import java.util.StringJoiner;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -108,6 +110,12 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final ConcurrentMap<String, CompletableFuture<@Nullable RestartSignal>> activeRestartSignal;
 
     private volatile boolean shutdown = false;
+
+    // A refused checkpoint write must never be retried, on the per-event delivery below. The call site already
+    // passes its own predicate, which RetryExecution combines with the strategy's own. The restart loop is
+    // excluded separately, in registerNewSpringSubscription's error handler, since it never runs a retried
+    // delivery action itself.
+    private final Predicate<Throwable> RETRYABLE = e -> !shutdown && !(e instanceof CheckpointWriteConditionNotFulfilledException);
 
     /**
      * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
@@ -209,7 +217,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
             BsonDocument resumeToken = raw.getResumeToken();
             MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                     .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(resumeToken)))
-                    .ifPresentOrElse(executeWithRetry(action, __ -> !shutdown, retryStrategy), () -> {
+                    .ifPresentOrElse(executeWithRetry(action, RETRYABLE, retryStrategy), () -> {
                         if (log.isDebugEnabled()) {
                             log.debug("Won't deserialize document to cloud event for operation type {} in namespace {}: {}", raw.getOperationTypeString(), raw.getNamespace(), raw.getFullDocument());
                         }
@@ -428,7 +436,14 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private org.springframework.data.mongodb.core.messaging.Subscription registerNewSpringSubscription(String subscriptionId, ChangeStreamRequest<Document> documentChangeStreamRequest, @Nullable CompletableFuture<@Nullable RestartSignal> failureSignal) {
         logDebug("registerNewSpringSubscription for subscription {}", subscriptionId);
         return messageListenerContainer.register(documentChangeStreamRequest, Document.class, throwable -> {
-            if (throwable instanceof DataAccessException) {
+            if (throwable instanceof CheckpointWriteConditionNotFulfilledException) {
+                // Stays known and pausable, unlike the history-lost branch below, since forgetting it here would let
+                // the strategy pause a subscription this model no longer knows about. Logged at error level because
+                // nothing else would say why the node went quiet. reportFailure with a null signal ends this
+                // subscription's restart loop, or never starts one, instead of running it unbounded.
+                log.error("Checkpoint write for subscription {} was refused: {}. This node's lease has moved to another one, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it, and a resume redelivers the event once this node holds the lease again.", subscriptionId, throwable.getMessage(), throwable);
+                reportFailure(subscriptionId, failureSignal, null);
+            } else if (throwable instanceof DataAccessException) {
                 Throwable cause = throwable.getCause();
                 if (cause instanceof MongoQueryException) {
                     log.warn("Caught {} ({}) for subscription {}, will restart!", MongoQueryException.class.getSimpleName(), cause.getMessage(), subscriptionId, throwable);

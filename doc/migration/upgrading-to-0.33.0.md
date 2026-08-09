@@ -27,6 +27,9 @@ The reactor twin gets the same two members, `Mono<Checkpoint> save(String, Check
 and `Mono<Long> writeVersion(String)`, with an empty `Mono` meaning no version is stored. A refusal on that stack
 signals `Mono.error`, it never throws from assembly.
 
+A test double that overrides the two-argument `save` to observe writes stops seeing them, because the subscription
+models now call the three-argument `save` directly, so override that one instead.
+
 `CheckpointWriteCondition` is sealed with three cases. `any()` is what the two-argument `save` has always meant. The
 write always succeeds and the stored version, if there is one, is carried forward untouched. `notOlderThan(long)`
 succeeds when nothing is stored yet, or when the stored version is not greater than the one offered, and otherwise
