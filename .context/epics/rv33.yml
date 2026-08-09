@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 9
-updated_at: 2026-08-09T21:05:00Z
+revision: 11
+updated_at: 2026-08-09T20:52:00Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -130,3 +130,51 @@ units:
     observed:
       pr_695: {head: 6a964b1b1a7b29a629265b24d6ff812ffadacff2, rollup: running, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T19:57:00Z}
     assessment: "prose deliverable; auto-merge excluded by the design-gate rule"
+  U6:
+    issue: 691
+    goal: "Bound the lease-refresh retry round: refresh-path retry gives up after fixed attempts, registration-path commit unchanged (P2, adopted by Johan 2026-08-09)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "in-session subagent, worktree-isolated, Sonnet (dispatched 2026-08-09 ~20:48Z, dies with the orchestrator context)"
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 691, met: false, evidence: null}
+    blocking_on: []
+    next_action: "await subagent completion notification with PR"
+    last_meaningful_progress_at: 2026-08-09T20:46:00Z
+    observed: {}
+    assessment: "released-surface behavior change, needs a real changelog entry"
+  U7:
+    issue: 692
+    goal: "Benchmark coverage: baseline arm + fail-fast fixture in PayloadFilterReadBenchmark, coalescing flush-vs-batchSize harness, stale #624 javadoc pointer (P4/P5 debt, adopted by Johan 2026-08-09)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "in-session subagent, worktree-isolated, Sonnet (dispatched 2026-08-09 ~20:48Z, dies with the orchestrator context)"
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 692, met: false, evidence: null}
+    blocking_on: []
+    next_action: "await subagent completion notification with PR"
+    last_meaningful_progress_at: 2026-08-09T20:46:00Z
+    observed: {}
+    assessment: "scoped to harness plus smoke runs so it cannot stall the tag on long JMH sessions"
+  U8:
+    issue: 693
+    goal: "Null-tolerant extractWriteVersion read in MongoCommons plus a test (B5 residue, adopted by Johan 2026-08-09)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "in-session subagent, worktree-isolated, Haiku (dispatched 2026-08-09 ~20:48Z, dies with the orchestrator context)"
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 693, met: false, evidence: null}
+    blocking_on: []
+    next_action: "await subagent completion notification with PR"
+    last_meaningful_progress_at: 2026-08-09T20:46:00Z
+    observed: {}
+    assessment: "tiny mechanical unit, Haiku-tier"
