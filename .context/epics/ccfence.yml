@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 8
-updated_at: '2026-08-09T11:40:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F2 merged and swept, wave 2
-  dispatched as four parallel worktree subagents)'
+revision: 9
+updated_at: '2026-08-09T12:10:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F2b delivered as PR 677;
+  F4 nudged back to foreground after its background build died with its turn)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -234,9 +234,20 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: subagent running since ~11:40Z with the confirmed 0.33 version
-    last_meaningful_progress_at: '2026-08-09T11:40:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 677 pinned to 25fd6fd0e2c240da76038beb600790aa8b5c3c53
+      when checks complete green; worker finished (DELIVERY_RESULT done, 62
+      recipe tests, prose greps clean), worktree held until the merge
+    last_meaningful_progress_at: '2026-08-09T12:05:00+00:00'
+    observed:
+      pr_677:
+        head: 25fd6fd0e2c240da76038beb600790aa8b5c3c53
+        note: 'opened ~12:00Z from johan/665-checkpoint-storage-rewrite-recipe;
+          DELIVERY_RESULT done with matching SHA; recipe is idempotent across
+          cycles (JavaTemplate parser fix) and guards against Kotlin sources;
+          the partial-migration case (one member present, one missing) is
+          structurally covered but not asserted, noted as a skipped check'
+        via: monitor bciv33mhs + gh pr view + worker DELIVERY_RESULT
+        at: '2026-08-09T12:05:00+00:00'
     assessment: 'Sonnet/high; declarative yml cannot add interface members, so
       this is a Java visitor with rewrite-test coverage'
   F3:
@@ -283,9 +294,12 @@ units:
     next_action: subagent running since ~11:40Z
     last_meaningful_progress_at: '2026-08-09T11:40:00+00:00'
     observed: {}
-    assessment: 'Sonnet/high; the retry exclusion here is load-bearing (default
-      RetryStrategy is infinite, a refusal would otherwise hang the delivery
-      thread forever)'
+    assessment: 'Sonnet/high; the retry exclusion here matters most, the
+      default RetryStrategy retries forever and a refusal would otherwise hang
+      the delivery thread; worker hit the background-process trap (ended its
+      turn waiting on a backgrounded Maven run, which dies with the turn) and
+      was resumed ~12:05Z with a foreground-only correction, context and
+      worktree intact'
   F5:
     issue: 665
     goal: CheckpointWriteVersionSource in subscription/api/blocking, the blocking
