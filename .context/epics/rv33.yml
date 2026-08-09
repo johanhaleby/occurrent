@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 4
-updated_at: 2026-08-09T19:58:00Z
+revision: 5
+updated_at: 2026-08-09T20:12:00Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -54,7 +54,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_4a88a66c (worker session id unknown until first message)"
+    session: local_01d24d53-c82d-41df-8632-2b9e3ffced93
     deliverables:
       - {check: pr_merged, ref: 694, met: false, evidence: null}
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/checkpoint-fencing, met: true, evidence: "commit ef786ac7b 2026-08-09T19:42:38Z, stale-claim grep 0 hits on branch content via gh api"}
@@ -68,47 +68,48 @@ units:
   U2:
     issue: null
     goal: "Bound the read inside MongoAppliedPositionStore.waitUntilApplied, fix reactive-store javadoc, defensive subscribeOn on the .block() path, interrupt-clause javadoc (P1, B5, M4)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_0a0e5a27-ecfd-422b-9ff9-950ed7d65912
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "chip spawned, awaiting worker session"
-    last_meaningful_progress_at: 2026-08-09T19:27:04Z
+    next_action: "worker mid-implementation; warned about the U3 rename conflict on RecordingReactiveUpdate"
+    last_meaningful_progress_at: 2026-08-09T20:03:44Z
     observed: {}
     assessment: "only shipped contract violation on a request-facing path; fix scoped to the Mongo override, never the interface default"
   U3:
     issue: null
     goal: "Reactor projection seam: bridge forwards replay capability (M1), rename reactor ReplayAwareMaterializedView (B3, name at plan gate), retry-precondition javadoc at blocking Projections:99 (A4), flush drain-and-swap (P5), findAllById javadoc (B5)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_2fa00e27-c4a3-4ef2-8a16-b6ecae2bc381
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 697, met: false, evidence: null}
       - {check: manual_approval, ref: "Johan approves the new marker name at the plan gate (plan decision 2026-08-09)", met: false, evidence: null}
     blocking_on: []
-    next_action: "chip spawned, awaiting worker session"
-    last_meaningful_progress_at: 2026-08-09T19:27:04Z
-    observed: {}
-    assessment: "rename window closes at the 0.33.0 tag"
+    next_action: "await checks + DELIVERY_RESULT; confirm the rename name was approved at the plan gate in the worker session; sequence merge against U2's pending conflict on RecordingReactiveUpdate"
+    last_meaningful_progress_at: 2026-08-09T20:05:00Z
+    observed:
+      pr_697: {head: 38d3bf1cb17e4f71b57acc0c7b32de9625e44c7e, rollup: running, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T20:08:00Z}
+    assessment: "rename delivered as ReactiveReplayAwareMaterializedView; RecordingReactiveUpdate edits are rename ripples only (brief-boundary contradiction, recorded in ORCHESTRATOR.md)"
   U4:
     issue: null
     goal: "Reactor conformance for conditional checkpoint writes (B1) plus the fresh-key any() case in the blocking suite (B5)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_dcc360e4-0789-4ccd-8e66-488861d0b702
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "chip spawned, awaiting worker session"
-    last_meaningful_progress_at: 2026-08-09T19:27:04Z
+    next_action: "worker mid-implementation"
+    last_meaningful_progress_at: 2026-08-09T20:03:36Z
     observed: {}
     assessment: "TCK-only file boundary; ADR 107/77 permit added suites in a minor"
   U5:
@@ -118,12 +119,12 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_ee122e4d (worker session id unknown until first message)"
+    session: local_95a13c51-2737-43e2-ae8c-752494756768
     deliverables:
       - {check: pr_merged, ref: 695, met: false, evidence: null}
       - {check: manual_approval, ref: "prose design gate: Johan confirms wording before merge (standing rule + plan decision 2026-08-09)", met: false, evidence: null}
     blocking_on: []
-    next_action: "await checks + worker DELIVERY_RESULT, then Johan's wording confirm (flag the wrap-order sentence in the ADR 110 banner and the banner-date inconsistency), then CAS merge"
+    next_action: "fold-in round sent to worker (adopt #696 banner, wrap-order sentence, banner dates); on push re-verify, then Johan's wording confirm, then CAS merge closing #696"
     last_meaningful_progress_at: 2026-08-09T19:56:00Z
     observed:
       pr_695: {head: 6a964b1b1a7b29a629265b24d6ff812ffadacff2, rollup: running, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T19:57:00Z}
