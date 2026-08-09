@@ -95,6 +95,10 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     private volatile boolean running = true;
 
     private final Predicate<Throwable> NOT_SHUTDOWN = __ -> !shutdown;
+    // A refused checkpoint write must never be retried, on either retry loop below. The call sites already pass
+    // their own predicate, which RetryExecution combines with the strategy's own.
+    private static final Predicate<Throwable> NOT_A_REFUSED_CHECKPOINT_WRITE = e -> !(e instanceof CheckpointWriteConditionNotFulfilledException);
+    private final Predicate<Throwable> RETRYABLE = NOT_SHUTDOWN.and(NOT_A_REFUSED_CHECKPOINT_WRITE);
 
     /**
      * Create a subscription using the native MongoDB sync driver. It will by default use a {@link RetryStrategy} for retries,
@@ -214,7 +218,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     private void startSubscription(Runnable internalSubscription) {
-        cloudEventDispatcher.execute(executeWithRetry(internalSubscription, NOT_SHUTDOWN, retryStrategy));
+        cloudEventDispatcher.execute(executeWithRetry(internalSubscription, RETRYABLE, retryStrategy));
     }
 
     // currentStartAt tracks the last change-stream document read (updated below, even without a delivered
@@ -249,12 +253,19 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             cursor.forEachRemaining(changeStreamDocument -> {
                 MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
                         .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())))
-                        .ifPresent(executeWithRetry(action, NOT_SHUTDOWN, retryStrategy));
+                        .ifPresent(executeWithRetry(action, RETRYABLE, retryStrategy));
                 currentStartAt.set(StartAt.checkpoint(new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())));
             });
         } catch (RuntimeException e) {
             if ((internalSubscription != null && internalSubscription.isIntentionallyClosed()) || isCursorNoLongerOpen(e)) {
                 log.debug("Caught {} (message={}) for subscription {}, this might happen when a subscription is paused or cancelled.", e.getClass().getName(), e.getMessage(), subscriptionId, e);
+            } else if (e instanceof CheckpointWriteConditionNotFulfilledException) {
+                // Stays known and pausable, unlike the history-lost branch below, since forgetting it here would let
+                // the strategy pause a subscription this model no longer knows about. Logged at error level because
+                // the exception leaves the model right after this and the outer retry won't restart on it, so
+                // nothing else would say why the node went quiet.
+                log.error("Checkpoint write for subscription {} was refused: {}. This node's lease has moved to another one, so delivery stops here rather than retrying. The subscription stays known and running until the next lease refresh pauses it, and a resume redelivers the event once this node holds the lease again.", subscriptionId, e.getMessage(), e);
+                throw e;
             } else if (isChangeStreamHistoryLost(e)) {
                 if (restartSubscriptionsOnChangeStreamHistoryLost) {
                     log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time.", subscriptionId, e);

@@ -35,6 +35,8 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -49,11 +51,13 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
@@ -279,6 +283,146 @@ public class NativeMongoSubscriptionModelResilienceTest {
             // not redelivered.
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
             assertThat(state).extracting(CloudEvent::getType).containsExactly(NameDefined.class.getName(), NameWasChanged.class.getName());
+        }
+    }
+
+    /**
+     * Tests ADR 116, "A refused write throws, and it must never be retried": a delivery action throwing
+     * {@link CheckpointWriteConditionNotFulfilledException} must not be retried on either retry loop, the
+     * subscription it belongs to must stay known and pausable rather than forgotten, and no other subscription on
+     * the same model is affected.
+     */
+    @Nested
+    @DisplayName("Checkpoint write refusal (ADR 116)")
+    class CheckpointWriteRefusalTest {
+
+        private CheckpointWriteConditionNotFulfilledException refusal(String subscriptionId) {
+            return new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.of(5), CheckpointWriteCondition.notOlderThan(3));
+        }
+
+        /**
+         * ADR 116 has the refusal reach "an executor's uncaught handler" once it is logged, on the outer restart
+         * loop's dispatcher thread. Awaitility catches uncaught exceptions from every thread by default and
+         * rethrows them into the polling {@code await()} call, which would otherwise turn this test's own
+         * provoked, expected escape into a spurious failure. A thread factory that recognizes exactly this
+         * exception keeps the assertion on the model's behaviour instead of on Awaitility's global safety net.
+         */
+        private ExecutorService dispatcherTolerantOfTheExpectedRefusalEscape() {
+            return Executors.newCachedThreadPool(runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setUncaughtExceptionHandler((t, throwable) -> {
+                    if (!(throwable instanceof CheckpointWriteConditionNotFulfilledException)) {
+                        throw new AssertionError("Unexpected uncaught exception on subscription dispatcher thread " + t, throwable);
+                    }
+                });
+                return thread;
+            });
+        }
+
+        @Test
+        void delivery_action_throwing_the_refusal_is_invoked_exactly_once() {
+            // Given
+            subscriptionModel = new NativeMongoSubscriptionModel(database, realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcherTolerantOfTheExpectedRefusalEscape(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
+            String subscriptionId = UUID.randomUUID().toString();
+            LocalDateTime now = LocalDateTime.now();
+            // A seed event the action must deliver successfully, so the model's tracked change-stream position is a
+            // concrete resume token before the target event arrives. Without it, a broken exclusion's restart would
+            // resolve "start from now" at restart time and never rediscover the already-past target event, letting
+            // this test pass by accident instead of by proving the exclusion holds.
+            NameDefined seedEvent = new NameDefined(UUID.randomUUID().toString(), now, "seed", "seed");
+            NameDefined targetEvent = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "target", "target");
+            AtomicInteger targetInvocations = new AtomicInteger();
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(subscriptionId, event -> {
+                if (event.getId().equals(targetEvent.eventId())) {
+                    targetInvocations.incrementAndGet();
+                    throw refusal(subscriptionId);
+                }
+                delivered.add(event);
+            }).waitUntilStarted(Duration.ofSeconds(10));
+
+            // When
+            mongoEventStore.write("1", 0, serialize(seedEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(delivered).hasSize(1));
+            mongoEventStore.write("2", 0, serialize(targetEvent));
+
+            // Then: exactly one invocation, and it stays that way well past what a retry backoff, or an unbounded
+            // restart loop reopening the change stream from the same concrete position, would allow.
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(targetInvocations.get()).isEqualTo(1));
+            // during(), not pollDelay()+atMost(): the latter only needs one truthy poll and returns as soon as it
+            // sees one, so a redelivery landing between polls would go unnoticed. during() re-checks continuously
+            // and fails the moment the count moves off 1, which is what "stays that way" actually means.
+            await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(3)).untilAsserted(() -> assertThat(targetInvocations.get()).isEqualTo(1));
+        }
+
+        @Test
+        void subscription_stays_known_and_pausable_and_a_resume_redelivers_the_refused_event() {
+            // Given
+            subscriptionModel = new NativeMongoSubscriptionModel(database, realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcherTolerantOfTheExpectedRefusalEscape(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
+            String subscriptionId = UUID.randomUUID().toString();
+            LocalDateTime now = LocalDateTime.now();
+            // A seed event the action must deliver successfully, so the model's tracked change-stream position
+            // is a concrete resume token before the target event arrives. Without it, the position would still be
+            // the unresolved "start from now" it was subscribed with, since a refusal aborts the action before that
+            // position is advanced, and a resume would then start from "now" at resume time, after the target event
+            // rather than before it.
+            NameDefined seedEvent = new NameDefined(UUID.randomUUID().toString(), now, "seed", "seed");
+            NameDefined targetEvent = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "target", "target");
+            AtomicInteger targetInvocations = new AtomicInteger();
+            CopyOnWriteArrayList<CloudEvent> delivered = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(subscriptionId, event -> {
+                if (event.getId().equals(targetEvent.eventId()) && targetInvocations.getAndIncrement() == 0) {
+                    throw refusal(subscriptionId);
+                }
+                delivered.add(event);
+            }).waitUntilStarted(Duration.ofSeconds(10));
+
+            // When
+            mongoEventStore.write("1", 0, serialize(seedEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(delivered).hasSize(1));
+            mongoEventStore.write("2", 0, serialize(targetEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(targetInvocations.get()).isEqualTo(1));
+
+            // Then: the subscription is still known (pause succeeds rather than throwing UnknownSubscriptionException
+            // or SubscriptionNotRunningException), and a resume redelivers the event the refusal aborted.
+            subscriptionModel.pauseSubscription(subscriptionId);
+            assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+            subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(delivered).extracting(CloudEvent::getId).contains(targetEvent.eventId()));
+            assertThat(targetInvocations.get()).isEqualTo(2);
+        }
+
+        @Test
+        void a_refused_write_on_one_subscription_does_not_stop_delivery_on_another() {
+            // Given
+            subscriptionModel = new NativeMongoSubscriptionModel(database, realEventCollection, TimeRepresentation.RFC_3339_STRING, dispatcherTolerantOfTheExpectedRefusalEscape(),
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
+            String refusedSubscriptionId = UUID.randomUUID().toString();
+            String healthySubscriptionId = UUID.randomUUID().toString();
+            AtomicInteger refusedInvocations = new AtomicInteger();
+            CopyOnWriteArrayList<CloudEvent> healthyState = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(refusedSubscriptionId, event -> {
+                refusedInvocations.incrementAndGet();
+                throw refusal(refusedSubscriptionId);
+            }).waitUntilStarted(Duration.ofSeconds(10));
+            subscriptionModel.subscribe(healthySubscriptionId, healthyState::add).waitUntilStarted(Duration.ofSeconds(10));
+
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1")));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+                assertThat(refusedInvocations.get()).isEqualTo(1);
+                assertThat(healthyState).hasSize(1);
+            });
+            mongoEventStore.write("2", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "name2", "name2")));
+
+            // Then: the healthy subscription keeps delivering, and the refused one still hasn't retried.
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(healthyState).hasSize(2));
+            assertThat(refusedInvocations.get()).isEqualTo(1);
         }
     }
 
