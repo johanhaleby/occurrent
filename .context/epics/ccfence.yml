@@ -1,9 +1,10 @@
 schema_version: 1
 epic: ccfence
-revision: 2
-updated_at: '2026-08-09T09:45:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (one-release decision folded
-  in, F0/F1/F2 chips dispatched, monitors reconciled)'
+revision: 3
+updated_at: '2026-08-09T09:55:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (mobile inversion: chips
+  dismissed, F0/F1/F2 running as worktree-isolated in-session subagents,
+  600k output-token fleet ceiling declared)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -64,19 +65,19 @@ units:
       in 0.33.0) with the accepted upgrade-window consequence and its recovery,
       as one coherent decision without an amendment trail, everything else in
       the file untouched
-    phase: READY
-    health: PROGRESSING
+    phase: RUNNING
+    health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
     deliverables:
     - check: pr_merged
       ref: null
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_91560d5d pending Johan's click
-    last_meaningful_progress_at: null
+    next_action: in-session subagent running (chip task_91560d5d dismissed, Johan on mobile); on its DELIVERY_RESULT, verify the PR and babysit CI via monitor bciv33mhs
+    last_meaningful_progress_at: '2026-08-09T09:55:00+00:00'
     observed: {}
     assessment: 'prose design deliverable; the decision itself is closed (the
       structured ask with the hazard quoted), but the MERGE waits for Johan''s
@@ -92,19 +93,19 @@ units:
       real, Mongo and Redis interim-refuse per ADR 93), TCK conformance via
       evaluatesWriteConditions fixture default with guards coverage, migration
       guide section with deploy-order requirement, changelog Breaking changes
-    phase: READY
-    health: PROGRESSING
+    phase: RUNNING
+    health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
     deliverables:
     - check: pr_merged
       ref: null
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_eab370e0 pending Johan's click
-    last_meaningful_progress_at: null
+    next_action: in-session subagent running (chip task_eab370e0 dismissed, Johan on mobile); on its DELIVERY_RESULT, verify the PR and babysit CI via monitor bciv33mhs
+    last_meaningful_progress_at: '2026-08-09T09:55:00+00:00'
     observed: {}
     assessment: 'foundation unit and the deliberate break; Sonnet/high, not
       plan-first (ADR 116 is the plan); brief carries the 20-implementer
@@ -118,19 +119,19 @@ units:
       ListenerLock.version with the exactly-one-registered-consumer-holds rule,
       named deterministic tests for LOCK_RELEASED-not-holding, two-consumer
       stand-down, and refresh-stable token
-    phase: READY
-    health: PROGRESSING
+    phase: RUNNING
+    health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
     deliverables:
     - check: pr_merged
       ref: null
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_42b4ec6d pending Johan's click
-    last_meaningful_progress_at: null
+    next_action: in-session subagent running (chip task_42b4ec6d dismissed, Johan on mobile); on its DELIVERY_RESULT, verify the PR and babysit CI via monitor bciv33mhs
+    last_meaningful_progress_at: '2026-08-09T09:55:00+00:00'
     observed: {}
     assessment: 'additive strategy-side unit; Sonnet/high; changelog Changes
       entry; dispatched in parallel with F2 per Johan''s start-the-chips ask
