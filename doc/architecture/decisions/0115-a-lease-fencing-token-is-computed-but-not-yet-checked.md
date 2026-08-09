@@ -16,7 +16,7 @@ Nothing reads it. `MongoLeaseCompetingConsumerStrategySupport.acquireLease` coll
 
 ## Decision
 
-**The javadoc is corrected to describe what a lease handover can actually redo today, instead of promising a fence that doesn't exist.** A subscriber's lease can expire while it still believes it holds the lock and is still acting on events. A checkpoint written after that point can move the checkpoint backward, so the new holder redelivers events already handled once. Delivery stays at least once, and the redelivered events are processed again.
+**The javadoc is corrected to describe what a lease handover can actually redo today, instead of promising a fence that doesn't exist.** A subscriber's lease can expire while it still believes it holds the lock and is still acting on events. A checkpoint written after that point can move the checkpoint backward, so the new holder redelivers events already handled once. Delivery stays at-least-once, and the redelivered events are processed again.
 
 **`ListenerLock`, `version()`, and the version-increment logic in `MongoListenerLockService`'s update pipeline stay exactly as they are.** They cost nothing to keep, since the field is already computed as part of the same atomic update that decides who holds the lease, and a real fence needs precisely this value. Removing them now would mean rebuilding the same pipeline logic from scratch when the fence is wired.
 

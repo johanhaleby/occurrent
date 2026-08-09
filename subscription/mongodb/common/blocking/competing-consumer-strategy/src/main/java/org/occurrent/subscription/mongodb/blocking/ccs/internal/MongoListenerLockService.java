@@ -58,7 +58,7 @@ class MongoListenerLockService {
      *
      * <p>A subscriber's lease can expire while it still believes it holds the lock and is still
      * acting on events. A checkpoint written after that point can move the checkpoint backward, so
-     * the new holder redelivers events already handled once. Delivery stays at least once, and the
+     * the new holder redelivers events already handled once. Delivery stays at-least-once, and the
      * redelivered events are processed again (see ADR 115).
      *
      * @param subscriptionId The subscriptionId to lock.
