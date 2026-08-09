@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 18
-updated_at: '2026-08-09T15:30:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (wave-2 matrix 25/26 with one
-  timing-shaped error on F1-adjacent code, rerun issued and watched)'
+revision: 19
+updated_at: '2026-08-09T16:20:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F6 DELIVERY_RESULT received,
+  PR 682 in CI; running tally ~2.9M of 4.5M)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -455,9 +455,30 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: subagent running since ~15:00Z (wave 3)
-    last_meaningful_progress_at: '2026-08-09T15:00:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 682 pinned to 237541ce871a981f39cc2677347de7d94c01bd61
+      when checks complete green; worktree held until the merge
+    last_meaningful_progress_at: '2026-08-09T16:15:00+00:00'
+    observed:
+      pr_682:
+        head: 237541ce871a981f39cc2677347de7d94c01bd61
+        note: 'DELIVERY_RESULT done with matching SHA; four mutation kills
+          across both models'' predicates and the Spring error-handler branch;
+          the worker found and fixed an Awaitility anti-pattern in its own new
+          tests (pollDelay+atMost only needs one truthy poll, during() is the
+          stays-true form) plus the position-concretization trap (a first-event
+          failure leaves the tracked position symbolic, tests need a seed
+          event); storage paths verified already-excluded structurally, no
+          storage code changed; declared migration-guide sentence carried'
+        via: monitor bciv33mhs + worker DELIVERY_RESULT
+        at: '2026-08-09T16:15:00+00:00'
+      stack_asymmetry:
+        note: 'recorded for F8''s brief: after a refusal the native model stops
+          consuming that subscription''s cursor while the Spring model keeps
+          re-attempting and re-refusing each subsequent event on the live
+          cursor until the lease-refresh pause lands; both satisfy the ADR,
+          operator symptom shapes differ per stack'
+        via: F6 DELIVERY_RESULT
+        at: '2026-08-09T16:15:00+00:00'
     assessment: 'Sonnet/high; the two correctness requirements are ADR-stated:
       no re-run of user side effects, and no acceptance of a stale position
       after a lease comeback'
