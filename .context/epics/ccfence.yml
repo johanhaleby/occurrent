@@ -1,6 +1,6 @@
 schema_version: 1
 epic: ccfence
-revision: 17
+revision: 18
 updated_at: '2026-08-09T15:30:00+00:00'
 updated_by: 'orchestrator session local_fab707d0 (wave-2 matrix 25/26 with one
   timing-shaped error on F1-adjacent code, rerun issued and watched)'
@@ -37,10 +37,13 @@ pending_actions:
     consumption_is_resumed_after_prohibited_when_lease_time_is_low, java-21
     sibling green; flake-shaped but sits on code F1 changed, so the rerun is
     the verdict: green means transient (record and move on), red means treat
-    as an F1 regression candidate and dispatch investigation before F7'
+    as an F1 regression candidate and dispatch investigation before F7;
+    VERDICT: rerun SUCCESS, 26/26 on 5b039fbf9, transient timing flake
+    recorded'
   expected: 'run concludes; watcher bzfu63yg7 reports the conclusion; no merge
-    landed between the failure and the rerun so the ref is current'
-  status: PENDING
+    landed between the failure and the rerun so the ref is current; DONE:
+    conclusion success, wave-2 combined verification green'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-09T15:25:00+00:00'
