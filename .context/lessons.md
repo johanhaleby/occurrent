@@ -95,6 +95,17 @@
   the agent is confirmed stopped. The cost of holding is nothing; the cost of the early
   sweep is a worker that cannot finish its own bookkeeping.
 
+- Addendum (2026-08-10, ccfence): the brief line alone does not prevent the background trap.
+  F4 and F9 both backgrounded long Maven runs and ended their turns waiting, with the
+  sequential-FOREGROUND rule stated verbatim in their briefs. The working recovery is one
+  SendMessage resume naming the death of the run ("that result does not exist and never
+  will") plus the foreground chunking recipe, which both workers then followed exactly.
+  Budget one recovery round trip per unit whose verification exceeds a few minutes, and
+  treat a completion notification whose result text says "waiting for" as this trap on
+  sight. Related new fact from F9: a worktree-pinned subagent must never call
+  EnterWorktree/ExitWorktree (it wedges the Bash sandbox's tracked directory until an
+  EnterWorktree back to the pinned path); branch inside the pinned worktree instead.
+
 - A subagent's background processes die with its turn, and nothing wakes it for them
   (2026-08-08, B2 and B6 both lost detached JMH runs the same hour). A worker SESSION can
   run an hour-long benchmark in the background because the harness re-invokes sessions on
