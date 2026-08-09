@@ -1,9 +1,10 @@
 schema_version: 1
 epic: ccfence
-revision: 33
-updated_at: '2026-08-09T22:45:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F12 merged and swept, 684
-  and 686 closed, F9 implementation is the last open unit)'
+revision: 34
+updated_at: '2026-08-09T23:30:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (681 re-investigated per
+  AGENTS.md at Johan''s direction, F13 re-scoped to a javadoc sentence done
+  inline as PR 689)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -249,6 +250,46 @@ pending_actions:
   safe_to_repeat: false
   issued_at: '2026-08-09T09:41:00+00:00'
 units:
+  F13:
+    issue: 681
+    goal: the ifAbsent identical-value edge documented in the
+      CheckpointWriteCondition javadoc and issue 681 closed, after Johan's
+      investigate-first direction reversed the adoption of a mechanized fix
+      (no correctness gap exists when the values are equal, and the exact
+      detection would bind every storage implementer through a permanent TCK
+      case for an imagined caller shape)
+    phase: RUNNING
+    health: PROGRESSING
+    swept: true
+    depends_on: []
+    session: orchestrator inline (bucket B, one javadoc paragraph, PR 689)
+    deliverables:
+    - check: pr_merged
+      ref: 689
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 681
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: CAS-merge PR 689 pinned to 66498d0c040471dada51d40b4101fb5ce2f53868
+      when checks complete green (closes 681)
+    last_meaningful_progress_at: '2026-08-09T23:25:00+00:00'
+    observed:
+      history:
+        note: 'the F13 implementation subagent (returnDocument BEFORE plus TCK
+          case) was dispatched on the first adoption ask and STOPPED seconds
+          in when Johan asked for the AGENTS.md investigation first; its
+          worktree was removed clean; the investigation verdict (javadoc, not
+          mechanics) was approved by structured ask and the BEFORE-based fix
+          stays recorded on the issue'
+        via: TaskStop + AGENTS.md design-intentions read + structured ask
+        at: '2026-08-09T23:20:00+00:00'
+    assessment: 'scope reversal driven by Johan''s correction, the orchestrator
+      cited a principle from recall and the source''s own qualifier (an easier
+      solution is fine when it yields roughly the same result) cut the other
+      way; lesson recorded'
   F0:
     issue: 665
     goal: ADR 116's two-release decision rewritten in place to record the
