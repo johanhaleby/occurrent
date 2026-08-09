@@ -37,7 +37,7 @@ import reactor.core.publisher.Mono;
  * A {@link Mono} that errors here fails the whole catch-up, exactly as a failed write inside the per-event fold does
  * today.
  */
-public interface ReplayAwareMaterializedView {
+public interface ReactiveReplayAwareMaterializedView {
 
     /** A catch-up replay is about to start delivering events to this view. */
     void replayStarted();

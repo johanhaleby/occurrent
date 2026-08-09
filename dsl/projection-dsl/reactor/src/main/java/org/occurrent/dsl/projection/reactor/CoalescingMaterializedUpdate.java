@@ -47,12 +47,12 @@ import java.util.function.BiFunction;
  * {@link Schedulers#boundedElastic()}. {@link #apply(EventMetadata, Object)} and {@link #replayCompleted()} hop there
  * explicitly because they do real work (a repository round trip); {@link #replayStarted()} and
  * {@link #replayAbandoned()} do not, since the engine only ever calls them from inside that same pipeline and never
- * awaits them (see {@link ReplayAwareMaterializedView}). {@code lock} still guards the mutable state throughout,
+ * awaits them (see {@link ReactiveReplayAwareMaterializedView}). {@code lock} still guards the mutable state throughout,
  * because a plain field write on one worker thread is not guaranteed visible to whichever worker thread runs the next
  * call, even though the calls themselves never run concurrently.
  */
 @NullMarked
-final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> implements BiFunction<EventMetadata, E, Mono<Void>>, ReplayAwareMaterializedView {
+final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAwareMaterializedView {
 
     private final View<S, E> view;
     private final ViewStateRepository<S, ID> repository;
@@ -61,7 +61,7 @@ final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> impl
 
     private final Object lock = new Object();
     private boolean replaying = false;
-    private final Map<ID, List<Buffered<E>>> buffered = new LinkedHashMap<>();
+    private Map<ID, List<Buffered<E>>> buffered = new LinkedHashMap<>();
     private int bufferedCount = 0;
 
     CoalescingMaterializedUpdate(View<S, E> view, ViewStateRepository<S, ID> repository, int batchSize,
@@ -137,8 +137,8 @@ final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> impl
 
     // Must be called holding lock.
     private Map<ID, List<Buffered<E>>> drainLocked() {
-        Map<ID, List<Buffered<E>>> batch = new LinkedHashMap<>(buffered);
-        buffered.clear();
+        Map<ID, List<Buffered<E>>> batch = buffered;
+        buffered = new LinkedHashMap<>();
         bufferedCount = 0;
         return batch;
     }

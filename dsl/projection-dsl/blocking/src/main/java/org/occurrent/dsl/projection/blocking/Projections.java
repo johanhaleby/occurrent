@@ -90,6 +90,13 @@ public final class Projections {
      * A strategy that retries everything also retries a fold that fails for a deterministic reason, which keeps the
      * failure away from the subscription model's error listener and from your broker's redelivery.
      * <p>
+     * {@code retryStrategy} also reaches this view's catch-up replay flush. Passing anything other than
+     * {@link RetryStrategy#none()} makes a flush re-read and re-write one key at a time instead of
+     * {@link ViewStateRepository#findAllById(java.util.Collection)} and {@link ViewStateRepository#saveAll(java.util.Map)}
+     * in one call each, because a repository that overrides those for a real bulk round trip reports no per-key outcome
+     * to retry against. See {@link #materializedView(Projection, ViewStateRepository, RetryStrategy, MaterializedViewOptions)}
+     * for the batching itself.
+     * <p>
      * Hand the result to whichever sink you drive through its {@link MaterializedView} overload:
      * {@code CatchupProjectionFeed.create(id, view, replayFilter, ..)},
      * {@code DomainEventFeed.register(id, view, replayFilter)}, or

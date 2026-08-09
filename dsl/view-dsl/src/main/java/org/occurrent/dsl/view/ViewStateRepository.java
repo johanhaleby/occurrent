@@ -54,7 +54,7 @@ public interface ViewStateRepository<S extends @Nullable Object, ID> {
      * settled for {@code CommandDispatcher.dispatchAll}: a seam an implementation may exploit, not a guarantee the
      * framework provides. The default loops {@link #findById(Object)} one id at a time, so behaviour is unchanged for
      * every existing repository, including one built from two lambdas through {@link #create(Function, BiConsumer)}.
-     * An id absent from {@code ids} is not present as a key of the returned map, the same as an empty
+     * An id with no stored state is simply absent from the returned map, the same as an empty
      * {@link #findById(Object)} result. An implementation backed by a store that supports an {@code _id in (..)} query
      * can override this to answer with one round trip instead of {@code ids.size()}.
      *

@@ -55,7 +55,7 @@ public final class MongoBulkViewStateOperations {
     /**
      * Reads every id in {@code ids} with a single {@code _id in (..)} query, in the same shape the looping
      * {@code ViewStateRepository.findAllById} default produces: a {@link LinkedHashMap} in {@code ids} iteration
-     * order, an id absent from the result store simply missing from the returned map.
+     * order, with an id that has no stored state simply absent from the returned map.
      */
     @SuppressWarnings("unchecked")
     public static <ID, S> Map<ID, S> findAllById(MongoOperations mongoOperations, Class<S> stateType, Collection<ID> ids) {

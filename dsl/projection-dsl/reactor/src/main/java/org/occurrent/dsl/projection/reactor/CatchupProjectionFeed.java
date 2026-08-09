@@ -251,14 +251,14 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public void replayStarted() {
-                if (fold instanceof ReplayAwareMaterializedView replayAware) {
+                if (fold instanceof ReactiveReplayAwareMaterializedView replayAware) {
                     replayAware.replayStarted();
                 }
             }
 
             @Override
             public Mono<Void> replayCompleted() {
-                if (fold instanceof ReplayAwareMaterializedView replayAware) {
+                if (fold instanceof ReactiveReplayAwareMaterializedView replayAware) {
                     return replayAware.replayCompleted();
                 }
                 return Mono.empty();
@@ -266,7 +266,7 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public void replayAbandoned() {
-                if (fold instanceof ReplayAwareMaterializedView replayAware) {
+                if (fold instanceof ReactiveReplayAwareMaterializedView replayAware) {
                     replayAware.replayAbandoned();
                 }
             }

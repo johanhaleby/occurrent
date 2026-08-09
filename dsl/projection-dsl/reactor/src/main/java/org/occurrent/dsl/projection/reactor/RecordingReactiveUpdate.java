@@ -31,7 +31,7 @@ import java.util.function.BiFunction;
  * Applies the wrapped update and then advances {@code store}, so the recorded position is written only after the
  * state it describes.
  * <p>
- * Implements {@link ReplayAwareMaterializedView} and forwards every lifecycle call to the delegate when it implements
+ * Implements {@link ReactiveReplayAwareMaterializedView} and forwards every lifecycle call to the delegate when it implements
  * the capability too. During a replay the delegate may be buffering (a coalescing update), so the position seen so
  * far is kept in memory and only written in {@link #replayCompleted()}, after the delegate's own {@link Mono}
  * completes. {@link #replayAbandoned()} discards it instead, since the next replay recomputes everything anyway.
@@ -39,7 +39,7 @@ import java.util.function.BiFunction;
  * though its calls never run concurrently.
  */
 @NullMarked
-final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReplayAwareMaterializedView {
+final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAwareMaterializedView {
 
     private final BiFunction<EventMetadata, E, Mono<Void>> delegate;
     private final AppliedPositionStore store;
@@ -81,7 +81,7 @@ final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, M
 
     @Override
     public void replayStarted() {
-        if (delegate instanceof ReplayAwareMaterializedView replayAware) {
+        if (delegate instanceof ReactiveReplayAwareMaterializedView replayAware) {
             replayAware.replayStarted();
         }
         synchronized (lock) {
@@ -92,7 +92,7 @@ final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, M
 
     @Override
     public Mono<Void> replayCompleted() {
-        Mono<Void> delegateCompletion = delegate instanceof ReplayAwareMaterializedView replayAware ? replayAware.replayCompleted() : Mono.empty();
+        Mono<Void> delegateCompletion = delegate instanceof ReactiveReplayAwareMaterializedView replayAware ? replayAware.replayCompleted() : Mono.empty();
         return delegateCompletion.then(Mono.<Void>fromRunnable(() -> {
             long highest;
             synchronized (lock) {
@@ -107,7 +107,7 @@ final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, M
 
     @Override
     public void replayAbandoned() {
-        if (delegate instanceof ReplayAwareMaterializedView replayAware) {
+        if (delegate instanceof ReactiveReplayAwareMaterializedView replayAware) {
             replayAware.replayAbandoned();
         }
         synchronized (lock) {

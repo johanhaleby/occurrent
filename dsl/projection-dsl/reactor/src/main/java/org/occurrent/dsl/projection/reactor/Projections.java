@@ -155,7 +155,10 @@ public final class Projections {
     /**
      * A reactive {@code (E) -> Mono<Void>} update that calls the blocking {@code materializedView.update(event)} on
      * {@link Schedulers#boundedElastic()}. Use this to drive a blocking {@link MaterializedView} (for example the one the
-     * view DSL's {@code materialized(...)} builds, with its own retry/locking policy) from a reactive pipeline.
+     * view DSL's {@code materialized(...)} builds, with its own retry/locking policy) from a reactive pipeline. When
+     * {@code materializedView} implements the blocking view DSL's replay-aware capability, the returned update forwards
+     * the replay lifecycle to it too, so a batching view keeps batching instead of writing through per event. See
+     * {@link #reactiveUpdateWithMetadata(MaterializedView)}.
      */
     public static <E> Function<E, Mono<Void>> reactiveUpdate(MaterializedView<E> materializedView) {
         BiFunction<EventMetadata, E, Mono<Void>> update = reactiveUpdateWithMetadata(materializedView);
@@ -164,11 +167,15 @@ public final class Projections {
 
     /**
      * The metadata-aware form of {@link #reactiveUpdate(MaterializedView)}: calls the blocking
-     * {@code materializedView.update(metadata, event)} on {@link Schedulers#boundedElastic()}.
+     * {@code materializedView.update(metadata, event)} on {@link Schedulers#boundedElastic()}. The returned update
+     * always implements {@link ReactiveReplayAwareMaterializedView}, and forwards
+     * {@code replayStarted}/{@code replayCompleted}/{@code replayAbandoned} to {@code materializedView} whenever it
+     * implements the blocking view DSL's {@code ReplayAwareMaterializedView} capability, so a replay driven through a
+     * {@code CatchupProjectionFeed} still reaches a batching or position-recording view wrapped through this bridge.
      */
     public static <E> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(MaterializedView<E> materializedView) {
         requireNonNull(materializedView, "materializedView cannot be null");
-        return (metadata, event) -> Mono.<Void>fromRunnable(() -> materializedView.update(metadata, event)).subscribeOn(Schedulers.boundedElastic());
+        return new BlockingMaterializedViewUpdate<>(materializedView);
     }
 
     /**
@@ -272,7 +279,7 @@ public final class Projections {
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
      * Works with any {@code (EventMetadata, E) -> Mono<Void>} update, including
      * {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository)}'s coalescing catch-up batching through
-     * {@link ReplayAwareMaterializedView}: the returned update forwards the lifecycle calls to {@code update} and only
+     * {@link ReactiveReplayAwareMaterializedView}: the returned update forwards the lifecycle calls to {@code update} and only
      * records the position once the delegate's own write for that replay is durable.
      * <p>
      * An event whose {@link EventMetadata#getPosition()} is {@code null} makes the returned {@link Mono} error with an

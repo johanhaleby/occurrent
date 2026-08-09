@@ -64,7 +64,7 @@ final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implem
     // Every access happens on the thread driving the catch-up replay: BlockingHandover.catchUp folds one payload at a
     // time on the calling thread, so this class does no synchronization of its own.
     private boolean replaying = false;
-    private final Map<ID, List<Buffered<E>>> buffered = new LinkedHashMap<>();
+    private Map<ID, List<Buffered<E>>> buffered = new LinkedHashMap<>();
     private int bufferedCount = 0;
 
     CoalescingMaterializedView(View<S, E> view, ViewStateRepository<S, ID> repository, RetryStrategy retryStrategy,
@@ -120,8 +120,8 @@ final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implem
         if (buffered.isEmpty()) {
             return;
         }
-        Map<ID, List<Buffered<E>>> batch = new LinkedHashMap<>(buffered);
-        buffered.clear();
+        Map<ID, List<Buffered<E>>> batch = buffered;
+        buffered = new LinkedHashMap<>();
         bufferedCount = 0;
 
         if (retryStrategy instanceof RetryStrategy.DontRetry) {
