@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 21
-updated_at: '2026-08-09T17:30:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F7 DELIVERY_RESULT received,
-  PR 683 in CI, finding 684 routed adopt-or-ask)'
+revision: 22
+updated_at: '2026-08-09T17:40:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (684 adopted as F12 by
+  structured ask, routing comment posted)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -539,6 +539,34 @@ units:
     assessment: 'Sonnet/high; merge gate is the full depends_on list, an active
       fence over stub storages or without the retry exclusion is the bug ADR
       116 names'
+  F12:
+    issue: 684
+    goal: the saga timer-poller gate resolves CompetingConsumerStrategy with
+      getIfUnique instead of getIfAvailable, a missing or ambiguous strategy
+      means the poller runs on every instance, matching the fence wiring's
+      two-bean stand-down, with a test proving a context with a Saga and two
+      strategy beans starts
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F8]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 684
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch after F8 merges
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'adopted by Johan (structured ask 2026-08-09) from F7''s
+      trace-first finding; Sonnet/medium, tiny; pre-existing startup crash for
+      a Saga app with two strategy beans; routing comment on the issue'
   F8:
     issue: 665
     goal: end-to-end proof over real MongoDB, expired-lease takeover with refused
