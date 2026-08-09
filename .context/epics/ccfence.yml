@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 16
-updated_at: '2026-08-09T15:05:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F3 merged, wave 2 complete,
-  F6 dispatched; wave-boundary token tally ~2.5M of 4.5M)'
+revision: 17
+updated_at: '2026-08-09T15:30:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (wave-2 matrix 25/26 with one
+  timing-shaped error on F1-adjacent code, rerun issued and watched)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -29,6 +29,21 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   each wave boundary, stop and ask if the ceiling nears (spend at wave-1 close:
   ~1.0M across the plan review, F0, F1, F2)'
 pending_actions:
+- id: act-011
+  type: rerun
+  target: 'run 31312898071 failed-jobs rerun on 5b039fbf9 (wave-2 combined
+    tree): test (subscription-util-blocking, java-25) errored with a 10s
+    Awaitility timeout in CompetingConsumerSubscriptionModelTest
+    consumption_is_resumed_after_prohibited_when_lease_time_is_low, java-21
+    sibling green; flake-shaped but sits on code F1 changed, so the rerun is
+    the verdict: green means transient (record and move on), red means treat
+    as an F1 regression candidate and dispatch investigation before F7'
+  expected: 'run concludes; watcher bzfu63yg7 reports the conclusion; no merge
+    landed between the failure and the rerun so the ref is current'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T15:25:00+00:00'
 - id: act-010
   type: merge
   target: 'PR 680 squash-merge pinned to verified head
