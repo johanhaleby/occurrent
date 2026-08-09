@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 19
-updated_at: '2026-08-09T16:20:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F6 DELIVERY_RESULT received,
-  PR 682 in CI; running tally ~2.9M of 4.5M)'
+revision: 20
+updated_at: '2026-08-09T16:45:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F6 merged and swept, F7
+  dispatched)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -29,6 +29,20 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   each wave boundary, stop and ask if the ceiling nears (spend at wave-1 close:
   ~1.0M across the plan review, F0, F1, F2)'
 pending_actions:
+- id: act-012
+  type: merge
+  target: 'PR 682 squash-merge pinned to verified head
+    237541ce871a981f39cc2677347de7d94c01bd61 (all checks complete 0 failed,
+    MERGEABLE, zero reviews, DELIVERY_RESULT done with matching SHA, four
+    mutation kills)'
+  expected: 'PR merged; DONE: squash 70358414dcbba4188e63fb96a36c331f69f07629,
+    state MERGED, remote branch deleted, worktree clean and removed, local
+    branches deleted; matrix watch with count guard running; F7 merge gate
+    fully satisfied and F7 dispatched'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T16:40:00+00:00'
 - id: act-011
   type: rerun
   target: 'run 31312898071 failed-jobs rerun on 5b039fbf9 (wave-2 combined
@@ -444,19 +458,18 @@ units:
       via existing predicates, subscription stays known and pausable (no
       history-lost forget copy), error-level log before rethrow, both Mongo
       storages own save-retries exclude it too
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F2]
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 3)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 682
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~16:40Z pinned to 237541ce8, squash 70358414dcbba4188e63fb96a36c331f69f07629, all checks complete 0 failed, zero review threads, DELIVERY_RESULT done with matching SHA, four mutation kills across both models and the Spring error-handler branch'
     blocking_on: []
-    next_action: CAS-merge PR 682 pinned to 237541ce871a981f39cc2677347de7d94c01bd61
-      when checks complete green; worktree held until the merge
+    next_action: none pending the main-matrix result on the squash
     last_meaningful_progress_at: '2026-08-09T16:15:00+00:00'
     observed:
       pr_682:
@@ -489,19 +502,19 @@ units:
       ManualStartSubscriptionModel.stoppedByDefault) via lazy ObjectProvider
       getIfUnique with remember-only-found volatile caching, storage bean stays
       ordinary
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F1, F3, F4, F5, F6]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 4)
     deliverables:
     - check: pr_merged
       ref: null
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 4
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~16:45Z (wave 4)
+    last_meaningful_progress_at: '2026-08-09T16:45:00+00:00'
     observed: {}
     assessment: 'Sonnet/high; merge gate is the full depends_on list, an active
       fence over stub storages or without the retry exclusion is the bug ADR
