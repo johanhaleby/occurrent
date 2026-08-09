@@ -525,16 +525,18 @@ units:
     deliverables:
     - check: pr_merged
       ref: 672
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~12:12Z pinned to f3f059ca3, squash
+        f9249f5c31c0b30800d72b3f51954404611b4e2e, headAtMerge equals pin
+        (verified), all checks green, the one Copilot thread resolved with a fix
+        (the stale removing-lock debug message)'
     blocking_on: []
-    next_action: 'ci-wait on PR 672; on green with threads resolved, verify the
-      DELIVERY_RESULT and body claims, CAS-merge pinned, then epic closeout: this
-      is the last unit with an unmet PR-advanceable deliverable, so the
-      completing sweep stops monitor bu11n182l and the loop, runs the tracker
-      scan from cursor 2026-08-08T23:10Z, final combined verification, and the
-      hot-restart handoff'
-    last_meaningful_progress_at: '2026-08-09T08:50:00+00:00'
+    next_action: 'closeout stage 1 done: monitor bu11n182l STOPPED (lifetime
+      rule), tracker scan clean (cursor advanced to 2026-08-09T12:10:00Z, all
+      candidates routed), matrix watch ba3ys2jqz on f9249f5c3 running; remaining:
+      U7 session sweep on its end notification, final hot-restart handoff when
+      the matrix reports'
+    last_meaningful_progress_at: '2026-08-09T12:12:00+00:00'
     observed: {}
     assessment: 'adopted per Johan (structured ask): 0.33.0 becomes the hardening
       release that also carries the fence groundwork, pulling the fence itself to
