@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 28
-updated_at: '2026-08-09T20:30:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F8 DELIVERY_RESULT received,
-  PR 687 in CI; measured spend ~4.4M of 4.5M, final-wave budget ask routed)'
+revision: 29
+updated_at: '2026-08-09T20:45:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (ceiling raised to 5.5M by
+  structured ask, F12 dispatched, F9 dispatches at PR 687 merge)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -27,7 +27,8 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   FLEET BUDGET (Johan, structured ask 2026-08-09 ~11:20Z): continue in
   parallel waves under a 4.5M subagent-token total ceiling, tally reported at
   each wave boundary, stop and ask if the ceiling nears (spend at wave-1 close:
-  ~1.0M across the plan review, F0, F1, F2)'
+  ~1.0M across the plan review, F0, F1, F2); RAISED to 5.5M by structured ask
+  2026-08-09 ~20:35Z at measured ~4.4M with F12 and F9 remaining'
 pending_actions:
 - id: act-014
   type: merge
@@ -577,11 +578,11 @@ units:
       wiring site, with a one-line ADR 116 starter-section touch-up so the
       site count stays honest (design gate for that sentence already closed
       by the structured ask)
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F8]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
     deliverables:
     - check: pr_merged
       ref: null
@@ -596,9 +597,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch after F8 and PR 685 merge (shares
-      ManualStartSubscriptionModel with F10)
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~20:45Z (685 merged, disjoint from PR 687's test-only diff)
+    last_meaningful_progress_at: '2026-08-09T20:45:00+00:00'
     observed: {}
     assessment: 'adopted by Johan (structured ask 2026-08-09) from F7''s
       trace-first finding; Sonnet/medium, tiny; pre-existing startup crash for
