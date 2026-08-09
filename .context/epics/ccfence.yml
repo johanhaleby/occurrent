@@ -1,8 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 13
-updated_at: '2026-08-09T13:50:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F4 merged and swept)'
+revision: 14
+updated_at: '2026-08-09T14:15:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F3 DELIVERY_RESULT received,
+  issue 681 routed deferred, PRs 679 and 680 in CI)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
