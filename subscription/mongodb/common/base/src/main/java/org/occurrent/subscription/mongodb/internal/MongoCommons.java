@@ -182,7 +182,11 @@ public class MongoCommons {
         if (document == null || !document.containsKey(WRITE_VERSION)) {
             return OptionalLong.empty();
         }
-        return OptionalLong.of(document.get(WRITE_VERSION, Number.class).longValue());
+        Number version = document.get(WRITE_VERSION, Number.class);
+        if (version == null) {
+            return OptionalLong.empty();
+        }
+        return OptionalLong.of(version.longValue());
     }
 
     /**
