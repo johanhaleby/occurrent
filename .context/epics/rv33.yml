@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 3
-updated_at: 2026-08-09T19:50:30Z
+revision: 4
+updated_at: 2026-08-09T19:58:00Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -50,7 +50,7 @@ units:
   U1:
     issue: null
     goal: "Release-docs truth pass: changelog.md:34/:21, upgrading-to-0.33.0.md sections 2-3, docs PR 55 branch sentence (A2, A4, P3, P4/P5 prose)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -114,16 +114,17 @@ units:
   U5:
     issue: null
     goal: "ADR-fidelity pass: amend ADR 116 (A1+B4), status line on ADR 115, banners on ADR 110 and ADR 94 (A3, M2), ADR 113 note, ADR 111 sentence for M3, view-dsl ReplayAwareMaterializedView javadoc"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_ee122e4d (worker session id unknown until first message)"
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 695, met: false, evidence: null}
       - {check: manual_approval, ref: "prose design gate: Johan confirms wording before merge (standing rule + plan decision 2026-08-09)", met: false, evidence: null}
     blocking_on: []
-    next_action: "chip spawned, awaiting worker session"
-    last_meaningful_progress_at: 2026-08-09T19:27:04Z
-    observed: {}
+    next_action: "await checks + worker DELIVERY_RESULT, then Johan's wording confirm (flag the wrap-order sentence in the ADR 110 banner and the banner-date inconsistency), then CAS merge"
+    last_meaningful_progress_at: 2026-08-09T19:56:00Z
+    observed:
+      pr_695: {head: 6a964b1b1a7b29a629265b24d6ff812ffadacff2, rollup: running, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T19:57:00Z}
     assessment: "prose deliverable; auto-merge excluded by the design-gate rule"
