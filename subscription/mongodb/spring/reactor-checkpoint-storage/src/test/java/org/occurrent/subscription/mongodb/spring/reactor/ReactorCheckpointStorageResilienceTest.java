@@ -34,7 +34,6 @@ import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
-import org.springframework.data.mongodb.core.query.UpdateDefinition;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -103,10 +102,14 @@ class ReactorCheckpointStorageResilienceTest {
                 .thenAnswer(invocation -> Mono.defer(() -> attempts.findOne.getAndIncrement() == 0
                         ? Mono.error(exception)
                         : realMongoOperations.findOne(invocation.getArgument(0, Query.class), Document.class, CHECKPOINT_COLLECTION)));
-        when(throwingOperations.upsert(any(Query.class), any(UpdateDefinition.class), eq(CHECKPOINT_COLLECTION)))
+        // save reaches MongoDB through getCollection(..).findOneAndUpdate(..) rather than upsert(..), since a
+        // conditional checkpoint write is a pipeline update that has to hand back the document it wrote, which
+        // ReactiveMongoOperations has no upsert-shaped equivalent for. Failing the collection lookup itself is the
+        // same "first subscription fails" shape as the other two operations, just one step earlier in the chain.
+        when(throwingOperations.getCollection(eq(CHECKPOINT_COLLECTION)))
                 .thenAnswer(invocation -> Mono.defer(() -> attempts.upsert.getAndIncrement() == 0
                         ? Mono.error(exception)
-                        : realMongoOperations.upsert(invocation.getArgument(0, Query.class), invocation.getArgument(1, UpdateDefinition.class), CHECKPOINT_COLLECTION)));
+                        : realMongoOperations.getCollection(CHECKPOINT_COLLECTION)));
         when(throwingOperations.remove(any(Query.class), eq(CHECKPOINT_COLLECTION)))
                 .thenAnswer(invocation -> Mono.defer(() -> attempts.remove.getAndIncrement() == 0
                         ? Mono.error(exception)

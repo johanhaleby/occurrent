@@ -242,11 +242,11 @@ public class SpringMongoCheckpointStorageTest {
 
             @Override
             @NullMarked
-            void persistDocumentStreamPosition(String subscriptionId, Document document) {
+            Document persistConditionalCheckpointDocument(String subscriptionId, Document newCheckpointDocument, CheckpointWriteCondition condition) {
                 if (counter.getAndIncrement() == 0) {
                     throw new IllegalStateException("expected");
                 }
-                super.persistDocumentStreamPosition(subscriptionId, document);
+                return super.persistConditionalCheckpointDocument(subscriptionId, newCheckpointDocument, condition);
             }
         };
 
