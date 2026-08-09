@@ -1,8 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 1
-updated_at: '2026-08-09T09:20:00+00:00'
-updated_by: 'orchestrator session worktree-mobile-setup-916a9c (epic registration)'
+revision: 2
+updated_at: '2026-08-09T09:45:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (one-release decision folded
+  in, F0/F1/F2 chips dispatched, monitors reconciled)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -14,11 +15,73 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   /Users/johan/.claude/plans/ccfence-adr116-implementation.md; two registration
   decisions by Johan 2026-08-09: the third CheckpointWriteCondition case
   (ifAbsent) folds into F2, and reactor writeVersion is Mono<Long> with empty
-  meaning none; HARD GATE G0: no unit PR merges until tag occurrent-0.33.0
-  exists (ADR 116 two-release boundary); milestone deliberately skipped
-  (ccpause/ccrace precedent)'
-pending_actions: []
+  meaning none; ONE-RELEASE DECISION (Johan, structured ask 2026-08-09, the ADR
+  116 deploy-window hazard quoted to him): survival and fence ship TOGETHER in
+  0.33.0, the former G0 tag gate is dissolved, and the 0.33.0 release now gates
+  on this epic instead (Johan holds the release until the fence units land);
+  unit F0 rewrites ADR 116 to record it, and F0''s prose PR merges only after
+  Johan confirms the wording (design-gate rule); 0.33.0 release readiness is
+  declared at F8 plus F11, with F9/F10 status stated either way; F11
+  coordinates with ccrace''s held docs PR 54 (the 0.33.0 news post needs fence
+  content now); milestone deliberately skipped (ccpause/ccrace precedent)'
+pending_actions:
+- id: act-003
+  type: dispatch-chip
+  target: 'F0 chip: ⌁[ccfence/F0#665] ADR 116 one-release amendment ·
+    Sonnet/high (prose-only, one-coherent-decision rewrite, merge held for
+    Johan''s wording confirmation)'
+  expected: 'chip visible to Johan; VERIFIED: spawn returned task_91560d5d'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-09T09:42:00+00:00'
+- id: act-002
+  type: dispatch-chip
+  target: 'F1 chip v2: ⌁[ccfence/F1#665] Strategy fencing token · Sonnet/high
+    (v1 task_4a6072c8 dismissed, its brief carried the obsolete tag-hold and
+    0.34.0 naming)'
+  expected: 'chip visible to Johan; VERIFIED: spawn returned task_42b4ec6d'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-09T09:42:00+00:00'
+- id: act-001
+  type: dispatch-chip
+  target: 'F2 chip v2: ⌁[ccfence/F2#665] Checkpoint write condition ·
+    Sonnet/high (v1 task_db94f037 dismissed, its brief carried the obsolete
+    tag-hold and 0.34.0 naming; v2 carries the ADR-supersession note so the
+    worker does not BLOCK on the release-split contradiction)'
+  expected: 'chip visible to Johan; VERIFIED: spawn returned task_eab370e0'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-09T09:41:00+00:00'
 units:
+  F0:
+    issue: 665
+    goal: ADR 116's two-release decision rewritten in place to record the
+      maintainer's 2026-08-09 one-release decision (survival and fence together
+      in 0.33.0) with the accepted upgrade-window consequence and its recovery,
+      as one coherent decision without an amendment trail, everything else in
+      the file untouched
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip task_91560d5d pending Johan's click
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'prose design deliverable; the decision itself is closed (the
+      structured ask with the hazard quoted), but the MERGE waits for Johan''s
+      wording confirmation per the design-gate rule, markdown runs no CI and
+      its only real reviewer is him'
   F2:
     issue: 665
     goal: CheckpointWriteCondition (sealed, any/notOlderThan/ifAbsent) and
@@ -29,8 +92,8 @@ units:
       real, Mongo and Redis interim-refuse per ADR 93), TCK conformance via
       evaluatesWriteConditions fixture default with guards coverage, migration
       guide section with deploy-order requirement, changelog Breaking changes
-    phase: BLOCKED
-    health: UNKNOWN
+    phase: READY
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: null
@@ -39,10 +102,8 @@ units:
       ref: null
       met: false
       evidence: null
-    blocking_on:
-    - 'G0: tag occurrent-0.33.0 does not exist yet; nothing in this epic merges
-      before it (dispatch also waits, tag-watch monitor armed)'
-    next_action: dispatch chip when the 0.33.0 tag appears (wave 1, alone)
+    blocking_on: []
+    next_action: chip task_eab370e0 pending Johan's click
     last_meaningful_progress_at: null
     observed: {}
     assessment: 'foundation unit and the deliberate break; Sonnet/high, not
@@ -57,10 +118,10 @@ units:
       ListenerLock.version with the exactly-one-registered-consumer-holds rule,
       named deterministic tests for LOCK_RELEASED-not-holding, two-consumer
       stand-down, and refresh-stable token
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
-    depends_on: [F2]
+    depends_on: []
     session: null
     deliverables:
     - check: pr_merged
@@ -68,12 +129,12 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 2 after F2 merges
+    next_action: chip task_42b4ec6d pending Johan's click
     last_meaningful_progress_at: null
     observed: {}
     assessment: 'additive strategy-side unit; Sonnet/high; changelog Changes
-      entry; wave-2 placement is pacing (changelog conflicts, api/blocking
-      co-location with F2), not a code dependency'
+      entry; dispatched in parallel with F2 per Johan''s start-the-chips ask
+      (never a code dependency, only changelog keep-both conflicts expected)'
   F2b:
     issue: 665
     goal: imperative OpenRewrite recipe inserting throwing stub overrides for the
