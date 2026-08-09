@@ -1,0 +1,324 @@
+schema_version: 1
+epic: ccfence
+revision: 1
+updated_at: '2026-08-09T09:20:00+00:00'
+updated_by: 'orchestrator session worktree-mobile-setup-916a9c (epic registration)'
+baseline:
+  repo: johanhaleby/occurrent
+  branch: main
+authority: 'see .context/orchestrator-policy.yml (standing merge, sibling leniency,
+  reasoned-decline-open, memory checkpoints); epic registered from Johan''s
+  /orchestrator invocation naming issue 665 (2026-08-09), scope approved via
+  structured ask (Register ccfence, 12 units): ADR 116 implementation plus issues
+  668 and 669 routed in by Johan during ccrace; plan file
+  /Users/johan/.claude/plans/ccfence-adr116-implementation.md; two registration
+  decisions by Johan 2026-08-09: the third CheckpointWriteCondition case
+  (ifAbsent) folds into F2, and reactor writeVersion is Mono<Long> with empty
+  meaning none; HARD GATE G0: no unit PR merges until tag occurrent-0.33.0
+  exists (ADR 116 two-release boundary); milestone deliberately skipped
+  (ccpause/ccrace precedent)'
+pending_actions: []
+units:
+  F2:
+    issue: 665
+    goal: CheckpointWriteCondition (sealed, any/notOlderThan/ifAbsent) and
+      CheckpointWriteConditionNotFulfilledException in subscription/core,
+      three-arg save plus writeVersion on both CheckpointStorage interfaces
+      (reactor writeVersion is Mono<Long> empty-means-none, refusals signal
+      Mono.error), all 20 in-repo implementers compiling and honest (in-memory
+      real, Mongo and Redis interim-refuse per ADR 93), TCK conformance via
+      evaluatesWriteConditions fixture default with guards coverage, migration
+      guide section with deploy-order requirement, changelog Breaking changes
+    phase: BLOCKED
+    health: UNKNOWN
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on:
+    - 'G0: tag occurrent-0.33.0 does not exist yet; nothing in this epic merges
+      before it (dispatch also waits, tag-watch monitor armed)'
+    next_action: dispatch chip when the 0.33.0 tag appears (wave 1, alone)
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'foundation unit and the deliberate break; Sonnet/high, not
+      plan-first (ADR 116 is the plan); brief carries the 20-implementer
+      inventory, NoopCheckpointStorage/WorkingCheckpointStorage anti-skip
+      criticality, the seven mock(CheckpointStorage) runtime sites, and the
+      confirmed fence-release version handed by the orchestrator at dispatch'
+  F1:
+    issue: 665
+    goal: CompetingConsumerStrategy.fencingToken default method returning
+      OptionalLong.empty, MongoLeaseCompetingConsumerStrategySupport keeps
+      ListenerLock.version with the exactly-one-registered-consumer-holds rule,
+      named deterministic tests for LOCK_RELEASED-not-holding, two-consumer
+      stand-down, and refresh-stable token
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F2]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 2 after F2 merges
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'additive strategy-side unit; Sonnet/high; changelog Changes
+      entry; wave-2 placement is pacing (changelog conflicts, api/blocking
+      co-location with F2), not a code dependency'
+  F2b:
+    issue: 665
+    goal: imperative OpenRewrite recipe inserting throwing stub overrides for the
+      two new CheckpointStorage members plus a review comment, wired into the
+      UpgradeToOccurrent umbrella for the fence release, per the
+      MigrateStreamToList precedent
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F2]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 2 after F2 merges, version name handed at
+      dispatch
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/high; declarative yml cannot add interface members, so
+      this is a Java visitor with rewrite-test coverage'
+  F3:
+    issue: 665
+    goal: real conditional write in NativeMongoCheckpointStorage,
+      SpringMongoCheckpointStorage and ReactorCheckpointStorage via one
+      findOneAndUpdate pipeline with $literal and $mergeObjects carry-forward,
+      probed against a live replica set before building (probe script and raw
+      output in DELIVERY_RESULT), reactor retryWhen excludes the refusal,
+      fixtures flip evaluatesWriteConditions to true
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F2]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 2 after F2 merges
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/high; pipeline-cannot-behave means BLOCKED, never a
+      workaround (ADR 114 precedent for the probe-first method)'
+  F4:
+    issue: 665
+    goal: SpringRedisCheckpointStorage conditional write via a two-key Lua script
+      with explicit serializers, delete removes both keys, its own infinite
+      executeWithRetry excludes the refusal, Redis Cluster refusal documented,
+      fixture flips to true
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F2]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 2 after F2 merges
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/high; the retry exclusion here is load-bearing (default
+      RetryStrategy is infinite, a refusal would otherwise hang the delivery
+      thread forever)'
+  F5:
+    issue: 665
+    goal: CheckpointWriteVersionSource in subscription/api/blocking, the blocking
+      checkpoint-writing models stamp notOlderThan when given a version and any()
+      when not, source rides CheckpointStorageConfig for the catch-up models and
+      the constructors for DurableSubscriptionModel and blocking
+      CatchupThenPushSubscriptionModel, CatchupSubscriptionModel and its config
+      in scope, reactor models unchanged, source-bearing tests over in-memory
+      storages only
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F2]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 2 after F2 merges
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/high; no lease vocabulary in models; existing
+      constructors remain (no source means today''s behavior); config-vs-ctor
+      attachment for catch-up models may escalate if the default direction
+      fights the code'
+  F6:
+    issue: 665
+    goal: both Mongo subscription models exclude
+      CheckpointWriteConditionNotFulfilledException from every retry on the path
+      via existing predicates, subscription stays known and pausable (no
+      history-lost forget copy), error-level log before rethrow, both Mongo
+      storages own save-retries exclude it too
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F2]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 3 (fragile area, undivided review attention)
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/high; the two correctness requirements are ADR-stated:
+      no re-run of user side effects, and no acceptance of a stale position
+      after a lease comeback'
+  F7:
+    issue: 665
+    goal: the starter passes strategy::fencingToken at every model-building site
+      (durable model and catch-up config, projection registrar, saga registrar,
+      ManualStartSubscriptionModel.stoppedByDefault) via lazy ObjectProvider
+      getIfUnique with remember-only-found volatile caching, storage bean stays
+      ordinary
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F1, F3, F4, F5, F6]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 4
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/high; merge gate is the full depends_on list, an active
+      fence over stub storages or without the retry exclusion is the bug ADR
+      116 names'
+  F8:
+    issue: 665
+    goal: end-to-end proof over real MongoDB, expired-lease takeover with refused
+      stale write and redelivery, graceful handover, and the hard-rule assertion
+      that one refused write never stops lease refresh or delivery for other
+      subscriptions, with a named test proven to fail when F6''s exclusion is
+      reverted, covering the registrar-driven starter paths
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F7]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 665
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 5
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/high; closes 665 via Fixes; mutation-style evidence for
+      the hard-rule test in DELIVERY_RESULT'
+  F9:
+    issue: 668
+    goal: a competing consumer that regains its lease resumes by reading the
+      checkpoint rather than continuing its old subscription, plan-first with
+      johan-plan, ADR 112/105/113 and the ccpause hand-back semantics carried as
+      constraints and none reopened
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F8]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 668
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 6
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/high, plan-first; touches
+      CompetingConsumerSubscriptionModel resume and the catch-up models
+      underneath; fence e2e harness reusable'
+  F10:
+    issue: 669
+    goal: ManualStartSubscriptionModel.pinStartPosition becomes one conditional
+      write using the ifAbsent condition approved into F2, closing the
+      two-nodes-starting-together race
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F7]
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 669
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch in wave 6 (shares ManualStartSubscriptionModel with
+      F7''s fourth site)
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/medium; small because the condition case already exists
+      by then'
+  F11:
+    issue: null
+    goal: held PR in occurrent-org/occurrent-org.github.io for the fence release
+      with the fencing section, checkpoint-storage implementer guidance, Redis
+      Cluster limit and deploy-order requirement, review-clean (Copilot review
+      requested, zero unresolved threads), merged only at the fence release day
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [F7]
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch after F7 merges, parallel with wave 5
+    last_meaningful_progress_at: null
+    observed: {}
+    assessment: 'Sonnet/medium; U5 pattern, deliberately not pr_merged; docs-repo
+      monitor arms at session launch (multi-repo rule)'
