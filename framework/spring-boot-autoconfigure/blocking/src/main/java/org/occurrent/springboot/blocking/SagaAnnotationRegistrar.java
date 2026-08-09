@@ -76,6 +76,11 @@ class SagaAnnotationRegistrar {
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
     private final Set<String> registeredIds;
+    // Resolves the competing-consumer strategy lazily, on the first checkpoint write a catch-up-then-push saga makes,
+    // so this registrar does not force the strategy bean into existence while singletons are still being instantiated
+    // (ADR 116). Separate from resolveSagaCompetingConsumerStrategy below, which gates the saga timer poller and is
+    // an unrelated, already-eager use of the same strategy type.
+    private final CompetingConsumerCheckpointWriteVersionSource writeVersionSource;
     // Registered sagas own a timer poller each, stop them when the context is destroyed so no poller thread leaks.
     // Concurrent because a push saga withheld by manual mode is added when the application starts it, on whichever
     // thread that is, while close() may be reading the list.
@@ -89,6 +94,7 @@ class SagaAnnotationRegistrar {
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
         this.registeredIds = registeredIds;
+        this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class));
     }
 
     // A @Saga factory returns a Saga descriptor: subscribe to its events, materialize per-instance state into a
@@ -292,7 +298,7 @@ class SagaAnnotationRegistrar {
         PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", PositionOrderedReader.class, id);
         CheckpointStorage catchupMarker = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Saga", CheckpointStorage.class, id);
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker,
-                ProjectionAnnotationRegistrar.catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
+                ProjectionAnnotationRegistrar.catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)), writeVersionSource);
         // Retained so close() can stop it. Its replay runs on its own thread, so a context that closes without stopping
         // it leaves that replay folding into a store that is closing with it, and a saga folding a replayed history is
         // one that issues commands while it does so.

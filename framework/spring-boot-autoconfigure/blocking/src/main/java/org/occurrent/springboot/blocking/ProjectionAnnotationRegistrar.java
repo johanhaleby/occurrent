@@ -47,6 +47,7 @@ import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
@@ -88,6 +89,10 @@ class ProjectionAnnotationRegistrar {
     private final ApplicationContext applicationContext;
     private final StartPositionSupport startPositionSupport;
     private final Set<String> registeredIds;
+    // Resolves the competing-consumer strategy lazily, on the first checkpoint write a catch-up-then-push projection
+    // makes, so this registrar does not force the strategy bean into existence while singletons are still being
+    // instantiated (ADR 116).
+    private final CompetingConsumerCheckpointWriteVersionSource writeVersionSource;
     // Domain-push feeds collected during projection registration, caught up once after every projection is registered.
     // A list rather than a set now that a feed carries one projection: each entry is one projection's catch-up, and
     // each carries its own startupMode, so there is nothing left to de-duplicate.
@@ -113,6 +118,7 @@ class ProjectionAnnotationRegistrar {
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
         this.registeredIds = registeredIds;
+        this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class));
     }
 
     // Stop every catch-up this registrar started or created a model for, waiting for any replay still in flight to
@@ -306,7 +312,8 @@ class ProjectionAnnotationRegistrar {
         if (catchesUp) {
             PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Projection", PositionOrderedReader.class, id);
             CheckpointStorage catchupMarker = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Projection", CheckpointStorage.class, id);
-            CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker, catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)));
+            CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, pushModel, catchupMarker,
+                    catchupThenLiveOptions(applicationContext.getBean(OccurrentProperties.class)), writeVersionSource);
             // Retained so close() can stop it. Its replay runs on its own thread, so a context that closes without
             // stopping it leaves that replay folding into a store that is closing with it.
             pushModels.add(model);

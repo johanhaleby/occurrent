@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
@@ -31,6 +32,7 @@ import org.occurrent.subscription.UnknownSubscriptionException;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -64,6 +66,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     private final SubscriptionModel delegate;
     private final @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource;
     private final @Nullable CheckpointStorage checkpointStorage;
+    private final @Nullable CheckpointWriteVersionSource writeVersionSource;
 
     private final ConcurrentMap<String, Registration> registrations = new ConcurrentHashMap<>();
     // Registration order, so start(true) brings subscriptions up in the order they were declared rather than in
@@ -83,10 +86,11 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     private final Object stateLock = new Object();
 
     private ManualStartSubscriptionModel(SubscriptionModel delegate, @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
-                                         @Nullable CheckpointStorage checkpointStorage) {
+                                         @Nullable CheckpointStorage checkpointStorage, @Nullable CheckpointWriteVersionSource writeVersionSource) {
         this.delegate = requireNonNull(delegate, SubscriptionModel.class.getSimpleName() + " cannot be null");
         this.positionSource = positionSource;
         this.checkpointStorage = checkpointStorage;
+        this.writeVersionSource = writeVersionSource;
     }
 
     /**
@@ -99,7 +103,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      * @param delegate The subscription model to register with once a subscription is started.
      */
     public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate) {
-        return new ManualStartSubscriptionModel(delegate, null, null);
+        return new ManualStartSubscriptionModel(delegate, null, null, null);
     }
 
     /**
@@ -116,9 +120,30 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      */
     public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
                                                                 CheckpointStorage checkpointStorage) {
+        return stoppedByDefault(delegate, positionSource, checkpointStorage, null);
+    }
+
+    /**
+     * A model that registers subscriptions without starting them, records where a subscription running for the first
+     * time will start from, and stamps that recorded position with a version from {@code writeVersionSource} (see
+     * ADR 116).
+     *
+     * @param delegate           The subscription model to register with once a subscription is started.
+     * @param positionSource     Supplies the position to record. Typically the innermost model, the one reading the feed.
+     *                           Only {@link GlobalCheckpointSource#globalCheckpoint()} is called, so a caller can pass
+     *                           anything that exposes it, such as a {@link CheckpointAwareSubscriptionModel}, without
+     *                           this method demanding the full subscription model that happens to implement it.
+     * @param checkpointStorage  Where the recorded position is written, which must be the storage the wrapped models read.
+     * @param writeVersionSource Asked for a version before the recorded position is written. A version stamps the
+     *                           write {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan} it, an empty
+     *                           answer or no source at all stamps it {@link CheckpointWriteCondition#any() any()}.
+     */
+    public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
+                                                                CheckpointStorage checkpointStorage, @Nullable CheckpointWriteVersionSource writeVersionSource) {
         return new ManualStartSubscriptionModel(delegate,
                 requireNonNull(positionSource, GlobalCheckpointSource.class.getSimpleName() + " cannot be null"),
-                requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null"));
+                requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null"),
+                writeVersionSource);
     }
 
     /**
@@ -375,8 +400,18 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     // was only ever a stand-in for a first run.
     private void pinStartPosition(String subscriptionId, @Nullable Checkpoint positionToPin) {
         if (positionToPin != null && checkpointStorage != null && !checkpointStorage.exists(subscriptionId)) {
-            checkpointStorage.save(subscriptionId, positionToPin);
+            checkpointStorage.save(subscriptionId, positionToPin, writeConditionFor(subscriptionId));
         }
+    }
+
+    // A version from writeVersionSource stamps notOlderThan. An empty answer or no source stamps any(). Mirrors
+    // DurableSubscriptionModel's writeConditionFor.
+    private CheckpointWriteCondition writeConditionFor(String subscriptionId) {
+        if (writeVersionSource == null) {
+            return CheckpointWriteCondition.any();
+        }
+        OptionalLong version = writeVersionSource.writeVersion(subscriptionId);
+        return version.isPresent() ? CheckpointWriteCondition.notOlderThan(version.getAsLong()) : CheckpointWriteCondition.any();
     }
 
     private sealed interface Registration {
