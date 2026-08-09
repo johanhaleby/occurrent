@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 11
-updated_at: '2026-08-09T01:30:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (663 and 664 merged pinned and
-  swept, 659 closed, U3 chipped)'
+revision: 12
+updated_at: '2026-08-09T06:15:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (U5 docs unit adopted per Johan,
+  chip journaled)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,6 +16,18 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-008
+  type: dispatch-chip
+  target: 'U5 chip: ⌁[ccrace/U5] 0.33.0 docs news + gap audit · Sonnet/high
+    (plan-first, docs repo occurrent-org/occurrent-org.github.io, held PR, gap
+    audit against the changelog next-version section, news post, version bump)'
+  expected: 'chip visible to Johan; session enters fleet on his click; a docs-repo
+    monitor arms when the session launches (multi-repo rule); VERIFIED: spawn
+    returned task_2d7f4004, chip pending at position 1'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-09T06:15:00+00:00'
 - id: act-007
   type: dispatch-chip
   target: 'U3 chip: ⌁[ccrace/U3#660] Fencing token decision · Sonnet/high
@@ -213,8 +225,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_cb44f929 spawned 2026-08-09 ~01:30Z, awaiting Johan's
-      launch; first expected observable is the unit's plan at his approval gate
+    next_action: chip task_cb44f929 spawned 2026-08-09 ~01:30Z, launched by Johan
+      ~06:00Z, session running toward his plan gate
     last_meaningful_progress_at: '2026-08-08T23:15:00+00:00'
     observed: {}
     assessment: 'the honest scope is the decision itself, wire the version through
@@ -263,3 +275,32 @@ units:
       module is the common strategy module, these are the native and spring wrapper
       modules) so it parallelizes; changelog collision with U2 is an expected
       rolling conflict pr-fix resolves keep-both'
+  U5:
+    issue: null
+    goal: one held PR in occurrent-org/occurrent-org.github.io carrying the 0.33.0
+      news post, the occurrentversion bump to 0.33.0, the 0.33.0 addedTags entry,
+      and docs for every unreleased changelog entry not covered by docs main or
+      held PRs 49, 52, 53, merged only after the 0.33.0 release
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip task_2d7f4004 spawned 2026-08-09 ~06:20Z, awaiting Johan's
+      launch; the docs-repo monitor arms at launch; first expected observable is
+      the coverage map at his plan gate
+    last_meaningful_progress_at: '2026-08-09T06:15:00+00:00'
+    observed: {}
+    assessment: 'adopted per Johan (chat request 2026-08-09 morning); deliverable
+      is a held review-clean PR, deliberately NOT pr_merged because the merge is a
+      release-day act outside the epic; the audit source of truth is the library
+      changelog next-version section (~12 entries); held PRs 49, 52, 53 and docs
+      main count as existing coverage and their branches are not to be pushed to;
+      docs-repo monitor arms at session launch per the multi-repo rule'
