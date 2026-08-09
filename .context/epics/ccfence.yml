@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 7
-updated_at: '2026-08-09T11:15:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F2 DELIVERY_RESULT received,
-  PR 676 in CI, fleet budget ask routed to Johan)'
+revision: 8
+updated_at: '2026-08-09T11:40:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F2 merged and swept, wave 2
+  dispatched as four parallel worktree subagents)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -23,8 +23,27 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   Johan confirms the wording (design-gate rule); 0.33.0 release readiness is
   declared at F8 plus F11, with F9/F10 status stated either way; F11
   coordinates with ccrace''s held docs PR 54 (the 0.33.0 news post needs fence
-  content now); milestone deliberately skipped (ccpause/ccrace precedent)'
+  content now); milestone deliberately skipped (ccpause/ccrace precedent);
+  FLEET BUDGET (Johan, structured ask 2026-08-09 ~11:20Z): continue in
+  parallel waves under a 4.5M subagent-token total ceiling, tally reported at
+  each wave boundary, stop and ask if the ceiling nears (spend at wave-1 close:
+  ~1.0M across the plan review, F0, F1, F2)'
 pending_actions:
+- id: act-006
+  type: merge
+  target: 'PR 676 squash-merge pinned to verified head
+    22bcff225c37f61940f6a1498bd5b120db1482fe (all checks complete 0 failed,
+    MERGEABLE, zero reviews so zero threads, DELIVERY_RESULT done with
+    matching SHA)'
+  expected: 'PR merged, 665 stays open; DONE: squash
+    a495c2fd59f6e2bd3ac6b69424f0ebf92bdc2396, state MERGED, 665 OPEN
+    (verified), remote branch deleted by the merge, worker worktree clean and
+    removed, local branches deleted; main matrix watch b29o5ms3j on the
+    squash running; wave 2 dispatched from this base'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T11:35:00+00:00'
 - id: act-005
   type: merge
   target: 'PR 675 squash-merge pinned to verified head
@@ -123,21 +142,21 @@ units:
       real, Mongo and Redis interim-refuse per ADR 93), TCK conformance via
       evaluatesWriteConditions fixture default with guards coverage, migration
       guide section with deploy-order requirement, changelog Breaking changes
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 676
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~11:35Z pinned to 22bcff225, squash
+        a495c2fd59f6e2bd3ac6b69424f0ebf92bdc2396, all checks complete 0
+        failed, zero review threads, DELIVERY_RESULT done with matching SHA,
+        mutation-verified conformance on the in-memory storages'
     blocking_on: []
-    next_action: CAS-merge PR 676 pinned to 22bcff225c37f61940f6a1498bd5b120db1482fe
-      when checks complete green; worker finished (DELIVERY_RESULT done,
-      mutation-verified conformance, mock sites confirmed unreached at
-      runtime), worktree held until the merge
+    next_action: none pending the main-matrix result on the squash
     last_meaningful_progress_at: '2026-08-09T11:10:00+00:00'
     observed:
       pr_676:
@@ -204,20 +223,19 @@ units:
       two new CheckpointStorage members plus a review comment, wired into the
       UpgradeToOccurrent umbrella for the fence release, per the
       MigrateStreamToList precedent
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F2]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 2)
     deliverables:
     - check: pr_merged
       ref: null
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 2 after F2 merges, version name handed at
-      dispatch
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~11:40Z with the confirmed 0.33 version
+    last_meaningful_progress_at: '2026-08-09T11:40:00+00:00'
     observed: {}
     assessment: 'Sonnet/high; declarative yml cannot add interface members, so
       this is a Java visitor with rewrite-test coverage'
@@ -229,19 +247,19 @@ units:
       probed against a live replica set before building (probe script and raw
       output in DELIVERY_RESULT), reactor retryWhen excludes the refusal,
       fixtures flip evaluatesWriteConditions to true
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F2]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 2)
     deliverables:
     - check: pr_merged
       ref: null
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 2 after F2 merges
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~11:40Z
+    last_meaningful_progress_at: '2026-08-09T11:40:00+00:00'
     observed: {}
     assessment: 'Sonnet/high; pipeline-cannot-behave means BLOCKED, never a
       workaround (ADR 114 precedent for the probe-first method)'
@@ -251,19 +269,19 @@ units:
       with explicit serializers, delete removes both keys, its own infinite
       executeWithRetry excludes the refusal, Redis Cluster refusal documented,
       fixture flips to true
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F2]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 2)
     deliverables:
     - check: pr_merged
       ref: null
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 2 after F2 merges
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~11:40Z
+    last_meaningful_progress_at: '2026-08-09T11:40:00+00:00'
     observed: {}
     assessment: 'Sonnet/high; the retry exclusion here is load-bearing (default
       RetryStrategy is infinite, a refusal would otherwise hang the delivery
@@ -277,19 +295,19 @@ units:
       CatchupThenPushSubscriptionModel, CatchupSubscriptionModel and its config
       in scope, reactor models unchanged, source-bearing tests over in-memory
       storages only
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F2]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 2)
     deliverables:
     - check: pr_merged
       ref: null
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 2 after F2 merges
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~11:40Z
+    last_meaningful_progress_at: '2026-08-09T11:40:00+00:00'
     observed: {}
     assessment: 'Sonnet/high; no lease vocabulary in models; existing
       constructors remain (no source means today''s behavior); config-vs-ctor
@@ -302,7 +320,7 @@ units:
       via existing predicates, subscription stays known and pausable (no
       history-lost forget copy), error-level log before rethrow, both Mongo
       storages own save-retries exclude it too
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: [F2]
