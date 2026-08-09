@@ -56,8 +56,10 @@ class MongoListenerLockService {
      *
      * <p>Only one subscriber ID will hold a lock for a given {@code subscriptionId} at any time.
      *
-     * <p>A subscriber lease may expire however so it is necessary to still use a kind of fencing
-     * token, like an increasing version number, when taking actions which require the lock.
+     * <p>A subscriber's lease can expire while it still believes it holds the lock and is still
+     * acting on events. A checkpoint written after that point can move the checkpoint backward, so
+     * the new holder redelivers events already handled once. Delivery stays at-least-once, and the
+     * redelivered events are processed again (see ADR 115).
      *
      * @param subscriptionId The subscriptionId to lock.
      * @return {@code Optional} with a {@link ListenerLock} if the lock is held by this subscriber,
