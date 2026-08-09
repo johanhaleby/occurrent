@@ -60,8 +60,11 @@ public OptionalLong writeVersion(String subscriptionId) {
 
 That is not a stopgap you are expected to replace before compiling. It is the correct, permanent answer for a store
 that genuinely cannot evaluate a condition. `UnsupportedOperationException` is the same refusal an event store gives
-for a capability it was not built with, and Occurrent's own Mongo and Redis checkpoint storages answer this way
-today, until a later release teaches them the real comparison.
+for a capability it was not built with.
+
+Occurrent's own Mongo and Redis checkpoint storages do not need this recipe. They already evaluate `notOlderThan`
+and `ifAbsent` for real. Redis Cluster is the exception. It still refuses a conditional write outright, and
+section 4 covers why.
 
 If your store can evaluate a condition for real, the two rules that matter are the same two the TCK asserts on every
 storage that declares it supports them. `any()` must leave whatever version is stored untouched, carrying it
@@ -69,7 +72,7 @@ forward, rather than clearing it or overwriting it with something inferred from 
 must accept when nothing is stored, since that is a checkpoint written before this condition existed, and every
 checkpoint saved by an earlier release has to stay readable.
 
-## 3. One release between the lease change and the fence
+## 3. A 0.32.0 node during a rolling upgrade
 
 Competing consumers ships the fencing token and the checkpoint write condition together in 0.33.0. During a rolling
 upgrade, a node still running 0.32.0 releases its lease the old way. It deletes the lock document rather than
