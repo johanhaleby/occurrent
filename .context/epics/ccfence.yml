@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 11
-updated_at: '2026-08-09T13:05:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F4 DELIVERY_RESULT received,
-  PR 678 in CI)'
+revision: 12
+updated_at: '2026-08-09T13:30:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F5 DELIVERY_RESULT received,
+  deviation reviewed and accepted, PRs 678 and 679 in CI)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -346,13 +346,35 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: subagent running since ~11:40Z
-    last_meaningful_progress_at: '2026-08-09T11:40:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 679 pinned to 71a49978b9fca248637b780f44449b9067ea360c
+      when checks complete green; expect a changelog conflict against PR 678,
+      whichever merges second rebases keep-both; worktree held until the merge
+    last_meaningful_progress_at: '2026-08-09T13:25:00+00:00'
+    observed:
+      pr_679:
+        head: 71a49978b9fca248637b780f44449b9067ea360c
+        note: 'opened ~13:20Z; DELIVERY_RESULT done with matching SHA; 14 new
+          tests plus three mutation-verified writeConditionFor implementations;
+          fixed one existing test that counted 2-arg saves (models now call the
+          3-arg save, the only such override on the blocking stack)'
+        via: monitor bciv33mhs + gh pr view + worker DELIVERY_RESULT
+        at: '2026-08-09T13:25:00+00:00'
+      deviation_accepted:
+        note: 'ORCHESTRATOR DECISION: the brief''s default (source on the
+          PersistCheckpointDuringCatchupPhase leaf) would leave the
+          catch-up-to-live handover write permanently unfenced, so the worker
+          put the accessor on the sealed UseCheckpointInStorage parent and
+          proved the handover write is stamped; accepted because it follows
+          ADR 116''s every-checkpoint-write rule and the sealed interface
+          means no external implementer can break'
+        via: PR 679 diff review (CheckpointStorageConfig sealed hierarchy)
+        at: '2026-08-09T13:28:00+00:00'
     assessment: 'Sonnet/high; no lease vocabulary in models; existing
-      constructors remain (no source means today''s behavior); config-vs-ctor
-      attachment for catch-up models may escalate if the default direction
-      fights the code'
+      constructors remain (no source means today''s behavior); F5''s worker
+      flagged a migration-guide gap worth one line, a test double overriding
+      the 2-arg save stops observing writes after this change, DEFERRED to a
+      small inline docs edit after wave 2 merges settle (avoid conflicting
+      with open PRs that touch the migration guide)'
   F6:
     issue: 665
     goal: both Mongo subscription models exclude
