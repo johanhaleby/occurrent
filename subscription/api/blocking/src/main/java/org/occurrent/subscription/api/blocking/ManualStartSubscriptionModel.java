@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
@@ -32,7 +33,6 @@ import org.occurrent.subscription.UnknownSubscriptionException;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -124,9 +124,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     }
 
     /**
-     * A model that registers subscriptions without starting them, records where a subscription running for the first
-     * time will start from, and stamps that recorded position with a version from {@code writeVersionSource} (see
-     * ADR 116).
+     * A model that registers subscriptions without starting them and records where a subscription running for the
+     * first time will start from (see ADR 116).
+     * <p>
+     * The recorded position is pinned with {@link CheckpointWriteCondition#ifAbsent() ifAbsent()}, which only ever
+     * writes a subscription's very first checkpoint, so {@code writeVersionSource} is not asked for a version and
+     * has no effect on this write. It is accepted here so a caller already holding one for the fence does not need a
+     * different overload; nothing in this model currently has a write for it to stamp.
      *
      * @param delegate           The subscription model to register with once a subscription is started.
      * @param positionSource     Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -134,9 +138,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
      *                           anything that exposes it, such as a {@link CheckpointAwareSubscriptionModel}, without
      *                           this method demanding the full subscription model that happens to implement it.
      * @param checkpointStorage  Where the recorded position is written, which must be the storage the wrapped models read.
-     * @param writeVersionSource Asked for a version before the recorded position is written. A version stamps the
-     *                           write {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan} it, an empty
-     *                           answer or no source at all stamps it {@link CheckpointWriteCondition#any() any()}.
+     * @param writeVersionSource Not consulted. See above.
      */
     public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
                                                                 CheckpointStorage checkpointStorage, @Nullable CheckpointWriteVersionSource writeVersionSource) {
@@ -398,20 +400,28 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     // Written when the subscription starts rather than when it is registered, so a subscription that is never started
     // leaves nothing behind. An existing checkpoint always wins, since that subscription has run before and this one
     // was only ever a stand-in for a first run.
+    //
+    // The write is ifAbsent() rather than an exists() check followed by a save(), because those are two calls with
+    // nothing holding them together. Two nodes racing to start the same subscription would both see nothing stored
+    // and both write, and whichever wrote second would silently win, losing the events between the two positions
+    // (see #669). ifAbsent() folds the check and the write into one call the storage evaluates atomically, so only
+    // the first node's write can succeed. The second gets CheckpointWriteConditionNotFulfilledException, which is
+    // swallowed here rather than surfaced, because the stored pin is exactly what this node would have written too:
+    // both nodes read the same position source before either of them raced to store it.
+    //
+    // This does not consult writeVersionSource. ifAbsent() and notOlderThan() are different conditions for different
+    // problems, first-pin atomicity versus a lease fence, and CheckpointWriteCondition carries exactly one of them
+    // per write. A version source passed to the four-argument stoppedByDefault has no effect on this write.
     private void pinStartPosition(String subscriptionId, @Nullable Checkpoint positionToPin) {
-        if (positionToPin != null && checkpointStorage != null && !checkpointStorage.exists(subscriptionId)) {
-            checkpointStorage.save(subscriptionId, positionToPin, writeConditionFor(subscriptionId));
+        if (positionToPin == null || checkpointStorage == null) {
+            return;
         }
-    }
-
-    // A version from writeVersionSource stamps notOlderThan. An empty answer or no source stamps any(). Mirrors
-    // DurableSubscriptionModel's writeConditionFor.
-    private CheckpointWriteCondition writeConditionFor(String subscriptionId) {
-        if (writeVersionSource == null) {
-            return CheckpointWriteCondition.any();
+        try {
+            checkpointStorage.save(subscriptionId, positionToPin, CheckpointWriteCondition.ifAbsent());
+        } catch (CheckpointWriteConditionNotFulfilledException e) {
+            // Another node already pinned this subscription's start position first. Its write wins and this node has
+            // nothing left to do.
         }
-        OptionalLong version = writeVersionSource.writeVersion(subscriptionId);
-        return version.isPresent() ? CheckpointWriteCondition.notOlderThan(version.getAsLong()) : CheckpointWriteCondition.any();
     }
 
     private sealed interface Registration {
