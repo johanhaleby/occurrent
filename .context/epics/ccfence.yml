@@ -1,10 +1,10 @@
 schema_version: 1
 epic: ccfence
-revision: 24
-updated_at: '2026-08-09T18:35:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F10 and F11 dispatched in
-  parallel with F8 after Johan flagged the stale adoption visibility on 668
-  and 669; adoption comments posted on both issues)'
+revision: 25
+updated_at: '2026-08-09T19:10:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F10 delivered as PR 685, 686
+  adopted into F12 with the removal decided, F11 redoing the stale
+  base-section addendum)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -556,10 +556,14 @@ units:
   F12:
     issue: 684
     goal: the saga timer-poller gate resolves CompetingConsumerStrategy with
-      getIfUnique instead of getIfAvailable, a missing or ambiguous strategy
-      means the poller runs on every instance, matching the fence wiring's
-      two-bean stand-down, with a test proving a context with a Saga and two
-      strategy beans starts
+      getIfUnique instead of getIfAvailable (a missing or ambiguous strategy
+      means the poller runs on every instance, a test proves a context with a
+      Saga and two strategy beans starts), AND issue 686's removal decided by
+      Johan, drop the unconsulted CheckpointWriteVersionSource parameter from
+      ManualStartSubscriptionModel.stoppedByDefault and the starter's fourth
+      wiring site, with a one-line ADR 116 starter-section touch-up so the
+      site count stays honest (design gate for that sentence already closed
+      by the structured ask)
     phase: PLANNED
     health: PROGRESSING
     swept: false
@@ -574,8 +578,13 @@ units:
       ref: 684
       met: false
       evidence: null
+    - check: issue_closed
+      ref: 686
+      met: false
+      evidence: null
     blocking_on: []
-    next_action: dispatch after F8 merges
+    next_action: dispatch after F8 and PR 685 merge (shares
+      ManualStartSubscriptionModel with F10)
     last_meaningful_progress_at: null
     observed: {}
     assessment: 'adopted by Johan (structured ask 2026-08-09) from F7''s
@@ -655,9 +664,19 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: subagent running since ~18:30Z
-    last_meaningful_progress_at: '2026-08-09T18:30:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 685 pinned to a40f751761975a6675c8b909f899f8fc65c2e60f
+      when checks complete green; worktree held until the merge
+    last_meaningful_progress_at: '2026-08-09T19:05:00+00:00'
+    observed:
+      pr_685:
+        head: a40f751761975a6675c8b909f899f8fc65c2e60f
+        note: 'DELIVERY_RESULT done with matching SHA; race mutation-proved
+          (revert to exists-then-save fails the race test); dropped F7''s
+          writeConditionFor stamping from the pin per brief, filed 686
+          trace-first for the now-dead parameter, adopted into F12 by
+          structured ask'
+        via: monitor bciv33mhs + worker DELIVERY_RESULT
+        at: '2026-08-09T19:05:00+00:00'
     assessment: 'Sonnet/medium; small because the condition case already exists
       by then'
   F11:
