@@ -175,28 +175,15 @@ caller cannot read back tells half the truth about its own state, and the failur
 against ends with somebody asking which version is stored and why their writes are refused. Answering
 that by reading a MongoDB document by hand is not an answer a library should leave people with.
 
-The fencing token is what the competing consumer layer supplies as the version, and it stays entirely
-on that side, in one small type that knows both halves.
+The fencing token is what supplies that version, and nothing here reaches for it. A checkpoint store
+is told a condition and never learns who computed it.
 
-```java
-public final class FencedCheckpointStorage {
-
-    public static CheckpointStorage fencedBy(VersionedCheckpointStorage storage, CompetingConsumerStrategy strategy);
-
-    public static CheckpointStorage fencedBy(VersionedCheckpointStorage storage, Supplier<CompetingConsumerStrategy> strategy);
-}
-```
-
-It asks the strategy, and writes with `notOlderThan(token)` when it gets one and `any()` when it does
-not. Standing down is a call rather than an absence, which is the whole of the rule the earlier
-sections describe.
-
-All of it lives in `subscription/api/blocking` and `subscription/core`, next to the types it needs, so
+All of this lives in `subscription/api/blocking` and `subscription/core`, next to the types it needs, so
 there is no new module and no new dependency. `CheckpointStorage` itself does not change.
 
 A separate storage interface rather than a default method on `CheckpointStorage`, because a store that
 cannot write conditionally has to be caught where somebody wires it rather than at the first checkpoint
-write. Both places that wire it name a concrete type, so that is a compile error and nobody pays a
+write. Everywhere it is wired names a concrete type, so that is a compile error and nobody pays a
 runtime check for it. It also gives the conformance suite something to attach to, so a future store
 inherits a contract instead of an implementer deciding whether they have opted into one.
 
@@ -212,32 +199,64 @@ would be a considered change to a contract every store implements, which is the 
 and the alternative of an open predicate would put a condition interpreter written in Lua into the
 Redis storage for cases nobody has asked for.
 
-### Nothing carries the token through the subscription models
+### A subscription model stamps its own checkpoint writes
 
-The wrapper asks the strategy at write time, and the `subscriptionId` the save call already has is the
-only key it needs. No subscription model changes, and every checkpoint write is covered rather than
-only the durable one, including both catch-up models, the durable model's seed write, the catch-up
-handover writes, the start position `ManualStartSubscriptionModel` records and
-`CatchupThenPushSubscriptionModel`'s catch-up marker.
+The models that write checkpoints are the ones that should know what they are writing them as, so they
+take a source of write versions and use it.
 
-This is what dissolves the third problem in #665. The token never travels from the strategy through
-`CompetingConsumerSubscriptionModel` to the write, because the strategy and the storage meet directly
-at a subscription id.
+```java
+@FunctionalInterface
+public interface CheckpointWriteVersionSource {
+    OptionalLong writeVersion(String subscriptionId);
+}
+```
 
-Rejected: having `CompetingConsumerSubscriptionModel` install a token source on the model it wraps. It
-needs a second capability interface, a mutable setter on a public subscription model, and a walk down
-the delegate chain, and it still cannot reach the storage the catch-up models hold.
+`DurableSubscriptionModel`, `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` and
+`CatchupThenPushSubscriptionModel` each take one beside their storage, and every checkpoint they write
+becomes `notOlderThan` the version they get, or `any()` when they get none. A model given a source is
+given a `VersionedCheckpointStorage` in the same constructor, so a source without a store that can use
+it does not compile.
 
-Rejected: a thread-local set around the delivery callback. Hidden coupling, and it cannot work for any
-reactive path.
+**A model does not learn what a lease is.** It learns that it has a source of write versions and that
+it stamps its writes with one. The words lease, fencing token and competing consumer appear nowhere in
+it, and a model with no source behaves exactly as it does today.
 
-Rejected: `DurableSubscriptionModel` taking the strategy as a constructor argument. It covers one write
-site out of seven and adds constructor overloads to several models.
+**Neither interface names the other, and the two are joined by a method reference at the wiring site.**
 
-The cost is that a hand-wired user has to wrap the storage, and forgetting leaves today's behaviour.
-The version nobody can forget needs `CompetingConsumerSubscriptionModel` to own the storage, which
-inverts every shipped wiring and breaks `DelegatingSubscriptionModel`. The Spring Boot starter below
-removes most of the exposure.
+```java
+new DurableSubscriptionModel(inner, storage, strategy::fencingToken)
+```
+
+`CompetingConsumerStrategy` does not implement `CheckpointWriteVersionSource`, because a name with
+Checkpoint in it has no business on a distributed lock. The lock offers a fencing token, the model
+wants a write version, the shapes agree, and the wiring is where they meet. That is the whole of the
+coupling between competing consumers and checkpointing.
+
+Rejected, and this is what the first two drafts of this ADR proposed: **a `CheckpointStorage` that
+wraps another one, asks the strategy itself and rewrites the save on the way past.** It touches no
+subscription model and covers every write site from one wiring point, which is why it was attractive.
+It is also not a checkpoint storage. It is a competing consumer object wearing the storage interface,
+and it strengthens `CheckpointStorage.save` from behind that interface, so four models and every user
+holding the injected bean have a reference that can now refuse a write with nothing in the type saying
+so. Touching nothing else was its only real advantage, and that is not an advantage.
+
+Rejected: **making the fence internal to `CompetingConsumerStrategy`.** A fence is a condition
+evaluated at the write, by whatever performs the write, and the strategy never performs one. Keeping
+the writer ignorant needs either the wrapper above or a checkpoint store that knows what a lease is.
+Asking the strategy before each write instead is a check rather than a condition, so it is stale by the
+time the write lands, which is the reason fencing exists at all, and it costs a round trip per event.
+The one arrangement that would work is the lease and the checkpoint living in one store with the write
+as a transaction over both, which rules out a MongoDB lease beside a Redis checkpoint and puts lease
+knowledge in the storage regardless.
+
+Rejected: **`CompetingConsumerSubscriptionModel` installing a source on the model it wraps.** It saves
+the user one constructor argument and pays with a mutable setter on a public subscription model, a walk
+down the delegate chain, and no way to reach the storage the catch-up models hold.
+
+The cost is real and worth naming. Four models gain a constructor argument, a hand-wiring user passes
+the source in two places rather than wrapping a storage in one, and the starter has to reach every
+place that builds a checkpoint-writing model rather than one bean. That is more code than the wrapper.
+What it buys is that no type pretends to be another one and every object states its own truth.
 
 ### The comparison rule, and what it does not promise
 
@@ -247,8 +266,8 @@ stays readable and there is nothing to migrate.
 
 `any()` leaves the stored version alone, and that is why it is a case of the condition rather than a
 missing argument. Unconditional writes stay alive in three places, which are a hand-wired user who did
-not wrap the storage, a node still on the previous release during a deploy, and the moment where the
-strategy stands down. Both Mongo storages write a full replacement document today, so an unconditional
+pass a source, a node still on the previous release during a deploy, and the moment where the strategy
+stands down. Both Mongo storages write a full replacement document today, so an unconditional
 save would take the version with it, and a stale writer offering an old one would then find nothing
 stored and be accepted. So `CheckpointStorage.save` carries the stored version forward. Redis gets this
 for free.
@@ -300,8 +319,8 @@ again on every attempt. Both Mongo storages retry `save` on their own terms as w
 wrong, and the second is a correctness bug rather than noise.
 
 1. The node re-runs the user's side effects every couple of seconds for as long as the process lives.
-2. The retry loop still holds the position from the delivery that was refused, while the wrapper asks
-   the strategy for a token again on each attempt. If this node later takes the lease back at a higher
+2. The retry loop still holds the position from the delivery that was refused, while the model asks
+   its source for a version again on each attempt. If this node later takes the lease back at a higher
    token, an attempt from that loop is accepted and writes the old position over the newer one. The
    fence would be beaten by waiting.
 
@@ -377,35 +396,37 @@ an unfenced cluster user is untouched.
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
 
-### The Spring Boot starter fences the storage it creates
+### The Spring Boot starter supplies the source wherever it builds a model
 
-The starter hands its `CheckpointStorage` to the durable model, the catch-up config and
-`ManualStartSubscriptionModel.stoppedByDefault`, and that is not the whole list. The projection and saga
-registrars each pull `CheckpointStorage` straight out of the application context, and both feed
-`CatchupThenPushSubscriptionModel`, which writes checkpoints.
+The starter builds checkpoint-writing models in more places than the one that takes the storage bean.
+`occurrentCompetingDurableSubscriptionModel` builds the durable model and the catch-up config, the
+projection and saga registrars each pull `CheckpointStorage` out of the application context and build
+a `CatchupThenPushSubscriptionModel`, and `ManualStartSubscriptionModel.stoppedByDefault` records a
+start position. Each of those is a place the source has to reach, and there is no single bean to wrap
+that reaches them all.
 
-**So `occurrentCheckpointStorage` returns the fenced storage itself.** Every consumer of the bean gets
-it, however it resolves the bean, and there is one wrapping site rather than a list to keep in step.
+**So the starter passes `strategy::fencingToken` at each of them, and the checkpoint storage bean stays
+an ordinary checkpoint storage.** That is more sites than a wrapper would have needed and it is the
+honest count, because those are the sites that write checkpoints. Missing one leaves that path writing
+with `any()`, which is today's behaviour rather than a broken fence, and the end-to-end proof covers
+the registrar-driven paths for that reason.
 
-The strategy has to be reached without the storage bean depending on it, which is why `fencedBy` takes a
-`Supplier<CompetingConsumerStrategy>` as well as a strategy. The strategy bean depends on
-`List<CompetingConsumerListener>`, an open extension point, so a user listener that injects
-`CheckpointStorage` would close a cycle if the storage bean asked for the strategy while it was being
-built. Resolving it on first use through an `ObjectProvider` removes the dependency. The provider is
-asked with `getIfUnique` rather than `getIfAvailable`, because an application with two strategy beans
-starts today and must keep starting, which also means two strategy beans mean no fence.
+The strategy has to be reached without those beans depending on it eagerly, because the strategy
+depends on `List<CompetingConsumerListener>`, which is an open extension point, so a user listener that
+injects a subscription model would close a cycle. Each site takes an `ObjectProvider` and resolves on
+first use, asked with `getIfUnique` rather than `getIfAvailable`, because an application with two
+strategy beans starts today and must keep starting, which also means two strategy beans mean no fence.
 
 Three rules on that lazy resolution, each of them a way the fence could otherwise be turned off
-quietly. Only a strategy that was actually found is remembered, so a first attempt that finds nothing is
-tried again rather than disabling the fence for the life of the process. The field holding it is
+quietly. Only a strategy that was actually found is remembered, so a first attempt that finds nothing
+is tried again rather than disabling the fence for the life of the process. The field holding it is
 `volatile`, and resolving twice is harmless. And a resolution that fails rather than returns nothing
-counts as no token, which keeps a checkpoint write from a registrar-driven subscription working while
+counts as no version, which keeps a checkpoint write from a registrar-driven subscription working while
 the strategy bean is still being built.
 
-`occurrentCheckpointStorage` is `@ConditionalOnMissingBean(CheckpointStorage.class)`, so a user-declared
-bean replaces it and is never wrapped. **The starter fences the storage it creates, and a storage you
-supply is yours to wrap**, which is one line. No runtime type check, no warning, and no application
-breaks on upgrade because it declared its own storage bean.
+A user who declares their own `CheckpointStorage` bean is unaffected, since that bean no longer carries
+the fence. A user who hand-wires their own models passes the source themselves, which is one argument
+in two places.
 
 ### The reactor checkpoint storage stays as it is
 
@@ -415,8 +436,8 @@ reactor model into a blocking one lives in the TCK, so no reactor checkpoint wri
 lease. Fencing it now builds for a caller that does not exist.
 
 What it would take, so nobody designs it again, is a matching capability interface in
-`subscription/api/reactor`, a wrapper that signals `Mono.error(CheckpointWriteConditionNotFulfilledException)` instead of
-throwing, and the no-database contract on `fencingToken`, which is what makes calling the blocking
+`subscription/api/reactor`, a `ReactorDurableSubscriptionModel` that takes a source and signals
+`Mono.error(CheckpointWriteConditionNotFulfilledException)` instead of throwing, and the no-database contract on `fencingToken`, which is what makes calling the blocking
 strategy from a reactive pipeline legitimate. Same pipeline as the blocking Mongo storages.
 
 One thing follows from leaving it alone. `ReactorCheckpointStorage` keeps writing a full replacement and
@@ -445,9 +466,9 @@ repeats, once per unit of the stored version, each cycle costing a lease period 
 user's action. It recovers on its own and `CheckpointStorage.delete(subscriptionId)` ends it
 immediately, at the price of a replay.
 
-A user who wires their own subscription models gets the fence by wrapping the storage and gets today's
-behaviour by not wrapping it. A user on the Spring Boot starter gets it without doing anything, unless
-they declare their own `CheckpointStorage` bean, which is theirs to wrap.
+A user who wires their own subscription models gets the fence by passing the source and gets today's
+behaviour by leaving it out. A user on the Spring Boot starter gets it without doing anything, whatever
+their checkpoint storage bean is, because the fence no longer travels through that bean.
 
 A `CheckpointStorage` implementation outside this repository keeps working untouched and has no fence.
 Implementing `VersionedCheckpointStorage` is what opts in, and the new conformance suite is what says
@@ -462,6 +483,6 @@ failure on the delivery path is treated, and the reason is written into the retr
 left to a reader of the stack trace.
 
 The implementation registers as its own epic against the two release boundaries above, split into the
-lease change, the strategy's token, the checkpoint store's write condition, the Mongo storages, the retry exclusion in
-both subscription models, the Redis storage, the starter wiring, an end-to-end proof over a real MongoDB
+lease change, the strategy's token, the checkpoint store's write condition, the four models taking a
+source, the Mongo storages, the retry exclusion in both subscription models, the Redis storage, the starter wiring, an end-to-end proof over a real MongoDB
 covering both an expired lease and a graceful handover, and the documentation.
