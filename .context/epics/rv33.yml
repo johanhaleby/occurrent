@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 12
-updated_at: 2026-08-09T21:12:00Z
+revision: 13
+updated_at: 2026-08-09T21:25:00Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -165,16 +165,16 @@ units:
   U8:
     issue: 693
     goal: "Null-tolerant extractWriteVersion read in MongoCommons plus a test (B5 residue, adopted by Johan 2026-08-09)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: "in-session subagent, worktree-isolated, Haiku (dispatched 2026-08-09 ~20:48Z, dies with the orchestrator context)"
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: issue_closed, ref: 693, met: false, evidence: null}
+      - {check: pr_merged, ref: 699, met: true, evidence: "squash 68e58c7c2, merged head equals verified 550390160, CAS pin honoured, 0 threads, 2026-08-09 ~21:22Z"}
+      - {check: issue_closed, ref: 693, met: true, evidence: "auto-closed by the merge (Fixes #693), verified CLOSED via gh"}
     blocking_on: []
-    next_action: "await subagent completion notification with PR"
-    last_meaningful_progress_at: 2026-08-09T20:46:00Z
+    next_action: "sweep: remove the subagent worktree and branch"
+    last_meaningful_progress_at: 2026-08-09T21:22:00Z
     observed: {}
-    assessment: "tiny mechanical unit, Haiku-tier"
+    assessment: "tiny mechanical unit, Haiku-tier; 66k subagent tokens, temporary-revert test check confirmed in its report"
