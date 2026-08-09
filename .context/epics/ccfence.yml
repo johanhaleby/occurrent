@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 35
-updated_at: '2026-08-09T23:55:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F13 merged, 681 closed;
-  F9 implementation is the only open unit)'
+revision: 36
+updated_at: '2026-08-10T00:40:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F9 DELIVERY_RESULT received,
+  PR 690 in CI, the epic''s last open deliverable)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -737,9 +737,24 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: implementation running since ~21:50Z against the approved plan at /Users/johan/.claude/plans/ccfence-f9-lease-regain-resume.md (Johan approved plan AND a new small ADR in the same PR, structured ask ~21:45Z); 668 carries the in-progress label
-    last_meaningful_progress_at: '2026-08-09T21:10:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 690 pinned to 509d7b9c426d658339b8ae29ed4cc8588d0fac44 when
+      checks complete green (closes 668); worktree held until the merge
+    last_meaningful_progress_at: '2026-08-10T00:35:00+00:00'
+    observed: 
+      pr_690:
+        head: 509d7b9c426d658339b8ae29ed4cc8588d0fac44
+        note: 'DELIVERY_RESULT done with matching SHA; plan executed with no
+          mechanism deviation; ADR 0117 included (design gate closed at the
+          plan ask); four mutation kills run, and the plan''s claim that the
+          fallback mutation would kill the TCK conformance case was
+          empirically WRONG (the TCK fixture delivers an event before pausing
+          so a checkpoint always exists at resume), reported as a
+          plan-accuracy note rather than forced; declared incidentals: one
+          test-scope pom dependency plus two fixture doc comments the change
+          made stale; the worker hit the background-process trap once mid-run
+          and redid all verification foreground after the recovery nudge'
+        via: monitor bciv33mhs + worker DELIVERY_RESULT
+        at: '2026-08-10T00:35:00+00:00'
     assessment: 'Sonnet/high, plan-first; touches
       CompetingConsumerSubscriptionModel resume and the catch-up models
       underneath; fence e2e harness reusable'
