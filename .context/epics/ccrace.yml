@@ -402,9 +402,9 @@ units:
       news post, the occurrentversion bump to 0.33.0, the 0.33.0 addedTags entry,
       and docs for every unreleased changelog entry not covered by docs main or
       held PRs 49, 52, 53, merged only after the 0.33.0 release
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_4133f037 (archived)
     deliverables:
