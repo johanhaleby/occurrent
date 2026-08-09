@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 18
+revision: 19
 updated_at: '2026-08-09T09:10:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U5 delivered and swept, U3
-  swept, docs monitor retired, U7 chip on hold pending the U6 discussion)'
+updated_by: 'orchestrator session local_f74d8561 (ADR 116 amendment PR 670
+  merged pinned, U7 hold lifted by Johan''s launch)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,6 +16,21 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-013
+  type: merge
+  target: 'PR 670 squash-merge pinned to verified head
+    487347b03611fc4edc30005b92d071189c40edbd (ADR 116 amendment from Johan''s own
+    review in the U6 session: the checkpoint write condition becomes its own
+    concept, CheckpointWriteCondition and VersionedCheckpointStorage, the fence
+    stays competing-consumer-side in FencedCheckpointStorage; prose-only, zero
+    threads, survival section verified untouched)'
+  expected: 'PR merged, merged head equals pin, issue 665 remains OPEN; DONE:
+    squash 174303cd6b0367bfd86867ea4bb6ddb2511adc0c, headAtMerge equals pin
+    (verified), 665 OPEN (verified)'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T09:40:00+00:00'
 - id: act-012
   type: dispatch-chip
   target: 'U7 chip: ⌁[ccrace/U7] Lease lock survives release · Sonnet/high (not
@@ -418,7 +433,13 @@ units:
       OPEN through this unit by design (Refs not Fixes), claimed with a comment
       saying exactly that; both target interfaces shipped, so the design must
       carry the migration conventions (OpenRewrite recipe, migration guide,
-      third-party implementer story for CompetingConsumerStrategy)'
+      third-party implementer story for CompetingConsumerStrategy). AMENDED by PR
+      670 (squash 174303cd6) after Johan''s post-merge read caught a modelling
+      error: the checkpoint store''s write condition is its own concept
+      (CheckpointWriteCondition, VersionedCheckpointStorage), the fence stays
+      competing-consumer-side (FencedCheckpointStorage, the only type knowing
+      both halves); the unit split stands, only the storage-capability unit''s
+      naming and ownership change; survival section untouched so U7 proceeds'
   U7:
     issue: 665
     goal: the lease lock document survives a release, remove unsets subscriberId
@@ -436,11 +457,10 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'chip task_4dcefbd5 spawned but ON HOLD per the orchestrator:
-      Johan is mid-discussion with the U6 session about ADR 116 changes he did
-      not like, and this unit implements that ADR''s survival section verbatim,
-      so it launches only after that discussion settles (re-verify the brief
-      against any ADR amendment first)'
+    next_action: 'hold LIFTED: Johan launched the chip after his ADR discussion
+      concluded in PR 670, whose diff verifiably does not touch the survival
+      section this unit implements; session running, expected observable is its
+      PR'
     last_meaningful_progress_at: '2026-08-09T08:50:00+00:00'
     observed: {}
     assessment: 'adopted per Johan (structured ask): 0.33.0 becomes the hardening

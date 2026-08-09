@@ -272,3 +272,16 @@
   search-before-filing line, and the orchestrator verifies PR-body bookkeeping claims at
   merge-readiness, preferring to wait for the DELIVERY_RESULT over repairing a gap while
   the worker's tail may still be running. This entry stays as the history.
+
+- A merged prose deliverable got no human read before the merge, and the read that came
+  after found a modelling error (2026-08-09, ADR 116, PR 667 merged then amended by PR
+  670). Every formal gate was green, no CI on markdown, no review requested, zero
+  threads, DELIVERY_RESULT done, but a design document's only meaningful reviewer is a
+  human, and mine merged while Johan was still reading. The concept-ownership question
+  (does this belong on CheckpointStorage at all) had also survived three adversarial
+  correctness reviews untouched, which graduated into the /orchestrator skill the same
+  day as a required design-against-the-domain review pass. The orchestrator-side rule
+  recorded here: an ADR or design-doc PR from a plan-first unit is not action-ready on
+  gates alone, hold it one beat and ask, or confirm the user's read happened in the
+  unit session, before the CAS merge. An amendment PR is cheap, but a merge mid-review
+  reads as the decision being closed while it is still open.
