@@ -108,8 +108,8 @@ registered consumer closes it, since the loser stays registered throughout. The 
 better than the highest, because it refuses the legitimate writer. `LOCK_RELEASED` counts as not
 holding the lock, since its token belongs to the lease it just gave up.
 
-Standing down is not free and the cost is worth stating. An unfenced write leaves the stored token
-alone, so the fence re-arms as soon as the ambiguity clears, but the write itself still lands and can
+Standing down is not free and the cost is worth stating. An unconditional write leaves the stored
+version alone, so the fence re-arms as soon as the ambiguity clears, but the write itself still lands and can
 still move the checkpoint back while it lasts.
 
 One strategy instance serving two consumers of the same subscription id is competing consumers inside
@@ -128,27 +128,89 @@ Rejected: widening `registerCompetingConsumer` or `hasLock`. Breaking for the th
 implementations the interface invites, and it answers at the wrong moment, since the token is needed
 at every checkpoint write rather than once at registration.
 
-### Where a storage takes the token
+### The checkpoint store learns about versions, and never about leases
+
+A `CheckpointStorage` records where a subscription has read to. Nothing in that job involves a lease,
+and a method parameter called a fencing token would put competing consumers into the vocabulary of
+every checkpoint store anybody writes, including the SQL one filed as #403. An implementer would have
+to understand distributed leasing to implement a checkpoint store correctly, which is the wrong thing
+to ask of them.
+
+So the store gets a concept of its own, and it is the one Occurrent already uses for the event store,
+which is a write that states what must be true of the stored version before it is allowed.
 
 ```java
-public interface FenceableCheckpointStorage extends CheckpointStorage {
-    Checkpoint save(String subscriptionId, Checkpoint checkpoint, long fencingToken);
+public sealed interface CheckpointWriteCondition {
 
-    static CheckpointStorage fencedBy(FenceableCheckpointStorage storage, Supplier<CompetingConsumerStrategy> strategy);
+    static CheckpointWriteCondition any();
 
-    static CheckpointStorage fencedBy(FenceableCheckpointStorage storage, CompetingConsumerStrategy strategy);
+    static CheckpointWriteCondition notOlderThan(long writeVersion);
+
+    record Any() implements CheckpointWriteCondition {}
+
+    record NotOlderThan(long writeVersion) implements CheckpointWriteCondition {}
+}
+
+public interface VersionedCheckpointStorage extends CheckpointStorage {
+
+    Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition);
+
+    OptionalLong writeVersion(String subscriptionId);
 }
 ```
 
-`CheckpointStorage` itself does not change. The new interface lives in `subscription/api/blocking`,
-next to both types it needs, so there is no new module and no new dependency.
+`any()` writes the checkpoint and leaves the stored version untouched, which is what
+`CheckpointStorage.save` has always meant. `notOlderThan(v)` refuses when the stored version is greater
+than `v`, and otherwise writes the checkpoint and records `v`. Versions come from the caller rather
+than from the store, and the store never learns where they come from.
 
-A capability interface here and a default method on the strategy is not an inconsistency. Absent token
-is a correct answer a strategy can give, with defined behaviour. A storage that is handed a token and
-ignores it has no correct fallback, so whether it can fence has to be answerable before the first
-write, and taking a `FenceableCheckpointStorage` makes wiring the wrong one a compile error. That is
-better than ADR 107's runtime trade whenever a compile error is available, and it matches how
-`IntrospectableSubscriptionModel.of` already treats an optional capability.
+Naming the condition rather than passing a bare number is what makes the two write modes one operation
+instead of two with different guarantees, and it is what lets the refusal say which condition was not
+met. It also puts the rule that an unconditional write must leave the stored version alone into the
+type, where every implementation has to face it, rather than into a paragraph of this document that
+two of them might read differently.
+
+`writeVersion` is not there for the fence, which never reads it. A store that records something its
+caller cannot read back tells half the truth about its own state, and the failure this ADR guards
+against ends with somebody asking which version is stored and why their writes are refused. Answering
+that by reading a MongoDB document by hand is not an answer a library should leave people with.
+
+The fencing token is what the competing consumer layer supplies as the version, and it stays entirely
+on that side, in one small type that knows both halves.
+
+```java
+public final class FencedCheckpointStorage {
+
+    public static CheckpointStorage fencedBy(VersionedCheckpointStorage storage, CompetingConsumerStrategy strategy);
+
+    public static CheckpointStorage fencedBy(VersionedCheckpointStorage storage, Supplier<CompetingConsumerStrategy> strategy);
+}
+```
+
+It asks the strategy, and writes with `notOlderThan(token)` when it gets one and `any()` when it does
+not. Standing down is a call rather than an absence, which is the whole of the rule the earlier
+sections describe.
+
+All of it lives in `subscription/api/blocking` and `subscription/core`, next to the types it needs, so
+there is no new module and no new dependency. `CheckpointStorage` itself does not change.
+
+A separate storage interface rather than a default method on `CheckpointStorage`, because a store that
+cannot write conditionally has to be caught where somebody wires it rather than at the first checkpoint
+write. Both places that wire it name a concrete type, so that is a compile error and nobody pays a
+runtime check for it. It also gives the conformance suite something to attach to, so a future store
+inherits a contract instead of an implementer deciding whether they have opted into one.
+
+**A condition of its own rather than the event store's `WriteCondition`, and this is the one place the
+two deliberately diverge.** `streamVersionEq` means the version I expect equals the stored one, and the
+event store assigns the next version itself. Here the version is assigned outside the store and the
+rule is not older than what is stored, so sharing the type would hand checkpoint stores conditions like
+`lt(5)` that mean nothing to them and would have to be refused at runtime. Same idea, stated for this
+store, which is worth more than a shared class name.
+
+`CheckpointWriteCondition` is sealed and has exactly the two cases anything needs today. A third case
+would be a considered change to a contract every store implements, which is the right weight for it,
+and the alternative of an open predicate would put a condition interpreter written in Lua into the
+Redis storage for cases nobody has asked for.
 
 ### Nothing carries the token through the subscription models
 
@@ -179,26 +241,27 @@ removes most of the exposure.
 
 ### The comparison rule, and what it does not promise
 
-A fenced write is accepted when the stored token is absent, or when the stored token is less than or
-equal to the incoming one. Absent means a checkpoint written before the fence existed, so every shipped
-deployment stays readable and there is nothing to migrate.
+`notOlderThan(v)` is accepted when no version is stored, or when the stored version is not greater than
+`v`. Nothing stored means a checkpoint written before any of this existed, so every shipped deployment
+stays readable and there is nothing to migrate.
 
-**An unfenced write leaves the stored token alone, and that is part of the rule.** Unfenced writes stay
-alive in three places, which are a hand-wired user who did not wrap the storage, a node still on the
-previous release during a deploy, and the moment where the strategy stands down. Both Mongo storages
-write a full replacement document today, so an unfenced save would take the token with it and a stale
-node offering an old one would find nothing stored and be accepted. So the plain two-argument `save`
-carries the stored token forward. Redis gets this for free.
+`any()` leaves the stored version alone, and that is why it is a case of the condition rather than a
+missing argument. Unconditional writes stay alive in three places, which are a hand-wired user who did
+not wrap the storage, a node still on the previous release during a deploy, and the moment where the
+strategy stands down. Both Mongo storages write a full replacement document today, so an unconditional
+save would take the version with it, and a stale writer offering an old one would then find nothing
+stored and be accepted. So `CheckpointStorage.save` carries the stored version forward. Redis gets this
+for free.
 
 **The guarantee is about ownership rather than position, and it starts once every node runs the release
 that carries the fence.** From then on a write carrying a token lower than the stored one is refused,
-permanently, and the stored token never decreases and is never erased. During the deploy that installs
+permanently, and the stored version never decreases and is never erased. During the deploy that installs
 the fence it does not hold, because a node on the previous release still writes a full replacement and
 takes the token with it, so the fence is off until the deploy finishes and re-arms on the first write
 after it.
 
 There is a window this does not cover, and it is smaller than it looks but real. Between a takeover and
-the new holder's first write, the stored token is still the old holder's, so an old holder that has not
+the new holder's first write, the stored version is still the old holder's, so an old holder that has not
 noticed can write. The new holder read the checkpoint when it subscribed and writes unconditionally
 afterwards, so if the old holder wrote a later position inside that window, the new holder's first
 write moves the stored position back. The design accepts this. It stays inside at-least-once, which is
@@ -217,8 +280,9 @@ which is that a newer owner exists rather than that a position is older.
 
 ### A refused write throws, and it must never be retried
 
-`CheckpointFencedException extends IllegalStateException`, in `subscription/core`, naming the
-subscription id, the token offered and the token stored.
+`CheckpointWriteConditionNotFulfilledException extends IllegalStateException`, in `subscription/core`,
+naming the subscription id, the version stored and the condition that was not met. Those are the three
+things `WriteConditionNotFulfilledException` names for the event store, which is the point.
 
 ADR 106's question decides the root. Can the caller fix it by passing something else? No. The node lost
 its lease, which is the state of another machine, and that is the wording ADR 106 used to keep a
@@ -275,11 +339,11 @@ through redelivery, and it is filed separately.
 
 **Both Mongo storages.** One round trip. `findOneAndUpdate`, filter on `_id` alone, upsert,
 `returnDocument AFTER`, and an update pipeline whose `$cond` writes the new document only when the
-stored token is missing or not greater than the incoming one, and yields `$$ROOT` otherwise. The caller
+stored version is missing or not greater than the one being written, and yields `$$ROOT` otherwise. The caller
 tells the outcomes apart by comparing the token on the returned document to the one it offered, which is
 how ADR 114 made `acquireOrRefreshFor` tell its own two outcomes apart, including its reason for
 matching on `_id` alone against the unique index rather than leaning on a duplicate-key error. What gets
-written is `$mergeObjects` of the new document and the stored token, in that order, so no stale
+written is `$mergeObjects` of the new document and the stored version, in that order, so no stale
 `resumeToken` survives beside a new `operationTime` and the legacy `subscriptionPosition` field still
 disappears on first write.
 
@@ -351,12 +415,12 @@ reactor model into a blocking one lives in the TCK, so no reactor checkpoint wri
 lease. Fencing it now builds for a caller that does not exist.
 
 What it would take, so nobody designs it again, is a matching capability interface in
-`subscription/api/reactor`, a wrapper that signals `Mono.error(CheckpointFencedException)` instead of
+`subscription/api/reactor`, a wrapper that signals `Mono.error(CheckpointWriteConditionNotFulfilledException)` instead of
 throwing, and the no-database contract on `fencingToken`, which is what makes calling the blocking
 strategy from a reactive pipeline legitimate. Same pipeline as the blocking Mongo storages.
 
 One thing follows from leaving it alone. `ReactorCheckpointStorage` keeps writing a full replacement and
-would take a stored token with it, and both starters default their checkpoint collection to the same
+would take a stored version with it, and both starters default their checkpoint collection to the same
 property, so a checkpoint collection the blocking storage fences must not also be written by the reactor
 one.
 
@@ -377,7 +441,7 @@ The upgrade has an order and the migration guide states it as a requirement. Dep
 carries the lease change before the release that carries the fence. An operator who skips it gets a
 cluster where an old node still deletes the lock document while a new node writes fenced checkpoints,
 so a subscription is refused, stops, releases, is taken over at a token still below the stored one, and
-repeats, once per unit of the stored token, each cycle costing a lease period and one re-run of the
+repeats, once per unit of the stored version, each cycle costing a lease period and one re-run of the
 user's action. It recovers on its own and `CheckpointStorage.delete(subscriptionId)` ends it
 immediately, at the price of a replay.
 
@@ -386,8 +450,8 @@ behaviour by not wrapping it. A user on the Spring Boot starter gets it without 
 they declare their own `CheckpointStorage` bean, which is theirs to wrap.
 
 A `CheckpointStorage` implementation outside this repository keeps working untouched and has no fence.
-Implementing `FenceableCheckpointStorage` is what opts in, and the new conformance suite is what says
-whether it did it correctly, including the case where an unfenced write must leave a stored token alone.
+Implementing `VersionedCheckpointStorage` is what opts in, and the new conformance suite is what says
+whether it did it correctly, including the case where `any()` must leave a stored version alone.
 
 Redis Cluster is not supported for fenced checkpoints, and turning the fence on there fails at the first
 write rather than quietly. An unfenced cluster user is unaffected.
@@ -398,6 +462,6 @@ failure on the delivery path is treated, and the reason is written into the retr
 left to a reader of the stack trace.
 
 The implementation registers as its own epic against the two release boundaries above, split into the
-lease change, the strategy's token, the storage capability, the Mongo storages, the retry exclusion in
+lease change, the strategy's token, the checkpoint store's write condition, the Mongo storages, the retry exclusion in
 both subscription models, the Redis storage, the starter wiring, an end-to-end proof over a real MongoDB
 covering both an expired lease and a graceful handover, and the documentation.
