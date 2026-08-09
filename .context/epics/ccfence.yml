@@ -1,8 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 10
-updated_at: '2026-08-09T12:30:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F2b merged and swept)'
+revision: 11
+updated_at: '2026-08-09T13:05:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F4 DELIVERY_RESULT received,
+  PR 678 in CI)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -304,9 +305,21 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: subagent running since ~11:40Z
-    last_meaningful_progress_at: '2026-08-09T11:40:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 678 pinned to 0b605095d5c24552cb9dce5c887e1e047db228a9
+      when checks complete green; worker finished (DELIVERY_RESULT done,
+      mutation-proved retry exclusion, rebased over F2b with keep-both),
+      worktree held until the merge
+    last_meaningful_progress_at: '2026-08-09T13:00:00+00:00'
+    observed:
+      pr_678:
+        head: 0b605095d5c24552cb9dce5c887e1e047db228a9
+        note: 'opened ~12:55Z; DELIVERY_RESULT done with matching SHA; 24
+          module tests green including the 4 conformance write-condition cases
+          against real Redis and the retry-escape test; serializer design
+          resolved with a pass-through wrapper so a 0.32.0 node''s plain GET
+          stays byte-compatible'
+        via: monitor bciv33mhs + gh pr view + worker DELIVERY_RESULT
+        at: '2026-08-09T13:00:00+00:00'
     assessment: 'Sonnet/high; the retry exclusion here matters most, the
       default RetryStrategy retries forever and a refusal would otherwise hang
       the delivery thread; worker hit the background-process trap (ended its
