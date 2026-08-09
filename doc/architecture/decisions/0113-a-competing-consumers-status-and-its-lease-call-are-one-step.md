@@ -90,6 +90,11 @@ registering at the same time still wait for each other, which is the cost the lo
 avoid, and release and the refresh thread never go through it anyway. Taking it off is a change to two
 public classes in other modules, so it stays for now and comes out on its own.
 
+> **Amended. The `synchronized` came out.** Neither `NativeMongoLeaseCompetingConsumerStrategy` nor
+> `SpringMongoLeaseCompetingConsumerStrategy` declares `registerCompetingConsumer` or
+> `unregisterCompetingConsumer` `synchronized` any longer. Registering or unregistering a consumer no
+> longer waits behind every other consumer's call on the same strategy instance.
+
 Two threads can still deliver their callbacks in the other order, in the window between one of them
 releasing the lock and making its call. The model tolerates it, since `onConsumeGranted` looks the
 consumer up, does not find it and returns, and a paused consumer hands the lease back per ADR 112.

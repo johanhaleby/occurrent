@@ -26,7 +26,10 @@ package org.occurrent.dsl.view;
  * before this capability existed. Whoever drives a replay (a catch-up handover, for example) probes for it with an
  * {@code instanceof} check at the point of need, the same idiom {@code SagaInstances} uses for
  * {@code SagaStateStoreQueries}. There is deliberately no {@code static Optional<ReplayAwareMaterializedView> of(Object)}
- * helper: that shape exists elsewhere to unwrap a delegating view, and there is no delegating {@link MaterializedView}.
+ * helper. That shape exists elsewhere to unwrap a delegating view. The one delegating {@link MaterializedView} this
+ * library builds, the position recorder from
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>,
+ * answers the {@code instanceof} probe itself and stays the outermost view, so it needs no unwrapping helper either.
  * <p>
  * {@link #replayCompleted()} runs before the replay's driver records the catch-up as complete, so an implementation
  * that buffers must have written every buffered update by the time this method returns. A write that fails here fails

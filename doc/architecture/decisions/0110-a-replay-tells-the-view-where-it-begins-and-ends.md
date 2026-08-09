@@ -115,6 +115,11 @@ No `static Optional<ReplayAwareMaterializedView> of(Object)` helper, unlike `Rep
 `IntrospectableSubscriptionModel`. Those exist to unwrap `DelegatingSubscriptionModel`. There is no delegating
 materialized view, so the helper would be ceremony around a bare `instanceof`.
 
+> **Amended on 2026-08-09 by [ADR 111](0111-a-projection-records-the-position-it-has-applied.md).** A
+> delegating materialized view now exists, the position recorder built there, and it wraps a view rather
+> than replacing it. It answers the `instanceof` probe itself and stays the outermost view, so it does not
+> bring the helper above back. A caller that wraps in the other order gets an unbatched replay.
+
 **3. The boundary is driven by whoever owns the replay, and every path that does not own one degrades to today's
 behaviour.** Internally, `BlockingHandover.Source` gains defaulted `replayStarted()`, `replayCompleted()` and
 `replayAbandoned()` methods, and `ReactiveHandover.Source` gains the same with `Mono<Void> replayCompleted()` so the
@@ -225,3 +230,7 @@ what makes `findAllById` useful at all.
 - The redundant per-event `subscribeOn(boundedElastic)` on the reactor fold bridge is worth removing while the replay
   path is open, since the handover pipeline already runs there. It is a separate change from batching and should be
   measured, not assumed.
+
+  > **Amended on 2026-08-08.** Measured in `ReactorProjectionHandoffBenchmark` (archrev B6, #639): the wrapping
+  > carries real load rather than being redundant, and it stays. The bullet above asked the right question, and
+  > removing it was the wrong answer.

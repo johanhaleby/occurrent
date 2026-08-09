@@ -206,10 +206,20 @@ version is assigned outside the store and the rule is not older than what is sto
 would hand checkpoint stores conditions like `lt(5)` that mean nothing to them. Same idea, stated for
 this store, which is worth more than a shared class name.
 
-`CheckpointWriteCondition` is sealed and has exactly the two cases anything needs today. A third case
-would be a considered change to a contract every store implements, which is the right weight for it, and
-an open predicate would put a condition interpreter written in Lua into the Redis storage for cases
-nobody has asked for.
+`CheckpointWriteCondition` is sealed and has exactly the three cases anything needs today, `any()`,
+`notOlderThan(v)` and `ifAbsent()`. A fourth case would be a considered change to a contract every store
+implements, which is the right weight for it, and an open predicate would put a condition interpreter
+written in Lua into the Redis storage for cases nobody has asked for.
+
+**`ifAbsent()` is the case this section originally left out.** `notOlderThan(v)` accepts a write when
+nothing is stored yet, so it cannot tell a subscription's first checkpoint apart from a later one.
+Pinning a subscription's very first checkpoint, what `ManualStartSubscriptionModel.stoppedByDefault`
+does, needs exactly that distinction. Two nodes racing to start the same subscription both see nothing
+stored, and under `notOlderThan` both writes could succeed, with whichever writes second silently
+winning and losing the events between the two positions (#669). `ifAbsent()` succeeds only while nothing
+is stored, so the first of two racing writes wins and the second is refused instead of silently
+overwritten. That need surfaced after this section was written, which is why the starter section further
+down already assumes `ifAbsent()` exists.
 
 ### A subscription model stamps its own checkpoint writes
 
@@ -229,8 +239,10 @@ becomes `notOlderThan` the version they get, or `any()` when they get none. A mo
 writes `any()`, which is one code path rather than two.
 
 **A model does not learn what a lease is.** It learns that it has a source of write versions and that
-it stamps its writes with one. The words lease, fencing token and competing consumer appear nowhere in
-it, and a model with no source behaves exactly as it does today.
+it stamps its writes with one. No competing-consumer type is imported or depended on by a model that
+writes checkpoints. `DurableSubscriptionModel`'s own javadoc does name `CompetingConsumerSubscriptionModel`
+and a lease handover, but only in prose describing what a caller above it may be doing, never as a type
+its code references. A model with no source behaves exactly as it does today.
 
 **Neither interface names the other, and the two are joined by a method reference at the wiring site.**
 
@@ -367,12 +379,20 @@ through redelivery, and it is filed separately.
 ### Storage mechanics
 
 **Both Mongo storages.** One round trip. `findOneAndUpdate`, filter on `_id` alone, upsert,
-`returnDocument AFTER`, and an update pipeline whose `$cond` writes the new document only when the
-stored version is missing or not greater than the one being written, and yields `$$ROOT` otherwise. The caller
-tells the outcomes apart by comparing the token on the returned document to the one it offered, which is
-how ADR 114 made `acquireOrRefreshFor` tell its own two outcomes apart, including its reason for
-matching on `_id` alone against the unique index rather than leaning on a duplicate-key error. What gets
-written is `$mergeObjects` of the new document and the stored version, in that order, so no stale
+`returnDocument AFTER`, and an update pipeline whose `$cond` decides whether to write the new document.
+`notOlderThan(v)` gates on the stored version, missing or not greater than `v`, and stamps `v` into the
+returned document when it fires. `ifAbsent()` gates on whether a checkpoint is stored at all, not on a
+version, so a successful write carries the previous version forward unchanged instead of stamping a new
+one. Either condition failing yields `$$ROOT`, the document untouched.
+
+For `notOlderThan`, the caller tells the outcomes apart by comparing the version on the returned document
+to the one it offered, which is how ADR 114 made `acquireOrRefreshFor` tell its own two outcomes apart,
+including its reason for matching on `_id` alone against the unique index rather than leaning on a
+duplicate-key error. `ifAbsent` has no version to compare, since a successful write leaves the previous
+one in place, so the caller instead compares the checkpoint value on the returned document to the one it
+offered.
+
+What gets written is `$mergeObjects` of the new document and the stored version, in that order, so no stale
 `resumeToken` survives beside a new `operationTime` and the legacy `subscriptionPosition` field still
 disappears on first write.
 
@@ -402,6 +422,14 @@ The cost of two keys is Redis Cluster, where a script over two differently-named
 crossing slots, and the two names cannot be brought into one slot without renaming the existing
 checkpoint key. That failure is immediate and reaches only a cluster user who turned the fence on, while
 an unfenced cluster user is untouched.
+
+**The same-value edge is storage-dependent.** Mongo's `ifAbsent` gates on presence, not value, so a
+second write offering the exact same checkpoint value as the one already stored is indistinguishable from
+a first write and is reported as success rather than refused, though nothing is stored twice
+(`CheckpointWriteCondition.ifAbsent()` documents the edge). Redis is strict. The Lua script checks
+`EXISTS` on the checkpoint key, so a second write to an existing key is refused whatever value it offers.
+The one shipped caller, `ManualStartSubscriptionModel.pinStartPosition`, swallows the refusal either way
+and is unaffected by which family it runs against.
 
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
@@ -458,9 +486,10 @@ prevent. A refusal on that stack signals `Mono.error` rather than throwing.
 
 ### This breaks implementations, and that is the right price
 
-Everything on the competing consumer side is additive. A default method on `CompetingConsumerStrategy`,
-a new source interface, a new exception, a new Redis key, and an internal method that stops deleting a
-document all leave every call site as it was.
+Everything on the competing consumer side is additive. A default method on `CompetingConsumerStrategy`, a
+new source interface, the Spring Boot starter's `CompetingConsumerCheckpointWriteVersionSource` that
+adapts a strategy bean into that interface, a new exception, a new Redis key, and an internal method that
+stops deleting a document all leave every call site as it was.
 
 The checkpoint store is a real break, and deliberately. No calling code changes, since the
 two-argument `save` remains as a default, but every implementation of `CheckpointStorage` and of its
