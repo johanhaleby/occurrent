@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 15
-updated_at: '2026-08-09T08:05:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U6 delivered PR 667, awaiting
-  Copilot pass and DELIVERY_RESULT)'
+revision: 16
+updated_at: '2026-08-09T08:25:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (667 merged pinned, U6 done,
+  findings 668 and 669 routed leave-for-later)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,6 +16,19 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-011
+  type: merge
+  target: 'PR 667 squash-merge pinned to verified head
+    f499113e30f4e00361f81084f0927013b02243b8 (markdown-only so no checks by
+    design, zero review threads, no review requested, MERGEABLE, delivery message
+    received with matching head)'
+  expected: 'PR merged, merged head equals pin, issue 665 remains OPEN (Refs not
+    Fixes, verified in body); DONE: squash da8af80e8f619e77be2971467e619baa9bce6e2e,
+    headAtMerge equals pin (verified), 665 OPEN with in-progress label (verified)'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T08:20:00+00:00'
 - id: act-010
   type: merge
   target: 'PR 666 squash-merge pinned to verified head
@@ -352,21 +365,27 @@ units:
       compares the token across its four shipped implementations, and the delivery
       path CompetingConsumerSubscriptionModel lacks, plus the implementation unit
       split, merged as a PR that references but does not close issue 665
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_1f6b0fb3
     deliverables:
     - check: pr_merged
       ref: 667
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~08:22Z pinned to f499113e3, squash
+        da8af80e8f619e77be2971467e619baa9bce6e2e, headAtMerge equals pin
+        (verified), markdown-only so no checks by design, zero threads, no review
+        requested, issue 665 verified OPEN with in-progress after the merge'
     blocking_on: []
-    next_action: 'PR 667 open (markdown-only, no CI by design); wait for the
-      Copilot review pass and the DELIVERY_RESULT, verify threads and the
-      Refs-not-Fixes body claim, then CAS-merge pinned; issue 665 stays OPEN with
-      its in-progress label per the design-pass deviation'
+    next_action: 'hold the session sweep until the session end notification, then
+      archive and sweep; ADR 116 facts for the implementation epic registration:
+      TWO releases required (lock-document survival ships in the release after
+      0.33.0, the fence in the one after that, mixed-version clusters otherwise
+      refuse every checkpoint write), no public interface breaks (one default
+      method on CompetingConsumerStrategy), token never travels through the
+      subscription models (survived three independent review passes)'
     last_meaningful_progress_at: '2026-08-09T08:00:00+00:00'
     observed:
       pr_667:
