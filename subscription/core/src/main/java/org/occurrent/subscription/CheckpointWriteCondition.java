@@ -61,6 +61,10 @@ public sealed interface CheckpointWriteCondition {
      * <p>
      * This exists for a caller that wants to write a subscription's very first checkpoint, and only the very first
      * one, so it can fix the subscription's start position without racing another writer through {@link #any()}.
+     * <p>
+     * One edge is deliberately tolerated. A save offering exactly the value that is already stored may be reported
+     * as success rather than refused, since some storages tell the two outcomes apart by comparing values. The
+     * stored checkpoint is identical either way.
      *
      * @return A {@link CheckpointWriteCondition} with the behavior described above.
      */
