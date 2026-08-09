@@ -216,7 +216,8 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnMissingBean(value = SubscriptionModel.class, ignored = RegisteringSubscribable.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, CheckpointStorage storage,
-                                                                        OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore, Environment environment) {
+                                                                        OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore,
+                                                                        ObjectProvider<CompetingConsumerStrategy> competingConsumerStrategyProvider, Environment environment) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         SpringMongoSubscriptionModelConfig mongoSubscriptionModelConfig = withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
                 .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost());
@@ -224,10 +225,14 @@ public class OccurrentMongoAutoConfiguration<E> {
             mongoSubscriptionModelConfig = mongoSubscriptionModelConfig.useVirtualThreads();
         }
         SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, mongoSubscriptionModelConfig);
+        // Resolved lazily, once per bean, and reused at every write site below (ADR 116). ObjectProvider rather than
+        // the strategy bean itself, so a checkpoint-writing model does not force the strategy, and through it every
+        // CompetingConsumerListener bean, into existence before this bean is fully constructed.
+        CheckpointWriteVersionSource writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(competingConsumerStrategyProvider);
         // Checkpoints after every event by default, see DurableSubscriptionModel javadoc for the EveryN.every(n)
         // throughput tradeoff if checkpoint write volume becomes a bottleneck.
-        DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
-        CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useCheckpointStorage(storage)
+        DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage, writeVersionSource);
+        CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useCheckpointStorage(storage, writeVersionSource)
                 .andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));
         // DCB catch-up replays by position over the DCB event store. The DcbCriteria.all() is shared by every
         // DcbSubscriptions subscription, which each narrow to their own DcbCriteria in the consumer, so a single
@@ -253,7 +258,7 @@ public class OccurrentMongoAutoConfiguration<E> {
         // replay reads the event store directly, so a subscription resuming from a stored checkpoint would deliver
         // history to a handler nobody started. The Mongo model supplies the position to pin, since it is the one
         // reading the feed.
-        return ManualStartSubscriptionModel.stoppedByDefault(competingConsumerSubscriptionModel, mongoSubscriptionModel, storage);
+        return ManualStartSubscriptionModel.stoppedByDefault(competingConsumerSubscriptionModel, mongoSubscriptionModel, storage, writeVersionSource);
     }
 
     @Bean

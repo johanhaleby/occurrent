@@ -456,6 +456,52 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_write_version_source_with_a_version_stamps_the_pinned_position_not_older_than_it() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");
+        CheckpointWriteVersionSource writeVersionSource = subscriptionId -> OptionalLong.of(42L);
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage, writeVersionSource);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+        // pinStartPosition runs on resumeSubscription, not on subscribe. The position is only written once this
+        // registration actually starts, matching the class javadoc's "instead of waiting until it starts".
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.notOlderThan(42L));
+    }
+
+    @Test
+    void a_write_version_source_with_no_version_stamps_the_pinned_position_unconditionally() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");
+        CheckpointWriteVersionSource writeVersionSource = subscriptionId -> OptionalLong.empty();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage, writeVersionSource);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.any());
+    }
+
+    @Test
+    void no_write_version_source_stamps_the_pinned_position_unconditionally_the_way_the_three_argument_factory_always_did() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.any());
+    }
+
+    @Test
     void starting_the_model_again_resumes_a_subscription_the_wrapped_model_paused_on_its_own() {
         // The wrapped model reports itself running throughout, since only one of its subscriptions was paused, not the
         // whole model. Guarding start(true) on delegate.isRunning() (removed) skipped calling delegate.start(..)
@@ -727,6 +773,7 @@ class ManualStartSubscriptionModelTest {
 
     private static final class RecordingCheckpointStorage implements CheckpointStorage {
         final Map<String, Checkpoint> checkpoints = new HashMap<>();
+        final Map<String, CheckpointWriteCondition> conditions = new HashMap<>();
 
         @Override
         public Checkpoint read(String subscriptionId) {
@@ -736,6 +783,7 @@ class ManualStartSubscriptionModelTest {
         @Override
         public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
             checkpoints.put(subscriptionId, checkpoint);
+            conditions.put(subscriptionId, condition);
             return checkpoint;
         }
 
