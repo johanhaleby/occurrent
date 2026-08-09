@@ -67,7 +67,7 @@ class RecordingReactiveUpdateTest {
         BiFunction<EventMetadata, String, Mono<Void>> delegate = recordingDelegate(calls);
         AppliedPositionStore storage = recordingStorage(calls);
         BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
-        ReplayAwareMaterializedView replayAware = (ReplayAwareMaterializedView) recording;
+        ReactiveReplayAwareMaterializedView replayAware = (ReactiveReplayAwareMaterializedView) recording;
 
         replayAware.replayStarted();
         recording.apply(metadataWithPosition(10), "event-1").block();
@@ -86,7 +86,7 @@ class RecordingReactiveUpdateTest {
         BiFunction<EventMetadata, String, Mono<Void>> delegate = recordingDelegate(calls);
         AppliedPositionStore storage = recordingStorage(calls);
         BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
-        ReplayAwareMaterializedView replayAware = (ReplayAwareMaterializedView) recording;
+        ReactiveReplayAwareMaterializedView replayAware = (ReactiveReplayAwareMaterializedView) recording;
 
         replayAware.replayStarted();
         recording.apply(metadataWithPosition(10), "event-1").block();
@@ -102,7 +102,7 @@ class RecordingReactiveUpdateTest {
         DelegateWithReplayAwareness delegate = new DelegateWithReplayAwareness(calls);
         AppliedPositionStore storage = recordingStorage(calls);
         BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
-        ReplayAwareMaterializedView replayAware = (ReplayAwareMaterializedView) recording;
+        ReactiveReplayAwareMaterializedView replayAware = (ReactiveReplayAwareMaterializedView) recording;
 
         replayAware.replayStarted();
         recording.apply(metadataWithPosition(10), "event-1").block();
@@ -131,7 +131,7 @@ class RecordingReactiveUpdateTest {
         return (metadata, event) -> Mono.fromRunnable(() -> calls.add("delegate:" + event));
     }
 
-    private static final class DelegateWithReplayAwareness implements BiFunction<EventMetadata, String, Mono<Void>>, ReplayAwareMaterializedView {
+    private static final class DelegateWithReplayAwareness implements BiFunction<EventMetadata, String, Mono<Void>>, ReactiveReplayAwareMaterializedView {
         private final List<String> calls;
 
         DelegateWithReplayAwareness(List<String> calls) {
