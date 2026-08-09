@@ -29,7 +29,9 @@
     <name>${mavenProjectName}</name>
 
     <dependencies>
-        <!-- The behavioral suites are the blocking ones, reached through the bridge in this module -->
+        <!-- The behavioral suites for a subscription model are the blocking ones, reached through the bridge in
+             this module. CheckpointStorageConformance is the exception: it lives here because the property it
+             checks, which signal a refused write produces, only exists on the Mono a blocking bridge would consume. -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-tck-subscription-blocking</artifactId>
@@ -39,6 +41,22 @@
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-api-reactor</artifactId>
             <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- Deliberately compile scope, not test: CheckpointStorageConformance lives in src/main and its public
+             surface is JUnit annotations and AssertJ assertions, so a consumer cannot run it without these on its
+             compile path. Same reasoning as the blocking TCK's pom, see ADR 77. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
         </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>
