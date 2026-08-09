@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 14
-updated_at: '2026-08-09T07:20:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (PR 666 verified green with
-  threads resolved, merge pinned and journaled)'
+revision: 15
+updated_at: '2026-08-09T08:05:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (U6 delivered PR 667, awaiting
+  Copilot pass and DELIVERY_RESULT)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -359,14 +359,24 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 667
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_d295754e spawned 2026-08-09 ~06:55Z, awaiting Johan's
-      launch; first expected observable is the design at his approval gate
-    last_meaningful_progress_at: '2026-08-09T06:50:00+00:00'
-    observed: {}
+    next_action: 'PR 667 open (markdown-only, no CI by design); wait for the
+      Copilot review pass and the DELIVERY_RESULT, verify threads and the
+      Refs-not-Fixes body claim, then CAS-merge pinned; issue 665 stays OPEN with
+      its in-progress label per the design-pass deviation'
+    last_meaningful_progress_at: '2026-08-09T08:00:00+00:00'
+    observed:
+      pr_667:
+        head: f499113e30f4e00361f81084f0927013b02243b8
+        note: 'opened ~08:00Z from johan/serene-wozniak-0e4d7d with ADR 116; the
+          design concludes neither public interface breaks (one default method on
+          CompetingConsumerStrategy) and the delivery-path problem in issue 665
+          does not exist; Refs 665 confirmed in the body, no Fixes'
+        via: monitor bu11n182l + gh pr view
+        at: '2026-08-09T08:05:00+00:00'
     assessment: 'adopted per Johan (structured ask, Design pass in ccrace): only
       the design unit lives here, implementation registers as its own epic from
       the design output and targets the release after 0.33.0; issue 665 stays
