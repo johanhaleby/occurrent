@@ -24,6 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
@@ -456,7 +457,7 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void a_write_version_source_with_a_version_stamps_the_pinned_position_not_older_than_it() {
+    void a_write_version_source_does_not_change_the_pinned_positions_write_condition() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");
@@ -469,26 +470,13 @@ class ManualStartSubscriptionModelTest {
         // registration actually starts, matching the class javadoc's "instead of waiting until it starts".
         model.resumeSubscription(SUBSCRIPTION_ID);
 
-        assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.notOlderThan(42L));
+        // ifAbsent() is what makes the first pin race-safe (see #669), and it carries no version, so a
+        // writeVersionSource passed to the four-argument factory has nothing to stamp on this write.
+        assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.ifAbsent());
     }
 
     @Test
-    void a_write_version_source_with_no_version_stamps_the_pinned_position_unconditionally() {
-        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
-        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
-        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");
-        CheckpointWriteVersionSource writeVersionSource = subscriptionId -> OptionalLong.empty();
-        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage, writeVersionSource);
-
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
-        });
-        model.resumeSubscription(SUBSCRIPTION_ID);
-
-        assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.any());
-    }
-
-    @Test
-    void no_write_version_source_stamps_the_pinned_position_unconditionally_the_way_the_three_argument_factory_always_did() {
+    void no_write_version_source_pins_the_position_with_if_absent() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");
@@ -498,7 +486,7 @@ class ManualStartSubscriptionModelTest {
         });
         model.resumeSubscription(SUBSCRIPTION_ID);
 
-        assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.any());
+        assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.ifAbsent());
     }
 
     @Test
@@ -614,6 +602,51 @@ class ManualStartSubscriptionModelTest {
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("from-a-previous-run");
+    }
+
+    @Test
+    void two_nodes_racing_to_pin_the_same_subscription_id_do_not_lose_events_between_the_two_positions() {
+        // Two separate model instances stand for two nodes. Their own bookkeeping is independent, but they share the
+        // one resource that matters here: the checkpoint storage both are about to pin the same subscription id in.
+        // The storage's exists() always answers false (see RaceSimulatingCheckpointStorage), standing in for the
+        // race #669 describes, where both nodes' reads land before either has written.
+        RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
+        RecordingSubscriptionModel firstDelegate = new RecordingSubscriptionModel();
+        RecordingSubscriptionModel secondDelegate = new RecordingSubscriptionModel();
+        GlobalCheckpointSource<@Nullable Checkpoint> firstPositionSource = () -> new StringCheckpoint("first-nodes-position");
+        GlobalCheckpointSource<@Nullable Checkpoint> secondPositionSource = () -> new StringCheckpoint("second-nodes-position");
+        ManualStartSubscriptionModel firstNode = ManualStartSubscriptionModel.stoppedByDefault(firstDelegate, firstPositionSource, storage);
+        ManualStartSubscriptionModel secondNode = ManualStartSubscriptionModel.stoppedByDefault(secondDelegate, secondPositionSource, storage);
+        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+        secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        // Whichever pins first wins, and the second call must not throw even though its write is refused.
+        assertThatCode(() -> firstNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
+        assertThatCode(() -> secondNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("first-nodes-position");
+    }
+
+    @Test
+    void a_pin_refused_because_another_node_already_pinned_first_does_not_stop_the_subscription_from_starting() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        // Stands for the other node's write having already landed before this node's start reaches the pin.
+        storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("pinned-by-another-node"));
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("this-nodes-own-position");
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        assertThatCode(() -> model.start(true))
+                .as("the ifAbsent() refusal means another node's pin won, not that this node failed to start")
+                .doesNotThrowAnyException();
+
+        assertThat(delegate.subscribeCalls).extracting(SubscribeCall::subscriptionId).containsExactly(SUBSCRIPTION_ID);
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("pinned-by-another-node");
     }
 
     private static CloudEvent cloudEvent(String id) {
@@ -771,6 +804,9 @@ class ManualStartSubscriptionModelTest {
         }
     }
 
+    // Records what it is asked to save rather than being a full checkpoint store, except for ifAbsent(), which it
+    // evaluates for real. Every test in this file that pins a position while one is already stored relies on that
+    // refusal, the same way the real storages the production code runs against do.
     private static final class RecordingCheckpointStorage implements CheckpointStorage {
         final Map<String, Checkpoint> checkpoints = new HashMap<>();
         final Map<String, CheckpointWriteCondition> conditions = new HashMap<>();
@@ -782,6 +818,9 @@ class ManualStartSubscriptionModelTest {
 
         @Override
         public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            if (condition instanceof CheckpointWriteCondition.IfAbsent && checkpoints.containsKey(subscriptionId)) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.empty(), condition);
+            }
             checkpoints.put(subscriptionId, checkpoint);
             conditions.put(subscriptionId, condition);
             return checkpoint;
@@ -800,6 +839,43 @@ class ManualStartSubscriptionModelTest {
         @Override
         public boolean exists(String subscriptionId) {
             return checkpoints.containsKey(subscriptionId);
+        }
+    }
+
+    // exists() always answers false, whatever is already stored. That is what two nodes racing to pin the same
+    // subscription id would each see from their own read, whichever real wall-clock order the two calls land in, so
+    // this makes the race in #669 deterministic instead of depending on winning an actual thread scheduling race.
+    // save() evaluates ifAbsent() for real, the way every checkpoint storage in this repository does.
+    private static final class RaceSimulatingCheckpointStorage implements CheckpointStorage {
+        final Map<String, Checkpoint> checkpoints = new HashMap<>();
+
+        @Override
+        public Checkpoint read(String subscriptionId) {
+            return checkpoints.get(subscriptionId);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            if (condition instanceof CheckpointWriteCondition.IfAbsent && checkpoints.containsKey(subscriptionId)) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.empty(), condition);
+            }
+            checkpoints.put(subscriptionId, checkpoint);
+            return checkpoint;
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            return OptionalLong.empty();
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            checkpoints.remove(subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return false;
         }
     }
 }
