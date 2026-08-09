@@ -285,3 +285,12 @@
   gates alone, hold it one beat and ask, or confirm the user's read happened in the
   unit session, before the CAS merge. An amendment PR is cheap, but a merge mid-review
   reads as the decision being closed while it is still open.
+
+  Addendum (2026-08-09, U6's handover, the expensive form of the same failure): three
+  prose PRs (667, 670, 671) each merged while ONE live design review was still running,
+  including one merged after a per-PR "is it settled?" ask answered yes, because the ask
+  raced the discussion it asked about. Per-PR confirmation is the wrong unit: the design
+  GATE is the unit. Graduated into the /orchestrator skill: a plan-first unit's prose
+  deliverable auto-merges only after its design gate is explicitly closed (the unit's
+  handover or the user saying the design is final), never on green gates or per-PR asks,
+  because prose runs no CI and its only real reviewer is the human still reading it.

@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 22
+revision: 23
 updated_at: '2026-08-09T09:10:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (PR 673 HELD by Johan, design
-  discussion still open)'
+updated_by: 'orchestrator session local_f74d8561 (U6 handover recorded, final
+  split is registration input, U7 confirmed unaffected)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -460,7 +460,21 @@ units:
       and HELD by Johan via structured ask 2026-08-09, the design discussion is
       still running in the U6 session; NO merge until he or that session signals
       final, and the implementation-epic registration input is whatever ADR 116
-      says after the last amendment merges'
+      says after the last amendment merges. U6 HANDOVER (2026-08-09): PR 673 is
+      the current design, held; its final shape puts the write condition on
+      CheckpointStorage itself (both stacks break once, two-argument save kept as
+      a default so calling code is unchanged), the four checkpoint-writing models
+      (DurableSubscriptionModel, both catch-up models,
+      CatchupThenPushSubscriptionModel) take a CheckpointWriteVersionSource and
+      stamp their own writes, joined by strategy::fencingToken at the wiring
+      site. Implementation-epic registration input, superseding the merged ADR
+      text until 673 lands: an OpenRewrite recipe and migration-guide section
+      now exist (changelog under Breaking changes), a NEW models unit, the
+      storage unit covers the reactor twin, the starter unit passes the source
+      at every model-building site including projection and saga registrars, no
+      bean wrapping. Unchanged and still true: two-release boundary, U7 ships
+      alone first, Mongo pipeline, Redis two-key script, retry exclusions. U6
+      session sweep HELD while the discussion and PR 673 stay open'
   U7:
     issue: 665
     goal: the lease lock document survives a release, remove unsets subscriberId
