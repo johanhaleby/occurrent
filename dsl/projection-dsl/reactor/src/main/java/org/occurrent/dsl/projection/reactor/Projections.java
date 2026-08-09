@@ -167,10 +167,10 @@ public final class Projections {
 
     /**
      * The metadata-aware form of {@link #reactiveUpdate(MaterializedView)}: calls the blocking
-     * {@code materializedView.update(metadata, event)} on {@link Schedulers#boundedElastic()}. When
-     * {@code materializedView} implements the blocking view DSL's {@code ReplayAwareMaterializedView} capability, the
-     * returned update also implements {@link ReactiveReplayAwareMaterializedView} and forwards
-     * {@code replayStarted}/{@code replayCompleted}/{@code replayAbandoned} to it, so a replay driven through a
+     * {@code materializedView.update(metadata, event)} on {@link Schedulers#boundedElastic()}. The returned update
+     * always implements {@link ReactiveReplayAwareMaterializedView}, and forwards
+     * {@code replayStarted}/{@code replayCompleted}/{@code replayAbandoned} to {@code materializedView} whenever it
+     * implements the blocking view DSL's {@code ReplayAwareMaterializedView} capability, so a replay driven through a
      * {@code CatchupProjectionFeed} still reaches a batching or position-recording view wrapped through this bridge.
      */
     public static <E> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(MaterializedView<E> materializedView) {

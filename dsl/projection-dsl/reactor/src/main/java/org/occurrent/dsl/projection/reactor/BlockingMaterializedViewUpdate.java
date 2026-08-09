@@ -26,11 +26,11 @@ import reactor.core.scheduler.Schedulers;
 import java.util.function.BiFunction;
 
 /**
- * The reactive update {@link Projections#reactiveUpdateWithMetadata(MaterializedView)} and its single-instance twin
- * build. Calls the blocking {@code materializedView.update(metadata, event)} on {@link Schedulers#boundedElastic()}.
- * Implements {@link ReactiveReplayAwareMaterializedView} and forwards every lifecycle call to
- * {@code materializedView} when it implements the blocking {@link ReplayAwareMaterializedView} capability, so a
- * batching view built with the blocking view DSL (for example {@code Projections.materializedView(..)}) keeps
+ * Built by {@link Projections#reactiveUpdateWithMetadata(MaterializedView)} and its single-instance twin. Calls the
+ * blocking {@code materializedView.update(metadata, event)} on {@link Schedulers#boundedElastic()}. Implements
+ * {@link ReactiveReplayAwareMaterializedView} and forwards every lifecycle call to {@code materializedView} when it
+ * implements the blocking {@link ReplayAwareMaterializedView} capability, so a batching view built with the blocking
+ * view DSL (for example {@code org.occurrent.dsl.projection.blocking.Projections.materializedView(..)}) keeps
  * batching instead of silently falling back to a write-through per event.
  */
 @NullMarked
