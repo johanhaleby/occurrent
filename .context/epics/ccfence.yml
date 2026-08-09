@@ -66,7 +66,7 @@ units:
       as one coherent decision without an amendment trail, everything else in
       the file untouched
     phase: RUNNING
-    health: UNKNOWN
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
@@ -94,7 +94,7 @@ units:
       evaluatesWriteConditions fixture default with guards coverage, migration
       guide section with deploy-order requirement, changelog Breaking changes
     phase: RUNNING
-    health: UNKNOWN
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
@@ -120,7 +120,7 @@ units:
       named deterministic tests for LOCK_RELEASED-not-holding, two-consumer
       stand-down, and refresh-stable token
     phase: RUNNING
-    health: UNKNOWN
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
