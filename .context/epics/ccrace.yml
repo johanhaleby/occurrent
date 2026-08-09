@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 10
-updated_at: '2026-08-09T00:55:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U2 delivered PR 664 ci-wait, U4
-  green at d6b2b448 with merge held for its DELIVERY_RESULT)'
+revision: 11
+updated_at: '2026-08-09T01:30:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (663 and 664 merged pinned and
+  swept, 659 closed, U3 chipped)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,6 +16,43 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-007
+  type: dispatch-chip
+  target: 'U3 chip: ⌁[ccrace/U3#660] Fencing token decision · Sonnet/high
+    (plan-first, /johan-plan, wire-vs-document decided at the plan gate, correct
+    orchestrator id, trace-first and recommendation protocol in the brief)'
+  expected: 'chip visible to Johan; session enters fleet on his click; VERIFIED:
+    spawn returned task_cb44f929, chip pending at position 1'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-09T01:30:00+00:00'
+- id: act-006
+  type: merge
+  target: 'PR 664 squash-merge pinned to verified head
+    6d7098531c91e97b1dfa79d241cfc38dfc2010f9 (all checks green, both Copilot
+    threads resolved with fixes, MERGEABLE after the worker resolved the expected
+    changelog conflict against 663, DELIVERY_RESULT done with matching SHA)'
+  expected: 'PR merged, merged head equals pin, issue 659 auto-closed via Fixes;
+    DONE: squash c18c7866b77449cfcc58c0e90364282e09204096, headAtMerge equals pin
+    (verified), issue 659 CLOSED (verified), remote branch deleted by the merge'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T01:20:00+00:00'
+- id: act-005
+  type: merge
+  target: 'PR 663 squash-merge pinned to verified head
+    d6b2b448114b3a2bb5d0cb3266da1b99b1566931 (all checks green after a rerun the
+    DELIVERY_RESULT attributes to a transient Maven Central 403, 1 Copilot thread
+    resolved, MERGEABLE, DELIVERY_RESULT done with matching SHA)'
+  expected: 'PR merged, merged head equals pin, no issue reference to close;
+    DONE: squash 352dfd7c6b7609d9e08e5cdda571d1591bee6d2c, headAtMerge equals pin
+    (verified), remote branch deleted by the merge'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T01:05:00+00:00'
 - id: act-004
   type: dispatch-chip
   target: 'U4 chip: ⌁[ccrace/U4] Drop strategy synchronized · Sonnet/medium (not
@@ -124,25 +161,26 @@ units:
     goal: lease expiry is written and judged on one clock, the database clock, in
       MongoListenerLockService, for both Mongo lease strategies, with the
       deterministic timing-test story resolved at the plan gate
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_3fc0e844
+    session: local_3fc0e844 (archived)
     deliverables:
     - check: pr_merged
       ref: 664
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~01:20Z pinned to 6d7098531, squash
+        c18c7866b77449cfcc58c0e90364282e09204096, headAtMerge equals pin
+        (verified), all checks green, both Copilot threads resolved with fixes,
+        main matrix on the squash 27/27 green (combined verification with 663)'
     - check: issue_closed
       ref: 659
-      met: false
-      evidence: null
+      met: true
+      evidence: CLOSED via Fixes, verified by orchestrator
     blocking_on: []
-    next_action: ci-wait on PR 664; on green with threads resolved, verify the
-      DELIVERY_RESULT and any PR-body bookkeeping claims, then CAS-merge pinned to
-      the verified full head SHA; U3's chip spawns in the sweep that verifies this
-      merge
+    next_action: 'none; DELIVERY_RESULT done with matching SHA, session archived,
+      worktree removed, local branch deleted, remote branch deleted by the merge'
     last_meaningful_progress_at: '2026-08-09T00:50:00+00:00'
     observed:
       pr_664:
@@ -160,7 +198,7 @@ units:
     goal: the fencing-token promise in the acquireOrRefreshFor javadoc is either
       wired to the writes that need it or withdrawn honestly, decided at the plan
       gate, implemented accordingly
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: [U2]
@@ -175,8 +213,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip spawns when U2 merges, both units change
-      MongoListenerLockService so they serialize
+    next_action: chip task_cb44f929 spawned 2026-08-09 ~01:30Z, awaiting Johan's
+      launch; first expected observable is the unit's plan at his approval gate
     last_meaningful_progress_at: '2026-08-08T23:15:00+00:00'
     observed: {}
     assessment: 'the honest scope is the decision itself, wire the version through
@@ -189,25 +227,25 @@ units:
       unregisterCompetingConsumer in NativeMongoLeaseCompetingConsumerStrategy and
       SpringMongoLeaseCompetingConsumerStrategy, per the ADR 113 note, after
       verifying those monitors protect nothing else
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: local_5384c04b
+    session: local_5384c04b (archived)
     deliverables:
     - check: pr_merged
       ref: 663
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~01:10Z pinned to d6b2b448, squash
+        352dfd7c6b7609d9e08e5cdda571d1591bee6d2c, headAtMerge equals pin
+        (verified); the mid-run shard failures were a transient Maven Central 403
+        per the DELIVERY_RESULT, cleared on rerun; final combined tree verified by
+        the 27/27 matrix on c18c7866b'
     blocking_on: []
-    next_action: 'PR 663 is green at head ece619739 after a rerun (both JDK
-      variants of the subscription-mongodb-spring shard failed once, the shard
-      covering exactly this PR''s touched code, then passed on rerun with the head
-      unchanged); merge HELD until the worker''s DELIVERY_RESULT arrives, because
-      its flake-vs-real verdict is material for a synchronization-removal change;
-      if no DELIVERY_RESULT or session end by the next heartbeat, read the session
-      tail; then CAS-merge pinned to the verified full head SHA; sweep caution
-      applies to the reused worktree'
+    next_action: 'none; session archived, its reused worktree
+      (worktree-mobile-setup-916a9c) deliberately left in place DETACHED for a
+      possible ccpause-session revival, U4 local branch deleted, remote branch
+      deleted by the merge'
     last_meaningful_progress_at: '2026-08-09T00:10:00+00:00'
     observed:
       worktree:
