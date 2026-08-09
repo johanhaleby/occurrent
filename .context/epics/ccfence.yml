@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 36
-updated_at: '2026-08-10T00:40:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F9 DELIVERY_RESULT received,
-  PR 690 in CI, the epic''s last open deliverable)'
+revision: 37
+updated_at: '2026-08-10T01:05:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F9 merged and swept, all 15
+  units DONE, tracker scan clean, awaiting the final combined matrix)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -30,6 +30,22 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   ~1.0M across the plan review, F0, F1, F2); RAISED to 5.5M by structured ask
   2026-08-09 ~20:35Z at measured ~4.4M with F12 and F9 remaining'
 pending_actions:
+- id: act-017
+  type: merge
+  target: 'PR 690 squash-merge pinned to verified head
+    509d7b9c426d658339b8ae29ed4cc8588d0fac44 (all checks complete 0 failed,
+    MERGEABLE, zero reviews, DELIVERY_RESULT done with matching SHA, plan
+    executed without mechanism deviation, ADR 0117 design gate closed at the
+    plan ask)'
+  expected: 'PR merged, issue 668 auto-closed via Fixes; DONE: squash
+    831d7d21fc14930e196a6180255a276beaac65fd, state MERGED, 668 CLOSED
+    (verified), worktree clean and removed, branches deleted; final combined
+    matrix watch running; tracker scan from the registration cursor clean
+    (681, 684, 686 all routed and closed)'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-10T01:00:00+00:00'
 - id: act-016
   type: merge
   target: 'PR 688 squash-merge pinned to verified head
@@ -722,23 +738,22 @@ units:
       checkpoint rather than continuing its old subscription, plan-first with
       johan-plan, ADR 112/105/113 and the ccpause hand-back semantics carried as
       constraints and none reopened
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F8]
-    session: in-session subagent of orchestrator local_fab707d0 (implementation phase, Sonnet, worktree isolation)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 690
+      met: true
+      evidence: 'CAS-MERGED 2026-08-10 ~01:00Z pinned to 509d7b9c4, squash 831d7d21fc14930e196a6180255a276beaac65fd, all checks complete 0 failed, zero review threads, ADR 0117 shipped in the PR'
     - check: issue_closed
       ref: 668
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes, verified'
     blocking_on: []
-    next_action: CAS-merge PR 690 pinned to 509d7b9c426d658339b8ae29ed4cc8588d0fac44 when
-      checks complete green (closes 668); worktree held until the merge
+    next_action: none pending the final combined matrix on 831d7d21f
     last_meaningful_progress_at: '2026-08-10T00:35:00+00:00'
     observed: 
       pr_690:
