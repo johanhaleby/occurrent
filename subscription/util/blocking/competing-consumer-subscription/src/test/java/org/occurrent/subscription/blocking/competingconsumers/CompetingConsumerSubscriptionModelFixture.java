@@ -105,23 +105,22 @@ class CompetingConsumerSubscriptionModelFixture implements SubscriptionModelFixt
 
     /**
      * True, for a different reason than {@code SpringMongoSubscriptionModelFixture} answers false, and not a
-     * re-litigation of #522: that fixture drives {@link SpringMongoSubscriptionModel} directly with a literal
+     * re-litigation of #522. That fixture drives {@link SpringMongoSubscriptionModel} directly with a literal
      * {@code StartAt.subscriptionModelDefault()}, so {@link SpringMongoSubscriptionModel#resumeSubscription} reopens
      * the change stream from that same literal object, which carries no position and so resolves to "now" again,
      * every time. This wiring is what {@link CompetingConsumerSubscriptionModel}'s own class-level javadoc recommends
-     * running it over: a {@link DurableSubscriptionModel} sits between the two. Its {@code subscribe(...)} replaces a
-     * default start position with a {@code StartAt.dynamic(...)} supplier that re-reads the checkpoint storage every
-     * time it is resolved, and its action wrapper saves a checkpoint after every delivered event. Pausing (whichever
-     * way {@link CompetingConsumerSubscriptionModel#pauseSubscription} gets there: it unregisters the lease for a
-     * user pause and only releases it for a system one, see its private {@code pauseSubscription(String, boolean)})
-     * always calls the delegate's own {@code pauseSubscription}, and resuming (whichever way it gets there: straight
-     * through when the lease was only released, or by winning the lease back when it was unregistered) always ends in
-     * the delegate's own {@code resumeSubscription}, which is {@code DurableSubscriptionModel}'s, which is
-     * {@code SpringMongoSubscriptionModel}'s. That reopens the change stream from the same {@code StartAt} object
-     * again, but this time it is the dynamic supplier, so it re-resolves to the checkpoint saved after the last event
-     * this subscription actually delivered, not "now", and the change stream replays forward from there.
-     * {@code CompetingConsumerSubscriptionModelTest.can_pause_and_resume_same_subscription} already demonstrates
-     * exactly this: ids {@code 1, 2, 3} arrive in order, with {@code 2} written while paused.
+     * running it over, a {@link DurableSubscriptionModel} sitting between the two. Pausing (whichever way
+     * {@link CompetingConsumerSubscriptionModel#pauseSubscription} gets there, it unregisters the lease for a user
+     * pause and only releases it for a system one, see its private {@code pauseSubscription(String, boolean)}) always
+     * calls the delegate's own {@code pauseSubscription}, and resuming (whichever way it gets there, straight through
+     * when the lease was only released, or by winning the lease back when it was unregistered) always ends in the
+     * delegate's own {@code resumeSubscription}, which is {@code DurableSubscriptionModel}'s. That re-reads the
+     * checkpoint saved after the last event this subscription actually delivered and hands it to
+     * {@link SpringMongoSubscriptionModel} as an explicit position (ADR 117, #668), rather than relying on
+     * {@code SpringMongoSubscriptionModel}'s own tracked position, which another node may have long since passed by
+     * the time this one regains the lease. Either way the change stream reopens from the checkpoint and replays
+     * forward from there. {@code CompetingConsumerSubscriptionModelTest.can_pause_and_resume_same_subscription}
+     * already demonstrates the outcome, ids {@code 1, 2, 3} arrive in order, with {@code 2} written while paused.
      */
     @Override
     public boolean deliversEventsPublishedWhilePaused() {

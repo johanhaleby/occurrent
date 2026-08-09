@@ -81,6 +81,14 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Test-only: proves a lease regain does not re-trigger catch-up in the starter's own composition,
+             CompetingConsumer(Catchup(Durable(SpringMongo))). -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-catchup-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-mongodb-spring-blocking-checkpoint-storage</artifactId>

@@ -138,10 +138,10 @@ class DurableSubscriptionModelFixture implements RestartableSubscriptionModelFix
 
     @Override
     public boolean deliversEventsPublishedWhilePaused() {
-        // Pausing and resuming are pure delegation (DurableSubscriptionModel.pauseSubscription/resumeSubscription
-        // call straight through to the wrapped model), and the wrapped model resumes its change stream from the
-        // resume token it last saw, which MongoDB still has queued in the oplog. Same answer as
-        // NativeMongoSubscriptionModelFixture for the same reason.
+        // Pausing is pure delegation. Resuming re-reads the checkpoint this fixture's own action wrapper just
+        // saved and hands it to the wrapped model as an explicit position (ADR 117), which for a single-consumer
+        // fixture like this one is the same resume token the wrapped model's own change stream last saw anyway.
+        // Same answer as NativeMongoSubscriptionModelFixture for the same reason.
         return true;
     }
 

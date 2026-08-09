@@ -27,9 +27,13 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
 
+import java.util.Collections;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.StringJoiner;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -53,6 +57,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private final CheckpointStorage storage;
     private final DurableSubscriptionModelConfig config;
     private final @Nullable CheckpointWriteVersionSource writeVersionSource;
+    // subscribe(..) records a subscription id here when its StartAt resolved to null, opting it out of this model's
+    // checkpoint management (the same "not allowed to start" case CompetingConsumerSubscriptionModel has its own
+    // set for). resumeSubscription reads this so it forwards such a subscription unchanged too, rather than
+    // resuming it from a checkpoint this model was never asked to manage.
+    private final Set<String> notCheckpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     /**
      * Create a subscription that combines a {@link CheckpointAwareSubscriptionModel} with a {@link CheckpointStorage} to automatically
@@ -124,6 +133,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
         if (startAtToUse == null) {
             // Not allowed to start, delegate to the wrapped subscription instead
+            notCheckpointedSubscriptions.add(subscriptionId);
             return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
         }
 
@@ -202,8 +212,31 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         return getDelegatedSubscriptionModel().isPaused(subscriptionId);
     }
 
+    /**
+     * Resume a paused subscription from the checkpoint stored for it, rather than from the position the wrapped
+     * model itself last read to. Those two agree for a subscription only this model ever drives, but not for one a
+     * {@code CompetingConsumerSubscriptionModel} pauses and resumes on lease handover, where another node can have
+     * moved the checkpoint forward while this node held no lease at all, and its own wrapped model has no way to
+     * know that happened.
+     * <p>
+     * Falls back to the wrapped model's own {@link SubscriptionModelLifeCycle#resumeSubscription(String)} when no
+     * checkpoint is stored yet, when the wrapped model does not implement {@link RepositionableSubscriptionModel},
+     * or when the subscription opted out of this model's checkpoint management in the first place (see
+     * {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}). The fallback is deliberately the wrapped
+     * model's own tracked position, never {@link StartAt#subscriptionModelDefault()}, which resolves to the
+     * present and would silently drop whatever was published while this subscription was paused.
+     */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
+        if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
+            Optional<RepositionableSubscriptionModel> repositionable = RepositionableSubscriptionModel.of(getDelegatedSubscriptionModel());
+            if (repositionable.isPresent()) {
+                Checkpoint checkpoint = storage.read(subscriptionId);
+                if (checkpoint != null) {
+                    return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
+                }
+            }
+        }
         return getDelegatedSubscriptionModel().resumeSubscription(subscriptionId);
     }
 
@@ -222,6 +255,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     public void cancelSubscription(String subscriptionId) {
         subscriptionModel.cancelSubscription(subscriptionId);
         storage.delete(subscriptionId);
+        notCheckpointedSubscriptions.remove(subscriptionId);
     }
 
     @Override

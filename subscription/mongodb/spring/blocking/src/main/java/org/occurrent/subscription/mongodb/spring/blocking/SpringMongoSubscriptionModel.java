@@ -39,6 +39,7 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
@@ -86,7 +87,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptionModel, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptionModel, RepositionableSubscriptionModel, SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
     private final String eventCollection;
@@ -319,16 +320,44 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * this handler again on resume. That is deliberate, since wasted work is the cheaper mistake, and it means
      * handlers must be idempotent. A subscription that had not received anything yet has no position to resume from
      * and starts at the present instead.
+     * <p>
+     * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
+     * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a
+     * subscription reached that way can resume somewhere else entirely, for example the position a competing
+     * consumer's other node advanced to while this one held no lease.
      *
      * @see #pauseSubscription(String)
+     * @see #resumeSubscription(String, StartAt)
      */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
+        return doResumeSubscription(subscriptionId, null);
+    }
+
+    /**
+     * Resume a paused subscription at {@code startAt}, instead of the change-stream position it had read to.
+     *
+     * @see RepositionableSubscriptionModel#resumeSubscription(String, StartAt)
+     */
+    @Override
+    public synchronized Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+        requireNonNull(startAt, "StartAt cannot be null");
+        MongoCommons.checkStartPosition(startAt, new StartAt.SubscriptionModelContext(SpringMongoSubscriptionModel.class));
+        return doResumeSubscription(subscriptionId, startAt);
+    }
+
+    // The shared resume path. repositionTo is the caller's explicit position from the two-arg overload, or null
+    // from the one-arg overload, in which case currentStartAt is left untouched and the resume continues from
+    // whatever it already holds.
+    private Subscription doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
         logDebug("Resuming subscription for {}", subscriptionId);
         requireKnown(subscriptionId);
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
             throw new SubscriptionAlreadyRunningException(subscriptionId);
+        }
+        if (repositionTo != null) {
+            internalSubscription.currentStartAt().set(repositionTo);
         }
 
         if (!messageListenerContainer.isRunning()) {

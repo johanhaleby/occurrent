@@ -35,6 +35,8 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
@@ -283,6 +285,38 @@ public class NativeMongoSubscriptionModelResilienceTest {
             // not redelivered.
             await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
             assertThat(state).extracting(CloudEvent::getType).containsExactly(NameDefined.class.getName(), NameWasChanged.class.getName());
+        }
+
+        @Test
+        void resuming_at_a_given_position_reopens_the_change_stream_there() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            subscriptionModel = new NativeMongoSubscriptionModel(database, realEventCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), state::add).waitUntilStarted(Duration.ofSeconds(10));
+
+            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1")));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+            // Captured so the model can be asked to reopen from here, a position earlier than the one it will have
+            // tracked itself by the time it is paused below.
+            Checkpoint afterFirstEvent = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(state.get(0));
+
+            mongoEventStore.write("2", 0, serialize(new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2")));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            mongoEventStore.write("3", 0, serialize(new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name3")));
+            subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(afterFirstEvent)).waitUntilStarted(Duration.ofSeconds(10));
+
+            // Then: the second and third events both arrive again, because the change stream reopened at the
+            // explicit position rather than at the position the subscription itself had tracked (which was already
+            // past the second event and would have delivered only the third).
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(4));
+            assertThat(state).extracting(CloudEvent::getType)
+                    .containsExactly(NameDefined.class.getName(), NameWasChanged.class.getName(), NameWasChanged.class.getName(), NameWasChanged.class.getName());
         }
     }
 
