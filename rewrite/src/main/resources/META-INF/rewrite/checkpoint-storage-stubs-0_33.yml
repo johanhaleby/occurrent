@@ -1,0 +1,27 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateCheckpointStorageConditionalWrite_0_33
+displayName: Stub the CheckpointStorage conditional write members (0.32.0 -> 0.33.0)
+description: >-
+  Finds a class implementing the blocking or reactor CheckpointStorage that is missing the three-argument save
+  or writeVersion added for a fenced checkpoint write (ADR 116), and inserts a throwing stub for each missing
+  member, marked with a review comment, so the class compiles again. Filling in real behaviour is a manual
+  pass, see doc/migration/upgrading-to-0.33.0.md. Java only, a Kotlin implementer needs the manual steps
+  instead.
+recipeList:
+  - org.occurrent.rewrite.AddCheckpointStorageConditionalWriteStubs

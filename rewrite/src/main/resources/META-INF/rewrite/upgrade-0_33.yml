@@ -1,0 +1,28 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.UpgradeToOccurrent_0_33
+displayName: Upgrade to Occurrent 0.33.0
+description: >-
+  Migrates an application from Occurrent 0.32.0 to 0.33.0. CheckpointStorage and its reactor twin gained a
+  conditional save and a writeVersion read, for the checkpoint fence in ADR 116. This recipe finds a class
+  implementing either interface that is missing the two members and inserts a throwing stub for each, marked
+  with a review comment, so the class compiles again. It only fixes the signature, filling in real behaviour
+  for a store that can evaluate a write condition is a manual pass, see
+  doc/migration/upgrading-to-0.33.0.md.
+recipeList:
+  - org.occurrent.MigrateCheckpointStorageConditionalWrite_0_33
