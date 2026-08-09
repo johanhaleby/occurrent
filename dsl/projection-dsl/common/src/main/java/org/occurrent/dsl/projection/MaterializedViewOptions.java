@@ -33,8 +33,9 @@ package org.occurrent.dsl.projection;
 public record MaterializedViewOptions(int batchSize) {
 
     /**
-     * The starting default. To be confirmed against the benchmark harness in
-     * <a href="https://github.com/johanhaleby/occurrent/issues/624">#624</a> rather than guessed at twice.
+     * The starting default. To be confirmed against {@code CoalescingFlushBenchmark} in the {@code benchmark}
+     * module, added for <a href="https://github.com/johanhaleby/occurrent/issues/692">#692</a>, rather than guessed
+     * at twice.
      */
     public static final int DEFAULT_BATCH_SIZE = 1000;
 

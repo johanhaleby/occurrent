@@ -30,6 +30,9 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 
+import java.lang.reflect.Method;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -40,11 +43,15 @@ import java.util.concurrent.TimeUnit;
  * {@link org.occurrent.filtermatching.DataFieldReader#read(CloudEvent, String)} once per leaf,
  * {@code FilterMatcher.java:46-57} and {@code ConditionMatcher.java:180-191}).
  * <p>
- * Also benchmarks {@link org.occurrent.filtermatching.DataFieldReader#readAll(CloudEvent, java.util.Collection)},
- * the bulk-read entry point PR #626 added: its default implementation is the same per-leaf loop
- * {@code FilterMatcher} already does, so it is not expected to differ from the composed-filter numbers here.
- * {@code JacksonDataFieldReader} does not override it, so this measures the current, unmemoized baseline both
- * paths share, not a hypothetical faster implementation.
+ * {@code JacksonDataFieldReader} now overrides
+ * {@link org.occurrent.filtermatching.DataFieldReader#readAll(CloudEvent, java.util.Collection)} (added by PR #626)
+ * to resolve every path in one parse instead of one per path. That makes both {@link #matchesFilter} and
+ * {@link #readAllPaths} exercise the batched path. {@code FilterMatcher.matchesAndFilter} calls {@code readAll} for
+ * a composed filter with two or more data-field leaves, and {@link #readAllPaths} calls it directly. Neither one
+ * measures the old, unmemoized baseline any more, but {@link #readEachPathIndependently} does. It calls
+ * {@link org.occurrent.filtermatching.DataFieldReader#read(CloudEvent, String)} once per path, the same per-leaf
+ * loop {@code ConditionMatcher} ran before {@code readAll} existed, so comparing it against the other two methods is
+ * what shows whether the batched path is actually faster.
  * <p>
  * Follows the protocol #623 asks for: 1, 5 and 20 leaves, 1 KB and 256 KB payloads, the needle fields placed early
  * or late in the payload, against both a byte-backed event (streaming re-parse per leaf) and a Map-backed event
@@ -83,13 +90,31 @@ public class PayloadFilterReadBenchmark {
         private final JacksonDataFieldReader reader = new JacksonDataFieldReader();
 
         @Setup(Level.Trial)
-        public void setUp() {
+        public void setUp() throws NoSuchMethodException {
+            requireReadAllOverride();
             Map<String, Object> payload = PayloadFixtures.payload(leafCount, payloadSizeBytes, fieldPosition);
             event = backing == PayloadFixtures.Backing.MAP
                     ? PayloadFixtures.eventWithMap(payload)
                     : PayloadFixtures.eventWithBytes(payload);
             paths = PayloadFixtures.needlePaths(leafCount);
             filter = PayloadFixtures.matchAllFilter(paths, payload);
+        }
+
+        /**
+         * {@link #matchesFilter} and {@link #readAllPaths} are only distinct from {@link #readEachPathIndependently}
+         * as long as {@code JacksonDataFieldReader} overrides {@code readAll} with a real batched implementation. If
+         * that override is ever removed, {@code readAll} silently falls back to
+         * {@link org.occurrent.filtermatching.DataFieldReader}'s default, which calls {@code read} once per path,
+         * the exact loop {@link #readEachPathIndependently} already measures, and this benchmark would keep running
+         * without ever telling anyone it stopped comparing two different implementations.
+         */
+        private static void requireReadAllOverride() throws NoSuchMethodException {
+            Method readAll = JacksonDataFieldReader.class.getMethod("readAll", CloudEvent.class, Collection.class);
+            if (readAll.getDeclaringClass() != JacksonDataFieldReader.class) {
+                throw new IllegalStateException(JacksonDataFieldReader.class.getSimpleName() + " no longer overrides readAll(..), "
+                        + "so matchesFilter and readAllPaths would silently measure the same per-path loop as "
+                        + "readEachPathIndependently instead of the batched path this benchmark exists to compare it against.");
+            }
         }
     }
 
@@ -101,5 +126,20 @@ public class PayloadFilterReadBenchmark {
     @Benchmark
     public Map<String, Object> readAllPaths(ReadState state) {
         return state.reader.readAll(state.event, state.paths);
+    }
+
+    /**
+     * The pre-{@code readAll} baseline, resolving every path in {@code state.paths} with its own
+     * {@link org.occurrent.filtermatching.DataFieldReader#read(CloudEvent, String)} call, reparsing a byte-backed
+     * payload from the start each time. This is what {@link #matchesFilter} and {@link #readAllPaths} used to
+     * measure before {@code JacksonDataFieldReader} started overriding {@code readAll}.
+     */
+    @Benchmark
+    public Map<String, Object> readEachPathIndependently(ReadState state) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (String path : state.paths) {
+            state.reader.read(state.event, path).ifPresent(value -> result.put(path, value));
+        }
+        return result;
     }
 }

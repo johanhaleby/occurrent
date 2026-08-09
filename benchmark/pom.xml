@@ -29,9 +29,10 @@
 
     <name>${mavenProjectName}</name>
     <description>
-        JMH benchmarks that reproduce the measurement setups cited in ADR 108 and PR #615, and a payload-filter
-        read benchmark for the go/no-go decision on #623. Dev-only: never installed as a reactor module unless the
-        "benchmarks" profile is active, and never published even if it is (see maven.deploy.skip below).
+        JMH benchmarks that reproduce the measurement setups cited in ADR 108 and PR #615, a payload-filter read
+        benchmark for the go/no-go decision on #623, and a coalescing-flush benchmark for the batch-size default in
+        #692. Dev-only: never installed as a reactor module unless the "benchmarks" profile is active, and never
+        published even if it is (see maven.deploy.skip below).
     </description>
 
     <properties>
@@ -55,6 +56,11 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-projection-dsl-reactor</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-projection-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
