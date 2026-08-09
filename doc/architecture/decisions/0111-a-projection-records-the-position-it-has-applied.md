@@ -121,6 +121,11 @@ so the default implementation polls. Polling is what makes the answer correct fo
 the projection, which is the common deployment. An implementation backed by a store that can push a change is free to
 override the method.
 
+**No reactive `Mono`-returning `waitUntilApplied` exists on the reactor stack, deliberately.**
+`AppliedPositionStore` is blocking-shaped on both stacks, and `ReactiveMongoAppliedPositionStore` implements that
+same interface directly. A reactor caller that waits blocks the calling thread, the same bridge the rest of that
+stack already makes in the other direction.
+
 **The polls back off rather than running at a fixed rate, and the pace is `org.occurrent.retry.Backoff`.** A fixed
 25 ms interval is wrong in the direction that matters, because the polls that keep coming are exactly the ones a
 lagging projection cannot afford. The load a waiting caller puts on the store is anti-correlated with the health of

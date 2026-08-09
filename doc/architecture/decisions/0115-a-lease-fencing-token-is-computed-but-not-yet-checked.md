@@ -4,7 +4,9 @@ Date: 2026-08-09
 
 ## Status
 
-Accepted. Fixes #660. Wiring the token into a real check is filed separately as #665.
+Accepted. Fixes #660. Wiring the token into a real check is filed separately as #665. Superseded in part
+by [ADR 116](0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md), which wires the token
+into `CheckpointWriteCondition` and gives `ListenerLock.version()` its caller.
 
 ## Context
 
@@ -26,4 +28,14 @@ Nothing reads it. `MongoLeaseCompetingConsumerStrategySupport.acquireLease` coll
 
 Until #665 lands, a node can still write a checkpoint after losing its lease. The worst it can do is move the checkpoint backward, so some events get redelivered and reprocessed. Nothing is lost and no checkpoint is left permanently wrong, which is why documenting the gap rather than leaving it silently wrong is enough for now.
 
+**Amended by ADR 116: #665 landed.** A checkpoint write now carries the version through
+`CheckpointWriteCondition`, and a write from a lease that has moved on is refused rather than merely
+producing a backward-moving checkpoint. The paragraph above describes the gap as it stood before that
+fix, not the current behavior.
+
 A reader of `MongoListenerLockService` finds a `version` field and a `ListenerLock.version()` accessor with no caller. That is intentional, not an oversight, and this ADR is the record for it.
+
+**Amended by ADR 116: `ListenerLock.version()` now has a caller.**
+`MongoLeaseCompetingConsumerStrategySupport.acquireLease` reads it to record the version behind each
+granted lease, which is what a checkpoint write is compared against. The accessor was deliberately built
+ahead of its caller, and this is the record of when it got one.

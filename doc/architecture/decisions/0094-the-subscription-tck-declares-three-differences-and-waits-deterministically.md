@@ -136,6 +136,14 @@ the one `EventStoreFixture.timePrecision()` sits on: declare what cannot be aske
   **The lesson to carry: a declaration must not park a bug, reaching for the word bug before measuring what the fix
   costs is the other way to get this wrong, and a measured cost is what a decision is made against rather than an
   argument about which comment sounded more deliberate.**
+
+  **Amended 2026-08-09 by [ADR 117](0117-a-resumed-competing-consumer-continues-from-the-checkpoint.md).** This
+  bullet describes what the wrapped Mongo model itself does on resume, reopening from the change-stream position
+  it had already read. That is still true of the wrapped model in isolation, but a `DurableSubscriptionModel`
+  sitting above it now re-reads the stored checkpoint and repositions the wrapped model there first, whenever one
+  is stored and the model underneath can be repositioned. A regained lease resumes from the checkpoint another
+  node may have advanced while this node held no lease, not always from the position this node's own delegate
+  last read.
 - **Which `StartAt` variants a model accepts.** A sealed set of four, asserted as delivery for the accepted ones and
   refusal for the rest. This is phase 8's declared restriction mechanism, and it is where the per-wrapper deliberate
   refusals get asserted rather than rediscovered.
