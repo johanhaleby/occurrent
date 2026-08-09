@@ -10,7 +10,8 @@ promised this and deferred the design here. Builds on
 [ADR 113](0113-a-competing-consumers-status-and-its-lease-call-are-one-step.md) and
 [ADR 114](0114-a-lease-expires-on-the-database-clock-not-the-asking-nodes.md), and applies
 [ADR 106](0106-a-refused-subscription-call-says-which-condition-it-hit.md)'s rule for which exception
-a refusal gets.
+a refusal gets and [ADR 93](0093-a-missing-capability-is-refused-and-a-reactive-publisher-is-cold.md)'s
+rule for a store that cannot do what it is asked.
 
 ## Context
 
@@ -128,16 +129,13 @@ Rejected: widening `registerCompetingConsumer` or `hasLock`. Breaking for the th
 implementations the interface invites, and it answers at the wrong moment, since the token is needed
 at every checkpoint write rather than once at registration.
 
-### The checkpoint store learns about versions, and never about leases
+### A checkpoint write states its condition, on `CheckpointStorage` itself
 
 A `CheckpointStorage` records where a subscription has read to. Nothing in that job involves a lease,
-and a method parameter called a fencing token would put competing consumers into the vocabulary of
-every checkpoint store anybody writes, including the SQL one filed as #403. An implementer would have
-to understand distributed leasing to implement a checkpoint store correctly, which is the wrong thing
-to ask of them.
-
-So the store gets a concept of its own, and it is the one Occurrent already uses for the event store,
-which is a write that states what must be true of the stored version before it is allowed.
+and a parameter called a fencing token would put competing consumers into the vocabulary of every
+checkpoint store anybody writes, including the SQL one filed as #403. So the store gets a concept of
+its own, and it is the one Occurrent already uses for the event store, which is a write that says what
+must be true of the stored version before it is allowed.
 
 ```java
 public sealed interface CheckpointWriteCondition {
@@ -150,13 +148,6 @@ public sealed interface CheckpointWriteCondition {
 
     record NotOlderThan(long writeVersion) implements CheckpointWriteCondition {}
 }
-
-public interface VersionedCheckpointStorage extends CheckpointStorage {
-
-    Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition);
-
-    OptionalLong writeVersion(String subscriptionId);
-}
 ```
 
 `any()` writes the checkpoint and leaves the stored version untouched, which is what
@@ -164,40 +155,59 @@ public interface VersionedCheckpointStorage extends CheckpointStorage {
 than `v`, and otherwise writes the checkpoint and records `v`. Versions come from the caller rather
 than from the store, and the store never learns where they come from.
 
-Naming the condition rather than passing a bare number is what makes the two write modes one operation
-instead of two with different guarantees, and it is what lets the refusal say which condition was not
-met. It also puts the rule that an unconditional write must leave the stored version alone into the
-type, where every implementation has to face it, rather than into a paragraph of this document that
-two of them might read differently.
+**This goes on `CheckpointStorage` and on its reactor twin, not on a second interface beside them.**
+
+```java
+Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition);
+
+default Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+    return save(subscriptionId, checkpoint, CheckpointWriteCondition.any());
+}
+
+OptionalLong writeVersion(String subscriptionId);
+```
+
+An unconditional checkpoint write is unsafe the moment more than one node can write, and competing
+consumers is a first-class feature of this library, so writing conditionally is part of what a
+checkpoint store is rather than an extra somebody opts into. That is what puts it on the interface every
+checkpoint store already implements.
+
+Rejected: **a second interface beside `CheckpointStorage` carrying the conditional write**, so that
+nothing already implementing the latter would break. Not breaking anything is the wrong reason to shape
+an interface. AGENTS.md says to avoid breakage where avoiding it costs nothing and not to preserve a
+mistake just to avoid it, and avoiding it here would cost a second public interface and a capability
+question wherever a store is wired, for a guarantee that is not optional.
+
+**A store that cannot evaluate anything but `any()` refuses the others with
+`UnsupportedOperationException`.** That is [ADR 93](0093-a-missing-capability-is-refused-and-a-reactive-publisher-is-cold.md)'s
+rule, and the question ADR 106 restated. No different argument helps, and the caller needs a
+differently built store. Redis on a cluster is exactly that case, and so is any store that has not caught up yet.
+
+The two-argument `save` stays as a default, so **no calling code changes at all**. What breaks is
+implementations, which now implement the three-argument method and answer `writeVersion`, and that gets
+an `org.occurrent.UpgradeToOccurrent_*` recipe and a migration-guide section.
 
 `writeVersion` is not there for the fence, which never reads it. A store that records something its
 caller cannot read back tells half the truth about its own state, and the failure this ADR guards
 against ends with somebody asking which version is stored and why their writes are refused. Answering
 that by reading a MongoDB document by hand is not an answer a library should leave people with.
 
-The fencing token is what supplies that version, and nothing here reaches for it. A checkpoint store
-is told a condition and never learns who computed it.
+Naming the condition rather than passing a bare number is what makes the two write modes one operation
+instead of two with different guarantees, and it is what lets the refusal say which condition was not
+met. It also puts the rule that an unconditional write must leave the stored version alone into the
+type, where every implementation has to face it, rather than into a paragraph of this document that two
+of them might read differently.
 
-All of this lives in `subscription/api/blocking` and `subscription/core`, next to the types it needs, so
-there is no new module and no new dependency. `CheckpointStorage` itself does not change.
-
-A separate storage interface rather than a default method on `CheckpointStorage`, because a store that
-cannot write conditionally has to be caught where somebody wires it rather than at the first checkpoint
-write. Everywhere it is wired names a concrete type, so that is a compile error and nobody pays a
-runtime check for it. It also gives the conformance suite something to attach to, so a future store
-inherits a contract instead of an implementer deciding whether they have opted into one.
-
-**A condition of its own rather than the event store's `WriteCondition`, and this is the one place the
-two deliberately diverge.** `streamVersionEq` means the version I expect equals the stored one, and the
-event store assigns the next version itself. Here the version is assigned outside the store and the
-rule is not older than what is stored, so sharing the type would hand checkpoint stores conditions like
-`lt(5)` that mean nothing to them and would have to be refused at runtime. Same idea, stated for this
-store, which is worth more than a shared class name.
+**A condition of its own rather than the event store's `WriteCondition`.** `streamVersionEq` means the
+version I expect equals the stored one, and the event store assigns the next version itself. Here the
+version is assigned outside the store and the rule is not older than what is stored, so sharing the type
+would hand checkpoint stores conditions like `lt(5)` that mean nothing to them. Same idea, stated for
+this store, which is worth more than a shared class name.
 
 `CheckpointWriteCondition` is sealed and has exactly the two cases anything needs today. A third case
-would be a considered change to a contract every store implements, which is the right weight for it,
-and the alternative of an open predicate would put a condition interpreter written in Lua into the
-Redis storage for cases nobody has asked for.
+would be a considered change to a contract every store implements, which is the right weight for it, and
+an open predicate would put a condition interpreter written in Lua into the Redis storage for cases
+nobody has asked for.
 
 ### A subscription model stamps its own checkpoint writes
 
@@ -213,9 +223,8 @@ public interface CheckpointWriteVersionSource {
 
 `DurableSubscriptionModel`, `StreamCatchupSubscriptionModel`, `DcbCatchupSubscriptionModel` and
 `CatchupThenPushSubscriptionModel` each take one beside their storage, and every checkpoint they write
-becomes `notOlderThan` the version they get, or `any()` when they get none. A model given a source is
-given a `VersionedCheckpointStorage` in the same constructor, so a source without a store that can use
-it does not compile.
+becomes `notOlderThan` the version they get, or `any()` when they get none. A model with no source
+writes `any()`, which is one code path rather than two.
 
 **A model does not learn what a lease is.** It learns that it has a source of write versions and that
 it stamps its writes with one. The words lease, fencing token and competing consumer appear nowhere in
@@ -232,8 +241,7 @@ Checkpoint in it has no business on a distributed lock. The lock offers a fencin
 wants a write version, the shapes agree, and the wiring is where they meet. That is the whole of the
 coupling between competing consumers and checkpointing.
 
-Rejected, and this is what the first two drafts of this ADR proposed: **a `CheckpointStorage` that
-wraps another one, asks the strategy itself and rewrites the save on the way past.** It touches no
+Rejected: **a `CheckpointStorage` that wraps another one, asks the strategy itself and rewrites the save on the way past.** It touches no
 subscription model and covers every write site from one wiring point, which is why it was attractive.
 It is also not a checkpoint storage. It is a competing consumer object wearing the storage interface,
 and it strengthens `CheckpointStorage.save` from behind that interface, so four models and every user
@@ -428,32 +436,48 @@ A user who declares their own `CheckpointStorage` bean is unaffected, since that
 the fence. A user who hand-wires their own models passes the source themselves, which is one argument
 in two places.
 
-### The reactor checkpoint storage stays as it is
+### The reactor stack gets the condition now, and a source when it has one to give
 
-#665 names four storages and `ReactorCheckpointStorage` should not be one of them yet. There is no
-reactor competing consumer model and no reactor `CompetingConsumerStrategy`, and the only bridge from a
-reactor model into a blocking one lives in the TCK, so no reactor checkpoint write is ever made under a
-lease. Fencing it now builds for a caller that does not exist.
+#665 names four storages. `ReactorCheckpointStorage` is one of them and it does get the conditional
+write, on the same interface change as the blocking twin, but nothing supplies it a real condition yet.
+There is no reactor competing consumer model and no reactor `CompetingConsumerStrategy`, and the only
+bridge from a reactor model into a blocking one lives in the TCK, so no reactor checkpoint write is
+made under a lease and `ReactorDurableSubscriptionModel` gets no source.
 
-What it would take, so nobody designs it again, is a matching capability interface in
-`subscription/api/reactor`, a `ReactorDurableSubscriptionModel` that takes a source and signals
-`Mono.error(CheckpointWriteConditionNotFulfilledException)` instead of throwing, and the no-database contract on `fencingToken`, which is what makes calling the blocking
-strategy from a reactive pipeline legitimate. Same pipeline as the blocking Mongo storages.
+The interface changes on both stacks together because they are being broken once. Leaving the reactor
+`CheckpointStorage` alone would mean a second breaking change, a second recipe and a second migration
+guide section the day a reactor competing consumer model arrives, and it would leave the two stacks
+saying different things about the same operation, which
+[ADR 98](0098-reactor-subscriptionmodel-means-what-blocking-subscriptionmodel-means.md) exists to
+prevent. A refusal on that stack signals `Mono.error` rather than throwing.
 
-One thing follows from leaving it alone. `ReactorCheckpointStorage` keeps writing a full replacement and
-would take a stored version with it, and both starters default their checkpoint collection to the same
-property, so a checkpoint collection the blocking storage fences must not also be written by the reactor
-one.
+### This breaks implementations, and that is the right price
 
-### None of this breaks a caller, so there is no recipe
+Everything on the competing consumer side is additive. A default method on `CompetingConsumerStrategy`,
+a new source interface, a new exception, a new Redis key, and an internal method that stops deleting a
+document all leave every call site as it was.
 
-A default method on an interface, a new interface, new implementations of it, a new exception, a new
-Redis key, and an internal method that stops deleting a document are all additive. No call site changes
-shape, which is the test ADR 106 applied before concluding it owed no recipe either. So a changelog
-entry under Changes rather than Breaking changes, a new-capability section in the migration guide, and
-no `org.occurrent.UpgradeToOccurrent_*` recipe.
+The checkpoint store is a real break, and deliberately. No calling code changes, since the
+two-argument `save` remains as a default, but every implementation of `CheckpointStorage` and of its
+reactor twin now implements the three-argument method and answers `writeVersion`. That earns an
+`org.occurrent.UpgradeToOccurrent_*` recipe and a migration-guide section, which is what the convention
+in AGENTS.md is for, and the changelog entry goes under Breaking changes.
+
+A design that owes no migration is a pleasant result and a poor requirement. Any shape here can be made
+to break nothing, by adding an interface beside the one that should have changed, and the cost lands on
+everybody who later has to work out which of the two they need. The break is taken because the
+alternative is a checkpoint store whose safety under concurrent writers is optional.
 
 ## Consequences
+
+Checked against the hard rule first, the way AGENTS.md asks. **No events are lost**, because a refused
+write means the delivery is not acknowledged and the new holder redelivers it. **No subscription is
+blocked by another one being faulty**, and that is the one place this design could have broken the rule.
+A refusal thrown on a delivery thread must not reach the lease refresh thread, which runs every consumer
+on the node in one loop, so the requirements in the retry section that the subscription stays known and
+pausable are what keeps one subscription's refused write from stopping every other subscription's lease
+refresh. The end-to-end proof asserts it rather than trusting it.
+
 
 The lock collection now keeps one small document per subscription id ever used, where it used to delete
 them. That document is the subscription's lease record, and its `version` is the fencing token.
@@ -470,12 +494,13 @@ A user who wires their own subscription models gets the fence by passing the sou
 behaviour by leaving it out. A user on the Spring Boot starter gets it without doing anything, whatever
 their checkpoint storage bean is, because the fence no longer travels through that bean.
 
-A `CheckpointStorage` implementation outside this repository keeps working untouched and has no fence.
-Implementing `VersionedCheckpointStorage` is what opts in, and the new conformance suite is what says
-whether it did it correctly, including the case where `any()` must leave a stored version alone.
+A `CheckpointStorage` implementation outside this repository has to be updated, which the recipe does
+for the signature and the author does for the behaviour. A store that cannot write conditionally stays
+usable by refusing anything but `any()`. The conformance suite is what says whether one that claims to
+did it correctly, including the case where `any()` must leave a stored version alone.
 
-Redis Cluster is not supported for fenced checkpoints, and turning the fence on there fails at the first
-write rather than quietly. An unfenced cluster user is unaffected.
+Redis Cluster is not supported for conditional checkpoint writes, and asking for one there fails at the
+first write rather than quietly. A cluster user who supplies no source is unaffected.
 
 This is the first place in Occurrent where a subscription refuses a checkpoint write made on behalf of
 application code. The exception is deliberately not retried, which is the opposite of how every other
