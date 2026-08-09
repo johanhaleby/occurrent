@@ -39,7 +39,6 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
      *     <tr><td colspan="2">Lease time</td><td>20 seconds</td></tr>
      *     <tr><td colspan="2">Collection name</td><td>competing-consumer-locks</td></tr>
      *     <tr><td colspan="2">Retry Strategy</td><td>Exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between each retry when read/updating the lease</td></tr>
-     *     <tr><td colspan="2">Clock</td><td>UTC</td></tr>
      * </table>
      *
      * @param mongoOperations The Spring {@link MongoOperations} instance that should be used to store the lease information for the subscribers.
@@ -155,7 +154,6 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
     @NullUnmarked
     public static final class Builder {
         private final MongoOperations mongoOperations;
-        private Clock clock;
         private Duration leaseTime;
         private String collectionName;
         private RetryStrategy retryStrategy;
@@ -172,15 +170,16 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         }
 
         /**
-         * The clock to use when scheduling lease updates. Default is {@code UTC}.
+         * Does nothing. A lease's expiry is judged against the database's own clock, not this one, so that
+         * acquiring, refreshing and judging a lease agree regardless of clock skew between nodes. Kept for source
+         * compatibility.
          *
-         * @param clock The clock
+         * @param clock Ignored.
          * @return The same builder instance.
          */
         @NullMarked
         public Builder clock(Clock clock) {
             Objects.requireNonNull(clock, Clock.class.getSimpleName() + " cannot be null");
-            this.clock = clock;
             return this;
         }
 
@@ -232,11 +231,10 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          */
         @NullMarked
         public SpringMongoLeaseCompetingConsumerStrategy build() {
-            Clock clockToUse = clock == null ? Clock.systemUTC() : clock;
             Duration leaseTimeToUse = leaseTime == null ? DEFAULT_LEASE_TIME : leaseTime;
             String collectionNameToUse = collectionName == null ? DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION : collectionName;
             RetryStrategy retryStrategyToUse = retryStrategy == null ? RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f) : retryStrategy;
-            MongoLeaseCompetingConsumerStrategySupport support = new MongoLeaseCompetingConsumerStrategySupport(leaseTimeToUse, clockToUse, retryStrategyToUse)
+            MongoLeaseCompetingConsumerStrategySupport support = new MongoLeaseCompetingConsumerStrategySupport(leaseTimeToUse, retryStrategyToUse)
                     .scheduleRefresh(consumer ->
                             () -> staticallyWithCompetingConsumerLocksCollectionReturn(mongoOperations, collectionNameToUse, collection -> {
                                 consumer.accept(collection);
