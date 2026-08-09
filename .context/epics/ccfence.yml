@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 26
-updated_at: '2026-08-09T19:30:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F11 DONE with the
-  base-section addendum, release-day notes recorded)'
+revision: 27
+updated_at: '2026-08-09T19:55:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F10 merged and swept, issue
+  669 closed)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -29,6 +29,20 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   each wave boundary, stop and ask if the ceiling nears (spend at wave-1 close:
   ~1.0M across the plan review, F0, F1, F2)'
 pending_actions:
+- id: act-014
+  type: merge
+  target: 'PR 685 squash-merge pinned to verified head
+    a40f751761975a6675c8b909f899f8fc65c2e60f (all checks complete 0 failed,
+    MERGEABLE, zero reviews, DELIVERY_RESULT done with matching SHA, race
+    mutation-proved)'
+  expected: 'PR merged, issue 669 auto-closed via Fixes; DONE: squash
+    9d6c8fedb0130edc1fd6450a95c8b5e5698e3d76, state MERGED, 669 CLOSED
+    (verified), worktree clean and removed, branches deleted; matrix watch
+    with count guard running'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T19:50:00+00:00'
 - id: act-013
   type: merge
   target: 'PR 683 squash-merge pinned to verified head
@@ -648,23 +662,22 @@ units:
     goal: ManualStartSubscriptionModel.pinStartPosition becomes one conditional
       write using the ifAbsent condition approved into F2, closing the
       two-nodes-starting-together race
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F7]
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 685
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~19:50Z pinned to a40f75176, squash 9d6c8fedb0130edc1fd6450a95c8b5e5698e3d76, all checks complete 0 failed, zero review threads, race mutation-proved'
     - check: issue_closed
       ref: 669
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes, verified by the orchestrator after the merge'
     blocking_on: []
-    next_action: CAS-merge PR 685 pinned to a40f751761975a6675c8b909f899f8fc65c2e60f
-      when checks complete green; worktree held until the merge
+    next_action: none pending the main-matrix result on the squash
     last_meaningful_progress_at: '2026-08-09T19:05:00+00:00'
     observed:
       pr_685:
