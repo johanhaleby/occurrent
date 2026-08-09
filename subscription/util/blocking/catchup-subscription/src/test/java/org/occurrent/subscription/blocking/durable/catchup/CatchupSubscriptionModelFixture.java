@@ -158,11 +158,13 @@ class CatchupSubscriptionModelFixture implements RestartableSubscriptionModelFix
     }
 
     /**
-     * True, for the same reason {@code DurableSubscriptionModelFixture} answers true: pausing and resuming are pure
-     * delegation all the way down ({@code CatchupSubscriptionModel.pauseSubscription/resumeSubscription} call straight
-     * through to {@code getDelegatedSubscriptionModel()}, which {@code DurableSubscriptionModel} again delegates
-     * straight through), and the native model at the bottom resumes its change stream from the resume token it last
-     * saw, which MongoDB still has queued in the oplog.
+     * True, for the same reason {@code DurableSubscriptionModelFixture} answers true. Pausing is pure delegation,
+     * {@code CatchupSubscriptionModel.pauseSubscription} calls straight through to
+     * {@code getDelegatedSubscriptionModel()}, which {@code DurableSubscriptionModel} again delegates straight
+     * through. Resuming reaches the same {@code DurableSubscriptionModel}, which re-reads the checkpoint saved
+     * after the last delivered event and hands it to the native model underneath as an explicit position (ADR
+     * 117), the same resume token the native model's own change stream last saw for a single-consumer fixture
+     * like this one.
      */
     @Override
     public boolean deliversEventsPublishedWhilePaused() {

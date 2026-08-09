@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -99,7 +100,7 @@ import java.util.stream.Stream;
  * </p>
  */
 @NullMarked
-public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, ReplayAwareSubscriptionModel {
+public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, ReplayAwareSubscriptionModel, RepositionableSubscriptionModel {
 
     private static final int DEFAULT_CACHE_SIZE = CatchupSubscriptionModelConfig.DEFAULT_HANDOVER_CACHE_SIZE;
 
@@ -308,6 +309,22 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         return getDelegatedSubscriptionModel().resumeSubscription(subscriptionId);
+    }
+
+    /**
+     * A plain forward to whichever {@link RepositionableSubscriptionModel} the wrapped model resolves to, exactly
+     * as the one-argument {@link #resumeSubscription(String)} above already forwards unconditionally rather than
+     * routing through a catch-up child. Catch-up is therefore never re-triggered by a resume at an explicit
+     * position either. It stays what it already was, a one-time replay driven from {@code subscribe}, not something
+     * a lease regain can turn back on.
+     *
+     * @throws UnsupportedOperationException if the wrapped model is not itself repositionable.
+     */
+    @Override
+    public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+        return RepositionableSubscriptionModel.of(getDelegatedSubscriptionModel())
+                .orElseThrow(() -> new UnsupportedOperationException(getDelegatedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"))
+                .resumeSubscription(subscriptionId, startAt);
     }
 
     @Override

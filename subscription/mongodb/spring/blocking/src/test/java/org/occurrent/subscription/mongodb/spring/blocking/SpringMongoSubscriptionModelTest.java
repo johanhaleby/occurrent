@@ -389,6 +389,44 @@ public class SpringMongoSubscriptionModelTest {
     }
 
     @Nested
+    @DisplayName("Resume at a given position")
+    class ResumeAtAGivenPositionTest {
+
+        @Test
+        void resuming_at_a_given_position_reopens_the_change_stream_there() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, StartAt.now(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            NameDefined firstEvent = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            mongoEventStore.write("1", 0, serialize(firstEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+            // Captured so the model can be asked to reopen from here, a position earlier than the one it will have
+            // tracked itself by the time it is paused below.
+            Checkpoint afterFirstEvent = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(state.get(0));
+
+            NameWasChanged secondEvent = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2");
+            mongoEventStore.write("1", 1, serialize(secondEvent));
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+            NameWasChanged thirdEvent = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name3");
+            mongoEventStore.write("1", 2, serialize(thirdEvent));
+            subscriptionModel.resumeSubscription(subscriptionId, StartAt.checkpoint(afterFirstEvent)).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            // Then: the second and third events both arrive again, because the change stream reopened at the
+            // explicit position rather than at the position the subscription itself had tracked (which was already
+            // past the second event and would have delivered only the third).
+            await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(4));
+            assertThat(state).extracting(CloudEvent::getId)
+                    .containsExactly(firstEvent.eventId(), secondEvent.eventId(), secondEvent.eventId(), thirdEvent.eventId());
+        }
+    }
+
+    @Nested
     @DisplayName("SubscriptionFilter for BsonMongoDBFilterSpecification")
     class MongoBsonFilterSpecificationTest {
         @Test

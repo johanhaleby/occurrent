@@ -39,6 +39,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
@@ -77,7 +78,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptionModel {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptionModel, RepositionableSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
 
     private final MongoCollection<Document> eventCollection;
@@ -445,11 +446,36 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * this handler again on resume. That is deliberate, since wasted work is the cheaper mistake, and it means
      * handlers must be idempotent. A subscription that had not received anything yet has no position to resume from
      * and starts at the present instead.
+     * <p>
+     * That is what this call does on its own. A {@code DurableSubscriptionModel} wrapping this model calls
+     * {@link #resumeSubscription(String, StartAt)} with a stored checkpoint instead whenever one exists, so a
+     * subscription reached that way can resume somewhere else entirely, for example the position a competing
+     * consumer's other node advanced to while this one held no lease.
      *
      * @see #pauseSubscription(String)
+     * @see #resumeSubscription(String, StartAt)
      */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
+        return doResumeSubscription(subscriptionId, null);
+    }
+
+    /**
+     * Resume a paused subscription at {@code startAt}, instead of the change-stream position it had read to.
+     *
+     * @see RepositionableSubscriptionModel#resumeSubscription(String, StartAt)
+     */
+    @Override
+    public synchronized Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(NativeMongoSubscriptionModel.class));
+        return doResumeSubscription(subscriptionId, startAt);
+    }
+
+    // The shared resume path. repositionTo is the caller's explicit position from the two-arg overload, or null
+    // from the one-arg overload, in which case the subscription's own currentStartAt reference is left untouched
+    // and the resume continues from whatever it already holds.
+    private Subscription doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
         if (shutdown) {
             throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
         }
@@ -462,12 +488,15 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         if (internalSubscription == null) {
             throw new SubscriptionNotRunningException(subscriptionId);
         }
+        if (repositionTo != null) {
+            internalSubscription.currentStartAt.set(repositionTo);
+        }
 
         running = true;
 
         CountDownLatch startedLatch = new CountDownLatch(1);
         // Reuses the same currentStartAt reference so a resume continues from the last change-stream document
-        // read before the subscription was paused, not the original StartAt.
+        // read before the subscription was paused, not the original StartAt, unless repositionTo overrode it above.
         Runnable newSubscription = () -> newInternalSubscription(subscriptionId, internalSubscription.pipeline,
                 internalSubscription.filter, internalSubscription.currentStartAt, internalSubscription.action, startedLatch);
         startSubscription(newSubscription);
