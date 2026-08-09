@@ -1,0 +1,128 @@
+schema_version: 1
+epic: rv33
+revision: 2
+updated_at: 2026-08-09T19:50:00Z
+updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
+baseline: {repo: johanhaleby/occurrent, branch: main}
+authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
+pending_actions:
+  - id: act-001
+    type: dispatch-chip
+    target: "U1 chip task_4a88a66c"
+    expected: "chip visible; worker session starts on Johan's click"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-09T19:48:00Z
+  - id: act-002
+    type: dispatch-chip
+    target: "U2 chip task_1ea2a8d6"
+    expected: "chip visible; worker session starts on Johan's click"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-09T19:48:00Z
+  - id: act-003
+    type: dispatch-chip
+    target: "U3 chip task_21a5a40d"
+    expected: "chip visible; worker session starts on Johan's click"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-09T19:48:00Z
+  - id: act-004
+    type: dispatch-chip
+    target: "U4 chip task_12efcfce"
+    expected: "chip visible; worker session starts on Johan's click"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-09T19:48:00Z
+  - id: act-005
+    type: dispatch-chip
+    target: "U5 chip task_ee122e4d"
+    expected: "chip visible; worker session starts on Johan's click"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-09T19:48:00Z
+units:
+  U1:
+    issue: null
+    goal: "Release-docs truth pass: changelog.md:34/:21, upgrading-to-0.33.0.md sections 2-3, docs PR 55 branch sentence (A2, A4, P3, P4/P5 prose)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/checkpoint-fencing, met: false, evidence: null}
+      - {check: manual_approval, ref: "Johan wording confirm before merge (plan decision 2026-08-09)", met: false, evidence: null}
+    blocking_on: []
+    next_action: "chip spawned, awaiting worker session"
+    last_meaningful_progress_at: 2026-08-09T19:27:04Z
+    observed: {}
+    assessment: "highest-ranked finding (A2); pure prose, no java files"
+  U2:
+    issue: null
+    goal: "Bound the read inside MongoAppliedPositionStore.waitUntilApplied, fix reactive-store javadoc, defensive subscribeOn on the .block() path, interrupt-clause javadoc (P1, B5, M4)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "chip spawned, awaiting worker session"
+    last_meaningful_progress_at: 2026-08-09T19:27:04Z
+    observed: {}
+    assessment: "only shipped contract violation on a request-facing path; fix scoped to the Mongo override, never the interface default"
+  U3:
+    issue: null
+    goal: "Reactor projection seam: bridge forwards replay capability (M1), rename reactor ReplayAwareMaterializedView (B3, name at plan gate), retry-precondition javadoc at blocking Projections:99 (A4), flush drain-and-swap (P5), findAllById javadoc (B5)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: manual_approval, ref: "Johan approves the new marker name at the plan gate (plan decision 2026-08-09)", met: false, evidence: null}
+    blocking_on: []
+    next_action: "chip spawned, awaiting worker session"
+    last_meaningful_progress_at: 2026-08-09T19:27:04Z
+    observed: {}
+    assessment: "rename window closes at the 0.33.0 tag"
+  U4:
+    issue: null
+    goal: "Reactor conformance for conditional checkpoint writes (B1) plus the fresh-key any() case in the blocking suite (B5)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "chip spawned, awaiting worker session"
+    last_meaningful_progress_at: 2026-08-09T19:27:04Z
+    observed: {}
+    assessment: "TCK-only file boundary; ADR 107/77 permit added suites in a minor"
+  U5:
+    issue: null
+    goal: "ADR-fidelity pass: amend ADR 116 (A1+B4), status line on ADR 115, banners on ADR 110 and ADR 94 (A3, M2), ADR 113 note, ADR 111 sentence for M3, view-dsl ReplayAwareMaterializedView javadoc"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: manual_approval, ref: "prose design gate: Johan confirms wording before merge (standing rule + plan decision 2026-08-09)", met: false, evidence: null}
+    blocking_on: []
+    next_action: "chip spawned, awaiting worker session"
+    last_meaningful_progress_at: 2026-08-09T19:27:04Z
+    observed: {}
+    assessment: "prose deliverable; auto-merge excluded by the design-gate rule"
