@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 28
+revision: 29
 updated_at: '2026-08-09T09:10:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (672 merged pinned, monitor
-  stopped, tracker scan clean, closeout stage 1)'
+updated_by: 'orchestrator session local_f74d8561 (U7 DELIVERY_RESULT received
+  and swept, all units DONE and swept, awaiting final matrix)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -519,9 +519,9 @@ units:
       fence can land in 0.34.0
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: local_96650e41 (archived)
     deliverables:
     - check: pr_merged
       ref: 672
