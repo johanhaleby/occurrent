@@ -1,10 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 3
-updated_at: '2026-08-09T09:55:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (mobile inversion: chips
-  dismissed, F0/F1/F2 running as worktree-isolated in-session subagents,
-  600k output-token fleet ceiling declared)'
+revision: 4
+updated_at: '2026-08-09T10:10:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F0 merged on Johan''s wording
+  confirmation, worktree swept)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -26,6 +25,20 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   coordinates with ccrace''s held docs PR 54 (the 0.33.0 news post needs fence
   content now); milestone deliberately skipped (ccpause/ccrace precedent)'
 pending_actions:
+- id: act-004
+  type: merge
+  target: 'PR 674 squash-merge pinned to verified head
+    1df335b31419eaefc5b6ba80b889e575fceda236 (prose-only ADR rewrite, design
+    gate closed by Johan''s structured-ask wording confirmation, dash and
+    semicolon greps clean on the diff, Refs 665 verified)'
+  expected: 'PR merged, 665 stays open; DONE: squash
+    2b984ad545b9116f5498a685b535385969b26544, state MERGED, 665 OPEN
+    (verified), remote branch deleted by the merge, subagent worktree and
+    local branches removed after DELIVERY_RESULT'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T10:08:00+00:00'
 - id: act-003
   type: dispatch-chip
   target: 'F0 chip: ⌁[ccfence/F0#665] ADR 116 one-release amendment ·
@@ -65,24 +78,26 @@ units:
       in 0.33.0) with the accepted upgrade-window consequence and its recovery,
       as one coherent decision without an amendment trail, everything else in
       the file untouched
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 674
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~10:08Z pinned to 1df335b31, squash
+        2b984ad545b9116f5498a685b535385969b26544, markdown-only so no checks by
+        design, Johan confirmed the wording via structured ask before the
+        merge, 665 verified OPEN after'
     blocking_on: []
-    next_action: in-session subagent running (chip task_91560d5d dismissed, Johan on mobile); on its DELIVERY_RESULT, verify the PR and babysit CI via monitor bciv33mhs
-    last_meaningful_progress_at: '2026-08-09T09:55:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-09T10:08:00+00:00'
     observed: {}
-    assessment: 'prose design deliverable; the decision itself is closed (the
-      structured ask with the hazard quoted), but the MERGE waits for Johan''s
-      wording confirmation per the design-gate rule, markdown runs no CI and
-      its only real reviewer is him'
+    assessment: 'prose design deliverable, merged only after Johan''s explicit
+      wording confirmation (design-gate rule); ADR 116 now records the
+      one-release decision as one coherent decision'
   F2:
     issue: 665
     goal: CheckpointWriteCondition (sealed, any/notOlderThan/ifAbsent) and
