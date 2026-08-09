@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 8
-updated_at: 2026-08-09T20:40:00Z
+revision: 9
+updated_at: 2026-08-09T21:05:00Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -52,7 +52,7 @@ units:
     goal: "Release-docs truth pass: changelog.md:34/:21, upgrading-to-0.33.0.md sections 2-3, docs PR 55 branch sentence (A2, A4, P3, P4/P5 prose)"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_01d24d53-c82d-41df-8632-2b9e3ffced93
     deliverables:
@@ -60,7 +60,7 @@ units:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/checkpoint-fencing, met: true, evidence: "commit ef786ac7b 2026-08-09T19:42:38Z, stale-claim grep 0 hits on branch content via gh api"}
       - {check: manual_approval, ref: "Johan wording confirm before merge (plan decision 2026-08-09)", met: true, evidence: "structured ask answered 'Wording confirmed, merge it' 2026-08-09 ~20:15Z; two Copilot threads stay open as reasoned declines per policy"}
     blocking_on: []
-    next_action: "sweep: archive session (shared worktree stays), remote branch auto-deleted"
+    next_action: "sweep complete"
     last_meaningful_progress_at: 2026-08-09T19:44:09Z
     observed:
       pr_694: {head: 2fab14739270205278e47b68793ff880d54b39e5, rollup: no_checks_markdown_only, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T19:45:00Z}
@@ -85,14 +85,14 @@ units:
     goal: "Reactor projection seam: bridge forwards replay capability (M1), rename reactor ReplayAwareMaterializedView (B3, name at plan gate), retry-precondition javadoc at blocking Projections:99 (A4), flush drain-and-swap (P5), findAllById javadoc (B5)"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_2fa00e27-c4a3-4ef2-8a16-b6ecae2bc381
     deliverables:
       - {check: pr_merged, ref: 697, met: true, evidence: "squash 8d9b08f98, merged head equals verified 1dbb19ecf, CAS pin honoured, 2026-08-09 ~20:37Z; two Copilot threads fixed in head and resolved"}
       - {check: manual_approval, ref: "Johan approves the new marker name at the plan gate (plan decision 2026-08-09)", met: true, evidence: "AskUserQuestion asked and answered in U3 session transcript ('What should the reactor replay marker...'), delivered name ReactiveReplayAwareMaterializedView"}
     blocking_on: []
-    next_action: "await DELIVERY_RESULT from the watching worker, then sweep; U2 must now rebase onto main for the rename"
+    next_action: "sweep complete; DELIVERY_RESULT done received, plan-gate decision confirmed in it"
     last_meaningful_progress_at: 2026-08-09T20:05:00Z
     observed:
       pr_697: {head: 38d3bf1cb17e4f71b57acc0c7b32de9625e44c7e, rollup: running, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T20:08:00Z}
@@ -100,15 +100,15 @@ units:
   U4:
     issue: null
     goal: "Reactor conformance for conditional checkpoint writes (B1) plus the fresh-key any() case in the blocking suite (B5)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_dcc360e4-0789-4ccd-8e66-488861d0b702
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 698, met: true, evidence: "squash 392a1f7f3, merged head equals verified cb1446f27, CAS pin honoured, 2026-08-09 ~21:00Z; DELIVERY_RESULT done, full reactive conformance suite, mutation-verified"}
     blocking_on: []
-    next_action: "worker fixing one Copilot thread on PR 698; merge when head goes green with threads resolved"
+    next_action: "sweep complete"
     last_meaningful_progress_at: 2026-08-09T20:38:00Z
     observed:
       pr_698: {head: aa8823195794ba15feb374c8ea5f801ee5cbd126, rollup: green_one_thread_open, threads_open: 1, via: "gh + monitor bzfz2akrm", at: 2026-08-09T20:39:00Z}
@@ -118,14 +118,14 @@ units:
     goal: "ADR-fidelity pass: amend ADR 116 (A1+B4), status line on ADR 115, banners on ADR 110 and ADR 94 (A3, M2), ADR 113 note, ADR 111 sentence for M3, view-dsl ReplayAwareMaterializedView javadoc"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_95a13c51-2737-43e2-ae8c-752494756768
     deliverables:
       - {check: pr_merged, ref: 695, met: true, evidence: "squash 35def4baa, merged head equals verified 674599cd4, CAS pin honoured, closed #696, 2026-08-09 ~20:28Z"}
       - {check: manual_approval, ref: "prose design gate: Johan confirms wording before merge (standing rule + plan decision 2026-08-09)", met: true, evidence: "structured ask answered 'Wording confirmed, merge it' 2026-08-09 ~20:27Z, covering the fold-in round"}
     blocking_on: []
-    next_action: "sweep: archive session, branch auto-deleted"
+    next_action: "sweep complete"
     last_meaningful_progress_at: 2026-08-09T19:56:00Z
     observed:
       pr_695: {head: 6a964b1b1a7b29a629265b24d6ff812ffadacff2, rollup: running, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T19:57:00Z}
