@@ -1,9 +1,10 @@
 schema_version: 1
 epic: ccrace
-revision: 29
+revision: 30
 updated_at: '2026-08-09T09:10:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U7 DELIVERY_RESULT received
-  and swept, all units DONE and swept, awaiting final matrix)'
+updated_by: 'orchestrator session local_f74d8561 (EPIC COMPLETE: final matrix
+  26/26 green on f9249f5c3, all seven units DONE and swept, monitors stopped,
+  tracker scan clean, session retiring)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
