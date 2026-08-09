@@ -1,9 +1,10 @@
 schema_version: 1
 epic: ccfence
-revision: 23
-updated_at: '2026-08-09T18:05:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F7 merged and swept, F8
-  dispatched with the asymmetry and flake constraints in its brief)'
+revision: 24
+updated_at: '2026-08-09T18:35:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F10 and F11 dispatched in
+  parallel with F8 after Johan flagged the stale adoption visibility on 668
+  and 669; adoption comments posted on both issues)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -639,11 +640,11 @@ units:
     goal: ManualStartSubscriptionModel.pinStartPosition becomes one conditional
       write using the ifAbsent condition approved into F2, closing the
       two-nodes-starting-together race
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F7]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
     deliverables:
     - check: pr_merged
       ref: null
@@ -666,11 +667,11 @@ units:
       with the fencing section, checkpoint-storage implementer guidance, Redis
       Cluster limit and deploy-order requirement, review-clean (Copilot review
       requested, zero unresolved threads), merged only at the fence release day
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F7]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (docs repo, own worktree there)
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
@@ -678,8 +679,9 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch after F7 merges, parallel with wave 5
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~18:30Z (docs repo, stacked on held
+      PR 54's branch, docs monitor b6m4a2tww armed)
+    last_meaningful_progress_at: '2026-08-09T18:30:00+00:00'
     observed: {}
     assessment: 'Sonnet/medium; U5 pattern, deliberately not pr_merged; docs-repo
       monitor arms at session launch (multi-repo rule)'
