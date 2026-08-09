@@ -34,6 +34,9 @@ import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -67,9 +70,11 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 @Timeout(20)
 @DisplayNameGeneration(DisplayNameGenerator.Simple.class)
@@ -232,6 +237,21 @@ class SpringRedisCheckpointStorageTest {
 
         // Then
         assertThat(requireNonNull(redisTemplate.keys("*")).size()).isZero();
+    }
+
+    @Test
+    void a_refused_conditional_write_escapes_retry_immediately_instead_of_hanging_the_calling_thread() {
+        // Given a retry strategy whose backoff is longer than this test's own timeout and whose max attempts is the
+        // exponentialBackoff default, infinite. If the refusal below were retried even once, this test would still
+        // be waiting out that backoff when assertTimeoutPreemptively gives up, since the write can never succeed.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate, RetryStrategy.exponentialBackoff(Duration.ofSeconds(30), Duration.ofSeconds(30), 1.0f));
+        String subscriptionId = UUID.randomUUID().toString();
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(5));
+
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
+                assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(1)))
+                        .as("a version below the stored one must be refused immediately, not queued behind a 30 second backoff")
+                        .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class));
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {

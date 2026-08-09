@@ -82,3 +82,9 @@ incrementing the token rather than resetting it. If you need it to end sooner, o
 cycling, `CheckpointStorage.delete(subscriptionId)` clears the checkpoint and its stored version together, and the
 subscription resumes as a fresh one. That costs a replay. Everything since the subscription's global checkpoint is
 redelivered, which is within the at-least-once contract this library has always kept, not a new kind of loss.
+
+## 4. Redis Cluster
+
+`SpringRedisCheckpointStorage` refuses `notOlderThan` and `ifAbsent` on Redis Cluster, on the first conditional
+write, because the checkpoint and its stored version live in two differently named keys that Cluster will not
+guarantee land in the same slot.
