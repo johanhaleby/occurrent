@@ -13,6 +13,7 @@ import org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompet
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.OptionalLong;
 
 import static org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION;
 import static org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_LEASE_TIME;
@@ -90,6 +91,14 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
     @Override
     public boolean hasLock(String subscriptionId, String subscriberId) {
         return support.hasLock(subscriptionId, subscriberId);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public OptionalLong fencingToken(String subscriptionId) {
+        return support.fencingToken(subscriptionId);
     }
 
     /**

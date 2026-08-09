@@ -1,6 +1,24 @@
+/*
+ * Copyright 2021 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.occurrent.subscription.api.blocking;
 
 import org.jspecify.annotations.NullMarked;
+
+import java.util.OptionalLong;
 
 /**
  * The contract for competing consumer strategies. A competing consumer strategy is used with a "competing consumer subscription model" to allow for
@@ -67,6 +85,21 @@ public interface CompetingConsumerStrategy {
      * @return <code>true</code> if the subscriber has the lock, <code>false</code> otherwise.
      */
     boolean hasLock(String subscriptionId, String subscriberId);
+
+    /**
+     * The current fencing token for the given subscription, a number a {@code CheckpointStorage} can compare
+     * against a stored one to refuse a write from a lease that has moved on (see ADR 116). The value increases on
+     * every genuine change of owner and is unchanged when the same holder refreshes. Empty means this node does
+     * not believe it holds the lock, or this strategy has no token to give. The call must not block and must not
+     * reach a database, since it runs on the per-event write path. An implementation that does not override this
+     * method is not broken, it simply has no fence.
+     *
+     * @param subscriptionId The id of the subscription to get the fencing token for
+     * @return The fencing token, or {@link OptionalLong#empty()} if this strategy has none to give
+     */
+    default OptionalLong fencingToken(String subscriptionId) {
+        return OptionalLong.empty();
+    }
 
     /**
      * Add a {@link CompetingConsumerListener} to this {@code CompetingConsumerStrategy} instance.
