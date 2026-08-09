@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 23
+revision: 24
 updated_at: '2026-08-09T09:10:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U6 handover recorded, final
-  split is registration input, U7 confirmed unaffected)'
+updated_by: 'orchestrator session local_f74d8561 (ADR-history decision recorded:
+  one replacement, relayed to the U6 session)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -460,7 +460,11 @@ units:
       and HELD by Johan via structured ask 2026-08-09, the design discussion is
       still running in the U6 session; NO merge until he or that session signals
       final, and the implementation-epic registration input is whatever ADR 116
-      says after the last amendment merges. U6 HANDOVER (2026-08-09): PR 673 is
+      says after the last amendment merges. ADR-HISTORY DECISION (Johan,
+      structured ask 2026-08-09): the final iteration rewrites ADR 116 as ONE
+      coherent decision, no amendment trail, git history keeps the churn; relayed
+      to the U6 session, which signals design-gate-closed explicitly. U6 HANDOVER
+      (2026-08-09): PR 673 is
       the current design, held; its final shape puts the write condition on
       CheckpointStorage itself (both stacks break once, two-argument save kept as
       a default so calling code is unchanged), the four checkpoint-writing models
