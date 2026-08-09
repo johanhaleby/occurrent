@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 19
+revision: 20
 updated_at: '2026-08-09T09:10:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (ADR 116 amendment PR 670
-  merged pinned, U7 hold lifted by Johan''s launch)'
+updated_by: 'orchestrator session local_f74d8561 (second ADR 116 amendment PR
+  671 merge journaled after Johan confirmed the discussion settled)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,6 +16,20 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-014
+  type: merge
+  target: 'PR 671 squash-merge pinned to verified head
+    2490bee7627642fc4289f7a70cee6018e2ca4f65 (second ADR 116 amendment from the
+    U6 discussion: FencedCheckpointStorage removed, the subscription models stamp
+    their own checkpoint writes; prose-only, zero threads, Johan confirmed the
+    discussion settled via structured ask)'
+  expected: 'PR merged, merged head equals pin, issue 665 remains OPEN; DONE:
+    squash 01e699ed42ae3a8bdb22439550189bedee69a10c, headAtMerge equals pin
+    (verified), 665 OPEN (verified)'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T10:20:00+00:00'
 - id: act-013
   type: merge
   target: 'PR 670 squash-merge pinned to verified head
