@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 22
-updated_at: '2026-08-09T17:40:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (684 adopted as F12 by
-  structured ask, routing comment posted)'
+revision: 23
+updated_at: '2026-08-09T18:05:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F7 merged and swept, F8
+  dispatched with the asymmetry and flake constraints in its brief)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -29,6 +29,20 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   each wave boundary, stop and ask if the ceiling nears (spend at wave-1 close:
   ~1.0M across the plan review, F0, F1, F2)'
 pending_actions:
+- id: act-013
+  type: merge
+  target: 'PR 683 squash-merge pinned to verified head
+    dd6001dfb6bc60a788c96afbe400dea59a6afacb (all checks complete 0 failed,
+    MERGEABLE, zero reviews, DELIVERY_RESULT done with matching SHA, seven
+    mutation kills, four wiring sites verified)'
+  expected: 'PR merged, 665 stays open; DONE: squash
+    ee34cb7eddeeea24075113d0f096779529b8fa31, state MERGED, 665 OPEN
+    (verified), worktree clean and removed, branches deleted; the fence is
+    fully wired on main; matrix watch with count guard running; F8 dispatched'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T18:00:00+00:00'
 - id: act-012
   type: merge
   target: 'PR 682 squash-merge pinned to verified head
@@ -502,19 +516,18 @@ units:
       ManualStartSubscriptionModel.stoppedByDefault) via lazy ObjectProvider
       getIfUnique with remember-only-found volatile caching, storage bean stays
       ordinary
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F1, F3, F4, F5, F6]
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 4)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 683
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~18:00Z pinned to dd6001dfb, squash ee34cb7eddeeea24075113d0f096779529b8fa31, all checks complete 0 failed, zero review threads, DELIVERY_RESULT done with matching SHA, seven mutation kills, four wiring sites verified'
     blocking_on: []
-    next_action: CAS-merge PR 683 pinned to dd6001dfb6bc60a788c96afbe400dea59a6afacb
-      when checks complete green; worktree held until the merge
+    next_action: none pending the main-matrix result on the squash
     last_meaningful_progress_at: '2026-08-09T17:25:00+00:00'
     observed:
       pr_683:
@@ -574,11 +587,11 @@ units:
       that one refused write never stops lease refresh or delivery for other
       subscriptions, with a named test proven to fail when F6''s exclusion is
       reverted, covering the registrar-driven starter paths
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F7]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 5)
     deliverables:
     - check: pr_merged
       ref: null
@@ -589,8 +602,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 5
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~18:05Z (wave 5)
+    last_meaningful_progress_at: '2026-08-09T18:05:00+00:00'
     observed: {}
     assessment: 'Sonnet/high; closes 665 via Fixes; mutation-style evidence for
       the hard-rule test in DELIVERY_RESULT'
