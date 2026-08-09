@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 20
-updated_at: '2026-08-09T16:45:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F6 merged and swept, F7
-  dispatched)'
+revision: 21
+updated_at: '2026-08-09T17:30:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F7 DELIVERY_RESULT received,
+  PR 683 in CI, finding 684 routed adopt-or-ask)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -513,9 +513,29 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: subagent running since ~16:45Z (wave 4)
-    last_meaningful_progress_at: '2026-08-09T16:45:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 683 pinned to dd6001dfb6bc60a788c96afbe400dea59a6afacb
+      when checks complete green; worktree held until the merge
+    last_meaningful_progress_at: '2026-08-09T17:25:00+00:00'
+    observed:
+      pr_683:
+        head: dd6001dfb6bc60a788c96afbe400dea59a6afacb
+        note: 'DELIVERY_RESULT done with matching SHA; all four ADR wiring
+          sites verified (durable model + catch-up config + manual-start pin
+          in the starter bean, projection registrar, saga registrar); seven
+          mutation kills; ManualStartSubscriptionModel needed a small additive
+          stoppedByDefault overload, a justified brief stretch the ADR names;
+          181 starter tests green against real Mongo'
+        via: monitor bciv33mhs + worker DELIVERY_RESULT
+        at: '2026-08-09T17:25:00+00:00'
+      finding_684:
+        note: 'worker filed issue 684 trace-first: the saga timer-poller gate
+          uses getIfAvailable so two strategy beans crash startup for @Saga
+          apps, pre-existing, inconsistent with the fence''s own graceful
+          two-bean stand-down; worker recommends getIfUnique with null meaning
+          poll-everywhere; ROUTED adopt-or-ask to Johan this tick (tiny unit,
+          same subsystem, warm context)'
+        via: gh issue 684 + worker DELIVERY_RESULT
+        at: '2026-08-09T17:28:00+00:00'
     assessment: 'Sonnet/high; merge gate is the full depends_on list, an active
       fence over stub storages or without the retry exclusion is the bug ADR
       116 names'
