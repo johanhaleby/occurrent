@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 12
-updated_at: '2026-08-09T06:15:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (U5 docs unit adopted per Johan,
-  chip journaled)'
+revision: 13
+updated_at: '2026-08-09T06:50:00+00:00'
+updated_by: 'orchestrator session local_f74d8561 (U3 delivered PR 666 after its
+  plan gate, 665 adopted as U6 design pass per Johan, U6 chip journaled)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,6 +16,17 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-009
+  type: dispatch-chip
+  target: 'U6 chip: ⌁[ccrace/U6#665] Fencing wiring design pass · Opus/high
+    (design-only unit, ADR plus unit split, Refs not Fixes, implementation is a
+    separate epic after 0.33.0)'
+  expected: 'chip visible to Johan; session enters fleet on his click; VERIFIED:
+    spawn returned task_d295754e, chip pending at position 1'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-09T06:50:00+00:00'
 - id: act-008
   type: dispatch-chip
   target: 'U5 chip: ⌁[ccrace/U5] 0.33.0 docs news + gap audit · Sonnet/high
@@ -210,14 +221,14 @@ units:
     goal: the fencing-token promise in the acquireOrRefreshFor javadoc is either
       wired to the writes that need it or withdrawn honestly, decided at the plan
       gate, implemented accordingly
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U2]
-    session: null
+    session: local_260d02c2
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 666
       met: false
       evidence: null
     - check: issue_closed
@@ -225,10 +236,26 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip task_cb44f929 spawned 2026-08-09 ~01:30Z, launched by Johan
-      ~06:00Z, session running toward his plan gate
-    last_meaningful_progress_at: '2026-08-08T23:15:00+00:00'
-    observed: {}
+    next_action: ci-wait on PR 666 (the interim honest-javadoc fix, Fixes 660,
+      ADR 115); plan-gate outcome recorded, Johan chose to BUILD the wiring, out
+      of this unit, routed as U6; on green with threads resolved verify the
+      DELIVERY_RESULT and CAS-merge pinned
+    last_meaningful_progress_at: '2026-08-09T06:45:00+00:00'
+    observed:
+      pr_666:
+        head: 5dae3f5ac3716114aba339c85ef82afdf65b604e
+        note: opened ~06:40Z from johan/660-honest-fencing-javadoc, checks running
+        via: monitor bu11n182l + gh pr view
+        at: '2026-08-09T06:45:00+00:00'
+      plan_gate:
+        note: 'cleared ~06:35Z: wiring chosen but does not fit the unit (breaks
+          CompetingConsumerStrategy and CheckpointStorage, four storage
+          implementations, plus a delivery path the model does not have); interim
+          javadoc fix lands as PR 666 with ADR 115, ListenerLock.version() and the
+          increment stay verbatim for the wiring; wiring filed trace-first as
+          issue 665 with an adopt recommendation'
+        via: cross-session message from local_260d02c2
+        at: '2026-08-09T06:35:00+00:00'
     assessment: 'the honest scope is the decision itself, wire the version through
       checkpoint writes (cross-module design, escalates at the plan gate before
       building) or amend the javadoc to state what a handover can redo, with a bias
@@ -304,3 +331,32 @@ units:
       changelog next-version section (~12 entries); held PRs 49, 52, 53 and docs
       main count as existing coverage and their branches are not to be pushed to;
       docs-repo monitor arms at session launch per the multi-repo rule'
+  U6:
+    issue: 665
+    goal: the fencing-token wiring design decided and recorded, an ADR settling the
+      CompetingConsumerStrategy contract change, how CheckpointStorage takes and
+      compares the token across its four shipped implementations, and the delivery
+      path CompetingConsumerSubscriptionModel lacks, plus the implementation unit
+      split, merged as a PR that references but does not close issue 665
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip task_d295754e spawned 2026-08-09 ~06:55Z, awaiting Johan's
+      launch; first expected observable is the design at his approval gate
+    last_meaningful_progress_at: '2026-08-09T06:50:00+00:00'
+    observed: {}
+    assessment: 'adopted per Johan (structured ask, Design pass in ccrace): only
+      the design unit lives here, implementation registers as its own epic from
+      the design output and targets the release after 0.33.0; issue 665 stays
+      OPEN through this unit by design (Refs not Fixes), claimed with a comment
+      saying exactly that; both target interfaces shipped, so the design must
+      carry the migration conventions (OpenRewrite recipe, migration guide,
+      third-party implementer story for CompetingConsumerStrategy)'
