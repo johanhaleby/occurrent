@@ -34,7 +34,7 @@ turned out to be less about the two public interfaces than about the lease itsel
 
 ## Decision
 
-### The lock document survives a release, and this ships one release before the fence
+### The lock document survives a release
 
 The version is not a fencing token yet, because it restarts. `MongoListenerLockService.remove` deletes
 the lock document, and the acquisition pipeline seeds a fresh one to 0 through
@@ -63,13 +63,15 @@ process is killed. A release that a failover rolls back leaves the lease looking
 which is what expiry is for. An acquisition rolled back would be a different matter, since two nodes
 would then both believe they hold the lease, and that write already asks for majority.
 
-**This ships alone, one release ahead of everything else here, and that is a decision rather than a
-preference.** During the upgrade that installs it, old and new nodes run the same subscription. An old
-node's `remove` still deletes the document, the new node's next refresh matches nothing and re-acquires
-a fresh document at version 0, and if the fence were already on, every write from that node would be
-refused for good. That is the failure this decision exists to prevent, caused by the deploy that
-installs it. A lock document that persists with an increasing version changes nothing anybody can
-observe, so shipping it by itself costs a release boundary and no design.
+**Both ship together, in 0.33.0, which supersedes the two-release order this ADR first recorded.**
+During the one deploy that installs them, the cluster runs mixed versions for a while, and that window
+is accepted rather than avoided. A 0.32.0 node's `remove` still deletes the lock document. A 0.33.0 node
+that takes the lease over from it re-acquires at version 0, and its checkpoint writes are refused,
+because the fence is already live on that node. Each further takeover during the deploy raises the
+version by one, so the cycle resolves on its own once every node runs 0.33.0. An operator who wants it
+to stop sooner can call `CheckpointStorage.delete(subscriptionId)`, which ends the loop immediately at
+the price of a replay. One release boundary was not worth its ceremony for a window this bounded and
+self-correcting, and the maintainer made that call with this failure mode stated to him.
 
 Rejected: a setting that turns the fence off for one release. It keeps both in one release and leaves
 behind a switch whose only purpose is to be deleted.
@@ -482,13 +484,14 @@ refresh. The end-to-end proof asserts it rather than trusting it.
 The lock collection now keeps one small document per subscription id ever used, where it used to delete
 them. That document is the subscription's lease record, and its `version` is the fencing token.
 
-The upgrade has an order and the migration guide states it as a requirement. Deploy the release that
-carries the lease change before the release that carries the fence. An operator who skips it gets a
-cluster where an old node still deletes the lock document while a new node writes fenced checkpoints,
-so a subscription is refused, stops, releases, is taken over at a token still below the stored one, and
-repeats, once per unit of the stored version, each cycle costing a lease period and one re-run of the
-user's action. It recovers on its own and `CheckpointStorage.delete(subscriptionId)` ends it
-immediately, at the price of a replay.
+There is no two-release order to get right, since the lease change and the fence ship together in
+0.33.0. The requirement the migration guide states instead is completing the 0.32.0-to-0.33.0 deploy.
+Until every node runs 0.33.0, a cluster in that window has an old node still deleting the lock document
+while a new node writes fenced checkpoints, so a subscription is refused, stops, releases, is taken over
+at a token still below the stored one, and repeats, once per unit of the stored version, each cycle
+costing a lease period and one re-run of the user's action. It recovers on its own once the deploy
+completes, and `CheckpointStorage.delete(subscriptionId)` ends it immediately, at the price of a replay.
+The migration guide documents the window.
 
 A user who wires their own subscription models gets the fence by passing the source and gets today's
 behaviour by leaving it out. A user on the Spring Boot starter gets it without doing anything, whatever
@@ -507,7 +510,7 @@ application code. The exception is deliberately not retried, which is the opposi
 failure on the delivery path is treated, and the reason is written into the retry predicates rather than
 left to a reader of the stack trace.
 
-The implementation registers as its own epic against the two release boundaries above, split into the
+The implementation registers as its own epic against the 0.33.0 release above, split into the
 lease change, the strategy's token, the checkpoint store's write condition, the four models taking a
 source, the Mongo storages, the retry exclusion in both subscription models, the Redis storage, the starter wiring, an end-to-end proof over a real MongoDB
 covering both an expired lease and a graceful handover, and the documentation.
