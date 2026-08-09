@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 30
-updated_at: '2026-08-09T21:10:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F8 merged, 665 CLOSED, F9
-  planning phase dispatched on Opus)'
+revision: 31
+updated_at: '2026-08-09T21:50:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F9 plan approved with an ADR
+  at the gate, implementation subagent running, planning worktree swept)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -664,7 +664,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: [F8]
-    session: in-session subagent of orchestrator local_fab707d0 (planning phase, Opus, read-only)
+    session: in-session subagent of orchestrator local_fab707d0 (implementation phase, Sonnet, worktree isolation)
     deliverables:
     - check: pr_merged
       ref: null
@@ -675,7 +675,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: planning subagent running since ~21:10Z, its plan routes to Johan at a structured ask before implementation
+    next_action: implementation running since ~21:50Z against the approved plan at /Users/johan/.claude/plans/ccfence-f9-lease-regain-resume.md (Johan approved plan AND a new small ADR in the same PR, structured ask ~21:45Z); 668 carries the in-progress label
     last_meaningful_progress_at: '2026-08-09T21:10:00+00:00'
     observed: {}
     assessment: 'Sonnet/high, plan-first; touches
