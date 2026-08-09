@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 14
-updated_at: '2026-08-09T14:15:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F3 DELIVERY_RESULT received,
-  issue 681 routed deferred, PRs 679 and 680 in CI)'
+revision: 15
+updated_at: '2026-08-09T14:40:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F5 merged and swept, PR 680
+  mergeability recomputing after the base move)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -29,6 +29,19 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   each wave boundary, stop and ask if the ceiling nears (spend at wave-1 close:
   ~1.0M across the plan review, F0, F1, F2)'
 pending_actions:
+- id: act-009
+  type: merge
+  target: 'PR 679 squash-merge pinned to verified head
+    71a49978b9fca248637b780f44449b9067ea360c (all checks complete 0 failed,
+    MERGEABLE, zero reviews, DELIVERY_RESULT done with matching SHA, the
+    handover-write deviation reviewed and accepted)'
+  expected: 'PR merged; DONE: squash a567b4c9b87bcbd13cda00d9cbc1f2e9274bffd7,
+    state MERGED, remote branch deleted, worktree clean and removed, local
+    branches deleted; matrix watch running; PR 680 recomputing mergeability'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T14:35:00+00:00'
 - id: act-008
   type: merge
   target: 'PR 678 squash-merge pinned to verified head
@@ -348,20 +361,22 @@ units:
       CatchupThenPushSubscriptionModel, CatchupSubscriptionModel and its config
       in scope, reactor models unchanged, source-bearing tests over in-memory
       storages only
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F2]
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 2)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 679
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~14:35Z pinned to 71a49978b, squash
+        a567b4c9b87bcbd13cda00d9cbc1f2e9274bffd7, all checks complete 0
+        failed, zero review threads, DELIVERY_RESULT done with matching SHA,
+        14 new tests, three mutation-verified stamping implementations, the
+        handover-write deviation accepted on review'
     blocking_on: []
-    next_action: CAS-merge PR 679 pinned to 71a49978b9fca248637b780f44449b9067ea360c
-      when checks complete green; expect a changelog conflict against PR 678,
-      whichever merges second rebases keep-both; worktree held until the merge
+    next_action: none pending the main-matrix result on the squash
     last_meaningful_progress_at: '2026-08-09T13:25:00+00:00'
     observed:
       pr_679:
