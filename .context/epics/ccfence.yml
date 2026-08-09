@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 31
-updated_at: '2026-08-09T21:50:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F9 plan approved with an ADR
-  at the gate, implementation subagent running, planning worktree swept)'
+revision: 32
+updated_at: '2026-08-09T22:20:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F12 DELIVERY_RESULT
+  received, PR 688 in CI)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -611,9 +611,18 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: subagent running since ~20:45Z (685 merged, disjoint from PR 687's test-only diff)
-    last_meaningful_progress_at: '2026-08-09T20:45:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 688 pinned to fe3514a476983008136c43bfcd43e15f59da9405 when checks complete green (closes 684 and 686, the ADR sentence's design gate closed at the structured ask); worktree held until the merge
+    last_meaningful_progress_at: '2026-08-09T22:15:00+00:00'
+    observed: 
+      pr_688:
+        head: fe3514a476983008136c43bfcd43e15f59da9405
+        note: 'DELIVERY_RESULT done with matching SHA; getIfUnique fix with a
+          dedicated timer-poller test, dead parameter removed with a
+          compile-proof mutation, ADR 116 wiring-site enumeration touched up
+          within the sanctioned clause, repo-wide grep found no other
+          getIfAvailable sites with the same hazard'
+        via: monitor bciv33mhs + worker DELIVERY_RESULT
+        at: '2026-08-09T22:15:00+00:00'
     assessment: 'adopted by Johan (structured ask 2026-08-09) from F7''s
       trace-first finding; Sonnet/medium, tiny; pre-existing startup crash for
       a Saga app with two strategy beans; routing comment on the issue'
