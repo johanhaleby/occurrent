@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 27
-updated_at: '2026-08-09T19:55:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F10 merged and swept, issue
-  669 closed)'
+revision: 28
+updated_at: '2026-08-09T20:30:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F8 DELIVERY_RESULT received,
+  PR 687 in CI; measured spend ~4.4M of 4.5M, final-wave budget ask routed)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -625,9 +625,20 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: subagent running since ~18:05Z (wave 5)
-    last_meaningful_progress_at: '2026-08-09T18:05:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 687 pinned to 26efaf14d3f32561ee8aca59bf81cd7201e18406
+      when checks complete green (closes 665); worktree held until the merge
+    last_meaningful_progress_at: '2026-08-09T20:25:00+00:00'
+    observed:
+      pr_687:
+        head: 26efaf14d3f32561ee8aca59bf81cd7201e18406
+        note: 'DELIVERY_RESULT done with matching SHA; four scenario tests
+          green against real Mongo replica sets (expired-lease takeover,
+          graceful handover, hard-rule isolation mutation-proved against the
+          reverted F6 exclusion, saga-registrar starter path); test-only
+          diff, deterministic write-order races via holdable storage test
+          helpers; no fence defect found'
+        via: monitor bciv33mhs + worker DELIVERY_RESULT
+        at: '2026-08-09T20:25:00+00:00'
     assessment: 'Sonnet/high; closes 665 via Fixes; mutation-style evidence for
       the hard-rule test in DELIVERY_RESULT'
   F9:
