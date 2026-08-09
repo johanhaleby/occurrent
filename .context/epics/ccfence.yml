@@ -1,10 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 25
-updated_at: '2026-08-09T19:10:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F10 delivered as PR 685, 686
-  adopted into F12 with the removal decided, F11 redoing the stale
-  base-section addendum)'
+revision: 26
+updated_at: '2026-08-09T19:30:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F11 DONE with the
+  base-section addendum, release-day notes recorded)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -685,20 +684,19 @@ units:
       with the fencing section, checkpoint-storage implementer guidance, Redis
       Cluster limit and deploy-order requirement, review-clean (Copilot review
       requested, zero unresolved threads), merged only at the fence release day
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F7]
-    session: in-session subagent of orchestrator local_fab707d0 (docs repo, own worktree there)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, its docs worktree removed by itself)
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
-      ref: null
-      met: false
-      evidence: null
+      ref: 55
+      met: true
+      evidence: 'held PR 55 open review-clean at 4a83b76a6041d7eff793f8c6e67a61d5afcff32b, stacked on PR 54''s branch, DELIVERY_RESULT done twice (fencing section + news paragraph, then the base checkpoint-storage reference section updated on send-back so the docs do not self-contradict), Jekyll build verified, all prose gates evidenced, no Copilot in that repo so review-clean means zero unresolved threads (PR 54 precedent); merges AFTER PR 54 on release day'
     blocking_on: []
-    next_action: subagent running since ~18:30Z (docs repo, stacked on held
-      PR 54's branch, docs monitor b6m4a2tww armed)
+    next_action: none, the held PR merges at release day after PR 54
     last_meaningful_progress_at: '2026-08-09T18:30:00+00:00'
     observed: {}
     assessment: 'Sonnet/medium; U5 pattern, deliberately not pr_merged; docs-repo
