@@ -19,9 +19,11 @@ package org.occurrent.subscription.blocking.durable.catchup;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -30,6 +32,7 @@ import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConf
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -203,6 +206,23 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     @Override
     public SubscriptionModel getDelegatedSubscriptionModel() {
         return subscriptionModel;
+    }
+
+    /**
+     * The {@link CheckpointWriteCondition} to stamp a checkpoint write triggered by {@code cfg} with. A version from
+     * {@link UseCheckpointInStorage#checkpointWriteVersionSource()} becomes
+     * {@link CheckpointWriteCondition#notOlderThan(long)}, and an empty answer or no source at all becomes
+     * {@link CheckpointWriteCondition#any()}. Both {@link StreamCatchupSubscriptionModel} and the DCB catch-up model
+     * call this for every checkpoint write, whichever config subtype triggered it, always through the 3-arg
+     * {@code CheckpointStorage.save} rather than choosing between that and the 2-arg one.
+     */
+    protected CheckpointWriteCondition writeConditionFor(UseCheckpointInStorage cfg, String subscriptionId) {
+        CheckpointWriteVersionSource source = cfg.checkpointWriteVersionSource();
+        if (source == null) {
+            return CheckpointWriteCondition.any();
+        }
+        OptionalLong version = source.writeVersion(subscriptionId);
+        return version.isPresent() ? CheckpointWriteCondition.notOlderThan(version.getAsLong()) : CheckpointWriteCondition.any();
     }
 
     protected <T, C extends CheckpointStorageConfig> Optional<T> returnIfCheckpointStorageConfigIs(Class<C> cls, Function<C, @Nullable T> fn) {

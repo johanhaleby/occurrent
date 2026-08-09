@@ -25,6 +25,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -37,6 +38,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -93,6 +95,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     private final PushSubscriptionModel liveFeed;
     private final @Nullable CheckpointStorage catchupMarker;
     private final CatchupThenLiveOptions options;
+    private final @Nullable CheckpointWriteVersionSource writeVersionSource;
 
     // Set by stop(), cleared by start(...). Read by the replay so stopping the model interrupts a replay in flight, not
     // just the live feed the replay has not handed over to yet.
@@ -126,6 +129,29 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * @param options De-dup cache size and live-buffer cap for the catch-up-to-live handover.
      */
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker, CatchupThenLiveOptions options) {
+        this(reader, liveFeed, catchupMarker, options, null);
+    }
+
+    /**
+     * @param catchupMarker      Records that the one-time catch-up finished so a restart skips it, or {@code null} to
+     *                           catch up on every subscribe.
+     * @param writeVersionSource Asked for a version before the one-shot marker write and every checkpoint write this
+     *                           model makes. A version stamps the write {@code notOlderThan} it, an empty answer or
+     *                           no source at all stamps it {@code any()}.
+     */
+    public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker,
+                                            @Nullable CheckpointWriteVersionSource writeVersionSource) {
+        this(reader, liveFeed, catchupMarker, CatchupThenLiveOptions.defaults(), writeVersionSource);
+    }
+
+    /**
+     * @param options            De-dup cache size and live-buffer cap for the catch-up-to-live handover.
+     * @param writeVersionSource Asked for a version before the one-shot marker write and every checkpoint write this
+     *                           model makes. A version stamps the write {@code notOlderThan} it, an empty answer or
+     *                           no source at all stamps it {@code any()}.
+     */
+    public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker,
+                                            CatchupThenLiveOptions options, @Nullable CheckpointWriteVersionSource writeVersionSource) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
         if (!reader.writesPosition()) {
             throw new IllegalArgumentException(HandoverMessages.POSITIONED_READER_REQUIRED);
@@ -133,6 +159,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         this.liveFeed = Objects.requireNonNull(liveFeed, "liveFeed cannot be null");
         this.catchupMarker = catchupMarker;
         this.options = Objects.requireNonNull(options, "options cannot be null");
+        this.writeVersionSource = writeVersionSource;
     }
 
     @Override
@@ -271,8 +298,18 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     private void markCaughtUp(String subscriptionId) {
         if (catchupMarker != null) {
             // The stored position marks that the catch-up replay completed at this head, not a live resume watermark.
-            catchupMarker.save(subscriptionId, GlobalCheckpoint.of(reader.currentPosition()));
+            catchupMarker.save(subscriptionId, GlobalCheckpoint.of(reader.currentPosition()), writeConditionFor(subscriptionId));
         }
+    }
+
+    // A version from writeVersionSource stamps notOlderThan. An empty answer or no source stamps any(). Always the
+    // 3-arg save, never a choice between two.
+    private CheckpointWriteCondition writeConditionFor(String subscriptionId) {
+        if (writeVersionSource == null) {
+            return CheckpointWriteCondition.any();
+        }
+        OptionalLong version = writeVersionSource.writeVersion(subscriptionId);
+        return version.isPresent() ? CheckpointWriteCondition.notOlderThan(version.getAsLong()) : CheckpointWriteCondition.any();
     }
 
     /**

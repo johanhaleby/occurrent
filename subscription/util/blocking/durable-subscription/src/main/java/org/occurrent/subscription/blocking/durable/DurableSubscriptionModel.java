@@ -21,12 +21,14 @@ import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
 
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.StringJoiner;
 import java.util.function.Consumer;
 
@@ -50,6 +52,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final CheckpointStorage storage;
     private final DurableSubscriptionModelConfig config;
+    private final @Nullable CheckpointWriteVersionSource writeVersionSource;
 
     /**
      * Create a subscription that combines a {@link CheckpointAwareSubscriptionModel} with a {@link CheckpointStorage} to automatically
@@ -71,6 +74,39 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     public DurableSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CheckpointStorage storage,
                                     DurableSubscriptionModelConfig config) {
+        this(subscriptionModel, storage, config, null);
+    }
+
+    /**
+     * Create a subscription that combines a {@link CheckpointAwareSubscriptionModel} with a {@link CheckpointStorage} to automatically
+     * store the subscription after each successful call to <code>action</code> (The "consumer" in {@link #subscribe(String, Consumer)}),
+     * stamping every checkpoint write with a version from {@code writeVersionSource}.
+     *
+     * @param subscriptionModel  The subscription that will read events from the event store
+     * @param storage            The {@link CheckpointStorage} that'll be used to persist the stream position
+     * @param writeVersionSource Asked for a version before each checkpoint write. A version stamps the write
+     *                           {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan} it, an empty answer
+     *                           or no source at all stamps it {@link CheckpointWriteCondition#any() any()}.
+     */
+    public DurableSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CheckpointStorage storage,
+                                    CheckpointWriteVersionSource writeVersionSource) {
+        this(subscriptionModel, storage, new DurableSubscriptionModelConfig(everyEvent()), writeVersionSource);
+    }
+
+    /**
+     * Create a subscription that combines a {@link CheckpointAwareSubscriptionModel} with a {@link CheckpointStorage} to automatically
+     * store the subscription when the predicate defined in {@link DurableSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled,
+     * stamping every checkpoint write with a version from {@code writeVersionSource}.
+     *
+     * @param subscriptionModel  The subscription that will read events from the event store
+     * @param storage            The {@link CheckpointStorage} that'll be used to persist the stream position
+     * @param config             The {@link DurableSubscriptionModelConfig} to use
+     * @param writeVersionSource Asked for a version before each checkpoint write. A version stamps the write
+     *                           {@link CheckpointWriteCondition#notOlderThan(long) notOlderThan} it, an empty answer
+     *                           or no source at all stamps it {@link CheckpointWriteCondition#any() any()}.
+     */
+    public DurableSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CheckpointStorage storage,
+                                    DurableSubscriptionModelConfig config, @Nullable CheckpointWriteVersionSource writeVersionSource) {
         requireNonNull(subscriptionModel, "subscription cannot be null");
         requireNonNull(storage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         requireNonNull(config, DurableSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
@@ -78,6 +114,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         this.storage = storage;
         this.subscriptionModel = subscriptionModel;
         this.config = config;
+        this.writeVersionSource = writeVersionSource;
     }
 
     @Override
@@ -94,10 +131,20 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     action.accept(cloudEvent);
                     if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
                         Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                        storage.save(subscriptionId, checkpoint);
+                        storage.save(subscriptionId, checkpoint, writeConditionFor(subscriptionId));
                     }
                 }
         );
+    }
+
+    // A version from writeVersionSource stamps notOlderThan. An empty answer or no source stamps any(). Always the
+    // 3-arg save, never a choice between two.
+    private CheckpointWriteCondition writeConditionFor(String subscriptionId) {
+        if (writeVersionSource == null) {
+            return CheckpointWriteCondition.any();
+        }
+        OptionalLong version = writeVersionSource.writeVersion(subscriptionId);
+        return version.isPresent() ? CheckpointWriteCondition.notOlderThan(version.getAsLong()) : CheckpointWriteCondition.any();
     }
 
     @Nullable
@@ -111,7 +158,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 if (checkpoint == null) {
                     Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
                     if (globalCheckpoint != null) {
-                        checkpoint = storage.save(subscriptionId, globalCheckpoint);
+                        checkpoint = storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
                     }
                 }
 
