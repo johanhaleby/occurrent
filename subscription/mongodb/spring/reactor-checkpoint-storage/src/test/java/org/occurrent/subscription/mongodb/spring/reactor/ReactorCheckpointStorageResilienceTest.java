@@ -236,11 +236,13 @@ class ReactorCheckpointStorageResilienceTest {
             ReactorCheckpointStorage seedStorage = new ReactorCheckpointStorage(realMongoOperations, CHECKPOINT_COLLECTION);
             seedStorage.save(subscriptionId, new StringBasedCheckpoint("fenced"), CheckpointWriteCondition.notOlderThan(9)).block();
 
-            AtomicInteger attempts = new AtomicInteger();
+            // persistConditionalCheckpointDocument calls getCollection() once per findOneAndUpdate attempt, so
+            // counting subscriptions to getCollection() is counting write attempts.
+            AtomicInteger getCollectionSubscriptions = new AtomicInteger();
             ReactiveMongoOperations countingOperations = mock(ReactiveMongoOperations.class);
             when(countingOperations.getCollection(eq(CHECKPOINT_COLLECTION)))
                     .thenAnswer(invocation -> Mono.defer(() -> {
-                        attempts.incrementAndGet();
+                        getCollectionSubscriptions.incrementAndGet();
                         return realMongoOperations.getCollection(CHECKPOINT_COLLECTION);
                     }));
             ReactorCheckpointStorage storage = new ReactorCheckpointStorage(countingOperations, CHECKPOINT_COLLECTION);
@@ -250,10 +252,10 @@ class ReactorCheckpointStorageResilienceTest {
 
             // Then
             assertThat(thrown).isInstanceOf(CheckpointWriteConditionNotFulfilledException.class);
-            assertThat(attempts.get())
-                    .as("a refusal is not a transient failure, so it must reach the caller after exactly one "
-                            + "findOneAndUpdate, not after retryWhen mistook a deterministic refusal for one and "
-                            + "spent its budget repeating it")
+            assertThat(getCollectionSubscriptions.get())
+                    .as("a refusal is not a transient failure, so it must reach the caller after exactly one write "
+                            + "attempt, not after retryWhen mistook a deterministic refusal for one and spent its "
+                            + "budget repeating it")
                     .isEqualTo(1);
         }
     }
