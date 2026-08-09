@@ -30,7 +30,10 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -157,7 +160,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
         Outcome outcome = inConsumerLock(competingConsumer, () -> {
             Status status = competingConsumers.get(competingConsumer);
-            if (status == Status.LOCK_ACQUIRED) {
+            if (status != null && status.isLockAcquired()) {
                 // A release keeps the consumer in the map, so it stays a candidate, but the lease below is about to go
                 // and it does not have it any more. Leaving the status alone would make hasLock answer yes for a
                 // subscriber that no longer receives events, and would make the next refresh find its commit rejected
@@ -181,12 +184,14 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private Outcome acquireLease(MongoCollection<BsonDocument> collection, CompetingConsumer competingConsumer, @Nullable Status oldStatus) {
         String subscriptionId = competingConsumer.subscriptionId;
         String subscriberId = competingConsumer.subscriberId;
-        boolean acquired = MongoListenerLockService.acquireOrRefreshFor(collection, retryStrategy, leaseTime, subscriptionId, subscriberId).isPresent();
+        Optional<ListenerLock> lock = MongoListenerLockService.acquireOrRefreshFor(collection, retryStrategy, leaseTime, subscriptionId, subscriberId);
+        boolean acquired = lock.isPresent();
+        boolean oldStatusWasAcquired = oldStatus != null && oldStatus.isLockAcquired();
         logDebug("acquireLease: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
-        competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
-        if (oldStatus != Status.LOCK_ACQUIRED && acquired) {
+        competingConsumers.put(competingConsumer, acquired ? Status.lockAcquired(lock.get().version()) : Status.LOCK_NOT_ACQUIRED);
+        if (!oldStatusWasAcquired && acquired) {
             return new Outcome(true, Notification.GRANTED);
-        } else if (oldStatus == Status.LOCK_ACQUIRED && !acquired) {
+        } else if (oldStatusWasAcquired && !acquired) {
             return new Outcome(false, Notification.PROHIBITED);
         }
         return new Outcome(acquired, Notification.NONE);
@@ -204,7 +209,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             return Outcome.NOTHING;
         }
         MongoListenerLockService.remove(collection, retryStrategy, subscriptionId, subscriberId);
-        if (status == Status.LOCK_ACQUIRED) {
+        if (status.isLockAcquired()) {
             logDebug("Lock status was {}, will invoke onConsumeProhibited for listeners (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
             return new Outcome(false, Notification.PROHIBITED);
         }
@@ -216,9 +221,34 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
         Status status = competingConsumers.get(new CompetingConsumer(subscriptionId, subscriberId));
-        boolean hasLock = status == Status.LOCK_ACQUIRED;
+        boolean hasLock = status != null && status.isLockAcquired();
         logDebug("hasLock={} (subscriberId={}, subscriptionId={})", hasLock, subscriberId, subscriptionId);
         return hasLock;
+    }
+
+    /**
+     * The fencing token for the given subscription. Answers with a value only when exactly one consumer is
+     * registered for {@code subscriptionId} in this instance and that consumer holds the lock, whatever its
+     * status otherwise is (ADR 116). {@code LOCK_RELEASED} counts as not holding, since its token belongs to
+     * the lease it just gave up.
+     * <p>
+     * Reads the in-memory map only, so this neither blocks nor reaches MongoDB, which a call on the per-event
+     * write path requires.
+     */
+    public OptionalLong fencingToken(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
+        Status onlyStatus = null;
+        int registered = 0;
+        for (Map.Entry<CompetingConsumer, Status> entry : competingConsumers.entrySet()) {
+            if (entry.getKey().subscriptionId.equals(subscriptionId)) {
+                registered++;
+                if (registered > 1) {
+                    return OptionalLong.empty();
+                }
+                onlyStatus = entry.getValue();
+            }
+        }
+        return registered == 1 && onlyStatus.isLockAcquired() ? onlyStatus.fencingToken() : OptionalLong.empty();
     }
 
     public void addListener(CompetingConsumerListener listenerConsumer) {
@@ -255,7 +285,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             logDebug("Consumer is no longer registered, skipping it this round (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
             return Outcome.NOTHING;
         }
-        return switch (status) {
+        return switch (status.kind()) {
             case LOCK_ACQUIRED -> {
                 boolean stillHasLock = MongoListenerLockService.commit(collection, retryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId);
                 if (stillHasLock) {
@@ -326,8 +356,28 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         GRANTED, PROHIBITED, NONE
     }
 
-    private enum Status {
-        LOCK_ACQUIRED, LOCK_NOT_ACQUIRED, LOCK_RELEASED
+    /**
+     * A consumer's status, with its fencing token for the acquired case. The token stays exactly as it was
+     * while this status remains {@code LOCK_ACQUIRED}, since a refresh (see {@code refreshOne}) commits
+     * without touching the map entry, and a lost commit replaces the whole status with {@code LOCK_NOT_ACQUIRED}
+     * rather than updating the token in place. That staleness is deliberate. The stale token is what a fence
+     * built on {@link #fencingToken(String)} refuses.
+     */
+    private record Status(Kind kind, OptionalLong fencingToken) {
+        private static final Status LOCK_NOT_ACQUIRED = new Status(Kind.LOCK_NOT_ACQUIRED, OptionalLong.empty());
+        private static final Status LOCK_RELEASED = new Status(Kind.LOCK_RELEASED, OptionalLong.empty());
+
+        private static Status lockAcquired(long fencingToken) {
+            return new Status(Kind.LOCK_ACQUIRED, OptionalLong.of(fencingToken));
+        }
+
+        private boolean isLockAcquired() {
+            return kind == Kind.LOCK_ACQUIRED;
+        }
+
+        private enum Kind {
+            LOCK_ACQUIRED, LOCK_NOT_ACQUIRED, LOCK_RELEASED
+        }
     }
 
     private static void logDebug(String message, @Nullable Object... params) {

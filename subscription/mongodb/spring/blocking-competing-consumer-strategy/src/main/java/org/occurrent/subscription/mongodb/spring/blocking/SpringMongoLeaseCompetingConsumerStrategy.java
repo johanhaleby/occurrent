@@ -14,6 +14,7 @@ import org.springframework.data.mongodb.core.MongoOperations;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.StringJoiner;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -97,6 +98,14 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
     @Override
     public boolean hasLock(String subscriptionId, String subscriberId) {
         return support.hasLock(subscriptionId, subscriberId);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public OptionalLong fencingToken(String subscriptionId) {
+        return support.fencingToken(subscriptionId);
     }
 
     /**
