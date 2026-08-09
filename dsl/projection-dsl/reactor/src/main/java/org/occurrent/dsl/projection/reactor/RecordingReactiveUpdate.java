@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedPositionStore;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.function.BiFunction;
 
@@ -37,6 +38,12 @@ import java.util.function.BiFunction;
  * completes. {@link #replayAbandoned()} discards it instead, since the next replay recomputes everything anyway.
  * {@code lock} guards the mutable state because the reactor catch-up handover can hop between worker threads even
  * though its calls never run concurrently.
+ * <p>
+ * {@link AppliedPositionStore} is a blocking-shaped interface, so both store advances below hop to
+ * {@link Schedulers#boundedElastic()} first. The delegate this class wraps is caller-supplied
+ * ({@code Projections.recordingAppliedPosition(..)} accepts any {@code BiFunction}), and nothing guarantees it
+ * completes off a non-blocking thread the way the framework's own coalescing update does. A delegate that finishes
+ * on a Reactor Netty event loop would otherwise make a blocking store's advance throw.
  */
 @NullMarked
 final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAwareMaterializedView {
@@ -63,10 +70,10 @@ final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, M
                     "Either the event store has position writing turned off, or the event arrived on a path that carries no metadata " +
                     "(a live domain-event feed the application did not pass metadata into, or the metadata-less query/replay path).").formatted(projectionId)));
         }
-        return delegate.apply(metadata, event).doOnSuccess(ignored -> recordApplied(position));
+        return delegate.apply(metadata, event).then(Mono.defer(() -> recordApplied(position)));
     }
 
-    private void recordApplied(long position) {
+    private Mono<Void> recordApplied(long position) {
         boolean stillReplaying;
         synchronized (lock) {
             stillReplaying = replaying;
@@ -74,9 +81,10 @@ final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, M
                 highestPositionSeenDuringReplay = position;
             }
         }
-        if (!stillReplaying) {
-            store.advance(projectionId, position);
+        if (stillReplaying) {
+            return Mono.empty();
         }
+        return Mono.<Void>fromRunnable(() -> store.advance(projectionId, position)).subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
@@ -93,15 +101,16 @@ final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, M
     @Override
     public Mono<Void> replayCompleted() {
         Mono<Void> delegateCompletion = delegate instanceof ReactiveReplayAwareMaterializedView replayAware ? replayAware.replayCompleted() : Mono.empty();
-        return delegateCompletion.then(Mono.<Void>fromRunnable(() -> {
+        return delegateCompletion.then(Mono.defer(() -> {
             long highest;
             synchronized (lock) {
                 highest = highestPositionSeenDuringReplay;
                 replaying = false;
             }
-            if (highest > 0) {
-                store.advance(projectionId, highest);
+            if (highest == 0) {
+                return Mono.empty();
             }
+            return Mono.<Void>fromRunnable(() -> store.advance(projectionId, highest)).subscribeOn(Schedulers.boundedElastic());
         }));
     }
 

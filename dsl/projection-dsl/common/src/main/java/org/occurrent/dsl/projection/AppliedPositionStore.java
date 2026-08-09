@@ -81,8 +81,10 @@ public interface AppliedPositionStore {
 
     /**
      * Blocks until {@code projectionId} has applied a position at or beyond {@code position}, or {@code timeout}
-     * elapses. Returns {@code true} once caught up, {@code false} on timeout, and never throws for a timeout, the
-     * same shape {@code Subscription.waitUntilStarted(Duration)} uses for a blocking wait elsewhere in this library.
+     * elapses. Returns {@code true} once caught up, {@code false} on timeout or if the waiting thread is
+     * interrupted, and never throws for either, the same shape {@code Subscription.waitUntilStarted(Duration)} uses
+     * for a blocking wait elsewhere in this library. An interrupt restores the thread's interrupt flag before
+     * returning, so a caller that needs to tell the two apart can check {@link Thread#isInterrupted()} itself.
      * <p>
      * This is a plain read-and-sleep loop, since the position lives in a store this method cannot subscribe to for a
      * push notification. An implementation backed by a store that can push a change is free to override this method.

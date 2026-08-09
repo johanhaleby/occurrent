@@ -22,14 +22,18 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedPositionStore;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -121,6 +125,39 @@ class RecordingReactiveUpdateTest {
         recording.apply(metadataWithPosition(10), "event-2").block();
 
         assertThat(storage.appliedPosition("orders")).hasValue(50L);
+    }
+
+    @Test
+    void advance_is_hopped_off_a_thread_reactor_forbids_blocking_on_even_when_the_delegate_completes_on_one() {
+        AtomicReference<String> threadThatCalledAdvance = new AtomicReference<>();
+        AppliedPositionStore inMemory = AppliedPositionStore.inMemory();
+        AppliedPositionStore storage = new AppliedPositionStore() {
+            @Override
+            public OptionalLong appliedPosition(String projectionId) {
+                return inMemory.appliedPosition(projectionId);
+            }
+
+            @Override
+            public void advance(String projectionId, long position) {
+                threadThatCalledAdvance.set(Thread.currentThread().getName());
+                // A genuinely async wait (an already-available value never actually parks the thread, so it would
+                // pass the check by accident). Reactor throws IllegalStateException here if called from a thread it
+                // has marked non-blocking, the same shape a real blocking AppliedPositionStore's own .block() call
+                // on a reactive Mongo read would fail with.
+                Mono.just(1).delayElement(Duration.ofMillis(1)).block();
+                inMemory.advance(projectionId, position);
+            }
+        };
+        // Completes on Schedulers.parallel(), which Reactor marks non-blocking, standing in for a delegate that
+        // finishes on a Reactor Netty event loop instead of the boundedElastic thread the framework's own
+        // coalescing update hops to.
+        BiFunction<EventMetadata, String, Mono<Void>> delegate = (metadata, event) -> Mono.<Void>empty().publishOn(Schedulers.parallel());
+        BiFunction<EventMetadata, String, Mono<Void>> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
+
+        assertThatCode(() -> recording.apply(metadataWithPosition(42), "event-1").block()).doesNotThrowAnyException();
+
+        assertThat(threadThatCalledAdvance.get()).startsWith("boundedElastic");
+        assertThat(storage.appliedPosition("orders")).hasValue(42L);
     }
 
     private static EventMetadata metadataWithPosition(long position) {
