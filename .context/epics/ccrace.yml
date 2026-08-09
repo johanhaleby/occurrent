@@ -1,9 +1,8 @@
 schema_version: 1
 epic: ccrace
-revision: 20
+revision: 21
 updated_at: '2026-08-09T09:10:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (second ADR 116 amendment PR
-  671 merge journaled after Johan confirmed the discussion settled)'
+updated_by: 'orchestrator session local_f74d8561 (U7 delivered PR 672, ci-wait)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -467,14 +466,16 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 672
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'hold LIFTED: Johan launched the chip after his ADR discussion
-      concluded in PR 670, whose diff verifiably does not touch the survival
-      section this unit implements; session running, expected observable is its
-      PR'
+    next_action: 'ci-wait on PR 672; on green with threads resolved, verify the
+      DELIVERY_RESULT and body claims, CAS-merge pinned, then epic closeout: this
+      is the last unit with an unmet PR-advanceable deliverable, so the
+      completing sweep stops monitor bu11n182l and the loop, runs the tracker
+      scan from cursor 2026-08-08T23:10Z, final combined verification, and the
+      hot-restart handoff'
     last_meaningful_progress_at: '2026-08-09T08:50:00+00:00'
     observed: {}
     assessment: 'adopted per Johan (structured ask): 0.33.0 becomes the hardening
