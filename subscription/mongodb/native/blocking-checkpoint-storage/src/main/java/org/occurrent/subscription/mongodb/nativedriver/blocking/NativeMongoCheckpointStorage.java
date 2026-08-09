@@ -18,10 +18,9 @@ package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
-import com.mongodb.client.model.ReplaceOptions;
+import com.mongodb.client.model.FindOneAndUpdateOptions;
+import com.mongodb.client.model.ReturnDocument;
 import jakarta.annotation.PreDestroy;
-import org.bson.BsonTimestamp;
-import org.bson.BsonValue;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -29,14 +28,13 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
-import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
 import java.time.Duration;
 import java.util.OptionalLong;
 import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.eq;
+import static java.util.Collections.singletonList;
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 import static org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer.ID;
@@ -118,32 +116,22 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
     @Override
     @NullMarked
     public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-        // This storage does not evaluate a condition yet, so only the unconditional one is honoured.
-        if (!(condition instanceof CheckpointWriteCondition.Any)) {
-            throw new UnsupportedOperationException(
-                    NativeMongoCheckpointStorage.class.getSimpleName() + " cannot evaluate " + condition + " yet, only "
-                            + CheckpointWriteCondition.any() + " is supported.");
-        }
-        Supplier<Checkpoint> save = () -> {
-            if (checkpoint instanceof MongoResumeTokenCheckpoint) {
-                persistResumeTokenCheckpoint(subscriptionId, ((MongoResumeTokenCheckpoint) checkpoint).resumeToken);
-            } else if (checkpoint instanceof MongoOperationTimeCheckpoint) {
-                persistOperationTimeCheckpoint(subscriptionId, ((MongoOperationTimeCheckpoint) checkpoint).operationTime);
-            } else {
-                String checkpointString = checkpoint.asString();
-                Document document = generateGenericCheckpointDocument(subscriptionId, checkpointString);
-                persistDocumentCheckpoint(subscriptionId, document);
-            }
-            return checkpoint;
-        };
-
-        return requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
+        Document newCheckpointDocument = generateCheckpointDocument(subscriptionId, checkpoint);
+        Supplier<Document> save = () -> persistConditionalCheckpointDocument(subscriptionId, newCheckpointDocument, condition);
+        // Interpreting the outcome happens outside the retried supplier, so a refusal is thrown once and never
+        // retried, see ADR 116, "A refused write throws, and it must never be retried".
+        Document afterDocument = requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
+        assertCheckpointWriteSucceeded(subscriptionId, checkpoint, condition, afterDocument);
+        return checkpoint;
     }
 
     @Override
     public OptionalLong writeVersion(String subscriptionId) {
-        // No version is recorded yet, since this storage does not evaluate a condition. See save(..).
-        return OptionalLong.empty();
+        Supplier<OptionalLong> readVersion = () -> {
+            Document document = checkpointCollection.find(eq(ID, subscriptionId), Document.class).first();
+            return extractWriteVersion(document);
+        };
+        return requireNonNull(executeWithRetry(readVersion, __ -> !shutdown, retryStrategy).get());
     }
 
     @Override
@@ -158,19 +146,16 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
         return requireNonNull(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
     }
 
-    private void persistResumeTokenCheckpoint(String subscriptionId, BsonValue resumeToken) {
-        persistDocumentCheckpoint(subscriptionId, generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
-    }
-
-    private void persistOperationTimeCheckpoint(String subscriptionId, BsonTimestamp operationTime) {
-        persistDocumentCheckpoint(subscriptionId, generateOperationTimeStreamPositionDocument(subscriptionId, operationTime));
-    }
-
-    void persistDocumentCheckpoint(String subscriptionId, Document document) {
-        // replaceOne swaps the entire document, so a legacy "subscriptionPosition" field (from before the
-        // SubscriptionPosition -> Checkpoint rename) is dropped automatically once a new "checkpoint" document
-        // is written. No explicit removal of the legacy field is needed for this adapter.
-        checkpointCollection.replaceOne(eq(ID, subscriptionId), document, new ReplaceOptions().upsert(true));
+    /**
+     * The single {@code findOneAndUpdate} round trip a conditional checkpoint write is, see
+     * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildConditionalCheckpointWrite}. Package
+     * private so a test can inject a transient failure into it and prove the retry in {@link #save} survives one.
+     */
+    Document persistConditionalCheckpointDocument(String subscriptionId, Document newCheckpointDocument, CheckpointWriteCondition condition) {
+        return requireNonNull(checkpointCollection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(buildConditionalCheckpointWrite(newCheckpointDocument, condition)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
     }
 
     private static RetryStrategy defaultRetryStrategy() {

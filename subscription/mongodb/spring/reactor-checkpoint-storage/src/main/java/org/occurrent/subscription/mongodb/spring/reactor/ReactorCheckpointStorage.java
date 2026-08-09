@@ -16,28 +16,25 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
-import com.mongodb.client.result.UpdateResult;
-import org.bson.BsonDocument;
-import org.bson.BsonTimestamp;
+import com.mongodb.client.model.FindOneAndUpdateOptions;
+import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.ReturnDocument;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
-import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
-import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
+import java.util.OptionalLong;
 
+import static java.util.Collections.singletonList;
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer.ID;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.generateOperationTimeStreamPositionDocument;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.generateResumeTokenStreamPositionDocument;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
@@ -80,30 +77,26 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
-    public Mono<Checkpoint> save(String subscriptionId, Checkpoint changeStreamPosition, CheckpointWriteCondition condition) {
-        // This storage does not evaluate a condition yet, so only the unconditional one is honoured.
-        if (!(condition instanceof CheckpointWriteCondition.Any)) {
-            return Mono.error(new UnsupportedOperationException(
-                    ReactorCheckpointStorage.class.getSimpleName() + " cannot evaluate " + condition + " yet, only "
-                            + CheckpointWriteCondition.any() + " is supported."));
-        }
-        Mono<?> result;
-        if (changeStreamPosition instanceof MongoResumeTokenCheckpoint mongoResumeTokenCheckpoint) {
-            result = persistResumeTokenStreamPosition(subscriptionId, mongoResumeTokenCheckpoint.resumeToken);
-        } else if (changeStreamPosition instanceof MongoOperationTimeCheckpoint mongoOperationTimeCheckpoint) {
-            result = persistOperationTimeStreamPosition(subscriptionId, mongoOperationTimeCheckpoint.operationTime);
-        } else {
-            String checkpointString = changeStreamPosition.asString();
-            Document document = MongoCommons.generateGenericCheckpointDocument(subscriptionId, checkpointString);
-            result = persistDocumentStreamPosition(subscriptionId, document);
-        }
-        return result.thenReturn(changeStreamPosition);
+    public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+        Document newCheckpointDocument = MongoCommons.generateCheckpointDocument(subscriptionId, checkpoint);
+        return persistConditionalCheckpointDocument(subscriptionId, newCheckpointDocument, condition)
+                .retryWhen(retry)
+                // Interpreting the outcome happens outside retryWhen, so a refusal is signalled once and never
+                // retried, see ADR 116, "A refused write throws, and it must never be retried".
+                .map(afterDocument -> {
+                    MongoCommons.assertCheckpointWriteSucceeded(subscriptionId, checkpoint, condition, afterDocument);
+                    return checkpoint;
+                });
     }
 
     @Override
     public Mono<Long> writeVersion(String subscriptionId) {
-        // No version is recorded yet, since this storage does not evaluate a condition. See save(..).
-        return Mono.empty();
+        return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, checkpointCollection)
+                .retryWhen(retry)
+                .flatMap(document -> {
+                    OptionalLong version = MongoCommons.extractWriteVersion(document);
+                    return version.isPresent() ? Mono.just(version.getAsLong()) : Mono.empty();
+                });
     }
 
     @Override
@@ -111,25 +104,18 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
         return mongo.remove(query(where(ID).is(subscriptionId)), checkpointCollection).retryWhen(retry).then();
     }
 
-    private Mono<Document> persistResumeTokenStreamPosition(String subscriptionId, BsonDocument resumeToken) {
-        Document document = generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken);
-        return persistDocumentStreamPosition(subscriptionId, document).thenReturn(document);
-    }
-
-    private Mono<Document> persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp timestamp) {
-        Document document = generateOperationTimeStreamPositionDocument(subscriptionId, timestamp);
-        return persistDocumentStreamPosition(subscriptionId, document).thenReturn(document);
-    }
-
-    private Mono<UpdateResult> persistDocumentStreamPosition(String subscriptionId, Document document) {
-        // "document" has no $-prefixed operators, so Spring Data applies it as a full-document replacement,
-        // not a field-level merge. That drops the legacy "subscriptionPosition" field (from before the
-        // SubscriptionPosition -> Checkpoint rename) on the first save after upgrade, same as the native
-        // adapter's replaceOne.
-        return mongo.upsert(query(where(ID).is(subscriptionId)),
-                Update.fromDocument(document),
-                checkpointCollection)
-                .retryWhen(retry);
+    /**
+     * The single {@code findOneAndUpdate} round trip a conditional checkpoint write is, reached through the
+     * underlying reactive streams collection because {@link ReactiveMongoOperations} has no pipeline-update
+     * equivalent that returns the document a write produced. See
+     * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildConditionalCheckpointWrite}.
+     */
+    private Mono<Document> persistConditionalCheckpointDocument(String subscriptionId, Document newCheckpointDocument, CheckpointWriteCondition condition) {
+        return mongo.getCollection(checkpointCollection)
+                .flatMap(collection -> Mono.from(collection.findOneAndUpdate(
+                        Filters.eq(ID, subscriptionId),
+                        singletonList(MongoCommons.buildConditionalCheckpointWrite(newCheckpointDocument, condition)),
+                        new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true))));
     }
 
     @Override

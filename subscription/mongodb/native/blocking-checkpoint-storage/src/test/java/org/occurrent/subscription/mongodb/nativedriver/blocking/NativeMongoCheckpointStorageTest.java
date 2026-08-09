@@ -38,6 +38,7 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
@@ -270,11 +271,11 @@ public class NativeMongoCheckpointStorageTest {
 
             @NullMarked
             @Override
-            void persistDocumentCheckpoint(String subscriptionId, Document document) {
+            Document persistConditionalCheckpointDocument(String subscriptionId, Document newCheckpointDocument, CheckpointWriteCondition condition) {
                 if (counter.getAndIncrement() == 0) {
                     throw new IllegalStateException("expected");
                 }
-                super.persistDocumentCheckpoint(subscriptionId, document);
+                return super.persistConditionalCheckpointDocument(subscriptionId, newCheckpointDocument, condition);
             }
         };
 
