@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 7
-updated_at: 2026-08-09T20:30:00Z
+revision: 8
+updated_at: 2026-08-09T20:40:00Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -83,16 +83,16 @@ units:
   U3:
     issue: null
     goal: "Reactor projection seam: bridge forwards replay capability (M1), rename reactor ReplayAwareMaterializedView (B3, name at plan gate), retry-precondition javadoc at blocking Projections:99 (A4), flush drain-and-swap (P5), findAllById javadoc (B5)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_2fa00e27-c4a3-4ef2-8a16-b6ecae2bc381
     deliverables:
-      - {check: pr_merged, ref: 697, met: false, evidence: null}
-      - {check: manual_approval, ref: "Johan approves the new marker name at the plan gate (plan decision 2026-08-09)", met: false, evidence: null}
+      - {check: pr_merged, ref: 697, met: true, evidence: "squash 8d9b08f98, merged head equals verified 1dbb19ecf, CAS pin honoured, 2026-08-09 ~20:37Z; two Copilot threads fixed in head and resolved"}
+      - {check: manual_approval, ref: "Johan approves the new marker name at the plan gate (plan decision 2026-08-09)", met: true, evidence: "AskUserQuestion asked and answered in U3 session transcript ('What should the reactor replay marker...'), delivered name ReactiveReplayAwareMaterializedView"}
     blocking_on: []
-    next_action: "await checks + DELIVERY_RESULT; confirm the rename name was approved at the plan gate in the worker session; sequence merge against U2's pending conflict on RecordingReactiveUpdate"
+    next_action: "await DELIVERY_RESULT from the watching worker, then sweep; U2 must now rebase onto main for the rename"
     last_meaningful_progress_at: 2026-08-09T20:05:00Z
     observed:
       pr_697: {head: 38d3bf1cb17e4f71b57acc0c7b32de9625e44c7e, rollup: running, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T20:08:00Z}
@@ -108,9 +108,10 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "worker mid-implementation"
-    last_meaningful_progress_at: 2026-08-09T20:03:36Z
-    observed: {}
+    next_action: "worker fixing one Copilot thread on PR 698; merge when head goes green with threads resolved"
+    last_meaningful_progress_at: 2026-08-09T20:38:00Z
+    observed:
+      pr_698: {head: aa8823195794ba15feb374c8ea5f801ee5cbd126, rollup: green_one_thread_open, threads_open: 1, via: "gh + monitor bzfz2akrm", at: 2026-08-09T20:39:00Z}
     assessment: "TCK-only file boundary; ADR 107/77 permit added suites in a minor"
   U5:
     issue: null
