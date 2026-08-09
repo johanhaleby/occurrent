@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccrace
-revision: 26
+revision: 28
 updated_at: '2026-08-09T09:10:00+00:00'
-updated_by: 'orchestrator session local_f74d8561 (668 and 669 routed into the
-  fencing epic registration per Johan)'
+updated_by: 'orchestrator session local_f74d8561 (672 merged pinned, monitor
+  stopped, tracker scan clean, closeout stage 1)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,6 +16,19 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   decisions rest with Johan at each unit session''s plan gate; milestone
   deliberately skipped (ccpause precedent)'
 pending_actions:
+- id: act-016
+  type: merge
+  target: 'PR 672 squash-merge pinned to verified head
+    f3f059ca31f7228156390035fc1abb69271ace18 (all checks green, the one Copilot
+    thread resolved with a fix, MERGEABLE)'
+  expected: 'PR merged, merged head equals pin, issue 665 remains OPEN (Refs not
+    Fixes); DONE: squash f9249f5c31c0b30800d72b3f51954404611b4e2e, headAtMerge
+    equals pin (verified), 665 OPEN (verified), remote branch deleted by the
+    merge'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T12:10:00+00:00'
 - id: act-015
   type: merge
   target: 'PR 673 squash-merge pinned to verified head
@@ -504,7 +517,7 @@ units:
       and expiresAt instead of deleting so the version increments forever, per ADR
       116 section "The lock document survives a release", shipped IN 0.33.0 so the
       fence can land in 0.34.0
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
