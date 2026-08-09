@@ -1,9 +1,8 @@
 schema_version: 1
 epic: ccfence
-revision: 5
-updated_at: '2026-08-09T10:35:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F1 DELIVERY_RESULT received,
-  PR 675 awaiting CI)'
+revision: 6
+updated_at: '2026-08-09T10:55:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F1 merged and swept)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -25,6 +24,21 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   coordinates with ccrace''s held docs PR 54 (the 0.33.0 news post needs fence
   content now); milestone deliberately skipped (ccpause/ccrace precedent)'
 pending_actions:
+- id: act-005
+  type: merge
+  target: 'PR 675 squash-merge pinned to verified head
+    dc7af83190cd9cddc8c6b8fecd2241c310efd50d (all checks complete 0 failed,
+    MERGEABLE, zero reviews so zero threads, DELIVERY_RESULT done with
+    matching SHA)'
+  expected: 'PR merged, 665 stays open; DONE: squash
+    717648b44438accc344817cababbbcd25e48cd92, state MERGED, 665 OPEN
+    (verified), remote branch deleted by the merge, worker worktree clean and
+    removed, local branches deleted; main matrix watch on the squash running
+    in background'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T10:50:00+00:00'
 - id: act-004
   type: merge
   target: 'PR 674 squash-merge pinned to verified head
@@ -134,22 +148,22 @@ units:
       ListenerLock.version with the exactly-one-registered-consumer-holds rule,
       named deterministic tests for LOCK_RELEASED-not-holding, two-consumer
       stand-down, and refresh-stable token
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 675
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~10:50Z pinned to dc7af8319, squash
+        717648b44438accc344817cababbbcd25e48cd92, all checks complete 0
+        failed, zero review threads, DELIVERY_RESULT done with matching SHA,
+        4 mutation-verified named tests; main matrix on the squash watched in
+        background'
     blocking_on: []
-    next_action: CAS-merge PR 675 pinned to dc7af83190cd9cddc8c6b8fecd2241c310efd50d
-      when checks complete green and review threads allow; worker finished
-      (DELIVERY_RESULT done, 4 mutation-verified named tests, forbidden-path
-      diff empty), its worktree held until the merge in case a fix round is
-      needed
+    next_action: none pending the main-matrix result on the squash
     last_meaningful_progress_at: '2026-08-09T10:30:00+00:00'
     observed:
       pr_675:
