@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 32
-updated_at: '2026-08-09T22:20:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F12 DELIVERY_RESULT
-  received, PR 688 in CI)'
+revision: 33
+updated_at: '2026-08-09T22:45:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F12 merged and swept, 684
+  and 686 closed, F9 implementation is the last open unit)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -30,6 +30,20 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   ~1.0M across the plan review, F0, F1, F2); RAISED to 5.5M by structured ask
   2026-08-09 ~20:35Z at measured ~4.4M with F12 and F9 remaining'
 pending_actions:
+- id: act-016
+  type: merge
+  target: 'PR 688 squash-merge pinned to verified head
+    fe3514a476983008136c43bfcd43e15f59da9405 (all checks complete 0 failed,
+    MERGEABLE, zero reviews, DELIVERY_RESULT done with matching SHA, ADR
+    sentence design gate closed at the structured ask)'
+  expected: 'PR merged, issues 684 and 686 auto-closed via Fixes; DONE: squash
+    e021fbec5391fb7322a148d62c424318ef1984cd, state MERGED, 684 CLOSED and 686
+    CLOSED (verified), worktree clean and removed, branches deleted; matrix
+    watch with count guard running'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T22:40:00+00:00'
 - id: act-015
   type: merge
   target: 'PR 687 squash-merge pinned to verified head
@@ -592,26 +606,26 @@ units:
       wiring site, with a one-line ADR 116 starter-section touch-up so the
       site count stays honest (design gate for that sentence already closed
       by the structured ask)
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F8]
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 688
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~22:40Z pinned to fe3514a47, squash e021fbec5391fb7322a148d62c424318ef1984cd, all checks complete 0 failed, zero review threads'
     - check: issue_closed
       ref: 684
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes, verified'
     - check: issue_closed
       ref: 686
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes, verified'
     blocking_on: []
-    next_action: CAS-merge PR 688 pinned to fe3514a476983008136c43bfcd43e15f59da9405 when checks complete green (closes 684 and 686, the ADR sentence's design gate closed at the structured ask); worktree held until the merge
+    next_action: none pending the main-matrix result on the squash
     last_meaningful_progress_at: '2026-08-09T22:15:00+00:00'
     observed: 
       pr_688:
