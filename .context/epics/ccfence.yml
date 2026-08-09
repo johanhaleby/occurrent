@@ -1,8 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 6
-updated_at: '2026-08-09T10:55:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F1 merged and swept)'
+revision: 7
+updated_at: '2026-08-09T11:15:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F2 DELIVERY_RESULT received,
+  PR 676 in CI, fleet budget ask routed to Johan)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -133,9 +134,29 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: in-session subagent running (chip task_eab370e0 dismissed, Johan on mobile); on its DELIVERY_RESULT, verify the PR and babysit CI via monitor bciv33mhs
-    last_meaningful_progress_at: '2026-08-09T09:55:00+00:00'
-    observed: {}
+    next_action: CAS-merge PR 676 pinned to 22bcff225c37f61940f6a1498bd5b120db1482fe
+      when checks complete green; worker finished (DELIVERY_RESULT done,
+      mutation-verified conformance, mock sites confirmed unreached at
+      runtime), worktree held until the merge
+    last_meaningful_progress_at: '2026-08-09T11:10:00+00:00'
+    observed:
+      pr_676:
+        head: 22bcff225c37f61940f6a1498bd5b120db1482fe
+        note: 'opened ~11:05Z from johan/665-checkpoint-write-condition, checks
+          running; DELIVERY_RESULT done with matching SHA; two local
+          Testcontainers Ryuk flakes were infra, re-verified green with Ryuk
+          disabled'
+        via: monitor bciv33mhs + gh pr view + worker DELIVERY_RESULT
+        at: '2026-08-09T11:10:00+00:00'
+      design_facts:
+        note: 'two F2 facts later units need: the exception stores
+          storedVersion as OptionalLong because notOlderThan accepts
+          nothing-stored and ifAbsent must represent absence honestly, and
+          ifAbsent checks whether a CHECKPOINT is stored, not whether a
+          version is, a deliberate distinction the F10 pin-race unit must
+          carry in its brief'
+        via: F2 DELIVERY_RESULT
+        at: '2026-08-09T11:10:00+00:00'
     assessment: 'foundation unit and the deliberate break; Sonnet/high, not
       plan-first (ADR 116 is the plan); brief carries the 20-implementer
       inventory, NoopCheckpointStorage/WorkingCheckpointStorage anti-skip
