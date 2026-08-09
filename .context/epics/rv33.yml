@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 2
-updated_at: 2026-08-09T19:50:00Z
+revision: 3
+updated_at: 2026-08-09T19:50:30Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -13,7 +13,7 @@ pending_actions:
     status: VERIFIED
     attempts: 1
     safe_to_repeat: false
-    issued_at: 2026-08-09T19:48:00Z
+    issued_at: 2026-08-09T19:40:00Z
   - id: act-002
     type: dispatch-chip
     target: "U2 chip task_1ea2a8d6"
@@ -21,7 +21,7 @@ pending_actions:
     status: VERIFIED
     attempts: 1
     safe_to_repeat: false
-    issued_at: 2026-08-09T19:48:00Z
+    issued_at: 2026-08-09T19:40:00Z
   - id: act-003
     type: dispatch-chip
     target: "U3 chip task_21a5a40d"
@@ -29,7 +29,7 @@ pending_actions:
     status: VERIFIED
     attempts: 1
     safe_to_repeat: false
-    issued_at: 2026-08-09T19:48:00Z
+    issued_at: 2026-08-09T19:40:00Z
   - id: act-004
     type: dispatch-chip
     target: "U4 chip task_12efcfce"
@@ -37,7 +37,7 @@ pending_actions:
     status: VERIFIED
     attempts: 1
     safe_to_repeat: false
-    issued_at: 2026-08-09T19:48:00Z
+    issued_at: 2026-08-09T19:40:00Z
   - id: act-005
     type: dispatch-chip
     target: "U5 chip task_ee122e4d"
@@ -45,7 +45,7 @@ pending_actions:
     status: VERIFIED
     attempts: 1
     safe_to_repeat: false
-    issued_at: 2026-08-09T19:48:00Z
+    issued_at: 2026-08-09T19:40:00Z
 units:
   U1:
     issue: null
@@ -54,15 +54,16 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_4a88a66c (worker session id unknown until first message)"
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/checkpoint-fencing, met: false, evidence: null}
+      - {check: pr_merged, ref: 694, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/checkpoint-fencing, met: true, evidence: "commit ef786ac7b 2026-08-09T19:42:38Z, stale-claim grep 0 hits on branch content via gh api"}
       - {check: manual_approval, ref: "Johan wording confirm before merge (plan decision 2026-08-09)", met: false, evidence: null}
     blocking_on: []
-    next_action: "chip spawned, awaiting worker session"
-    last_meaningful_progress_at: 2026-08-09T19:27:04Z
-    observed: {}
+    next_action: "await worker DELIVERY_RESULT, then Johan's wording confirm on PR 694, then CAS merge"
+    last_meaningful_progress_at: 2026-08-09T19:44:09Z
+    observed:
+      pr_694: {head: 2fab14739270205278e47b68793ff880d54b39e5, rollup: no_checks_markdown_only, threads_open: 0, via: "gh pr view + monitor bzfz2akrm", at: 2026-08-09T19:45:00Z}
     assessment: "highest-ranked finding (A2); pure prose, no java files"
   U2:
     issue: null
