@@ -23,7 +23,6 @@ import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.ReturnDocument;
-import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
 import org.bson.BsonDocument;
 import org.bson.Document;
@@ -42,6 +41,7 @@ import static com.mongodb.client.model.Filters.*;
 import static com.mongodb.client.model.Projections.include;
 import static com.mongodb.client.model.Updates.combine;
 import static com.mongodb.client.model.Updates.set;
+import static com.mongodb.client.model.Updates.unset;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 
@@ -148,10 +148,22 @@ class MongoListenerLockService {
                 "else", "$expiresAt")));
     }
 
-    static DeleteResult remove(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, String subscriptionId, String subscriberId) {
+    /**
+     * Releases the lease by unsetting {@code subscriberId} and {@code expiresAt} rather than deleting the lock
+     * document, so {@code version} keeps climbing instead of reseeding at 0 on the next acquisition (see ADR 116).
+     * {@code isAllowedFor} already treats a missing {@code subscriberId} as free and {@code lockIsExpiredExpr}
+     * already treats a missing {@code expiresAt} as expired, so a released lock is taken exactly as a deleted one
+     * was. The filter stays {@code {_id, subscriberId}}, so only the current holder can release it. The write keeps
+     * the collection's default write concern rather than majority, since this runs on the {@code @PreDestroy}
+     * shutdown path and majority acknowledgement has no timeout, so a replica set that lost majority would hold the
+     * process open until it is killed.
+     */
+    static UpdateResult remove(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, String subscriptionId, String subscriberId) {
         return retryStrategy.execute(() -> {
             logDebug("Before removing lock (subscriptionId={})", subscriptionId);
-            return collection.deleteOne(and(eq("_id", subscriptionId), eq("subscriberId", subscriberId)));
+            return collection.updateOne(
+                    and(eq("_id", subscriptionId), eq("subscriberId", subscriberId)),
+                    combine(unset("subscriberId"), unset("expiresAt")));
         });
     }
 
