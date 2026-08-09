@@ -1,9 +1,9 @@
 schema_version: 1
 epic: ccfence
-revision: 15
-updated_at: '2026-08-09T14:40:00+00:00'
-updated_by: 'orchestrator session local_fab707d0 (F5 merged and swept, PR 680
-  mergeability recomputing after the base move)'
+revision: 16
+updated_at: '2026-08-09T15:05:00+00:00'
+updated_by: 'orchestrator session local_fab707d0 (F3 merged, wave 2 complete,
+  F6 dispatched; wave-boundary token tally ~2.5M of 4.5M)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -29,6 +29,22 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   each wave boundary, stop and ask if the ceiling nears (spend at wave-1 close:
   ~1.0M across the plan review, F0, F1, F2)'
 pending_actions:
+- id: act-010
+  type: merge
+  target: 'PR 680 squash-merge pinned to verified head
+    8987538a551f9dba21a3f147c4ffa1fece11dbe7 (all checks complete 0 failed,
+    MERGEABLE after recompute, zero reviews, DELIVERY_RESULT done with probe
+    artifact)'
+  expected: 'PR merged, 665 stays open; DONE: squash
+    5b039fbf93df670ba0d994bfc7f596f3c20bb2e6, state MERGED, 665 OPEN
+    (verified), worktree clean and removed, branches deleted; NOTE: the F4 and
+    F5 squash matrix runs were auto-cancelled by later main pushes, the
+    combined wave-2 verification is the matrix on 5b039fbf9, watched with a
+    min-count guard after the first watcher raced check-run registration'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-09T15:00:00+00:00'
 - id: act-009
   type: merge
   target: 'PR 679 squash-merge pinned to verified head
@@ -298,16 +314,16 @@ units:
       probed against a live replica set before building (probe script and raw
       output in DELIVERY_RESULT), reactor retryWhen excludes the refusal,
       fixtures flip evaluatesWriteConditions to true
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [F2]
-    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 2)
+    session: in-session subagent of orchestrator local_fab707d0 (finished, worktree swept)
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: null
+      ref: 680
+      met: true
+      evidence: 'CAS-MERGED 2026-08-09 ~15:00Z pinned to 8987538a5, squash 5b039fbf93df670ba0d994bfc7f596f3c20bb2e6, all checks complete 0 failed, zero review threads, probe artifact verified in DELIVERY_RESULT'
     blocking_on: []
     next_action: subagent running since ~11:40Z
     last_meaningful_progress_at: '2026-08-09T11:40:00+00:00'
@@ -410,19 +426,19 @@ units:
       via existing predicates, subscription stays known and pausable (no
       history-lost forget copy), error-level log before rethrow, both Mongo
       storages own save-retries exclude it too
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [F2]
-    session: null
+    session: in-session subagent of orchestrator local_fab707d0 (worktree isolation, wave 3)
     deliverables:
     - check: pr_merged
       ref: null
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch in wave 3 (fragile area, undivided review attention)
-    last_meaningful_progress_at: null
+    next_action: subagent running since ~15:00Z (wave 3)
+    last_meaningful_progress_at: '2026-08-09T15:00:00+00:00'
     observed: {}
     assessment: 'Sonnet/high; the two correctness requirements are ADR-stated:
       no re-run of user side effects, and no acceptance of a stale position
