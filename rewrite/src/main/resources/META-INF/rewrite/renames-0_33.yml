@@ -25,7 +25,9 @@ description: >-
   stacks. DelegatingSubscriptionModel becomes SubscriptionModelWrapper, since it names a structural fact about
   the instance rather than a per-subscription capability. Its two methods move with it, getDelegatedSubscriptionModel
   to getWrappedSubscriptionModel and getDelegatedSubscriptionModelRecursively to
-  getWrappedSubscriptionModelRecursively, so the interface and its methods share one vocabulary.
+  getWrappedSubscriptionModelRecursively, so the interface and its methods share one vocabulary. The published TCK
+  base class IntrospectableSubscriptionModelConformance moves with the interface it is named after, to
+  IntrospectableSubscriptionsConformance.
 recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel
@@ -53,3 +55,7 @@ recipeList:
   - org.openrewrite.java.ChangeMethodName:
       methodPattern: org.occurrent.subscription.api.blocking.SubscriptionModelWrapper getDelegatedSubscriptionModelRecursively(..)
       newMethodName: getWrappedSubscriptionModelRecursively
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance
+      newFullyQualifiedTypeName: org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance
+      ignoreDefinition: true

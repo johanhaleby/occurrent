@@ -16,6 +16,7 @@
 package org.occurrent.rewrite;
 
 import org.junit.jupiter.api.Test;
+import org.openrewrite.java.JavaParser;
 import org.openrewrite.test.RecipeSpec;
 import org.openrewrite.test.RewriteTest;
 
@@ -268,6 +269,89 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
                                 model.getWrappedSubscriptionModel();
                                 model.getWrappedSubscriptionModelRecursively();
                             }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void aRealUpgradeRenamesTheTypeAndItsMethodsTogether() {
+        // DelegatingSubscriptionModel is supplied as a compiled dependency, the way a user's classpath actually
+        // looks after adding the 0.33.0 jar, rather than as a rewritten source. This is the real upgrade case,
+        // one user source using the old type and both old method names, migrated in a single recipe run.
+        rewriteRun(
+                spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(
+                        """
+                        package org.occurrent.subscription.api.blocking;
+
+                        public interface DelegatingSubscriptionModel {
+                            Object getDelegatedSubscriptionModel();
+
+                            default Object getDelegatedSubscriptionModelRecursively() {
+                                return getDelegatedSubscriptionModel();
+                            }
+                        }
+                        """
+                )),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+
+                        class Foo {
+                            void bar(DelegatingSubscriptionModel model) {
+                                model.getDelegatedSubscriptionModel();
+                                model.getDelegatedSubscriptionModelRecursively();
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
+
+                        class Foo {
+                            void bar(SubscriptionModelWrapper model) {
+                                model.getWrappedSubscriptionModel();
+                                model.getWrappedSubscriptionModelRecursively();
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void theIntrospectableSubscriptionModelConformanceTckBaseClassIsRenamed() {
+        // Published in occurrent-tck-subscription-blocking since 0.32.0, so an external implementer's own
+        // conformance test extends it. Supplied as a compiled dependency for the same reason as the combined
+        // type-and-method case above.
+        rewriteRun(
+                spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(
+                        """
+                        package org.occurrent.tck.subscription.blocking;
+
+                        public abstract class IntrospectableSubscriptionModelConformance {
+                        }
+                        """
+                )),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance;
+
+                        class FooConformanceTest extends IntrospectableSubscriptionModelConformance {
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance;
+
+                        class FooConformanceTest extends IntrospectableSubscriptionsConformance {
                         }
                         """
                 )

@@ -119,13 +119,22 @@ so the type and its methods share one vocabulary:
 | `getDelegatedSubscriptionModel()` | `getWrappedSubscriptionModel()` |
 | `getDelegatedSubscriptionModelRecursively()` | `getWrappedSubscriptionModelRecursively()` |
 
+One published TCK base class moves with the interface it is named after:
+
+| Old | New |
+|---|---|
+| `org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance` | `IntrospectableSubscriptionsConformance` |
+
+Only relevant if you extend it yourself to check your own subscription model against the introspection contract.
+
 ### Run the recipe
 
-`UpgradeToOccurrent_0_33` renames all five interfaces and both methods for you, in Java and Kotlin alike, the same
-way [section 5 of the 0.32.0 guide](upgrading-to-0.32.0.md#5-the-reactor-subscriptionmodel-is-now-fluxsubscriptionmodel)
+`UpgradeToOccurrent_0_33` renames all five interfaces, both methods and the TCK base class for you, in Java and
+Kotlin alike, the same way
+[section 5 of the 0.32.0 guide](upgrading-to-0.32.0.md#5-the-reactor-subscriptionmodel-is-now-fluxsubscriptionmodel)
 renamed the reactor `SubscriptionModel`. Run it once, as part of the upgrade.
 
 ### By hand
 
-Change the import and the type name at every use listed in the first table, and the two method names on
-`SubscriptionModelWrapper` listed in the second.
+Change the import and the type name at every use listed in the tables above, and the two method names on
+`SubscriptionModelWrapper`.
