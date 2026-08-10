@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 24
-updated_at: 2026-08-10T06:43:41Z
+revision: 25
+updated_at: 2026-08-10T06:48:15Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -213,16 +213,16 @@ units:
   U11:
     issue: null
     goal: "Carry the U10 renames into the occurrent.org docs, on a held branch plus the one held PR that adds a reference, and record the merge order in docs issue 57"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "in-session subagent, worktree-isolated, Haiku (dispatched 2026-08-10 ~01:10Z)"
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/capability-interface-renames, met: false, evidence: null}
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/replay-batching, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/capability-interface-renames, met: true, evidence: "PR 58 head a1114db00, docs.md only after the news-post revert, old-name greps zero, verified by content read"}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/replay-batching, met: true, evidence: "rename commit 672d4c3 plus clean news-post revert 9a21849, old-name greps zero, news post identical to main"}
     blocking_on: []
-    next_action: "worker correcting a history-rewriting edit flagged in review, then verify and hold"
+    next_action: "sweep complete; issue 57 comment posted by the orchestrator after the worker's write was blocked by the flaky permission classifier"
     last_meaningful_progress_at: 2026-08-10T06:23:59Z
     observed:
       docs_pr_58: {branch: docs/capability-interface-renames, created: 2026-08-10T06:23:59Z, defect: "renamed a type inside the 2021 0.7.0 news post, revert requested", via: "gh pr view", at: 2026-08-10T06:33:25Z}
