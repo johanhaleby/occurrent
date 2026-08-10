@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 30
-updated_at: 2026-08-10T08:04:01Z
+revision: 31
+updated_at: 2026-08-10T08:08:45Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -242,3 +242,18 @@ units:
     last_meaningful_progress_at: 2026-08-10T06:33:25Z
     observed: {}
     assessment: "vehicle: session chip at the U10-merge sweep (Johan is at the computer), Sonnet/high, no plan gate (design settled in-session) but the ADR holds for wording confirm. All extends additions are source and binary compatible on shipped types. ADR carries a dedicated paragraph on the EventStoreCapability asymmetry (Johan raised it 2026-08-10): the enum-vs-interface split is deliberate and unremovable (a root must be a type, a config value must be a value, TemporalUnit vs ChronoUnit is the JDK precedent), and the ADR pre-names the hypothetical future subscription-side declared-capability enum as SubscriptionModelFeature so that name collision is resolved before it exists. Do not rename the mixins to *Capability, the extends wiring is the consistency."
+  U13:
+    issue: null
+    goal: "Document every subscription model capability on occurrent.org, what each does, which models implement it, how the of() probe works, and where ordering genuinely matters (Johan 2026-08-10)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/subscription-model-capabilities, met: false, evidence: null}
+    blocking_on: []
+    next_action: "chip task_085aafc1 spawned 2026-08-10T08:08:45Z, awaiting Johan's click"
+    last_meaningful_progress_at: 2026-08-10T08:08:45Z
+    observed: {}
+    assessment: "docs-repo only, held for release like every docs PR. Branched from PR 58's branch rather than main because the existing capability prose sits on the lines 58 renames. Documents the post-U12 end state (SubscriptionModelCapability root, of() narrowed) while U12 runs in parallel, so it needs a re-check if U12's design shifts at its ADR gate. Merge order: immediately after PR 58."
