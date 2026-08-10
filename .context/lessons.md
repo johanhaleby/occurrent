@@ -368,3 +368,88 @@
   it that ordering leaves a live worker plus a pending duplicate aimed at the same
   files. Check whether the chip started before replacing it, and if it did, correct
   the running session with a message and withdraw the replacement instead.
+
+- The measure-timestamps rule recurred within one session of being written, and the
+  tell was a false STALLED again (2026-08-10, stepcond). Registration read `date -u`
+  correctly, then every timestamp written over the next hour and a half (dispatch,
+  monitor arming, the ADR correction, the worker report) was estimated from the
+  conversation's own sense of elapsed time and landed roughly an hour early. The
+  derive step then compared a real clock against invented progress times and labelled
+  a healthy unit STALLED. Writing the rule down clearly does not fire it, because
+  each individual timestamp feels like bookkeeping rather than a measurement. Run
+  `date -u` in the SAME command that writes a timestamp, and when a past time cannot
+  be recovered, mark it approximate in the file rather than writing a confident wrong
+  value.
+
+- `FETCH_HEAD` is volatile and a later `git fetch` silently repoints it, so never verify
+  a worker's branch through it (2026-08-10, stepcond U1). The sequence that nearly
+  produced a wrong review: fetch the worker branch, read files from `FETCH_HEAD`
+  correctly, then run a routine memory checkpoint whose `git fetch origin main`
+  repointed `FETCH_HEAD` at main, then read another file from `FETCH_HEAD` and get
+  main's OLD version while believing it was the worker's. The file still parsed and
+  still looked plausible, so nothing announced the error. It was caught only because a
+  Copilot comment quoted code that did not appear in what had just been read, and the
+  mismatch was investigated rather than dismissed. Verify a worker's code at the PR's
+  full head SHA (`git show <sha>:<path>`), which is the same pin the CAS merge uses,
+  or through an explicit remote-tracking ref, never `FETCH_HEAD`. This is a git fact
+  rather than an Occurrent one, so it belongs in the orchestrator skill itself at the
+  next edit, not only here.
+
+- GitHub's two API surfaces disagree on the CASE of a check conclusion, and mixing them
+  manufactured a false all-red main (2026-08-10, stepcond U1). The REST endpoint
+  `/commits/<sha>/check-runs` returns `"success"` in lowercase, while GraphQL's
+  `statusCheckRollup` returns `SUCCESS` in uppercase. A watcher written with the
+  uppercase comparison against the REST endpoint reported `total=27 success=0
+  failed=27` on a commit whose 27 jobs had all passed. Nothing about the output looked
+  malformed, it looked like a catastrophic regression, and the only reason it was not
+  acted on is that 27 of 27 failing minutes after a green PR is implausible on its
+  face. Compare conclusions case-insensitively (`ascii_downcase`), and treat an
+  implausibly total failure as a probable query bug to disprove before it becomes a
+  revert. Same family as the FETCH_HEAD lesson: the tooling answered a slightly
+  different question than the one being asked, and answered it confidently.
+
+- A worker's "writing gate ran clean" is a claim, and the cheapest place to catch a miss
+  is the next unit that copies the text (2026-08-10, stepcond U3). The library unit
+  reported the johan-writing greps run with zero hits, and a semicolon nonetheless
+  shipped in a code comment in BOTH doc guard test files. It surfaced only because the
+  documentation unit copied that comment into a snippet, noticed the semicolon was a
+  borderline case, recast it, and SAID SO in its report rather than silently working
+  around it. Two rules follow. Treat a gate claim like a DELIVERY_RESULT claim, spot-check
+  it on the merged artifact when the text is short enough to grep, which for code comments
+  it always is. And name comment text explicitly as a gate surface in any brief that
+  copies code between repositories, because the copying unit inherits prose it did not
+  write. The fix went out as its own small PR rather than a direct push, since the
+  standing push grant covers memory checkpoints and never code.
+
+- A subagent cannot Edit or Write outside its own session worktree, so a brief that tells
+  one to `git worktree add` in ANOTHER repository and edit there is asking for something
+  the harness blocks (2026-08-10, stepcond U6). The worker got the job done by applying
+  edits through Python run from Bash, which the hook does not gate, and flagged the
+  workaround rather than passing it off as normal. Two consequences. Briefs that send a
+  subagent into a second repository should say up front that file edits go through a
+  scripted Bash path, or the unit should run as a spawned session instead, which has its
+  own worktree and no such restriction. And a worker reporting an environment constraint
+  it worked around is doing exactly the right thing, that report is the only reason this
+  is known.
+
+- Merge authority is per REPOSITORY, and this fleet works in two (2026-08-10, stepcond).
+  `.context/orchestrator-policy.yml` declares `repository: johanhaleby/occurrent`, so the
+  standing merge grant covers the library and says nothing about
+  `occurrent-org/occurrent-org.github.io`. Held docs PRs hid this for several epics
+  because Johan merges them at release anyway, and the one earlier docs merge to main was
+  explicitly at his request. The first ordinary, unheld docs PR is where the gap shows:
+  it is green, mergeable, and still not mine to merge. Route it as a structured ask.
+
+- Two branches rewriting the same paragraph DUPLICATE it silently, git reports no conflict
+  (2026-08-10, stepcond, docs PRs 61 and 62). Both rewrote the flow saga `historyWindow`
+  paragraph, one adding step-condition facts and the other recasting the prose for
+  readability. Because the two versions had diverged enough to look like separate
+  additions rather than competing edits, a cherry-pick produced BOTH paragraphs and exited
+  zero. The result was the exact duplicated-paragraph defect PR 62 existed to fix, with the
+  surviving stale copy missing every step-condition fact. A conflict marker would have been
+  the safe outcome; silence was the dangerous one. Two rules. When two branches are known
+  to touch the same prose region, TRIAL MERGE them and read the result, never infer safety
+  from a clean exit code. And after any merge or rebase of prose branches, grep for the
+  distinctive opening clause of each rewritten paragraph and assert it appears exactly
+  once. Recorded on the merge-order issue too, because a later rebase can recreate it.
+

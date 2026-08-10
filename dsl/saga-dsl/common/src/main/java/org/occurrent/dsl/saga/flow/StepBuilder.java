@@ -31,9 +31,14 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Configures one step of a {@link FlowSaga}: either a choice (one or more {@code on(...)} branches, first match wins) or a
- * single {@code join(...)}, optionally with a {@code timeout(...)}. A step cannot be both a choice and a join, and can
- * have at most one timeout. Violating either throws {@link IllegalStateException}.
+ * Configures one step of a {@link FlowSaga}, one or more {@code on(...)} branches, evaluated in declaration order with the
+ * first satisfied one winning, or the deprecated {@code join(...)} sugar instead of {@code on(...)}, never both, plus at
+ * most one {@code timeout(...)}. Violating either throws {@link IllegalStateException}.
+ * <p>
+ * A branch is either a classic type match, {@code on(Class, ...)}, firing on a matching arriving event, or a window
+ * condition, {@code on(StepCondition, ...)}, firing once the events received since the step was entered satisfy a
+ * {@link StepCondition} tree. The two mix freely in the same step's branch list. A mixed step is a single ordered list, not
+ * two separate mechanisms layered on top of each other.
  *
  * @param <E> the domain event type
  * @param <C> the command type
@@ -41,7 +46,7 @@ import static java.util.Objects.requireNonNull;
 public final class StepBuilder<E, C> {
     private final String stepName;
     private final List<Branch<E, C>> branches = new ArrayList<>();
-    private @Nullable JoinBody<E, C> join;
+    private boolean joinDeclared = false;
     private @Nullable TimeoutSpec<E, C> timeout;
 
     StepBuilder(String stepName) {
@@ -83,14 +88,49 @@ public final class StepBuilder<E, C> {
         requireNonNull(type, "type cannot be null");
         requireNonNull(then, "then cannot be null");
         requireNonNull(commands, "commands cannot be null");
-        if (join != null) {
-            throw new IllegalStateException("step '" + stepName + "' is a join step and cannot also have on(...) branches");
-        }
-        branches.add(new Branch<>(type, (BiPredicate<E, ReceivedEvents<E>>) onlyIf, (BiFunction<EventMetadata, E, List<C>>) commands, then));
+        requireNoJoin();
+        ArrivingEvent<E> trigger = new ArrivingEvent<>(type, (BiPredicate<E, ReceivedEvents<E>>) onlyIf);
+        BranchReaction<E, C> reaction = (metadata, triggering, received) -> commands.apply(metadata, (T) triggering);
+        branches.add(new Branch<>(trigger, reaction, then));
         return this;
     }
 
-    /** Makes this a join step: wait until all {@code expecting} are met (counted since the step was entered), then run {@code whenFulfilled} and follow {@code then}. */
+    /**
+     * Adds a branch that follows {@code then} once the events received since the step was entered satisfy
+     * {@code condition}. Issues no commands. {@code condition} takes {@code StepCondition<? extends E>}, not the
+     * invariant {@code StepCondition<E>}, so a tree built by combining leaves of different concrete event types (its
+     * inferred type is their least upper bound) is accepted without a cast, see {@link StepCondition}'s javadoc.
+     */
+    public StepBuilder<E, C> on(StepCondition<? extends E> condition, Continuation then) {
+        return on(condition, then, received -> List.of());
+    }
+
+    /**
+     * As {@link #on(StepCondition, Continuation)}, plus the commands to issue once {@code condition} is satisfied.
+     * {@code whenFulfilled} reads {@link ReceivedEvents}, not the triggering event alone. The tipping event, whichever
+     * leaf it matched, is always {@code received.asList().getLast()}.
+     */
+    @SuppressWarnings("unchecked") // Safe. A StepCondition only ever reads an event through eventType.isInstance, never writes one.
+    public StepBuilder<E, C> on(StepCondition<? extends E> condition, Continuation then, Function<ReceivedEvents<E>, List<C>> whenFulfilled) {
+        requireNonNull(condition, "condition cannot be null");
+        requireNonNull(then, "then cannot be null");
+        requireNonNull(whenFulfilled, "whenFulfilled cannot be null");
+        requireNoJoin();
+        WindowCondition<E> trigger = new WindowCondition<>((StepCondition<E>) condition);
+        BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
+        branches.add(new Branch<>(trigger, reaction, then));
+        return this;
+    }
+
+    /**
+     * Makes this a join step that waits until all {@code expecting} are met (counted since the step was entered), then
+     * runs {@code whenFulfilled} and follows {@code then}.
+     *
+     * @deprecated in favor of {@code on(allOf(...))}, which this now lowers to internally. An expectation of {@code n}
+     * events of a type becomes {@code event(type, n)}, and the whole list becomes one {@code allOf(...)} tree. Behavior is
+     * unchanged, only the authoring surface is. See {@link StepCondition}.
+     */
+    @Deprecated
     public StepBuilder<E, C> join(List<Expectation<E>> expecting, Continuation then, Function<ReceivedEvents<E>, List<C>> whenFulfilled) {
         requireNonNull(expecting, "expecting cannot be null");
         requireNonNull(then, "then cannot be null");
@@ -98,19 +138,42 @@ public final class StepBuilder<E, C> {
         if (!branches.isEmpty()) {
             throw new IllegalStateException("step '" + stepName + "' has on(...) branches and cannot also be a join step");
         }
-        if (join != null) {
+        if (joinDeclared) {
             throw new IllegalStateException("join(...) has already been set for step '" + stepName + "' and can only be set once");
         }
         if (expecting.isEmpty()) {
             throw new IllegalArgumentException("a join step needs at least one expectation");
         }
-        join = new JoinBody<>(List.copyOf(expecting), whenFulfilled, then);
+        joinDeclared = true;
+        WindowCondition<E> trigger = new WindowCondition<>(StepCondition.allOf(toConditions(expecting)));
+        BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
+        branches.add(new Branch<>(trigger, reaction, then));
         return this;
     }
 
-    /** As {@link #join(List, Continuation, Function)}, but issues no commands when fulfilled. */
+    /**
+     * As {@link #join(List, Continuation, Function)}, but issues no commands when fulfilled.
+     *
+     * @deprecated in favor of {@code on(allOf(...))}, see {@link #join(List, Continuation, Function)}.
+     */
+    @Deprecated
     public StepBuilder<E, C> join(List<Expectation<E>> expecting, Continuation then) {
         return join(expecting, then, events -> List.of());
+    }
+
+    private static <E> List<StepCondition<E>> toConditions(List<Expectation<E>> expecting) {
+        List<StepCondition<E>> conditions = new ArrayList<>();
+        for (Expectation<E> expectation : expecting) {
+            StepCondition<E> leaf = StepCondition.event(expectation.eventType(), expectation.count());
+            conditions.add(leaf);
+        }
+        return conditions;
+    }
+
+    private void requireNoJoin() {
+        if (joinDeclared) {
+            throw new IllegalStateException("step '" + stepName + "' is a join step and cannot also have on(...) branches");
+        }
     }
 
     /** Sets a relative timeout: if it fires before the step completes, run {@code onExpiry} and follow {@code then}. */
@@ -149,10 +212,9 @@ public final class StepBuilder<E, C> {
     }
 
     CompiledStep<E, C> compile() {
-        if (branches.isEmpty() && join == null) {
+        if (branches.isEmpty()) {
             throw new IllegalStateException("step '" + stepName + "' needs at least one on(...) branch or a join(...)");
         }
-        StepBody<E, C> body = join != null ? join : new ChoiceBody<>(List.copyOf(branches));
-        return new CompiledStep<>(stepName, body, timeout);
+        return new CompiledStep<>(stepName, List.copyOf(branches), timeout);
     }
 }

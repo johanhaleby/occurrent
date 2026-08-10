@@ -624,6 +624,133 @@ class SagaFlowExtensionsTest {
         }
     }
 
+    // --- Scenario G: the Kotlin StepCondition sugar (event, allOf/anyOf, KClass and reified arity, on(condition)) -----
+
+    sealed interface CondEvent {
+        val id: String
+    }
+    data class CondStarted(override val id: String) : CondEvent
+    data class CondEventA(override val id: String, val value: Int) : CondEvent
+    data class CondEventB(override val id: String) : CondEvent
+    data class CondEventC(override val id: String) : CondEvent
+
+    sealed interface CondCommand
+    data class CondRecorded(val note: String) : CondCommand
+
+    @Nested
+    inner class StepConditionSugar {
+
+        private fun conditionSaga(build: StepScope<CondEvent, CondCommand>.() -> StepCondition<CondEvent>): Saga<CondEvent, FlowState<CondEvent>, CondCommand> =
+            saga {
+                startsOn<CondStarted>()
+                correlateAll { it.id }
+                step("wait") {
+                    on(build(), then = end)
+                }
+            }
+
+        @Test
+        fun `event with a count and a predicate only counts a matching event`() {
+            val saga = conditionSaga { event<CondEventA>(count = 1) { a -> a.value > 10 } }
+            val started = start(saga, CondStarted("s1"))
+
+            val afterLow = saga.evolve(started.state, SagaInput.event(CondEventA("s1", 1)))
+            val afterHigh = saga.evolve(afterLow, SagaInput.event(CondEventA("s1", 20)))
+
+            assertAll(
+                { assertThat(saga.isTerminal(afterLow)).describedAs("value 1 fails the predicate").isFalse() },
+                { assertThat(saga.isTerminal(afterHigh)).describedAs("value 20 satisfies it").isTrue() }
+            )
+        }
+
+        @Test
+        fun `allOf and anyOf reified two-type arity sugar`() {
+            val allSaga = conditionSaga { allOf<CondEventA, CondEventB>() }
+            val anySaga = conditionSaga { anyOf<CondEventA, CondEventB>() }
+
+            val afterAOnly = allSaga.evolve(start(allSaga, CondStarted("s1")).state, SagaInput.event(CondEventA("s1", 1)))
+            val afterAThenB = allSaga.evolve(afterAOnly, SagaInput.event(CondEventB("s1")))
+            val afterEitherAlone = anySaga.evolve(start(anySaga, CondStarted("s2")).state, SagaInput.event(CondEventA("s2", 1)))
+
+            assertAll(
+                { assertThat(allSaga.isTerminal(afterAOnly)).describedAs("allOf needs both").isFalse() },
+                { assertThat(allSaga.isTerminal(afterAThenB)).isTrue() },
+                { assertThat(anySaga.isTerminal(afterEitherAlone)).describedAs("anyOf needs only one").isTrue() }
+            )
+        }
+
+        @Test
+        fun `allOf and anyOf reified three-type arity sugar`() {
+            val allSaga = conditionSaga { allOf<CondEventA, CondEventB, CondEventC>() }
+            val anySaga = conditionSaga { anyOf<CondEventA, CondEventB, CondEventC>() }
+
+            var state = start(allSaga, CondStarted("s1")).state
+            state = allSaga.evolve(state, SagaInput.event(CondEventA("s1", 1)))
+            state = allSaga.evolve(state, SagaInput.event(CondEventB("s1")))
+            val beforeThird = state
+            state = allSaga.evolve(state, SagaInput.event(CondEventC("s1")))
+            val afterEitherAlone = anySaga.evolve(start(anySaga, CondStarted("s2")).state, SagaInput.event(CondEventC("s2")))
+
+            assertAll(
+                { assertThat(allSaga.isTerminal(beforeThird)).describedAs("allOf needs all three").isFalse() },
+                { assertThat(allSaga.isTerminal(state)).isTrue() },
+                { assertThat(anySaga.isTerminal(afterEitherAlone)).describedAs("anyOf needs only one").isTrue() }
+            )
+        }
+
+        @Test
+        fun `allOf and anyOf KClass shortcuts expand to count-one leaves`() {
+            val allSaga = conditionSaga { allOf(CondEventA::class, CondEventB::class) }
+            val anySaga = conditionSaga { anyOf(CondEventA::class, CondEventB::class) }
+
+            val afterAOnly = allSaga.evolve(start(allSaga, CondStarted("s1")).state, SagaInput.event(CondEventA("s1", 1)))
+            val afterAThenB = allSaga.evolve(afterAOnly, SagaInput.event(CondEventB("s1")))
+            val afterEitherAlone = anySaga.evolve(start(anySaga, CondStarted("s2")).state, SagaInput.event(CondEventB("s2")))
+
+            assertAll(
+                { assertThat(allSaga.isTerminal(afterAOnly)).isFalse() },
+                { assertThat(allSaga.isTerminal(afterAThenB)).isTrue() },
+                { assertThat(anySaga.isTerminal(afterEitherAlone)).isTrue() }
+            )
+        }
+
+        @Test
+        fun `on with a condition binds its trailing lambda as whenFulfilled`() {
+            var recordedNote: String? = null
+            val saga = saga<CondEvent, CondCommand> {
+                startsOn<CondStarted>()
+                correlateAll { it.id }
+                step("wait") {
+                    on(event<CondEventA>(), then = end) { received ->
+                        recordedNote = "count=" + received.count(CondEventA::class.java)
+                        issue(CondRecorded("done"))
+                    }
+                }
+            }
+            val started = start(saga, CondStarted("s1"))
+
+            val step = saga.step(started.state, SagaInput.event(CondEventA("s1", 1)))
+
+            assertAll(
+                { assertThat(step.effects).containsExactly(SagaEffect.issue(CondRecorded("done"))) },
+                { assertThat(recordedNote).isEqualTo("count=1") }
+            )
+        }
+
+        @Test
+        fun `on with a condition and no trailing lambda issues nothing, the nothing default`() {
+            val saga = conditionSaga { event<CondEventA>() }
+            val started = start(saga, CondStarted("s1"))
+
+            val step = saga.step(started.state, SagaInput.event(CondEventA("s1", 1)))
+
+            assertAll(
+                { assertThat(saga.isTerminal(step.state)).isTrue() },
+                { assertThat(step.effects).isEmpty() }
+            )
+        }
+    }
+
     // --- Build-time validation ------------------------------------------------------------------------------------
 
     sealed interface ValidationEvent
@@ -744,6 +871,45 @@ class SagaFlowExtensionsTest {
         fun `an Expectation of zero count is rejected`() {
             assertThatThrownBy { Expectation.of(Foo::class.java, 0) }
                 .isInstanceOf(IllegalArgumentException::class.java)
+        }
+
+        @Test
+        fun `an empty allOf or anyOf collection is rejected`() {
+            assertThatThrownBy { StepCondition.allOf(emptyList<StepCondition<ValidationEvent>>()) }
+                .isInstanceOf(IllegalArgumentException::class.java)
+            assertThatThrownBy { StepCondition.anyOf(emptyList<StepCondition<ValidationEvent>>()) }
+                .isInstanceOf(IllegalArgumentException::class.java)
+        }
+
+        @Test
+        fun `a condition leaf type used in a step with no correlation fails to build naming the type`() {
+            assertThatThrownBy {
+                saga<ValidationEvent, ValidationCommand> {
+                    startsOn<Started>()
+                    correlate<Started> { it.id }
+                    step("first") {
+                        on(event<Foo>(), then = end)
+                    }
+                }
+            }.isInstanceOf(IllegalStateException::class.java)
+                .hasMessageContaining("Foo")
+                .hasMessageContaining("is used by a step")
+        }
+
+        @Test
+        fun `a step mixing a window-condition branch and a join fails immediately, same as mixing a classic branch and a join`() {
+            assertThatThrownBy {
+                saga<ValidationEvent, ValidationCommand> {
+                    startsOn<Started>()
+                    correlate<Started> { it.id }
+                    correlate<Foo> { it.id }
+                    correlate<Bar> { it.id }
+                    step("first") {
+                        on(event<Foo>(), then = end)
+                        join(expect<Bar>(), then = end)
+                    }
+                }
+            }.isInstanceOf(IllegalStateException::class.java)
         }
     }
 }

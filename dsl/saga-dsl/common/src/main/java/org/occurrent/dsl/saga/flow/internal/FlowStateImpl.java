@@ -40,17 +40,21 @@ import java.util.Objects;
  * cap per-save serialization cost), the flow lowering retains only a bounded window of received events: the initiating
  * event, always kept as {@code received.get(0)}, followed by the events from the current step's entry back through a
  * configurable carry-over of earlier events (see the flow builder's {@code historyWindow}). Events older than the window
- * are dropped, so a guard, a join reaction, or a timeout reaction that reads {@link ReceivedEvents} sees only the retained
- * window (the initiating event is the one exception, it is always available). {@link #windowStart()} is the absolute
- * position the retained tail begins at, which lets the join-matching window be reconstructed even after the prefix is
- * dropped. {@link #stepEntryIndex()} is an absolute position too, not an index into the (bounded) {@link #received()} list.
+ * are dropped, so a guard, a window-condition reaction, or a timeout reaction that reads {@link ReceivedEvents} sees only
+ * the retained window (the initiating event is the one exception, it is always available). {@link #windowStart()} is the
+ * absolute position the retained tail begins at, which lets a window condition's matching window be reconstructed even
+ * after the prefix is dropped. {@link #stepEntryIndex()} is an absolute position too, not an index into the (bounded)
+ * {@link #received()} list.
  *
  * <h2>Compatibility note</h2>
  * The bookkeeping fields ({@link #stepEntryIndex()}, {@link #windowStart()}, {@link #previousStep()},
  * {@link #lastAction()}, {@link #matchedBranchIndex()}) are an implementation detail of the flow lowering. They are not a
  * stable wire format: their meaning can change between versions, and a store that persists a flow saga's state must round-
  * trip whatever it wrote without interpreting them. Only {@link #currentStep()}, {@link #received()} and
- * {@link #completed()} carry user-meaningful semantics.
+ * {@link #completed()} carry user-meaningful semantics. {@link ActionKind#JOIN} is one such implementation detail moving
+ * between versions. Since ADR 120, every branch firing writes {@link ActionKind#BRANCH} instead, a lowered {@code join}
+ * step included, so {@code JOIN} is never written by current code. The constant stays declared so a document a
+ * pre-ADR-120 process wrote, and never re-evolved since, still round-trips instead of failing {@code ActionKind.valueOf}.
  *
  * @param <E> the domain event type
  */
@@ -63,7 +67,11 @@ public record FlowStateImpl<E>(@Nullable String currentStep,
                                ActionKind lastAction,
                                int matchedBranchIndex) implements FlowState<E> {
 
-    /** What the last {@code evolve} did, so {@code react} knows which reaction to run. Internal bookkeeping. */
+    /**
+     * What the last {@code evolve} did, so {@code react} knows which reaction to run. Internal bookkeeping.
+     * {@link #JOIN} is retained for wire compatibility only. Current code always writes {@link #BRANCH}, see this
+     * record's compatibility note.
+     */
     public enum ActionKind {NONE, BRANCH, JOIN, TIMEOUT}
 
     public FlowStateImpl {
