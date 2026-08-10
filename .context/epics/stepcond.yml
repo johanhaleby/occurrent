@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 11
+revision: 12
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (U3 PR 713 open, background-wait trap recovered)
+updated_by: orchestrator session dc08d709 (U3 library half merged, docs half running)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -204,15 +204,21 @@ units:
     deliverables:
     - check: pr_merged
       ref: 713
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-10T13:44:43+00:00 pinned to 20512b2729b1b78ac61c2443a794a66813a06dd5,
+        squash ee91f9919fc5822971132c5eddd2be44057fbcaa. Verified before merging:
+        26/26 checks success (counted case-insensitively), MERGEABLE/CLEAN, 3 review
+        threads all resolved, two files touched and both are test files
+        (DocumentedFlowSagaTest.java +272, DocumentedFlowSagaKotlinTest.kt +234), no
+        production code and no changelog entry, which is right because the feature was
+        already announced. Remote branch deleted, worker worktree clean.'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: 61
       met: false
       evidence: null
     blocking_on: []
-    next_action: 'PR 713 open, 26 checks with 20 still running and 0 failed; worker resumed after the background-wait trap, waiting on its DELIVERY_RESULT'
+    next_action: library half merged; docs half (subagent a604ae63) extending PR 61's held branch with the three examples
     last_meaningful_progress_at: '2026-08-10T13:13:53+00:00'
     observed: {}
     assessment: 'Adopted by Johan at a structured ask after U2 reported the gap honestly
