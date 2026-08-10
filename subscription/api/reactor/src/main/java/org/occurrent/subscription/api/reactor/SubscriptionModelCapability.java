@@ -16,6 +16,8 @@
 
 package org.occurrent.subscription.api.reactor;
 
+import java.util.Optional;
+
 /**
  * Marker supertype for every reactive subscription model capability. {@link Subscribable}, {@link CancellableSubscriptions},
  * {@link Pushable}, {@link IntrospectableSubscriptions} and {@link ReplayAwareSubscriptions} all extend it, so a whole
@@ -31,4 +33,26 @@ package org.occurrent.subscription.api.reactor;
  * {@link Object}.
  */
 public interface SubscriptionModelCapability {
+
+    /**
+     * The capability of type {@code type} behind this object. This stack has no wrapper type to unwrap, so the check
+     * is a direct {@code instanceof} against this object rather than a chain walk.
+     *
+     * @param type The capability to look for.
+     * @param <T>  The capability type.
+     * @return The capability, or empty if this object does not implement {@code type}.
+     */
+    default <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        return type.isInstance(this) ? Optional.of(type.cast(this)) : Optional.empty();
+    }
+
+    /**
+     * Whether the capability of type {@code type} exists behind this object, without returning it.
+     *
+     * @param type The capability to look for.
+     * @return {@code true} if {@link #capability(Class)} would return a non-empty result for {@code type}.
+     */
+    default boolean hasCapability(Class<? extends SubscriptionModelCapability> type) {
+        return capability(type).isPresent();
+    }
 }
