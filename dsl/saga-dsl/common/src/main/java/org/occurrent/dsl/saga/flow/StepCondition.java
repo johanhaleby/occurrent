@@ -19,6 +19,7 @@ package org.occurrent.dsl.saga.flow;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.function.Consumer;
@@ -33,10 +34,10 @@ import static java.util.Objects.requireNonNull;
  * {@link AllOf} and {@link AnyOf} combine leaves and other composites into a tree.
  * <p>
  * A condition tree is monotone. Every leaf only ever asks whether enough matching events have arrived, never whether
- * one is absent or whether a count stays under a limit. That is what lets the executor check a tree incrementally as
- * each event arrives rather than re-scanning history for a negative that could be undone by a later event. There is
- * deliberately no {@code not()} and no way to match on an event's absence. A step's {@code timeout} is what expresses
- * "this did not happen in time".
+ * one is absent or whether a count stays under a limit. That is what makes checking a tree fresh on every arriving
+ * event correct rather than merely convenient. Once a leaf's count is reached, no later event can undo it, so there
+ * is never a negative to look for. There is deliberately no {@code not()} and no way to match on an event's absence.
+ * A step's {@code timeout} is what expresses "this did not happen in time".
  * <p>
  * A tree is data, not a closure over the builder, so it can be built once, given a name, and reused across several
  * {@code on(...)} calls, or across steps: {@code var cancelled = anyOf(event(Cancelled.class), event(TimedOut.class));}.
@@ -223,12 +224,12 @@ public sealed interface StepCondition<E> permits StepCondition.AtLeast, StepCond
     }
 
     private static <E> List<StepCondition<E>> widenAll(StepCondition<? extends E> first, StepCondition<? extends E>[] rest) {
-        List<StepCondition<E>> widened = new ArrayList<>();
-        widened.add(widen(first));
-        for (StepCondition<? extends E> condition : rest) {
-            widened.add(widen(condition));
-        }
-        return widened;
+        requireNonNull(first, "first cannot be null");
+        requireNonNull(rest, "rest cannot be null");
+        List<StepCondition<? extends E>> all = new ArrayList<>(rest.length + 1);
+        all.add(first);
+        all.addAll(Arrays.asList(rest));
+        return widenAll(all);
     }
 
     private static <E> List<StepCondition<E>> widenAll(Collection<? extends StepCondition<? extends E>> conditions) {

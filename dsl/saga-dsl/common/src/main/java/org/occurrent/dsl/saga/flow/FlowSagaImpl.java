@@ -159,12 +159,11 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         }
         List<E> received = append(state.received(), event);
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
-        ReceivedEvents<E> receivedEvents = ReceivedEvents.of(received);
         List<E> window = received.subList(windowStart(state), received.size());
         List<Branch<E, C>> branches = step.branches();
         for (int i = 0; i < branches.size(); i++) {
             Branch<E, C> branch = branches.get(i);
-            if (triggered(branch.trigger(), event, receivedEvents, window)) {
+            if (triggered(branch.trigger(), event, received, window)) {
                 return applyTransition(state, branch.then(), received, ActionKind.BRANCH, i);
             }
         }
@@ -175,11 +174,12 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // log, but a guarded branch is deliberately NOT re-checked on later, unrelated events, see StepBuilder's javadoc). A
     // window-condition branch (on(StepCondition, ...) or the join sugar) fires whenever the accumulating window since step
     // entry satisfies its tree, so it is re-evaluated on every arriving event regardless of that event's own type, since a
-    // tree can span several leaf types.
-    private static <E> boolean triggered(Trigger<E> trigger, E event, ReceivedEvents<E> receivedEvents, List<E> window) {
+    // tree can span several leaf types. received is wrapped in ReceivedEvents only inside the guard branch, since an
+    // unguarded classic branch (the common case) and a window condition never read it.
+    private static <E> boolean triggered(Trigger<E> trigger, E event, List<E> received, List<E> window) {
         return switch (trigger) {
             case ArrivingEvent<E> arriving ->
-                    arriving.eventType().isInstance(event) && (arriving.guard() == null || arriving.guard().test(event, receivedEvents));
+                    arriving.eventType().isInstance(event) && (arriving.guard() == null || arriving.guard().test(event, ReceivedEvents.of(received)));
             case WindowCondition<E> windowCondition -> conditionFulfilled(windowCondition.condition(), window);
         };
     }
@@ -369,8 +369,22 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private static <E> boolean conditionFulfilled(StepCondition<E> condition, List<E> window) {
         return switch (condition) {
             case StepCondition.AtLeast<E> atLeast -> countMatches(atLeast.matcher(), window) >= atLeast.count();
-            case StepCondition.AllOf<E> allOf -> allOf.conditions().stream().allMatch(child -> conditionFulfilled(child, window));
-            case StepCondition.AnyOf<E> anyOf -> anyOf.conditions().stream().anyMatch(child -> conditionFulfilled(child, window));
+            case StepCondition.AllOf<E> allOf -> {
+                for (StepCondition<E> child : allOf.conditions()) {
+                    if (!conditionFulfilled(child, window)) {
+                        yield false;
+                    }
+                }
+                yield true;
+            }
+            case StepCondition.AnyOf<E> anyOf -> {
+                for (StepCondition<E> child : anyOf.conditions()) {
+                    if (conditionFulfilled(child, window)) {
+                        yield true;
+                    }
+                }
+                yield false;
+            }
         };
     }
 

@@ -164,7 +164,11 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
 
     private fun <T : E> classLeaf(type: Class<T>): StepCondition<E> = StepCondition.event<E, T>(type)
 
+    // The @JvmName pair on each arity disambiguates the JVM signature between the two overloads below (both erase to a
+    // zero-argument method), the same reason DcbCriteriaBuilder.types<E1,E2>()/types<E1,E2,E3>() names both types2/types3.
+
     /** [allOf] over [A] and [B], each a predicate-less, count-one leaf. Beyond three types, use the [KClass] or leaf spelling. */
+    @JvmName("allOfTwo")
     inline fun <reified A : E, reified B : E> allOf(): StepCondition<E> =
         StepCondition.allOf<E>(event<A>(), event<B>())
 
@@ -174,6 +178,7 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
         StepCondition.allOf<E>(event<A>(), event<B>(), event<C>())
 
     /** [anyOf] over [A] and [B], each a predicate-less, count-one leaf. Beyond three types, use the [KClass] or leaf spelling. */
+    @JvmName("anyOfTwo")
     inline fun <reified A : E, reified B : E> anyOf(): StepCondition<E> =
         StepCondition.anyOf<E>(event<A>(), event<B>())
 
