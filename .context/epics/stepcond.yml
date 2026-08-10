@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 18
+revision: 19
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (PR 62 held per Johan, reconciliation unit running)
+updated_by: orchestrator session dc08d709 (reconciliation done and verified, docs set ready)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -310,9 +310,9 @@ units:
       today, add the missing table-of-contents entry for Sagas Without Command Types,
       rewrite twelve long or buried paragraphs, and recast the chapter-wide colon
       reveals'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U5]
     session: subagent a2171d76 (docs repo worktree, branch docs/saga-chapter-readability)
     deliverables:
@@ -337,19 +337,25 @@ units:
     issue: null
     goal: 'The four readability rewrites in prose PR 61 itself introduced, applied on its
       held branch after it rebases onto the U6 result'
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U6]
     session: null
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: 61
-      met: false
-      evidence: null
-    blocking_on: []
-    next_action: rolled into U8 together with the historyWindow reconciliation and the preview update
+      met: true
+      evidence: 'PR 61 head 302fa0306 carries the four readability fixes it owned.
+        Verified independently at 2026-08-10T15:29:10+00:00: the split step-definition sentence is present,
+        PR 62 head b9a14b209 and the preview branch 55ac34a89 each carry exactly ONE
+        historyWindow paragraph, and that paragraph carries all eight facts checked
+        individually (condition/join/guard/timeout reader, 100 default, both language
+        setters, raise-for-condition, never-dropped-mid-step, historyWindow(0),
+        initiating retention). No conflict markers and no duplicated paragraph anywhere
+        in the preview saga chapter. PR 61 still shows the live-events paragraph twice,
+        correctly, since that fix belongs to PR 62 which lands after it.'
     last_meaningful_progress_at: '2026-08-10T14:58:44+00:00'
     observed: {}
     assessment: 'The four items the audit attributed to PR 61 rather than to main: the
