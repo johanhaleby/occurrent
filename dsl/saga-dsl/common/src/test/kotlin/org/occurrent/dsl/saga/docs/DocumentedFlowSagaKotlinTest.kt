@@ -28,6 +28,7 @@ import org.occurrent.dsl.saga.SagaInput
 import org.occurrent.dsl.saga.SagaTimeout
 import org.occurrent.dsl.saga.flow.FlowState
 import org.occurrent.dsl.saga.flow.initiating
+import org.occurrent.dsl.saga.flow.none
 import org.occurrent.dsl.saga.flow.saga
 import java.time.Duration
 import java.time.Instant
@@ -520,7 +521,7 @@ class DocumentedFlowSagaKotlinTest {
             correlateAll { it.reviewId }
             step("awaiting-decision") {
                 on(anyOf(event<Approved>(2), event<Rejected>()), then = end) { received ->
-                    if (received.all(Rejected::class.java).isEmpty()) {
+                    if (received.none<Rejected>()) {
                         issue(Publish(received.initiating<ReviewStarted>().reviewId))
                     } else {
                         issue(Discard(received.initiating<ReviewStarted>().reviewId))

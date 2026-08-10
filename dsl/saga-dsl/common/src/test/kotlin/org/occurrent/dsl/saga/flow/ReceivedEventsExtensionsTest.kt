@@ -129,4 +129,30 @@ class ReceivedEventsExtensionsTest {
             assertThat(received.any<PaymentReserved>()).isFalse()
         }
     }
+
+    @Nested
+    inner class None {
+
+        @Test
+        fun `is true when no event of the type was received`() {
+            val received = received(OrderPlaced("o1"), PaymentFailed("o1", 1))
+
+            assertThat(received.none<PaymentReserved>()).isTrue()
+        }
+
+        @Test
+        fun `is false when an event of the type was received`() {
+            val received = received(OrderPlaced("o1"), PaymentFailed("o1", 1))
+
+            assertThat(received.none<PaymentFailed>()).isFalse()
+        }
+
+        @Test
+        fun `is the logical negation of any`() {
+            val received = received(OrderPlaced("o1"), PaymentFailed("o1", 1))
+
+            assertThat(received.none<PaymentFailed>()).isEqualTo(!received.any<PaymentFailed>())
+            assertThat(received.none<PaymentReserved>()).isEqualTo(!received.any<PaymentReserved>())
+        }
+    }
 }

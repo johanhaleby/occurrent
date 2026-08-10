@@ -25,7 +25,7 @@ package org.occurrent.dsl.saga.flow
 // is not shadowing, it is ordinary scope. Shadowing only matters for initiating: ReceivedEvents has a no-arg
 // initiating() member, a member wins over an extension when both apply, so the reified form needs its type argument
 // spelled out. It also means a missing import reports "No type arguments expected for fun initiating()" rather than an
-// unresolved reference, which is the confusing part (issue #449). The other four names have no no-arg member to lose to.
+// unresolved reference, which is the confusing part (issue #449). The other five names have no no-arg member to lose to.
 
 /** The initiating event cast to [T]. Throws [ClassCastException] if it is not of that type. */
 inline fun <reified T : Any> ReceivedEvents<in T>.initiating(): T = initiating(T::class.java)
@@ -34,7 +34,10 @@ inline fun <reified T : Any> ReceivedEvents<in T>.initiating(): T = initiating(T
 inline fun <reified T : Any> ReceivedEvents<in T>.first(): T? = first(T::class.java).orElse(null)
 
 /** Whether any event of type [T] has been received. */
-inline fun <reified T : Any> ReceivedEvents<in T>.any(): Boolean = first(T::class.java).isPresent
+inline fun <reified T : Any> ReceivedEvents<in T>.any(): Boolean = any(T::class.java)
+
+/** Whether no event of type [T] has been received. */
+inline fun <reified T : Any> ReceivedEvents<in T>.none(): Boolean = none(T::class.java)
 
 /** All received events of type [T], in arrival order. */
 inline fun <reified T : Any> ReceivedEvents<in T>.all(): List<T> = all(T::class.java)

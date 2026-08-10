@@ -60,6 +60,20 @@ public interface ReceivedEvents<E> {
     /** How many events of {@code type} have been received. */
     <T extends E> int count(Class<T> type);
 
+    /**
+     * Whether any event of {@code type} has been received.
+     * <p>
+     * Kotlin has a reified {@code received.any<Rejected>()} for this, a top-level extension in this package.
+     */
+    default <T extends E> boolean any(Class<T> type) {
+        return first(type).isPresent();
+    }
+
+    /** Whether no event of {@code type} has been received. */
+    default <T extends E> boolean none(Class<T> type) {
+        return first(type).isEmpty();
+    }
+
     /** All received events, in arrival order, initiating first. */
     List<E> asList();
 
