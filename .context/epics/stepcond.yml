@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 10
+revision: 11
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (U2 delivered and verified, U3 adopted at Johan ask)
+updated_by: orchestrator session dc08d709 (U3 PR 713 open, background-wait trap recovered)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -192,9 +192,18 @@ units:
     swept: false
     depends_on: [U1, U2]
     session: subagent a617fdcf (worktree-isolated, library half)
+    observed_pr:
+      number: 713
+      head: 20512b2729b1b78ac61c2443a794a66813a06dd5
+      note: 'Add three StepCondition examples to the flow saga doc guard tests. Worker
+        hit the background-wait trap (ended its turn waiting on a CI monitor that dies
+        with the turn), recovered with one SendMessage naming the dead wait plus the
+        foreground polling recipe, exactly as the recorded lesson prescribes. Budget one
+        such round trip per unit whose verification exceeds a few minutes.'
+      at: '2026-08-10T13:36:36+00:00'
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 713
       met: false
       evidence: null
     - check: branch_pushed
@@ -203,7 +212,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: library subagent a617fdcf running; docs follow-up dispatches after it merges
+    next_action: 'PR 713 open, 26 checks with 20 still running and 0 failed; worker resumed after the background-wait trap, waiting on its DELIVERY_RESULT'
     last_meaningful_progress_at: '2026-08-10T13:13:53+00:00'
     observed: {}
     assessment: 'Adopted by Johan at a structured ask after U2 reported the gap honestly
