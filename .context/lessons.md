@@ -326,3 +326,26 @@
   merge sequencing, but the contradiction was findable before dispatch by grepping the
   renamed type's implementors against the collision map. The adversarial plan review
   checked file sets for overlap, not type-reference closures.
+
+- Historical files are out of scope for a rename, and a brief that says "the whole
+  repository" actively causes the damage (2026-08-10, rv33 U11). The docs brief told the
+  worker to grep the whole repository rather than only docs.md, so it renamed a type
+  inside the January 2021 news post announcing 0.7.0, making that announcement claim
+  0.7.0 introduced a name that did not exist for another five years. The library brief
+  for the same rename got this right by scoping ADRs explicitly (update the unreleased
+  one, amendment banner for released ones), so the rule existed and simply was not
+  carried across to the sibling brief. Every rename brief now names the historical
+  surfaces it must NOT touch, dated announcements, release notes and past changelog
+  sections, alongside the reference surfaces it must.
+
+- Measure timestamps, never estimate them, and re-arm the monitor when an epic reopens
+  (2026-08-10, rv33 U10/U11, both caught by Johan's question rather than by the loop).
+  Two failures with one root: writing plausible values instead of reading real ones. The
+  epic state file accumulated hand-written ISO timestamps that were hours off, which made
+  the derived health labels meaningless and produced a false STALLED that hid whether the
+  workers were really progressing. Separately, the monitor was stopped correctly at the
+  U9 closeout and never re-armed when U10 and U11 were adopted, so a delivered docs PR
+  sat unseen. The skill already carries the lifetime invariant (the monitor runs as long
+  as some unit has an unmet deliverable a PR event could advance); the gap was applying it
+  at the reopening rather than only at the sweep. Run `date -u` before writing any
+  timestamp, and re-arm the monitor in the same action that registers a post-closeout unit.

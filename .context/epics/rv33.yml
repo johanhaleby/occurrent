@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 20
-updated_at: 2026-08-10T01:25:00Z
+revision: 22
+updated_at: 2026-08-10T06:33:25Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -205,9 +205,10 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "await subagent completion with PR"
-    last_meaningful_progress_at: 2026-08-10T01:10:00Z
-    observed: {}
+    next_action: "await subagent completion with PR; no branch pushed as of 2026-08-10T06:33:25Z"
+    last_meaningful_progress_at: 2026-08-10T06:33:25Z
+    observed:
+      branch_pushed: {value: false, via: "git ls-remote --heads origin", at: 2026-08-10T06:33:25Z}
     assessment: "window closes at the 0.33.0 tag; three renames are free (unreleased), five shipped ChangeType entries ride the existing UpgradeToOccurrent_0_33 recipe. Final names (Johan, 2026-08-10): RepositionableSubscriptions, ReplayAwareSubscriptions, IntrospectableSubscriptions, SubscriptionModelWrapper, ReplayAware, ReactiveReplayAware. DelegatingSubscriptions was an intermediate choice, superseded mid-flight and relayed to both workers."
   U11:
     issue: null
@@ -221,7 +222,23 @@ units:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/capability-interface-renames, met: false, evidence: null}
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/replay-batching, met: false, evidence: null}
     blocking_on: []
-    next_action: "await subagent completion with the held PR"
-    last_meaningful_progress_at: 2026-08-10T01:10:00Z
-    observed: {}
+    next_action: "worker correcting a history-rewriting edit flagged in review, then verify and hold"
+    last_meaningful_progress_at: 2026-08-10T06:23:59Z
+    observed:
+      docs_pr_58: {branch: docs/capability-interface-renames, created: 2026-08-10T06:23:59Z, defect: "renamed a type inside the 2021 0.7.0 news post, revert requested", via: "gh pr view", at: 2026-08-10T06:33:25Z}
     assessment: "docs main carries 11 references, held PR 49 adds one more; never merges, held for release day"
+  U12:
+    issue: null
+    goal: "Introduce the Subscriptions root supertype on both stacks and narrow the four capability of(Object) signatures to it, with an ADR (Johan-approved 2026-08-10)"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U10]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "dispatch once U10 is merged; they collide in the same files"
+    last_meaningful_progress_at: 2026-08-10T06:33:25Z
+    observed: {}
+    assessment: "additive supertype is source and binary compatible; the signature narrowing is what is cheaper now than in 0.34.0, since these types are already breaking this release. Design: Subscribable and CancellableSubscriptions extend the new root, so SubscriptionModelLifeCycle, SubscriptionModel, DcbSubscriptionModel and StreamSubscriptionModel inherit it transitively."
