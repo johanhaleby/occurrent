@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 44
-updated_at: 2026-08-10T10:36:09Z
+revision: 45
+updated_at: 2026-08-10T11:09:56Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -293,7 +293,7 @@ units:
   U16:
     issue: null
     goal: "Instance-side capability lookup on SubscriptionModelCapability (both stacks): a default capability(Class<T>) returning Optional<T> plus a default hasCapability(Class<? extends SubscriptionModelCapability>) returning boolean that delegates to it, Kotlin reified extensions for both in the subscription DSL module, and a docs commit on held PR 59 branch (Johan adopted 2026-08-10)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U12]
@@ -302,9 +302,10 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/subscription-model-capabilities, met: true, evidence: "PR 59 head 88771f3d2, held; findIn used throughout, zero unreleased framing, ordering answered (outermost implementer answers) with a worked example, registered on docs issue 57 after PR 58"}
     blocking_on: []
-    next_action: "chip spawned at the U12 merge, awaiting Johan click. Ref task_b2342954 spawned 2026-08-10T09:55:22Z, awaiting Johan's click"
+    next_action: "PR 710 delivered and reviewed clean, awaiting CI then merge (ADR 119 holds for Johan wording read). Was: chip spawned at the U12 merge. Ref task_b2342954 spawned 2026-08-10T09:55:22Z, awaiting Johan's click"
     last_meaningful_progress_at: 2026-08-10T08:59:36Z
-    observed: {}
+    observed:
+      pr_710_review: {methods: "capability(Class<T>) returning Optional<T> plus hasCapability delegating to it, both stacks", reactor: "correctly simpler, no wrapper chain to walk", dedup: "all three static findIn helpers now delegate to capability, so the chain walk lives in exactly one place", kotlin: "reified extensions in dsl/subscription-dsl both stacks, nullable return not Optional", changelog: "folded into the existing breaking-changes bullet, plus one minus one, no new entry", adr: 119, recipe: "none, correctly, since the types never shipped", via: "orchestrator read of the PR branch", at: "2026-08-10T11:09:56Z"}
     assessment: "purely additive so it was free to defer, Johan chose to ship it in 0.33.0 anyway. Design settled: default method (statics are not inherited, which is why the static findIn could not move to the root, but a default method can), BOTH shapes ship, corrected after Johan pushed back: the orchestrator first argued a boolean invites check-then-act and a second chain walk, but that objection is about caller patterns rather than about having both methods, and it dissolves when hasCapability is a one-line delegate to capability(..).isPresent(). Precedent is Map.containsKey beside Map.get, and it matches the recorded tell-dont-ask preference for a direct accessor over chaining through a wrapper even at the cost of a thin duplicate. Signatures differ: capability needs the type parameter to return Optional<T>, hasCapability does not and takes Class<? extends SubscriptionModelCapability>. Kotlin goes in the subscription DSL module since subscription/api ships zero Kotlin files. No event store precedent exists, EventStoreCapability is a config value never queried at runtime, so this establishes the pattern. Docs go as a commit on PR 59's existing held branch rather than a new docs PR."
   U17:
     issue: null
