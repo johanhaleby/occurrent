@@ -1,8 +1,8 @@
 schema_version: 1
 epic: timerid
-revision: 1
-updated_at: 2026-08-10T19:51:25Z
-updated_by: orchestrator session 496ca320 (registration, U1 dispatched)
+revision: 2
+updated_at: 2026-08-10T20:41:00Z
+updated_by: orchestrator session 496ca320 (U1 reviewed REVISE, U6 added for the migration artefacts)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 is a prose design gate and merges only after Johan confirms the ADR, per the approved plan"
 pending_actions:
@@ -26,15 +26,15 @@ units:
   U1:
     issue: 716
     goal: "ADR 0121 settling the timer-identity model: the sealed TimerId, the canonical parse/encode round trip and its edge cases, whether the string-shaped API is deprecated now, and whether compose namespacing is answered or merely unblocked"
-    phase: READY
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_24efc36e (worktree sleepy-merkle-0e3f9a)
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: []
-    next_action: "chip task_3b940167 spawned 2026-08-10T19:51:25Z, awaiting Johan's click"
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "717", met: false, evidence: "PR 717 open at 20dcdf569, mergeable, 0 fail. Writing gates verified independently, all four clean. Adversarial review verdict REVISE with six must-fix, feedback sent 2026-08-10T20:40Z"}
+    blocking_on: ["Johan wording confirm, design gate"]
+    next_action: "PR 717 open, REVISE returned, feedback sent to session local_24efc36e. Held for Johan wording confirm, must not merge overnight"
     last_meaningful_progress_at: 2026-08-10T19:51:25Z
     observed: {}
     assessment: "Design gate, so it merges only on Johan's wording confirm. ADR number 0121 chosen after a cross-branch audit over every remote branch, which found 0120 as the highest claimed anywhere. That audit is the only view that catches a number claimed on an unmerged branch, a collision this repository has already had once."
@@ -83,6 +83,21 @@ units:
     last_meaningful_progress_at: 2026-08-10T19:51:25Z
     observed: {}
     assessment: "This is the unit that makes the change safe to ship rather than merely correct in isolation, so it is not optional and not foldable into U3."
+  U6:
+    issue: 716
+    goal: "The migration artefacts AGENTS.md requires for a break to shipped API: an UpgradeToOccurrent_0_33 recipe entry for the SagaTimeout shape change, and a numbered section in doc/migration/upgrading-to-0.33.0.md"
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U2]
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+    blocking_on: ["U2, the API shape the recipe rewrites"]
+    next_action: "hold until U2 merges"
+    last_meaningful_progress_at: 2026-08-10T20:41:00Z
+    observed: {}
+    assessment: "MISSED AT REGISTRATION. The approved plan claimed the change would be additive, so no unit owned the migration artefacts. ADR 121 takes a source break instead, and AGENTS.md:75 makes a recipe plus a guide entry mandatory once a feature has shipped in a versioned section, which the saga DSL did in 0.32.0. All three of 0.33.0 other breaks shipped both. Found by the adversarial review of U1, not by the orchestrator. If a mechanical recipe cannot cover a return-type change, the MigrateStreamToList_0_30 precedent applies, rewrite what can be proven and mark the rest."
   U5:
     issue: 716
     goal: "Docs: the testing chapter stops teaching the prefix, on a new held branch in the docs repository, plus a changelog entry and a news bullet"
