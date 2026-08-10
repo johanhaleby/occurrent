@@ -101,6 +101,57 @@ class DocumentedFlowSagaTest {
     record Discard(String reviewId) implements ReviewCommand {
     }
 
+    sealed interface ShipmentEvent permits ShipmentStarted, ItemPacked, CourierAssigned, PickupScheduled {
+        String shipmentId();
+    }
+
+    record ShipmentStarted(String shipmentId) implements ShipmentEvent {
+    }
+
+    record ItemPacked(String shipmentId, String sku) implements ShipmentEvent {
+    }
+
+    record CourierAssigned(String shipmentId) implements ShipmentEvent {
+    }
+
+    record PickupScheduled(String shipmentId) implements ShipmentEvent {
+    }
+
+    record DispatchShipment(String shipmentId) {
+    }
+
+    sealed interface SensorEvent permits SensorArmed, ReadingTaken {
+        String sensorId();
+    }
+
+    record SensorArmed(String sensorId) implements SensorEvent {
+    }
+
+    record ReadingTaken(String sensorId, int celsius) implements SensorEvent {
+    }
+
+    record RaiseAlarm(String sensorId) {
+    }
+
+    sealed interface PurchaseEvent permits PurchaseStarted, PaymentReceived {
+        String purchaseId();
+    }
+
+    record PurchaseStarted(String purchaseId, int total) implements PurchaseEvent {
+    }
+
+    record PaymentReceived(String purchaseId, int amount) implements PurchaseEvent {
+    }
+
+    sealed interface PurchaseCommand permits ReleaseGoods, NotifyLayawayComplete {
+    }
+
+    record ReleaseGoods(String purchaseId) implements PurchaseCommand {
+    }
+
+    record NotifyLayawayComplete(String purchaseId) implements PurchaseCommand {
+    }
+
     @Nested
     @DisplayName("when a lobby waits for a player to join")
     class When_a_lobby_waits_for_a_player_to_join {
@@ -323,6 +374,184 @@ class DocumentedFlowSagaTest {
         }
     }
 
+    @Nested
+    @DisplayName("when a step needs two packed items plus either a courier or a pickup slot")
+    class When_a_step_needs_two_packed_items_plus_either_a_courier_or_a_pickup_slot {
+
+        private static final String SHIPMENT_ID = "shipment-1";
+
+        @Test
+        void two_packed_items_alone_do_not_fulfil_the_condition() {
+            // Given
+            Saga.Step<FlowState<ShipmentEvent>, DispatchShipment> started = start(shipment(), new ShipmentStarted(SHIPMENT_ID));
+            Saga.Step<FlowState<ShipmentEvent>, DispatchShipment> afterFirstItem =
+                    shipment().step(started.state(), SagaInput.event(new ItemPacked(SHIPMENT_ID, "sku-1")));
+
+            // When
+            Saga.Step<FlowState<ShipmentEvent>, DispatchShipment> afterSecondItem =
+                    shipment().step(afterFirstItem.state(), SagaInput.event(new ItemPacked(SHIPMENT_ID, "sku-2")));
+
+            // Then
+            assertThat(afterSecondItem.state().completed()).isFalse();
+        }
+
+        @Test
+        void two_packed_items_and_a_courier_assignment_dispatch_and_complete_the_saga() {
+            // Given
+            Saga.Step<FlowState<ShipmentEvent>, DispatchShipment> started = start(shipment(), new ShipmentStarted(SHIPMENT_ID));
+            Saga.Step<FlowState<ShipmentEvent>, DispatchShipment> afterItems = shipment().step(
+                    shipment().step(started.state(), SagaInput.event(new ItemPacked(SHIPMENT_ID, "sku-1"))).state(),
+                    SagaInput.event(new ItemPacked(SHIPMENT_ID, "sku-2")));
+
+            // When
+            Saga.Step<FlowState<ShipmentEvent>, DispatchShipment> step =
+                    shipment().step(afterItems.state(), SagaInput.event(new CourierAssigned(SHIPMENT_ID)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(step.state().completed()).isTrue(),
+                    () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new DispatchShipment(SHIPMENT_ID)))
+            );
+        }
+
+        @Test
+        void two_packed_items_and_a_pickup_slot_dispatch_and_complete_the_saga_too() {
+            // Given
+            Saga.Step<FlowState<ShipmentEvent>, DispatchShipment> started = start(shipment(), new ShipmentStarted(SHIPMENT_ID));
+            Saga.Step<FlowState<ShipmentEvent>, DispatchShipment> afterItems = shipment().step(
+                    shipment().step(started.state(), SagaInput.event(new ItemPacked(SHIPMENT_ID, "sku-1"))).state(),
+                    SagaInput.event(new ItemPacked(SHIPMENT_ID, "sku-2")));
+
+            // When
+            Saga.Step<FlowState<ShipmentEvent>, DispatchShipment> step =
+                    shipment().step(afterItems.state(), SagaInput.event(new PickupScheduled(SHIPMENT_ID)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(step.state().completed()).isTrue(),
+                    () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new DispatchShipment(SHIPMENT_ID)))
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("when a step waits for a reading above a threshold")
+    class When_a_step_waits_for_a_reading_above_a_threshold {
+
+        private static final String SENSOR_ID = "sensor-1";
+
+        @Test
+        void a_reading_at_the_threshold_does_not_fulfil_the_condition() {
+            // Given
+            Saga.Step<FlowState<SensorEvent>, RaiseAlarm> started = start(sensor(), new SensorArmed(SENSOR_ID));
+
+            // When
+            Saga.Step<FlowState<SensorEvent>, RaiseAlarm> step =
+                    sensor().step(started.state(), SagaInput.event(new ReadingTaken(SENSOR_ID, 40)));
+
+            // Then
+            assertThat(step.state().completed()).isFalse();
+        }
+
+        @Test
+        void a_reading_above_the_threshold_raises_the_alarm_and_completes_the_saga() {
+            // Given
+            Saga.Step<FlowState<SensorEvent>, RaiseAlarm> started = start(sensor(), new SensorArmed(SENSOR_ID));
+
+            // When
+            Saga.Step<FlowState<SensorEvent>, RaiseAlarm> step =
+                    sensor().step(started.state(), SagaInput.event(new ReadingTaken(SENSOR_ID, 41)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(step.state().completed()).isTrue(),
+                    () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new RaiseAlarm(SENSOR_ID)))
+            );
+        }
+
+        @Test
+        void a_low_reading_followed_by_a_high_one_still_raises_the_alarm() {
+            // Given
+            Saga.Step<FlowState<SensorEvent>, RaiseAlarm> started = start(sensor(), new SensorArmed(SENSOR_ID));
+            Saga.Step<FlowState<SensorEvent>, RaiseAlarm> afterLow =
+                    sensor().step(started.state(), SagaInput.event(new ReadingTaken(SENSOR_ID, 10)));
+
+            // When
+            Saga.Step<FlowState<SensorEvent>, RaiseAlarm> afterHigh =
+                    sensor().step(afterLow.state(), SagaInput.event(new ReadingTaken(SENSOR_ID, 45)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(afterLow.state().completed()).isFalse(),
+                    () -> assertThat(afterHigh.state().completed()).isTrue()
+            );
+        }
+    }
+
+    @Nested
+    @DisplayName("when a step mixes a classic branch with a window condition")
+    class When_a_step_mixes_a_classic_branch_with_a_window_condition {
+
+        private static final String PURCHASE_ID = "purchase-1";
+
+        @Test
+        void a_single_full_payment_releases_the_goods_through_the_classic_branch() {
+            // Given
+            Saga.Step<FlowState<PurchaseEvent>, PurchaseCommand> started = start(purchase(), new PurchaseStarted(PURCHASE_ID, 80));
+
+            // When
+            Saga.Step<FlowState<PurchaseEvent>, PurchaseCommand> step =
+                    purchase().step(started.state(), SagaInput.event(new PaymentReceived(PURCHASE_ID, 80)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(step.state().completed()).isTrue(),
+                    () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new ReleaseGoods(PURCHASE_ID)))
+            );
+        }
+
+        @Test
+        void two_partial_payments_release_the_goods_through_the_window_condition() {
+            // Given
+            Saga.Step<FlowState<PurchaseEvent>, PurchaseCommand> started = start(purchase(), new PurchaseStarted(PURCHASE_ID, 80));
+            Saga.Step<FlowState<PurchaseEvent>, PurchaseCommand> afterFirst =
+                    purchase().step(started.state(), SagaInput.event(new PaymentReceived(PURCHASE_ID, 30)));
+
+            // When
+            Saga.Step<FlowState<PurchaseEvent>, PurchaseCommand> afterSecond =
+                    purchase().step(afterFirst.state(), SagaInput.event(new PaymentReceived(PURCHASE_ID, 30)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(afterFirst.state().completed()).isFalse(),
+                    () -> assertThat(afterSecond.state().completed()).isTrue(),
+                    () -> assertThat(afterSecond.effects()).containsExactly(
+                            SagaEffect.issue(new ReleaseGoods(PURCHASE_ID)),
+                            SagaEffect.issue(new NotifyLayawayComplete(PURCHASE_ID)))
+            );
+        }
+
+        @Test
+        void a_full_payment_arriving_second_satisfies_both_branches_but_the_declared_first_classic_branch_wins() {
+            // Given
+            Saga.Step<FlowState<PurchaseEvent>, PurchaseCommand> started = start(purchase(), new PurchaseStarted(PURCHASE_ID, 80));
+            Saga.Step<FlowState<PurchaseEvent>, PurchaseCommand> afterFirst =
+                    purchase().step(started.state(), SagaInput.event(new PaymentReceived(PURCHASE_ID, 30)));
+
+            // When
+            Saga.Step<FlowState<PurchaseEvent>, PurchaseCommand> afterSecond =
+                    purchase().step(afterFirst.state(), SagaInput.event(new PaymentReceived(PURCHASE_ID, 80)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(afterSecond.state().completed()).isTrue(),
+                    () -> assertThat(afterSecond.effects())
+                            .as("the window condition is also satisfied here (two PaymentReceived events), but the classic branch is declared first")
+                            .containsExactly(SagaEffect.issue(new ReleaseGoods(PURCHASE_ID)))
+            );
+        }
+    }
+
     private static Saga<GameEvent, FlowState<GameEvent>, CloseGame> lobby() {
         return FlowSaga.<GameEvent, CloseGame>builder()
                 .startsOn(GameCreated.class)
@@ -358,6 +587,48 @@ class DocumentedFlowSagaTest {
                                 received -> received.all(Rejected.class).isEmpty()
                                         ? List.of(new Publish(received.initiating(ReviewStarted.class).reviewId()))
                                         : List.of(new Discard(received.initiating(ReviewStarted.class).reviewId()))))
+                .build();
+    }
+
+    private static Saga<ShipmentEvent, FlowState<ShipmentEvent>, DispatchShipment> shipment() {
+        return FlowSaga.<ShipmentEvent, DispatchShipment>builder()
+                .startsOn(ShipmentStarted.class)
+                .correlateAll(ShipmentEvent::shipmentId)
+                .step("packing", step -> step
+                        .on(StepCondition.allOf(
+                                        StepCondition.event(ItemPacked.class, 2),
+                                        StepCondition.anyOf(StepCondition.event(CourierAssigned.class), StepCondition.event(PickupScheduled.class))),
+                                Continuation.end(),
+                                received -> List.of(new DispatchShipment(received.initiating(ShipmentStarted.class).shipmentId()))))
+                .build();
+    }
+
+    private static Saga<SensorEvent, FlowState<SensorEvent>, RaiseAlarm> sensor() {
+        return FlowSaga.<SensorEvent, RaiseAlarm>builder()
+                .startsOn(SensorArmed.class)
+                .correlateAll(SensorEvent::sensorId)
+                .step("monitoring", step -> step
+                        .on(StepCondition.event(ReadingTaken.class, 1, (ReadingTaken reading) -> reading.celsius() > 40),
+                                Continuation.end(),
+                                received -> List.of(new RaiseAlarm(received.initiating(SensorArmed.class).sensorId()))))
+                .build();
+    }
+
+    private static Saga<PurchaseEvent, FlowState<PurchaseEvent>, PurchaseCommand> purchase() {
+        return FlowSaga.<PurchaseEvent, PurchaseCommand>builder()
+                .startsOn(PurchaseStarted.class)
+                .correlateAll(PurchaseEvent::purchaseId)
+                // A single payment covering the total releases immediately; otherwise two installments, of any amount, do.
+                .step("collecting-payment", step -> step
+                        .on(PaymentReceived.class,
+                                (payment, received) -> payment.amount() >= received.initiating(PurchaseStarted.class).total(),
+                                Continuation.end(),
+                                payment -> List.of(new ReleaseGoods(payment.purchaseId())))
+                        .on(StepCondition.event(PaymentReceived.class, 2),
+                                Continuation.end(),
+                                received -> List.of(
+                                        new ReleaseGoods(received.initiating(PurchaseStarted.class).purchaseId()),
+                                        new NotifyLayawayComplete(received.initiating(PurchaseStarted.class).purchaseId()))))
                 .build();
     }
 
