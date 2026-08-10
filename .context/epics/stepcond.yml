@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 15
+revision: 16
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (EPIC CLOSED, all units verified and swept)
+updated_by: orchestrator session dc08d709 (REOPENED for U5, the saga-chapter docs audit)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -261,3 +261,39 @@ units:
       and code comments copied between repositories are a gate surface the copying unit
       inherits. Fixed as its own PR rather than pushed to main, because the standing
       push grant covers memory checkpoints only, never code.'
+  U5:
+    issue: null
+    goal: 'Read-only audit of the whole Saga DSL chapter across main, the step-conditions
+      branch and the seven held docs branches: readability, writing-convention
+      violations, and above all stale claims the step-conditions feature contradicted
+      that a held branch would reintroduce if merged after it'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: [U2, U3]
+    session: subagent ad689629 (read-only, no writes anywhere)
+    deliverables:
+    - check: manual_approval
+      grant: "Johan routes the audit findings once delivered (which branch owns each fix, and which are worth doing before the release)"
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: audit running; findings then route per owning branch
+    last_meaningful_progress_at: '2026-08-10T14:43:52+00:00'
+    observed:
+      why_reopened:
+        note: 'Johan asked whether the docs read like a human wrote them and chose the
+          wide option. Two concrete findings justified it before dispatch: PR 53
+          introduces a banned "Worth knowing for initiating in particular", and held
+          branches still carry "A step is either a set of on(...) branches or a single
+          join(...), never both" as untouched context, which the step-conditions work
+          removed. A branch merging after PR 61 can therefore reintroduce a false claim,
+          the exact docs-accretion failure the writing skill records. Chose an AUDIT
+          over edits because six of seven held branches have hunks inside the saga
+          chapter, so a wide rewrite on PR 61 would collide with all of them, while a
+          read-only pass collides with nothing.'
+        via: git diff over each held branch plus a trial merge
+        at: '2026-08-10T14:43:52+00:00'
+    assessment: 'Findings get routed to the branch that OWNS each region, never fixed on
+      PR 61 wholesale, because these branches merge in the order recorded on docs issue
+      57 and a fix on the wrong branch either conflicts or is lost.'
