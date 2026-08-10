@@ -157,3 +157,40 @@ renamed the reactor `SubscriptionModel`. Run it once, as part of the upgrade.
 Change the import and the type name at every use listed in the tables above, the two method names on
 `SubscriptionModelWrapper`, and `of` to `findIn` wherever you call `ReplayAwareSubscriptions` or
 `IntrospectableSubscriptions`.
+
+## 6. A flow saga's `join` is deprecated in favor of step conditions
+
+Nothing breaks. `join` keeps working exactly as it did, and this section is only useful if you want to move off it,
+or if you need something `join` cannot express in the first place.
+
+A flow step can now wait on a `StepCondition` tree instead of only a single-branch choice or a `join`. `join`'s
+per-type counting is one case a tree expresses, `allOf(event(Type, count), ...)`, so every existing `join` call has a
+direct equivalent:
+
+Java, before and after:
+
+```java
+// Before
+step.join(List.of(Expectation.of(PlayerReady.class, 2)), Continuation.end());
+
+// After
+step.on(StepCondition.allOf(StepCondition.event(PlayerReady.class, 2)), Continuation.end());
+```
+
+Kotlin, before and after:
+
+```kotlin
+// Before
+join(expect<PlayerReady>(2), then = end)
+
+// After
+on(allOf(event<PlayerReady>(2)), then = end)
+```
+
+`whenFulfilled`/the trailing reaction lambda carries over unchanged. It still reads `ReceivedEvents`, not a single
+triggering event. A tree also expresses what `join` never could, an alternative (`anyOf(...)`) or a predicate over an
+event (`event(Type, predicate)`), so a step currently hand-rolling either with an `onlyIf` guard and manual counting
+against `ReceivedEvents` can drop that guard for a tree instead. [ADR 120](../architecture/decisions/0120-a-step-condition-is-a-monotone-matcher-tree.md)
+has the full design, including the normalization laws `allOf`/`anyOf` apply and the window-reset rule a mixed step
+makes visible. No `UpgradeToOccurrent_0_33` recipe rewrites `join` calls. The API still works, and a recipe belongs
+with whichever future release removes it.

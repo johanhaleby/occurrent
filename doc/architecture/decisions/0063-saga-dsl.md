@@ -197,3 +197,11 @@ every step" wildcard matching. A process that needs any of those drops down to t
   change between versions. A store that persists a flow saga's state (the `instanceof FlowStateImpl` serialization branch
   in a `SagaStateStore`) must round-trip whatever it wrote without interpreting them. Only `currentStep`, `received`, and
   `completed` carry user-meaningful semantics.
+
+> **Amended on 2026-08-10 by [ADR 120](0120-a-step-condition-is-a-monotone-matcher-tree.md).** The "no dynamic N-of-M
+> joins" non-goal above is now only partially true. A static alternative or conjunction tree, built once at
+> saga-definition time, is expressible directly in the flow layer through `StepCondition`, and `join` is deprecated
+> sugar over it. Runtime-varying counts, decided per-instance rather than fixed at build time, remain out of scope,
+> unchanged. `join`'s per-type counting described above is still exactly what it does, it just now lowers to a
+> `StepCondition` tree rather than being its own body kind. No wire format changed. `FlowStateImpl`'s bookkeeping
+> fields keep the same meanings this section states, and `ActionKind.JOIN` stays declared but is no longer written.
