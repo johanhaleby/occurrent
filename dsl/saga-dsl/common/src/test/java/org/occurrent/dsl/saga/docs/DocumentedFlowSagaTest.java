@@ -483,7 +483,8 @@ class DocumentedFlowSagaTest {
             // Then
             assertAll(
                     () -> assertThat(afterLow.state().completed()).isFalse(),
-                    () -> assertThat(afterHigh.state().completed()).isTrue()
+                    () -> assertThat(afterHigh.state().completed()).isTrue(),
+                    () -> assertThat(afterHigh.effects()).containsExactly(SagaEffect.issue(new RaiseAlarm(SENSOR_ID)))
             );
         }
     }
@@ -608,7 +609,7 @@ class DocumentedFlowSagaTest {
                 .startsOn(SensorArmed.class)
                 .correlateAll(SensorEvent::sensorId)
                 .step("monitoring", step -> step
-                        .on(StepCondition.event(ReadingTaken.class, 1, (ReadingTaken reading) -> reading.celsius() > 40),
+                        .on(StepCondition.event(ReadingTaken.class, (ReadingTaken reading) -> reading.celsius() > 40),
                                 Continuation.end(),
                                 received -> List.of(new RaiseAlarm(received.initiating(SensorArmed.class).sensorId()))))
                 .build();

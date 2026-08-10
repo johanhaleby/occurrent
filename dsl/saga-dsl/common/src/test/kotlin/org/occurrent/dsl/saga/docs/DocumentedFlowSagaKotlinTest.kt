@@ -348,7 +348,8 @@ class DocumentedFlowSagaKotlinTest {
             // Then
             assertAll(
                 { assertThat(afterLow.state.completed()).isFalse() },
-                { assertThat(afterHigh.state.completed()).isTrue() }
+                { assertThat(afterHigh.state.completed()).isTrue() },
+                { assertThat(afterHigh.effects).containsExactly(SagaEffect.issue(RaiseAlarm(SENSOR_ID))) }
             )
         }
     }
