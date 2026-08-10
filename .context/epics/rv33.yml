@@ -329,12 +329,12 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_8d398409 (worktree busy-banach-9c6901, branch johan/busy-banach-9c6901)
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/707-step-conditions, met: false, evidence: null}
     blocking_on: []
-    next_action: "chip task_117d1dc6 spawned 2026-08-10T17:06:19Z, awaiting Johan's click"
+    next_action: "running since 2026-08-10T17:11Z as session local_8d398409, chip task_117d1dc6"
     last_meaningful_progress_at: 2026-08-10T17:06:19Z
     observed: {}
     assessment: "Johan spotted received.all(Rejected::class.java).isEmpty() in the step-conditions example and asked for a none predicate plus reified Kotlin forms. Verified before adopting: reified all<T>() and any<T>() ALREADY exist in ReceivedEventsExtensions.kt, so the Kotlin half of his ask is already shipped and the example simply was not using it. The real gap is that neither stack has a none, and Java has no any either, so Java can only write all(X.class).isEmpty(). Design: two default methods on the ReceivedEvents interface (any/none delegating to first(type)), one new reified Kotlin none<T>(), and retarget the existing any<T>() onto the new Java member so the two stacks share one implementation. Additive, no break. Docs example is guard-tested twice, DocumentedFlowSagaKotlinTest.kt:523 and DocumentedFlowSagaTest.java, so both must change with the docs. Docs land on PR 61's held branch, which the stepcond epic owns, so that epic must be told. Naming note NOT actioned: Kotlin collections use any/none/all as a predicate triple, but this all<T>() returns a List, so the released name already breaks that symmetry and renaming it is a break for another release."

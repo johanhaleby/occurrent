@@ -453,3 +453,26 @@
   distinctive opening clause of each rewritten paragraph and assert it appears exactly
   once. Recorded on the merge-order issue too, because a later rebase can recreate it.
 
+
+## The chip convention lives in the `title` parameter, not the prompt (2026-08-10, rv33 U18)
+
+`spawn_task`'s `title` is what becomes the chip label AND the spawned session's name in
+`list_sessions`. The prompt's first line is invisible there. U18 was spawned with the epic's
+`⌁[rv33/U18] ... · Sonnet/high` convention on the prompt's first line and a plain imperative
+phrase in `title`, so the running session appeared as "Add any/none predicates to
+ReceivedEvents" while every sibling in the same epic carried its unit tag. Johan spotted it
+before the orchestrator did, which is the tell that fleet visibility was actually lost rather
+than merely being untidy: an orchestrator scanning `list_sessions` cannot group its own units
+when one of them is missing the tag.
+
+The tool's own description invites this, because its examples are all plain imperative phrases
+("Fix stale README badge"), which is right for a one-off suggestion chip and wrong for a chip
+that is one unit of a tracked epic. So restate the convention at every spawn rather than
+trusting the tool's example.
+
+**How to apply:** put `⌁[<epic>/U<n>] <short> · <Model>/<effort>` in `title` itself, and keep it
+under the 60 character cap, which usually means shortening the description rather than dropping
+the tag. Repeating the same line at the top of the prompt is fine and useful for the worker, but
+it is not a substitute. **It is recoverable after the fact:** `set_session_title` renames another
+session in place, so a mis-titled running unit is fixed with `list_sessions` to get the id and
+one rename, with no need to dismiss the chip or restart the work.
