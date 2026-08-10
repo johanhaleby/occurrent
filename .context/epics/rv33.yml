@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 27
-updated_at: 2026-08-10T07:45:50Z
+revision: 28
+updated_at: 2026-08-10T07:54:44Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
