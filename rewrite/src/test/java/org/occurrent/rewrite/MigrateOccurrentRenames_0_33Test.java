@@ -360,12 +360,19 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
 
     @Test
     void aRealUpgradeRenamesReplayAwareSubscriptionsOfToFindIn() {
-        // ReplayAwareSubscriptionModel is supplied as a compiled dependency with the of(Object) shape it actually
-        // shipped with in 0.32.0, the way a user's classpath looks before the upgrade, rather than as a rewritten
-        // source. One user source using the old type and the old of(..) call, migrated to the new type and findIn
-        // in a single recipe run.
+        // ReplayAwareSubscriptionModel and its of(Object) are supplied as a compiled dependency, the way a user's
+        // classpath looks before the upgrade, rather than as a rewritten source. The caller's own parameter is typed
+        // as the real 0.33.0 SubscriptionModelCapability marker rather than Object, so the migrated example matches
+        // the narrowed findIn(SubscriptionModelCapability) it now calls, instead of only compiling by accident
+        // because the stub dependency's of(Object) still accepts anything.
         rewriteRun(
                 spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(
+                        """
+                        package org.occurrent.subscription.api.blocking;
+
+                        public interface SubscriptionModelCapability {
+                        }
+                        """,
                         """
                         package org.occurrent.subscription.api.blocking;
 
@@ -385,9 +392,10 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
                         package com.example;
 
                         import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
+                        import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 
                         class Foo {
-                            void bar(Object model) {
+                            void bar(SubscriptionModelCapability model) {
                                 ReplayAwareSubscriptionModel.of(model);
                             }
                         }
@@ -396,9 +404,10 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
                         package com.example;
 
                         import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
+                        import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 
                         class Foo {
-                            void bar(Object model) {
+                            void bar(SubscriptionModelCapability model) {
                                 ReplayAwareSubscriptions.findIn(model);
                             }
                         }
@@ -409,9 +418,16 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
 
     @Test
     void aRealUpgradeRenamesIntrospectableSubscriptionsOfToFindIn() {
-        // Same shape as the ReplayAwareSubscriptions case above, for IntrospectableSubscriptionModel's of(Object).
+        // Same shape as the ReplayAwareSubscriptions case above, for IntrospectableSubscriptionModel's of(Object),
+        // with the caller's parameter typed as SubscriptionModelCapability for the same reason.
         rewriteRun(
                 spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(
+                        """
+                        package org.occurrent.subscription.api.blocking;
+
+                        public interface SubscriptionModelCapability {
+                        }
+                        """,
                         """
                         package org.occurrent.subscription.api.blocking;
 
@@ -432,9 +448,10 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
                         package com.example;
 
                         import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+                        import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 
                         class Foo {
-                            void bar(Object model) {
+                            void bar(SubscriptionModelCapability model) {
                                 IntrospectableSubscriptionModel.of(model);
                             }
                         }
@@ -443,9 +460,10 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
                         package com.example;
 
                         import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
+                        import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 
                         class Foo {
-                            void bar(Object model) {
+                            void bar(SubscriptionModelCapability model) {
                                 IntrospectableSubscriptions.findIn(model);
                             }
                         }
