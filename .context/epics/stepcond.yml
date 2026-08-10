@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 3
-updated_at: '2026-08-10T11:10:00+00:00'
-updated_by: orchestrator session dc08d709 (U1 started, ADR-number correction sent)
+revision: 4
+updated_at: '2026-08-10T12:17:33+00:00'
+updated_by: orchestrator session dc08d709 (ADR correction verified, U1 pre-PR report)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -43,7 +43,7 @@ pending_actions:
   status: VERIFIED
   attempts: 1
   safe_to_repeat: false
-  issued_at: '2026-08-10T10:40:00+00:00'
+  issued_at: '2026-08-10T10:40:00+00:00'  # approximate
 - id: act-003
   type: message-session
   target: 'ADR-number correction to U1 session local_abfbd577: 0118 taken by rv33 on
@@ -51,11 +51,13 @@ pending_actions:
     running the cross-branch audit; plus the rv33 boundaries (rv33/* branches,
     subscription trees, shared changelog.md keep-both)'
   expected: 'message delivered and acted on, the PR body states which ADR number was
-    taken and what the audit showed'
-  status: PENDING
+    taken and what the audit showed; DONE: U1 had already caught 0118 and then 0119
+    itself before the message arrived and landed on 0120, then re-ran the
+    cross-branch audit on request and confirmed 0120 is the max with no collision'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
-  issued_at: '2026-08-10T11:10:00+00:00'
+  issued_at: '2026-08-10T12:00:00+00:00'  # approximate, wall clock was not read at issue time
 units:
   U1:
     issue: 707
@@ -80,15 +82,23 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: implementing, waiting on the first PR
-    last_meaningful_progress_at: '2026-08-10T11:09:33+00:00'
+    next_action: simplify pass running, PR opens next
+    last_meaningful_progress_at: '2026-08-10T12:17:33+00:00'
     observed:
       adr_number:
         note: 'plan said 118, corrected to 120 at 11:10Z: rv33 merged 0118 to main
           and claims 0119 on rv33/u16-instance-capability-lookup (PR 710); worker
           told to re-audit across all remote branches because rv33 may take 120'
         via: git ls-tree over all origin branches
-        at: '2026-08-10T10:52:00+00:00'
+        at: '2026-08-10T11:50:00+00:00'  # approximate, wall clock was not read at the time
+      worker_report:
+        note: 'U1 rebased onto origin/main tip 9a5d407bb (post rv33 merges) before
+          pushing, diff is 18 files and stepcond-only, changelog.md purely additive
+          (2 inserted lines, nothing reflowed), no writes under subscription/ or
+          dsl/subscription-dsl/ and no rv33 branch touched. Claims are the worker''s,
+          verified at merge-readiness against the PR itself.'
+        via: cross-session message from local_abfbd577
+        at: '2026-08-10T12:17:33+00:00'
     assessment: 'Additive on public API but it rewrites the flow evaluator, which is
       shipped 0.31.0 behavior, so the sugar-equivalence guard is the unchanged join
       test suite. Settled by the plan, do not re-litigate: no new ActionKind (rollback

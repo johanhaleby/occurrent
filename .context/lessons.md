@@ -368,3 +368,16 @@
   it that ordering leaves a live worker plus a pending duplicate aimed at the same
   files. Check whether the chip started before replacing it, and if it did, correct
   the running session with a message and withdraw the replacement instead.
+
+- The measure-timestamps rule recurred within one session of being written, and the
+  tell was a false STALLED again (2026-08-10, stepcond). Registration read `date -u`
+  correctly, then every timestamp written over the next hour and a half (dispatch,
+  monitor arming, the ADR correction, the worker report) was estimated from the
+  conversation's own sense of elapsed time and landed roughly an hour early. The
+  derive step then compared a real clock against invented progress times and labelled
+  a healthy unit STALLED. Writing the rule down clearly does not fire it, because
+  each individual timestamp feels like bookkeeping rather than a measurement. Run
+  `date -u` in the SAME command that writes a timestamp, and when a past time cannot
+  be recovered, mark it approximate in the file rather than writing a confident wrong
+  value.
+
