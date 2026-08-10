@@ -26,7 +26,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
@@ -148,8 +148,8 @@ class CompetingConsumerFencingWiringTest {
             if (type.isInstance(current)) {
                 return type.cast(current);
             }
-            if (current instanceof DelegatingSubscriptionModel delegatingSubscriptionModel) {
-                current = delegatingSubscriptionModel.getDelegatedSubscriptionModel();
+            if (current instanceof SubscriptionModelWrapper delegatingSubscriptionModel) {
+                current = delegatingSubscriptionModel.getWrappedSubscriptionModel();
             } else {
                 throw new IllegalStateException("Could not find delegate of type " + type.getName());
             }

@@ -38,8 +38,8 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
-import org.occurrent.subscription.api.blocking.RepositionableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
@@ -87,7 +87,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptionModel, RepositionableSubscriptionModel, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
     private final String eventCollection;
@@ -337,7 +337,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     /**
      * Resume a paused subscription at {@code startAt}, instead of the change-stream position it had read to.
      *
-     * @see RepositionableSubscriptionModel#resumeSubscription(String, StartAt)
+     * @see RepositionableSubscriptions#resumeSubscription(String, StartAt)
      */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId, StartAt startAt) {

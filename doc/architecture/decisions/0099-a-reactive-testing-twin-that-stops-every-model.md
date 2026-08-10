@@ -68,3 +68,7 @@ with exactly one blocking `SubscriptionModelLifeCycle` bean, which is every appl
 
 **#530 is closed.** The docs site gets a branch, stacked on the existing testing-chapter chain, held for release like
 the others.
+
+**Amended for 0.33.0: `IntrospectableSubscriptionModel` is renamed to `IntrospectableSubscriptions`, and
+`DelegatingSubscriptionModel` to `SubscriptionModelWrapper`.** Neither capability changed. Both names moved
+because neither interface ever extended `SubscriptionModel`.

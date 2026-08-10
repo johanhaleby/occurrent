@@ -143,7 +143,7 @@ class SuiteNeverSkipsTest {
         assertThat(SkipMechanismScan.classesScannedAlongside(SubscriptionModelConformance.class))
                 .describedAs("the scan must reach the suites, or a clean verdict means only that it looked nowhere")
                 .contains(CheckpointStorageConformance.class.getName(), SubscriptionModelConformance.class.getName(),
-                        IntrospectableSubscriptionModelConformance.class.getName(),
+                        IntrospectableSubscriptionsConformance.class.getName(),
                         CheckpointAwareSubscriptionModelConformance.class.getName(),
                         CompetingConsumerStrategyConformance.class.getName(),
                         InProcessDeliveryConformance.class.getName(),
@@ -293,7 +293,7 @@ class SuiteNeverSkipsTest {
         }
     }
 
-    static class HonoursNothingIntrospectionConformance extends IntrospectableSubscriptionModelConformance {
+    static class HonoursNothingIntrospectionConformance extends IntrospectableSubscriptionsConformance {
 
         @Override
         protected SubscriptionModelFixture createFixture() {
@@ -301,7 +301,7 @@ class SuiteNeverSkipsTest {
         }
     }
 
-    static class HonoursEverythingIntrospectionConformance extends IntrospectableSubscriptionModelConformance {
+    static class HonoursEverythingIntrospectionConformance extends IntrospectableSubscriptionsConformance {
 
         @Override
         protected SubscriptionModelFixture createFixture() {

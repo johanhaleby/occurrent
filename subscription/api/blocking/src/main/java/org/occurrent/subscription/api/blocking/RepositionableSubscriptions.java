@@ -31,7 +31,7 @@ import java.util.Optional;
  * Not every subscription model implements this, so reach it with {@link #of(Object)}.
  */
 @NullMarked
-public interface RepositionableSubscriptionModel {
+public interface RepositionableSubscriptions {
 
     /**
      * Resume a paused subscription at {@code startAt}, instead of the position {@link SubscriptionModelLifeCycle#resumeSubscription(String)}
@@ -46,17 +46,17 @@ public interface RepositionableSubscriptionModel {
     Subscription resumeSubscription(String subscriptionId, StartAt startAt);
 
     /**
-     * The repositionable model behind {@code subscriptionModel}, unwrapping a {@link DelegatingSubscriptionModel}
+     * The repositionable model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper}
      * until one is found. An empty result means the model cannot be resumed at an explicit position.
      *
      * @param subscriptionModel Any subscription model, wrapped or not.
      * @return The repositionable model, or empty if nothing in the chain implements this.
      */
-    static Optional<RepositionableSubscriptionModel> of(Object subscriptionModel) {
-        if (subscriptionModel instanceof RepositionableSubscriptionModel repositionable) {
+    static Optional<RepositionableSubscriptions> of(Object subscriptionModel) {
+        if (subscriptionModel instanceof RepositionableSubscriptions repositionable) {
             return Optional.of(repositionable);
-        } else if (subscriptionModel instanceof DelegatingSubscriptionModel delegating) {
-            return of(delegating.getDelegatedSubscriptionModel());
+        } else if (subscriptionModel instanceof SubscriptionModelWrapper delegating) {
+            return of(delegating.getWrappedSubscriptionModel());
         }
         return Optional.empty();
     }

@@ -28,8 +28,8 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
-import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.IntrospectableSubscriptions;
+import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
@@ -77,7 +77,7 @@ import java.util.function.Supplier;
  * a replay is in flight, which the live feed cannot give because it is buffering rather than delivering.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, ReplayAwareSubscriptionModel {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, ReplayAwareSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
 

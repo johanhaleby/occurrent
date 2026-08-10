@@ -224,7 +224,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
         // behavior, which tells the durable layer not to persist a checkpoint because the subscription always
         // restarts from the same StartAt). In that branch globalCheckpoint is also null (see
         // CatchupSubscriptionModel#startPositionCatchupSubscriptionForStream), so no watermark-derived cursor is ever
-        // persisted, and getDelegatedSubscriptionModel().subscribe(...) is still called with the original dynamic
+        // persisted, and getWrappedSubscriptionModel().subscribe(...) is still called with the original dynamic
         // startAt afterwards, i.e. a live change-stream subscription is started right after the catch-up phase, not
         // skipped. This test proves an event that is only assigned (and commits) a low position after the bulk
         // replay's head was read is still delivered, because the live change-stream subscription independently sees

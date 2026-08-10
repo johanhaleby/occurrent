@@ -22,7 +22,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.UUID;
@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The contract a model owes when it can list the subscriptions it knows.
  * <p>
  * A model that cannot list them declines this suite by not extending it, which is the same visible absence as declining
- * any other suite. There is no declaration for it, because {@link IntrospectableSubscriptionModel} is itself the
+ * any other suite. There is no declaration for it, because {@link IntrospectableSubscriptions} is itself the
  * declaration.
  * <p>
  * Worth having rather than assumed. Both of Occurrent's MongoDB subscription models implement {@code subscriptionIds()}
@@ -43,10 +43,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @DisplayName("the introspectable subscription model contract")
 @Timeout(60)
-public abstract class IntrospectableSubscriptionModelConformance extends SubscriptionModelSuite {
+public abstract class IntrospectableSubscriptionsConformance extends SubscriptionModelSuite {
 
     /**
-     * Creates a fixture whose model has no subscriptions and implements {@link IntrospectableSubscriptionModel}.
+     * Creates a fixture whose model has no subscriptions and implements {@link IntrospectableSubscriptions}.
      * Called before every test method.
      */
     @Override
@@ -55,15 +55,15 @@ public abstract class IntrospectableSubscriptionModelConformance extends Subscri
     @Override
     protected void checkFixtureCanAnswerThisSuite(SubscriptionModelFixture fixture) {
         SubscriptionModel model = fixture.subscriptionModel();
-        if (!(model instanceof IntrospectableSubscriptionModel)) {
+        if (!(model instanceof IntrospectableSubscriptions)) {
             throw new IllegalStateException(model.getClass().getName() + " does not implement "
-                    + IntrospectableSubscriptionModel.class.getSimpleName() + ", so it cannot answer this suite. A model "
+                    + IntrospectableSubscriptions.class.getSimpleName() + ", so it cannot answer this suite. A model "
                     + "that cannot list its subscriptions declines by not extending it.");
         }
     }
 
-    private IntrospectableSubscriptionModel introspectable() {
-        return (IntrospectableSubscriptionModel) fixture().subscriptionModel();
+    private IntrospectableSubscriptions introspectable() {
+        return (IntrospectableSubscriptions) fixture().subscriptionModel();
     }
 
     private static String subscriptionId() {

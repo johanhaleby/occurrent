@@ -151,7 +151,7 @@ class OccurrentSubscriptionsExtensionTest {
 
     @Test
     void start_all_fails_loudly_when_a_model_cannot_list_its_subscriptions() {
-        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(new NotIntrospectableSubscriptionModel());
+        OccurrentSubscriptionsExtension extension = OccurrentSubscriptionsExtension.stoppedByDefault(new NotIntrospectableSubscriptions());
 
         assertThatThrownBy(extension::startAll)
                 .isInstanceOf(IllegalStateException.class)
@@ -418,8 +418,8 @@ class OccurrentSubscriptionsExtensionTest {
                 });
     }
 
-    // A lifecycle with no IntrospectableSubscriptionModel anywhere in it, so startAll has nothing to enumerate.
-    private static final class NotIntrospectableSubscriptionModel implements SubscriptionModelLifeCycle {
+    // A lifecycle with no IntrospectableSubscriptions anywhere in it, so startAll has nothing to enumerate.
+    private static final class NotIntrospectableSubscriptions implements SubscriptionModelLifeCycle {
         @Override
         public void stop() {
         }

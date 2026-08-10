@@ -16,10 +16,10 @@
 
 package org.occurrent.subscription.inmemory;
 
-import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance;
+import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 
-class InMemorySubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionModelConformance {
+class InMemorySubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionsConformance {
 
     @Override
     protected SubscriptionModelFixture createFixture() {

@@ -25,9 +25,9 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.RepositionableSubscriptionModel;
-import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
@@ -100,7 +100,7 @@ import java.util.stream.Stream;
  * </p>
  */
 @NullMarked
-public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, ReplayAwareSubscriptionModel, RepositionableSubscriptionModel {
+public class CatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions, RepositionableSubscriptions {
 
     private static final int DEFAULT_CACHE_SIZE = CatchupSubscriptionModelConfig.DEFAULT_HANDOVER_CACHE_SIZE;
 
@@ -265,14 +265,14 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     @Override
     public void stop() {
         presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::stopReplay);
-        getDelegatedSubscriptionModel().stop();
+        getWrappedSubscriptionModel().stop();
     }
 
     // resumeReplay() for the same reason stop() uses stopReplay().
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         presentCatchupModels().forEach(AbstractCatchupSubscriptionModel::resumeReplay);
-        getDelegatedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+        getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
     }
 
     // Asks the catch-up children too, because a replay is running before the live delegate has registered the
@@ -280,13 +280,13 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     @Override
     public boolean isRunning() {
         return presentCatchupModels().anyMatch(AbstractCatchupSubscriptionModel::isRunning)
-                || getDelegatedSubscriptionModel().isRunning();
+                || getWrappedSubscriptionModel().isRunning();
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
         return presentCatchupModels().anyMatch(model -> model.isRunning(subscriptionId))
-                || getDelegatedSubscriptionModel().isRunning(subscriptionId);
+                || getWrappedSubscriptionModel().isRunning(subscriptionId);
     }
 
     /**
@@ -303,16 +303,16 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     @Override
     public boolean isPaused(String subscriptionId) {
         return presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))
-                || getDelegatedSubscriptionModel().isPaused(subscriptionId);
+                || getWrappedSubscriptionModel().isPaused(subscriptionId);
     }
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        return getDelegatedSubscriptionModel().resumeSubscription(subscriptionId);
+        return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
     }
 
     /**
-     * A plain forward to whichever {@link RepositionableSubscriptionModel} the wrapped model resolves to, exactly
+     * A plain forward to whichever {@link RepositionableSubscriptions} the wrapped model resolves to, exactly
      * as the one-argument {@link #resumeSubscription(String)} above already forwards unconditionally rather than
      * routing through a catch-up child. Catch-up is therefore never re-triggered by a resume at an explicit
      * position either. It stays what it already was, a one-time replay driven from {@code subscribe}, not something
@@ -322,14 +322,14 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-        return RepositionableSubscriptionModel.of(getDelegatedSubscriptionModel())
-                .orElseThrow(() -> new UnsupportedOperationException(getDelegatedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"))
+        return RepositionableSubscriptions.of(getWrappedSubscriptionModel())
+                .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"))
                 .resumeSubscription(subscriptionId, startAt);
     }
 
     @Override
     public void pauseSubscription(String subscriptionId) {
-        getDelegatedSubscriptionModel().pauseSubscription(subscriptionId);
+        getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
     }
 
     @Override
@@ -379,7 +379,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     @Override
-    public SubscriptionModel getDelegatedSubscriptionModel() {
+    public SubscriptionModel getWrappedSubscriptionModel() {
         return subscriptionModel;
     }
 

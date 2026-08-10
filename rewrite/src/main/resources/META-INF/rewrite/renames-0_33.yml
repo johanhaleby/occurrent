@@ -1,0 +1,61 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateOccurrentRenames_0_33
+displayName: Migrate Occurrent renamed types (0.32.0 -> 0.33.0)
+description: >-
+  Renames five subscription-model interfaces that never extended SubscriptionModel and cannot. They are
+  capability interfaces applied to types that are not subscription models, so the old "SubscriptionModel"
+  suffix claimed a relationship none of them had. ReplayAwareSubscriptionModel becomes ReplayAwareSubscriptions
+  and IntrospectableSubscriptionModel becomes IntrospectableSubscriptions on both the blocking and reactor
+  stacks. DelegatingSubscriptionModel becomes SubscriptionModelWrapper, since it names a structural fact about
+  the instance rather than a per-subscription capability. Its two methods move with it, getDelegatedSubscriptionModel
+  to getWrappedSubscriptionModel and getDelegatedSubscriptionModelRecursively to
+  getWrappedSubscriptionModelRecursively, so the interface and its methods share one vocabulary. The published TCK
+  base class IntrospectableSubscriptionModelConformance moves with the interface it is named after, to
+  IntrospectableSubscriptionsConformance.
+recipeList:
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.ReplayAwareSubscriptionModel
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.IntrospectableSubscriptions
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.IntrospectableSubscriptions
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.SubscriptionModelWrapper
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.api.blocking.SubscriptionModelWrapper getDelegatedSubscriptionModel(..)
+      newMethodName: getWrappedSubscriptionModel
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.api.blocking.SubscriptionModelWrapper getDelegatedSubscriptionModelRecursively(..)
+      newMethodName: getWrappedSubscriptionModelRecursively
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance
+      newFullyQualifiedTypeName: org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance
+      ignoreDefinition: true

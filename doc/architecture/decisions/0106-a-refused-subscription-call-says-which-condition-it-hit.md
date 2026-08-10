@@ -128,3 +128,6 @@ the same conclusion ADR 102 reached for the same reason.
 This is Occurrent's first exception hierarchy. Every other named exception here extends `RuntimeException` directly.
 That is recorded so the next one does not copy this without first asking whether its callers need to tell the cases
 apart. These ones demonstrably did, and two shipped workarounds are the evidence.
+
+**Amended for 0.33.0: `IntrospectableSubscriptionModel` is renamed to `IntrospectableSubscriptions`.** The
+capability is unchanged, only the name moved, since the interface never extended `SubscriptionModel`.

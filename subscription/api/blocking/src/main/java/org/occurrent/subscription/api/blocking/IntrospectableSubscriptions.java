@@ -28,7 +28,7 @@ import java.util.Set;
  * Not every subscription model implements this, so reach it with {@link #of(Object)}.
  */
 @NullMarked
-public interface IntrospectableSubscriptionModel {
+public interface IntrospectableSubscriptions {
 
     /**
      * @return Every subscription id this model knows, whether running or paused.
@@ -36,18 +36,18 @@ public interface IntrospectableSubscriptionModel {
     Set<String> subscriptionIds();
 
     /**
-     * The introspectable model behind {@code subscriptionModel}, unwrapping a {@link DelegatingSubscriptionModel} until
+     * The introspectable model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper} until
      * one is found. An empty result means the model cannot list its subscriptions, which is not the same as having
      * none.
      *
      * @param subscriptionModel Any subscription model, wrapped or not.
      * @return The introspectable model, or empty if nothing in the chain implements this.
      */
-    static Optional<IntrospectableSubscriptionModel> of(Object subscriptionModel) {
-        if (subscriptionModel instanceof IntrospectableSubscriptionModel introspectable) {
+    static Optional<IntrospectableSubscriptions> of(Object subscriptionModel) {
+        if (subscriptionModel instanceof IntrospectableSubscriptions introspectable) {
             return Optional.of(introspectable);
-        } else if (subscriptionModel instanceof DelegatingSubscriptionModel delegating) {
-            return of(delegating.getDelegatedSubscriptionModel());
+        } else if (subscriptionModel instanceof SubscriptionModelWrapper delegating) {
+            return of(delegating.getWrappedSubscriptionModel());
         }
         return Optional.empty();
     }

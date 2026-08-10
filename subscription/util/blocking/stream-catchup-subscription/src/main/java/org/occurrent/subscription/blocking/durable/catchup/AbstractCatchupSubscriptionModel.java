@@ -24,8 +24,8 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
@@ -44,7 +44,7 @@ import java.util.function.Function;
  * stream module both modes build against.
  */
 @NullMarked
-abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, ReplayAwareSubscriptionModel {
+abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, ReplayAwareSubscriptions {
 
     protected final CheckpointAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;
@@ -73,23 +73,23 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     @Override
     public void stop() {
         stopped = true;
-        getDelegatedSubscriptionModel().stop();
+        getWrappedSubscriptionModel().stop();
     }
 
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
         stopped = false;
-        getDelegatedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+        getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
     }
 
     @Override
     public boolean isRunning() {
-        return !runningCatchupSubscriptions.isEmpty() || getDelegatedSubscriptionModel().isRunning();
+        return !runningCatchupSubscriptions.isEmpty() || getWrappedSubscriptionModel().isRunning();
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return runningCatchupSubscriptions.containsKey(subscriptionId) || getDelegatedSubscriptionModel().isRunning(subscriptionId);
+        return runningCatchupSubscriptions.containsKey(subscriptionId) || getWrappedSubscriptionModel().isRunning(subscriptionId);
     }
 
     @Override
@@ -100,13 +100,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return pauseRequestedDuringCatchup.containsKey(subscriptionId) || getDelegatedSubscriptionModel().isPaused(subscriptionId);
+        return pauseRequestedDuringCatchup.containsKey(subscriptionId) || getWrappedSubscriptionModel().isPaused(subscriptionId);
     }
 
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         pauseRequestedDuringCatchup.remove(subscriptionId);
-        return getDelegatedSubscriptionModel().resumeSubscription(subscriptionId);
+        return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
     }
 
     @Override
@@ -117,7 +117,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
             // interrupting and resuming it would require persisting the exact replay cursor, which this class does not do.
             pauseRequestedDuringCatchup.put(subscriptionId, true);
         } else {
-            getDelegatedSubscriptionModel().pauseSubscription(subscriptionId);
+            getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
         }
     }
 
@@ -127,7 +127,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
      */
     protected void applyPendingPauseIfAny(String subscriptionId) {
         if (pauseRequestedDuringCatchup.remove(subscriptionId) != null) {
-            getDelegatedSubscriptionModel().pauseSubscription(subscriptionId);
+            getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
         }
     }
 
@@ -204,7 +204,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     }
 
     @Override
-    public SubscriptionModel getDelegatedSubscriptionModel() {
+    public SubscriptionModel getWrappedSubscriptionModel() {
         return subscriptionModel;
     }
 

@@ -34,7 +34,7 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.springboot.common.OccurrentProperties;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
@@ -285,10 +285,10 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                     // In DCB-only mode the subscription model now wraps a DCB-mode CatchupSubscriptionModel, so a
                     // subscription started at a GlobalCheckpoint can replay history by position.
                     SubscriptionModel subscriptionModel = context.getBean(SubscriptionModel.class);
-                    assertThat(subscriptionModel).isInstanceOf(DelegatingSubscriptionModel.class);
-                    SubscriptionModel delegated = ((DelegatingSubscriptionModel) subscriptionModel).getDelegatedSubscriptionModel();
+                    assertThat(subscriptionModel).isInstanceOf(SubscriptionModelWrapper.class);
+                    SubscriptionModel delegated = ((SubscriptionModelWrapper) subscriptionModel).getWrappedSubscriptionModel();
                     assertThat(delegated).isInstanceOf(CatchupSubscriptionModel.class);
-                    assertThat(((DelegatingSubscriptionModel) delegated).getDelegatedSubscriptionModel())
+                    assertThat(((SubscriptionModelWrapper) delegated).getWrappedSubscriptionModel())
                             .isInstanceOf(DurableSubscriptionModel.class);
                 });
     }
@@ -480,8 +480,8 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
             if (type.isInstance(current)) {
                 return type.cast(current);
             }
-            if (current instanceof DelegatingSubscriptionModel delegatingSubscriptionModel) {
-                current = delegatingSubscriptionModel.getDelegatedSubscriptionModel();
+            if (current instanceof SubscriptionModelWrapper delegatingSubscriptionModel) {
+                current = delegatingSubscriptionModel.getWrappedSubscriptionModel();
             } else {
                 throw new IllegalStateException("Could not find delegate of type " + type.getName());
             }

@@ -28,8 +28,8 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -124,8 +124,8 @@ class SubscriptionModeManualMongoTest {
     }
 
     private Set<String> subscriptionIdsKnownToTheChangeStreamModel() {
-        SubscriptionModel innermost = ((DelegatingSubscriptionModel) subscriptionModel).getDelegatedSubscriptionModelRecursively();
-        return IntrospectableSubscriptionModel.of(innermost).orElseThrow().subscriptionIds();
+        SubscriptionModel innermost = ((SubscriptionModelWrapper) subscriptionModel).getWrappedSubscriptionModelRecursively();
+        return IntrospectableSubscriptions.of(innermost).orElseThrow().subscriptionIds();
     }
 
     private static TestEvent event() {

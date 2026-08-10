@@ -109,3 +109,6 @@ for exactly the subscriptions the application has just started. The subscription
 should pin it.
 
 `manual` is blocking only until the reactive starter gets the same wiring.
+
+**Amended for 0.33.0: `IntrospectableSubscriptionModel` is renamed to `IntrospectableSubscriptions`.** The
+capability is unchanged, only the name moved, since the interface never extended `SubscriptionModel`.

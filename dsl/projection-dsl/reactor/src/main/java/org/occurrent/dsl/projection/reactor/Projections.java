@@ -168,9 +168,9 @@ public final class Projections {
     /**
      * The metadata-aware form of {@link #reactiveUpdate(MaterializedView)}: calls the blocking
      * {@code materializedView.update(metadata, event)} on {@link Schedulers#boundedElastic()}. The returned update
-     * always implements {@link ReactiveReplayAwareMaterializedView}, and forwards
+     * always implements {@link ReactiveReplayAware}, and forwards
      * {@code replayStarted}/{@code replayCompleted}/{@code replayAbandoned} to {@code materializedView} whenever it
-     * implements the blocking view DSL's {@code ReplayAwareMaterializedView} capability, so a replay driven through a
+     * implements the blocking view DSL's {@code ReplayAware} capability, so a replay driven through a
      * {@code CatchupProjectionFeed} still reaches a batching or position-recording view wrapped through this bridge.
      */
     public static <E> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(MaterializedView<E> materializedView) {
@@ -279,7 +279,7 @@ public final class Projections {
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
      * Works with any {@code (EventMetadata, E) -> Mono<Void>} update, including
      * {@link #reactiveUpdateWithMetadata(Projection, ViewStateRepository)}'s coalescing catch-up batching through
-     * {@link ReactiveReplayAwareMaterializedView}: the returned update forwards the lifecycle calls to {@code update} and only
+     * {@link ReactiveReplayAware}: the returned update forwards the lifecycle calls to {@code update} and only
      * records the position once the delegate's own write for that replay is durable.
      * <p>
      * An event whose {@link EventMetadata#getPosition()} is {@code null} makes the returned {@link Mono} error with an

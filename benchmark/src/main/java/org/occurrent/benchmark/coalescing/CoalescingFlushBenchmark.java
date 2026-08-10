@@ -20,7 +20,7 @@ import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.blocking.Projections;
 import org.occurrent.dsl.view.MaterializedView;
-import org.occurrent.dsl.view.ReplayAwareMaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.retry.RetryStrategy;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -95,9 +95,9 @@ public class CoalescingFlushBenchmark {
                     .build();
             MaterializedView<Long> materializedView =
                     Projections.materializedView(projection, repository, RetryStrategy.none(), new MaterializedViewOptions(batchSize));
-            if (!(materializedView instanceof ReplayAwareMaterializedView replayAware)) {
+            if (!(materializedView instanceof ReplayAware replayAware)) {
                 throw new IllegalStateException(Projections.class.getSimpleName() + " no longer returns a "
-                        + ReplayAwareMaterializedView.class.getSimpleName() + ", so this benchmark can no longer start a replay to buffer through.");
+                        + ReplayAware.class.getSimpleName() + ", so this benchmark can no longer start a replay to buffer through.");
             }
             replayAware.replayStarted();
             view = materializedView;

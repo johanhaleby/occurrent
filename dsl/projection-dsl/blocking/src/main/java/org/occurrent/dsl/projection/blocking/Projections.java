@@ -27,7 +27,7 @@ import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.ProjectionKeys;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.view.MaterializedView;
-import org.occurrent.dsl.view.ReplayAwareMaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.filter.Filter;
@@ -297,7 +297,7 @@ public final class Projections {
      * after the delegate has written its state
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
      * Works with any {@link MaterializedView}, framework-built or your own, including one that batches its writes
-     * during a catch-up replay through {@link ReplayAwareMaterializedView}: the returned view forwards the lifecycle
+     * during a catch-up replay through {@link ReplayAware}: the returned view forwards the lifecycle
      * calls to {@code view} and only records the position once the delegate's own write for that replay is durable.
      * <p>
      * An event whose {@link EventMetadata#getPosition()} is {@code null} makes the returned view throw an

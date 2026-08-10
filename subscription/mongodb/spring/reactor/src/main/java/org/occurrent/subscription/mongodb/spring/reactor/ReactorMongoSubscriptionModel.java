@@ -85,7 +85,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * the plain {@link #subscribe(SubscriptionFilter, StartAt)} {@link Flux} primitive.
  */
 @NullMarked
-public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptionModel {
+public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions {
     private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
 
     private final ReactiveMongoOperations mongo;

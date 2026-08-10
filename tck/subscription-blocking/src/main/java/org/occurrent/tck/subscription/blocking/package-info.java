@@ -30,9 +30,9 @@
  *   <tr><td>{@link org.occurrent.tck.subscription.blocking.SubscriptionModelConformance}</td>
  *       <td>{@link org.occurrent.tck.subscription.blocking.SubscriptionModelFixture}</td>
  *       <td>you have a {@code SubscriptionModel} at all</td></tr>
- *   <tr><td>{@link org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance}</td>
+ *   <tr><td>{@link org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance}</td>
  *       <td>{@code SubscriptionModelFixture}</td>
- *       <td>it implements {@code IntrospectableSubscriptionModel}</td></tr>
+ *       <td>it implements {@code IntrospectableSubscriptions}</td></tr>
  *   <tr><td>{@link org.occurrent.tck.subscription.blocking.CheckpointAwareSubscriptionModelConformance}</td>
  *       <td>{@code SubscriptionModelFixture}</td>
  *       <td>it implements {@code CheckpointAwareSubscriptionModel}</td></tr>

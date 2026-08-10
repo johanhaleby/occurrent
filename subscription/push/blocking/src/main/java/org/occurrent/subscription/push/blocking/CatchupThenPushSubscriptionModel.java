@@ -26,8 +26,8 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
-import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
@@ -83,7 +83,7 @@ import java.util.stream.Stream;
  * delegated per-subscription to {@link BlockingHandover}, shared with {@code CatchupProjectionFeed}.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, ReplayAwareSubscriptionModel {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, ReplayAwareSubscriptions {
 
     private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
 

@@ -72,6 +72,9 @@ On the reactor twin the running check sits inside a `Mono.defer`, so it is evalu
 `Mono` is subscribed rather than when it is assembled. Assembling a dispatch while running and subscribing
 after a stop delivers nothing, which is the behaviour a caller would expect and is covered by a test.
 
+**Amended for 0.33.0: `IntrospectableSubscriptionModel` is renamed to `IntrospectableSubscriptions`.** The
+capability is unchanged, only the name moved, since the interface never extended `SubscriptionModel`.
+
 The subscription conformance suite planned in #395 should pin the lifecycle across all models, including
 the drop-not-defer semantics, which currently hold because every implementation agrees rather than because
 anything enforces it.

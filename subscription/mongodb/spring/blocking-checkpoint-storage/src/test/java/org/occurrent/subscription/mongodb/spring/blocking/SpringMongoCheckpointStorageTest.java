@@ -42,7 +42,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
@@ -586,7 +586,7 @@ public class SpringMongoCheckpointStorageTest {
                 .build());
     }
 
-    private static void cancelSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
-        subscriptionModel.getDelegatedSubscriptionModelRecursively().cancelSubscription(subscriberId);
+    private static void cancelSubscription(SubscriptionModelWrapper subscriptionModel, String subscriberId) {
+        subscriptionModel.getWrappedSubscriptionModelRecursively().cancelSubscription(subscriberId);
     }
 }

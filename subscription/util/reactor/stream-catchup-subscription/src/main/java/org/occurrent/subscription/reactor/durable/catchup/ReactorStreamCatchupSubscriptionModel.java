@@ -28,7 +28,7 @@ import org.occurrent.inmemory.filtermatching.FilterMatcher;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
@@ -90,7 +90,7 @@ import static java.util.Objects.requireNonNull;
  * one between compositions.
  */
 @NullMarked
-public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, ReplayAwareSubscriptionModel {
+public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, ReplayAwareSubscriptions {
 
     // Guards every replay read and the live subscription this model performs so a DCB-tagged event is never delivered
     // to a stream subscriber, even on a store that has both capabilities enabled (see ADR 50).

@@ -21,7 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.view.MaterializedView;
-import org.occurrent.dsl.view.ReplayAwareMaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 
 /**
  * The {@link MaterializedView} {@link Projections#recordingAppliedPosition(MaterializedView, AppliedPositionStore, String)}
@@ -30,13 +30,13 @@ import org.occurrent.dsl.view.ReplayAwareMaterializedView;
  * Delegates every update to the wrapped view and then advances {@code store}, so the recorded position is written
  * only after the state it describes.
  * <p>
- * Implements {@link ReplayAwareMaterializedView} and forwards every lifecycle call to the delegate when it implements
+ * Implements {@link ReplayAware} and forwards every lifecycle call to the delegate when it implements
  * the capability too. During a replay the delegate may be buffering (a coalescing view), so the position seen so far
  * is kept in memory and only written in {@link #replayCompleted()}, after the delegate has flushed.
  * {@link #replayAbandoned()} discards it instead, since the next replay recomputes everything anyway.
  */
 @NullMarked
-final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayAwareMaterializedView {
+final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayAware {
 
     private final MaterializedView<E> delegate;
     private final AppliedPositionStore store;
@@ -79,7 +79,7 @@ final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayA
 
     @Override
     public void replayStarted() {
-        if (delegate instanceof ReplayAwareMaterializedView replayAware) {
+        if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayStarted();
         }
         replaying = true;
@@ -88,7 +88,7 @@ final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayA
 
     @Override
     public void replayCompleted() {
-        if (delegate instanceof ReplayAwareMaterializedView replayAware) {
+        if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayCompleted();
         }
         if (highestPositionSeenDuringReplay > 0) {
@@ -99,7 +99,7 @@ final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayA
 
     @Override
     public void replayAbandoned() {
-        if (delegate instanceof ReplayAwareMaterializedView replayAware) {
+        if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayAbandoned();
         }
         highestPositionSeenDuringReplay = 0;

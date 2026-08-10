@@ -144,12 +144,12 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             if (checkpoint == null) {
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
                 // the handover would, keeping DCB events out.
-                return getDelegatedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAt, action);
+                return getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAt, action);
             } else if (positionMode && isTimeBasedCheckpoint(checkpoint)) {
                 // The store now writes position, but this stored token predates that and is time-based. Reading it as a
                 // position would misinterpret a timestamp or replay from an unrelated cursor, so re-resolve to the
                 // model default instead.
-                return getDelegatedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), StartAt.subscriptionModelDefault(), action);
+                return getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), StartAt.subscriptionModelDefault(), action);
             } else {
                 firstStartAt = StartAt.checkpoint(checkpoint);
             }
@@ -157,7 +157,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
                 // Not allowed to start this subscription model, defer to parent
-                return getDelegatedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAt, action);
+                return getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAt, action);
             } else {
                 firstStartAt = startAtGeneratedByDynamic;
             }
@@ -252,7 +252,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // the insertion-order delta below. A null resume token fails loudly (captureLiveResumeCheckpoint) instead
         // of silently resuming live at "now" and dropping events committed during the replay; the position path
         // captures its checkpoint before its replay instead, for the same guarantee.
-        Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
+        Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
 
@@ -357,7 +357,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             });
             subscription = new CancelledSubscription(subscriptionId);
         } else {
-            subscription = getDelegatedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAtToUse, liveConsumer);
+            subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAtToUse, liveConsumer);
             applyPendingPauseIfAny(subscriptionId);
         }
         return subscription;
@@ -381,7 +381,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // Capture the live resume token before the bulk replay so an event committed during the replay is still
         // delivered live, like the DCB handover. Fails loudly instead of falling back to "now" when the delegate
         // reports no resume token (captureLiveResumeCheckpoint).
-        Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
+        Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
 

@@ -90,3 +90,9 @@ speculative. The reactor models hold the same maps, so the addition stays cheap 
 The subscription conformance suite planned in #395 should pin this alongside the paused-after-stop
 guarantee ADR 82 added to `SubscriptionModelLifeCycle.stop()`. Both are contracts that currently hold
 because every implementation happens to agree, which is what a TCK exists to convert into a promise.
+
+**Amended for 0.33.0: `IntrospectableSubscriptionModel` is renamed to `IntrospectableSubscriptions`, and
+`DelegatingSubscriptionModel` to `SubscriptionModelWrapper`.** Neither capability changed. Both names moved
+because neither interface ever extended `SubscriptionModel`, confirming the recipe this ADR already predicted
+renaming would need. `SubscriptionModelWrapper.getDelegatedSubscriptionModelRecursively()` is now
+`getWrappedSubscriptionModelRecursively()`.
