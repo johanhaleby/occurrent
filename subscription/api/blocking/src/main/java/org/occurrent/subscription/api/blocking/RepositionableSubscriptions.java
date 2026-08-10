@@ -56,11 +56,6 @@ public interface RepositionableSubscriptions extends SubscriptionModelCapability
      * @return The repositionable model, or empty if nothing in the chain implements this.
      */
     static Optional<RepositionableSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
-        if (subscriptionModel instanceof RepositionableSubscriptions repositionable) {
-            return Optional.of(repositionable);
-        } else if (subscriptionModel instanceof SubscriptionModelWrapper delegating) {
-            return findIn(delegating.getWrappedSubscriptionModel());
-        }
-        return Optional.empty();
+        return subscriptionModel.capability(RepositionableSubscriptions.class);
     }
 }

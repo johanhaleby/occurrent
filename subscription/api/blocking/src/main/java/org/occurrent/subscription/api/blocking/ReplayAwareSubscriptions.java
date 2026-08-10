@@ -59,11 +59,6 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
      * @return The replay-aware model, or empty if nothing in the chain implements this.
      */
     static Optional<ReplayAwareSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
-        if (subscriptionModel instanceof ReplayAwareSubscriptions replayAware) {
-            return Optional.of(replayAware);
-        } else if (subscriptionModel instanceof SubscriptionModelWrapper delegating) {
-            return findIn(delegating.getWrappedSubscriptionModel());
-        }
-        return Optional.empty();
+        return subscriptionModel.capability(ReplayAwareSubscriptions.class);
     }
 }

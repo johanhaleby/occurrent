@@ -16,6 +16,8 @@
 
 package org.occurrent.subscription.api.blocking;
 
+import java.util.Optional;
+
 /**
  * Marker supertype for every blocking subscription model capability. {@link Subscribable}, {@link CancellableSubscriptions},
  * {@link Pushable}, {@link RepositionableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link IntrospectableSubscriptions}
@@ -35,4 +37,32 @@ package org.occurrent.subscription.api.blocking;
  * @see IntrospectableSubscriptions#findIn(SubscriptionModelCapability)
  */
 public interface SubscriptionModelCapability {
+
+    /**
+     * The capability of type {@code type} behind this object, unwrapping a {@link SubscriptionModelWrapper} chain
+     * until one is found. This is the instance-side counterpart to a facet's own static {@code findIn} method, for a
+     * caller that has a {@link Class} in hand rather than a single facet named at the call site.
+     *
+     * @param type The capability to look for.
+     * @param <T>  The capability type.
+     * @return The capability, or empty if nothing in the chain implements {@code type}.
+     */
+    default <T extends SubscriptionModelCapability> Optional<T> capability(Class<T> type) {
+        if (type.isInstance(this)) {
+            return Optional.of(type.cast(this));
+        } else if (this instanceof SubscriptionModelWrapper wrapper) {
+            return wrapper.getWrappedSubscriptionModel().capability(type);
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Whether the capability of type {@code type} exists behind this object, without returning it.
+     *
+     * @param type The capability to look for.
+     * @return {@code true} if {@link #capability(Class)} would return a non-empty result for {@code type}.
+     */
+    default boolean hasCapability(Class<? extends SubscriptionModelCapability> type) {
+        return capability(type).isPresent();
+    }
 }

@@ -47,11 +47,6 @@ public interface IntrospectableSubscriptions extends SubscriptionModelCapability
      * @return The introspectable model, or empty if nothing in the chain implements this.
      */
     static Optional<IntrospectableSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
-        if (subscriptionModel instanceof IntrospectableSubscriptions introspectable) {
-            return Optional.of(introspectable);
-        } else if (subscriptionModel instanceof SubscriptionModelWrapper delegating) {
-            return findIn(delegating.getWrappedSubscriptionModel());
-        }
-        return Optional.empty();
+        return subscriptionModel.capability(IntrospectableSubscriptions.class);
     }
 }
