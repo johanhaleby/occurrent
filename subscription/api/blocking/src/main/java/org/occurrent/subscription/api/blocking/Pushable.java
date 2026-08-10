@@ -33,7 +33,7 @@ import java.util.function.Consumer;
  * {@code Pushable} is usable wherever a {@code Consumer<CloudEvent>} is expected.
  */
 @NullMarked
-public interface Pushable extends Consumer<CloudEvent> {
+public interface Pushable extends Consumer<CloudEvent>, SubscriptionModelCapability {
 
     /**
      * Push a single event to the target, dispatching it to every matching registered handler.

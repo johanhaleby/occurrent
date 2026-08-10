@@ -221,7 +221,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         Set<String> ids = competingConsumers.keySet().stream()
                 .map(SubscriptionIdAndSubscriberId::subscriptionId)
                 .collect(Collectors.toCollection(HashSet::new));
-        IntrospectableSubscriptions.of(getWrappedSubscriptionModel())
+        IntrospectableSubscriptions.findIn(getWrappedSubscriptionModel())
                 .map(IntrospectableSubscriptions::subscriptionIds)
                 .ifPresent(ids::addAll);
         return Set.copyOf(ids);

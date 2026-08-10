@@ -20,7 +20,7 @@ import java.util.function.Consumer;
  * A blocking subscription model also you to create and manage subscriptions that'll use blocking IO.
  */
 @NullMarked
-public interface Subscribable {
+public interface Subscribable extends SubscriptionModelCapability {
 
     /**
      * Start listening to cloud events persisted to the event store using the supplied start position and <code>filter</code>.

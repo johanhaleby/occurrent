@@ -25,10 +25,10 @@ import java.util.Set;
  * A subscription model that can list the subscriptions it knows about, so a caller can name one that does not exist
  * rather than only repeating the id it was given.
  * <p>
- * Not every subscription model implements this, so reach it with {@link #of(Object)}.
+ * Not every subscription model implements this, so reach it with {@link #findIn(SubscriptionModelCapability)}.
  */
 @NullMarked
-public interface IntrospectableSubscriptions {
+public interface IntrospectableSubscriptions extends SubscriptionModelCapability {
 
     /**
      * @return Every subscription id this model knows, whether running or paused.
@@ -40,14 +40,17 @@ public interface IntrospectableSubscriptions {
      * one is found. An empty result means the model cannot list its subscriptions, which is not the same as having
      * none.
      *
-     * @param subscriptionModel Any subscription model, wrapped or not.
+     * @param subscriptionModel A {@link Subscribable}, a {@link SubscriptionModelLifeCycle}, a whole {@link SubscriptionModel},
+     *                          or a {@link SubscriptionModelWrapper} around one of these. Typed as {@link SubscriptionModelCapability}
+     *                          because callers hold different subsets of a subscription model's capabilities, and no
+     *                          existing type names their union.
      * @return The introspectable model, or empty if nothing in the chain implements this.
      */
-    static Optional<IntrospectableSubscriptions> of(Object subscriptionModel) {
+    static Optional<IntrospectableSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
         if (subscriptionModel instanceof IntrospectableSubscriptions introspectable) {
             return Optional.of(introspectable);
         } else if (subscriptionModel instanceof SubscriptionModelWrapper delegating) {
-            return of(delegating.getWrappedSubscriptionModel());
+            return findIn(delegating.getWrappedSubscriptionModel());
         }
         return Optional.empty();
     }

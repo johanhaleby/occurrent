@@ -29,10 +29,10 @@ import java.util.Optional;
  * model gates its timers on being live, and firing a timeout mid-replay would decide against state that is only half
  * folded up.
  * <p>
- * Not every subscription model replays, so reach it with {@link #of(Object)} rather than assuming a concrete class.
+ * Not every subscription model replays, so reach it with {@link #findIn(SubscriptionModelCapability)} rather than assuming a concrete class.
  */
 @NullMarked
-public interface ReplayAwareSubscriptions {
+public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
 
     /**
      * Whether {@code subscriptionId} is still replaying history and has not yet handed over to live delivery.
@@ -52,14 +52,17 @@ public interface ReplayAwareSubscriptions {
      * one is found. An empty result means the model cannot say whether it is replaying, which is not the same as
      * having handed over.
      *
-     * @param subscriptionModel Any subscription model, wrapped or not.
+     * @param subscriptionModel A {@link Subscribable}, a {@link SubscriptionModelLifeCycle}, a whole {@link SubscriptionModel},
+     *                          or a {@link SubscriptionModelWrapper} around one of these. Typed as {@link SubscriptionModelCapability}
+     *                          because callers hold different subsets of a subscription model's capabilities, and no
+     *                          existing type names their union.
      * @return The replay-aware model, or empty if nothing in the chain implements this.
      */
-    static Optional<ReplayAwareSubscriptions> of(Object subscriptionModel) {
+    static Optional<ReplayAwareSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
         if (subscriptionModel instanceof ReplayAwareSubscriptions replayAware) {
             return Optional.of(replayAware);
         } else if (subscriptionModel instanceof SubscriptionModelWrapper delegating) {
-            return of(delegating.getWrappedSubscriptionModel());
+            return findIn(delegating.getWrappedSubscriptionModel());
         }
         return Optional.empty();
     }

@@ -27,7 +27,9 @@ description: >-
   to getWrappedSubscriptionModel and getDelegatedSubscriptionModelRecursively to
   getWrappedSubscriptionModelRecursively, so the interface and its methods share one vocabulary. The published TCK
   base class IntrospectableSubscriptionModelConformance moves with the interface it is named after, to
-  IntrospectableSubscriptionsConformance.
+  IntrospectableSubscriptionsConformance. ReplayAwareSubscriptions.of and IntrospectableSubscriptions.of are
+  renamed to findIn, since of is the Java convention for constructing a value that never returns empty while this
+  method searches a wrapper chain and can, so findIn says what it actually does.
 recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel
@@ -59,3 +61,9 @@ recipeList:
       oldFullyQualifiedTypeName: org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance
       newFullyQualifiedTypeName: org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance
       ignoreDefinition: true
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions of(..)
+      newMethodName: findIn
+  - org.openrewrite.java.ChangeMethodName:
+      methodPattern: org.occurrent.subscription.api.blocking.IntrospectableSubscriptions of(..)
+      newMethodName: findIn

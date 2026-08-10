@@ -303,7 +303,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     private Optional<Set<String>> modelSubscriptionIds() {
         Set<String> ids = new LinkedHashSet<>();
         for (SubscriptionModelLifeCycle model : subscriptionModels) {
-            Optional<IntrospectableSubscriptions> introspectable = IntrospectableSubscriptions.of(model);
+            Optional<IntrospectableSubscriptions> introspectable = IntrospectableSubscriptions.findIn(model);
             if (introspectable.isEmpty()) {
                 return Optional.empty();
             }

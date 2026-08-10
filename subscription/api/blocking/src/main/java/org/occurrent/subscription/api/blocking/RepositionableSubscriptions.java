@@ -28,10 +28,10 @@ import java.util.Optional;
  * the position it had read to. This is what lets a caller holding a better position, for example a checkpoint
  * another node advanced while this one was paused, hand it over on resume instead of continuing from a stale one.
  * <p>
- * Not every subscription model implements this, so reach it with {@link #of(Object)}.
+ * Not every subscription model implements this, so reach it with {@link #findIn(SubscriptionModelCapability)}.
  */
 @NullMarked
-public interface RepositionableSubscriptions {
+public interface RepositionableSubscriptions extends SubscriptionModelCapability {
 
     /**
      * Resume a paused subscription at {@code startAt}, instead of the position {@link SubscriptionModelLifeCycle#resumeSubscription(String)}
@@ -49,14 +49,17 @@ public interface RepositionableSubscriptions {
      * The repositionable model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper}
      * until one is found. An empty result means the model cannot be resumed at an explicit position.
      *
-     * @param subscriptionModel Any subscription model, wrapped or not.
+     * @param subscriptionModel A {@link Subscribable}, a {@link SubscriptionModelLifeCycle}, a whole {@link SubscriptionModel},
+     *                          or a {@link SubscriptionModelWrapper} around one of these. Typed as {@link SubscriptionModelCapability}
+     *                          because callers hold different subsets of a subscription model's capabilities, and no
+     *                          existing type names their union.
      * @return The repositionable model, or empty if nothing in the chain implements this.
      */
-    static Optional<RepositionableSubscriptions> of(Object subscriptionModel) {
+    static Optional<RepositionableSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
         if (subscriptionModel instanceof RepositionableSubscriptions repositionable) {
             return Optional.of(repositionable);
         } else if (subscriptionModel instanceof SubscriptionModelWrapper delegating) {
-            return of(delegating.getWrappedSubscriptionModel());
+            return findIn(delegating.getWrappedSubscriptionModel());
         }
         return Optional.empty();
     }

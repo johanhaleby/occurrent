@@ -31,7 +31,7 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Covers {@link IntrospectableSubscriptions#of(Object)}, the lookup a caller uses instead of casting, since the
+ * Covers {@link IntrospectableSubscriptions#findIn(SubscriptionModelCapability)}, the lookup a caller uses instead of casting, since the
  * model it needs is often behind one or more {@link SubscriptionModelWrapper} wrappers.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -41,7 +41,7 @@ class IntrospectableSubscriptionsTest {
     void finds_the_model_itself_when_it_is_introspectable() {
         IntrospectableModel model = new IntrospectableModel(Set.of("orders"));
 
-        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.of(model);
+        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.findIn(model);
 
         assertThat(found).containsSame(model);
     }
@@ -50,7 +50,7 @@ class IntrospectableSubscriptionsTest {
     void unwraps_a_delegating_model_to_reach_the_introspectable_one() {
         IntrospectableModel inner = new IntrospectableModel(Set.of("orders", "shipments"));
 
-        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.of(new Wrapper(inner));
+        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.findIn(new Wrapper(inner));
 
         assertThat(found).containsSame(inner);
         assertThat(found.orElseThrow().subscriptionIds()).containsExactlyInAnyOrder("orders", "shipments");
@@ -60,14 +60,14 @@ class IntrospectableSubscriptionsTest {
     void unwraps_through_several_layers_of_wrapping() {
         IntrospectableModel inner = new IntrospectableModel(Set.of("orders"));
 
-        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.of(new Wrapper(new Wrapper(inner)));
+        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.findIn(new Wrapper(new Wrapper(inner)));
 
         assertThat(found).containsSame(inner);
     }
 
     @Test
     void is_empty_when_nothing_in_the_chain_can_be_introspected() {
-        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.of(new Wrapper(new PlainModel()));
+        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.findIn(new Wrapper(new PlainModel()));
 
         assertThat(found).isEmpty();
     }

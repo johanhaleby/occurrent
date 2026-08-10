@@ -229,7 +229,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
-            Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.of(getWrappedSubscriptionModel());
+            Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
             if (repositionable.isPresent()) {
                 Checkpoint checkpoint = storage.read(subscriptionId);
                 if (checkpoint != null) {

@@ -25,7 +25,7 @@ import org.jspecify.annotations.NullMarked;
  * such as implementing {@link SubscriptionModelLifeCycle}.
  */
 @NullMarked
-public interface SubscriptionModelWrapper {
+public interface SubscriptionModelWrapper extends SubscriptionModelCapability {
 
     /**
      * @return The wrapped {@link SubscriptionModel} that this {@code SubscriptionModel} delegates to.
