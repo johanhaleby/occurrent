@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 8
+revision: 9
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (U1 DELIVERY_RESULT cross-checked post-merge)
+updated_by: orchestrator session dc08d709 (combined verification green, tracker scan clean)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -88,7 +88,7 @@ units:
       evidence: 'CLOSED via Fixes #707, verified by gh issue view; in-progress label
         removed'
     blocking_on: []
-    next_action: none, merged and swept; main matrix on the squash still being watched as combined verification
+    next_action: 'none, COMPLETE: main matrix 27/27 success on squash 9a26411be, verified case-insensitively after a lowercase/uppercase query bug first read as 27 failures'
     last_meaningful_progress_at: '2026-08-10T12:17:33+00:00'
     observed:
       adr_number:

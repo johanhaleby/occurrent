@@ -395,3 +395,16 @@
   rather than an Occurrent one, so it belongs in the orchestrator skill itself at the
   next edit, not only here.
 
+- GitHub's two API surfaces disagree on the CASE of a check conclusion, and mixing them
+  manufactured a false all-red main (2026-08-10, stepcond U1). The REST endpoint
+  `/commits/<sha>/check-runs` returns `"success"` in lowercase, while GraphQL's
+  `statusCheckRollup` returns `SUCCESS` in uppercase. A watcher written with the
+  uppercase comparison against the REST endpoint reported `total=27 success=0
+  failed=27` on a commit whose 27 jobs had all passed. Nothing about the output looked
+  malformed, it looked like a catastrophic regression, and the only reason it was not
+  acted on is that 27 of 27 failing minutes after a green PR is implausible on its
+  face. Compare conclusions case-insensitively (`ascii_downcase`), and treat an
+  implausibly total failure as a probable query bug to disprove before it becomes a
+  revert. Same family as the FETCH_HEAD lesson: the tooling answered a slightly
+  different question than the one being asked, and answered it confidently.
+
