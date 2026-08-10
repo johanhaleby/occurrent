@@ -1,0 +1,106 @@
+---
+schema_version: 1
+epic: stepcond
+revision: 2
+updated_at: '2026-08-10T10:40:00+00:00'
+updated_by: orchestrator session dc08d709 (registration plus U1 dispatch)
+baseline:
+  repo: johanhaleby/occurrent
+  branch: main
+authority: 'see .context/orchestrator-policy.yml (standing merge, sibling leniency,
+  reasoned-decline-open, memory checkpoints); plan approved by Johan 2026-08-10 via
+  ExitPlanMode after a fresh-context adversarial review (verdict REVISE, all eight
+  findings folded in) and four structured-ask decisions (unified event leaf,
+  allOf/anyOf, deprecate join, target 0.33.0), plus a class-literal shortcut Johan
+  added at the approval gate; plan at
+  /Users/johan/.claude/plans/https-github-com-johanhaleby-occurrent-i-whimsical-glade.md;
+  epic scoped to issue 707 (library) plus its docs unit; milestone deliberately
+  skipped, matching every prior epic in this repo'
+definition_of_done: 'U1 merged to main with ADR 118, the ADR 63 amendment, the
+  changelog entry and the 0.33.0 migration-guide section; U2 docs branch pushed and
+  review-clean, slotted into the docs-repo issue 57 merge order; issue 707 closed.
+  0.33.0 release execution itself is Johan''s manual act and is NOT part of this
+  epic.'
+pending_actions:
+- id: act-001
+  type: commit-push
+  target: 'routing comment on issue 707 (id 5238513960), updated in place for the
+    stepcond adoption plus the 0.31.0 correction'
+  expected: 'marker present, exactly one orchestrator-routing comment on the issue;
+    DONE: verified by re-read, count is 1'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-10T10:35:00+00:00'
+- id: act-002
+  type: dispatch-chip
+  target: 'U1 chip task_abdd6422: ⌁[stepcond/U1#707] Matcher step conditions ·
+    Sonnet/high (full brief, plan by path, johan-writing surfaces named, delivery
+    defaults, finding-routing protocol)'
+  expected: chip visible to Johan; session enters the fleet on his click
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-10T10:40:00+00:00'
+units:
+  U1:
+    issue: 707
+    goal: 'Matcher-based flow saga step conditions: public sealed StepCondition tree
+      (AtLeast/AllOf/AnyOf over a nested EventMatcher), on(StepCondition<? extends E>)
+      overloads, internal unification of ChoiceBody/JoinBody into one branch list with
+      ArrivingEvent/WindowCondition triggers, join deprecated and lowered to sugar,
+      Kotlin sugar incl. KClass and reified arity shortcuts, ADR 118 plus the ADR 63
+      non-goal reversal, changelog and 0.33.0 migration guide'
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: issue_closed
+      ref: 707
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: chip dispatched, waiting on Johan's click and the first PR
+    last_meaningful_progress_at: '2026-08-10T10:35:24+00:00'
+    observed: {}
+    assessment: 'Additive on public API but it rewrites the flow evaluator, which is
+      shipped 0.31.0 behavior, so the sugar-equivalence guard is the unchanged join
+      test suite. Settled by the plan, do not re-litigate: no new ActionKind (rollback
+      safety, SpringMongoSagaStateStore.java:342 valueOf); guarded classic branches are
+      NOT lowered to window leaves (onlyIf sees the arriving event, a window leaf would
+      re-evaluate later); no forRemoval and no OpenRewrite recipe for the deprecation
+      (the API still works, a recipe belongs to the removal release, and rewrite-kotlin
+      cannot fire on the Kotlin sugar); monotonicity is v1 law, no not() and no absence
+      because the step timeout owns absence.'
+  U2:
+    issue: null
+    goal: 'occurrent.org docs for step conditions: rewrite the either-branches-or-join
+      framing and the flow-DSL non-goals sentence, add a new Step conditions subsection
+      (first documentation of step predicates at all, onlyIf was never documented),
+      rewrite the join testing section keeping its #testing-saga-joins anchor, add a
+      0.33.0 news paragraph; held branch per docs-repo issue 57'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U1]
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: null
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: dispatch after U1's first push freezes the syntax
+    last_meaningful_progress_at: '2026-08-10T10:35:24+00:00'
+    observed: {}
+    assessment: 'Docs PR 60 is open, not held, and touches the same saga sections, so
+      U2 rebases over it or lands after it. Historical surfaces are out of scope: no
+      dated news post other than the 0.33.0 one may be touched (the rv33 U11 lesson,
+      a rename inside a 2021 announcement).'
