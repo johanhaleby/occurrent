@@ -1,7 +1,7 @@
 schema_version: 1
 epic: timerid
-revision: 2
-updated_at: 2026-08-10T20:41:00Z
+revision: 3
+updated_at: 2026-08-10T20:52:00Z
 updated_by: orchestrator session 496ca320 (U1 reviewed REVISE, U6 added for the migration artefacts)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 is a prose design gate and merges only after Johan confirms the ADR, per the approved plan"
@@ -32,9 +32,9 @@ units:
     depends_on: []
     session: local_24efc36e (worktree sleepy-merkle-0e3f9a)
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "717", met: false, evidence: "PR 717 open at 20dcdf569, mergeable, 0 fail. Writing gates verified independently, all four clean. Adversarial review verdict REVISE with six must-fix, feedback sent 2026-08-10T20:40Z"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "717", met: false, evidence: "PR 717 revised to c605df05f, mergeable, 0 fail, checks DONE. All six must-fix addressed and re-verified by the orchestrator: toString returns encode with the compile-error sentence corrected, SagaEffect records carry the value with the extra break shapes carried into Consequences, the recipe and guide obligation recorded, the boundary inventory corrected, the ADR 63 amendment rewritten to state that the compose collision REMAINS, and the SagaTimeout constructor question marked a plan departure for Johan with both sides and a recommendation. Writing gates re-run independently, all four clean. HELD for Johan wording confirm"}
     blocking_on: ["Johan wording confirm, design gate"]
-    next_action: "PR 717 open, REVISE returned, feedback sent to session local_24efc36e. Held for Johan wording confirm, must not merge overnight"
+    next_action: "revision verified, awaiting Johan wording confirm. Two decisions are explicitly his: taking the source break at all, and whether SagaTimeout keeps a two-string constructor"
     last_meaningful_progress_at: 2026-08-10T19:51:25Z
     observed: {}
     assessment: "Design gate, so it merges only on Johan's wording confirm. ADR number 0121 chosen after a cross-branch audit over every remote branch, which found 0120 as the highest claimed anywhere. That audit is the only view that catches a number claimed on an unmerged branch, a collision this repository has already had once."
