@@ -1,0 +1,101 @@
+schema_version: 1
+epic: timerid
+revision: 1
+updated_at: 2026-08-10T19:51:25Z
+updated_by: orchestrator session 496ca320 (registration, U1 dispatched)
+baseline: {repo: johanhaleby/occurrent, branch: main}
+authority: "standing grants per .context/orchestrator-policy.yml; U1 is a prose design gate and merges only after Johan confirms the ADR, per the approved plan"
+pending_actions:
+  - id: act-001
+    type: commit-push
+    target: "claim on issue 716, in-progress label plus routing comment 5245227157"
+    expected: "label present and exactly one orchestrator-routing comment; DONE, both verified by re-read"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-10T19:51:25Z
+  - id: act-002
+    type: dispatch-chip
+    target: "U1 chip task_3b940167"
+    expected: "chip visible to Johan; worker session starts on his click"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-10T19:51:25Z
+units:
+  U1:
+    issue: 716
+    goal: "ADR 0121 settling the timer-identity model: the sealed TimerId, the canonical parse/encode round trip and its edge cases, whether the string-shaped API is deprecated now, and whether compose namespacing is answered or merely unblocked"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "chip task_3b940167 spawned 2026-08-10T19:51:25Z, awaiting Johan's click"
+    last_meaningful_progress_at: 2026-08-10T19:51:25Z
+    observed: {}
+    assessment: "Design gate, so it merges only on Johan's wording confirm. ADR number 0121 chosen after a cross-branch audit over every remote branch, which found 0120 as the highest claimed anywhere. That audit is the only view that catches a number claimed on an unmerged branch, a collision this repository has already had once."
+  U2:
+    issue: 716
+    goal: "Core: the sealed TimerId with its parse/encode pair, TimerId overloads on SagaEffect and Saga.Builder, the SagaInput.timeout(String, TimerId) shortcut, SagaTimeout carrying the typed id, and the registration maps re-keyed"
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U1]
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+    blocking_on: ["U1, the ADR settles the separator rules and the deprecation question this unit implements"]
+    next_action: "hold until U1 merges"
+    last_meaningful_progress_at: 2026-08-10T19:51:25Z
+    observed: {}
+    assessment: "Deliberately excludes a timeout(String, String) overload. Core cannot know whether the saga it feeds is a flow saga, so it would parse a step name to Named, fail to match the flow's Qualified, and reintroduce the silent no-op this epic exists to delete."
+  U3:
+    issue: 716
+    goal: "Flow: the lowering uses Qualified(step, ..), FlowSaga.stepTimer exposed, the four FlowSagaImpl concatenation sites removed, and every in-repo test migrated off the step: literal"
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U2]
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+    blocking_on: ["U2, the type it consumes"]
+    next_action: "hold until U2 merges"
+    last_meaningful_progress_at: 2026-08-10T19:51:25Z
+    observed: {}
+    assessment: "The store round-trip assertions at SpringMongoSagaStateStoreMongoTest.java:418,486,494 keep their literal. That test pins the on-disk format, so deriving its expected value from the production helper would make it prove nothing."
+  U4:
+    issue: 716
+    goal: "Persistence proof: a 0.32.0-shaped envelope with step:X already stored loads and fires correctly, so no in-flight saga is stranded"
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U3]
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+    blocking_on: ["U3, the flow lowering it proves"]
+    next_action: "hold until U3 merges"
+    last_meaningful_progress_at: 2026-08-10T19:51:25Z
+    observed: {}
+    assessment: "This is the unit that makes the change safe to ship rather than merely correct in isolation, so it is not optional and not foldable into U3."
+  U5:
+    issue: 716
+    goal: "Docs: the testing chapter stops teaching the prefix, on a new held branch in the docs repository, plus a changelog entry and a news bullet"
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U3]
+    session: null
+    deliverables:
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+    blocking_on: ["U3, the API the documentation describes"]
+    next_action: "hold until U3 merges"
+    last_meaningful_progress_at: 2026-08-10T19:51:25Z
+    observed: {}
+    assessment: "Held branch, added to the merge order in occurrent-org.github.io#57. Six of the seven held branches already carry hunks in the saga chapter, so trial-merge before declaring it clean."
