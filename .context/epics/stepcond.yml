@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 14
+revision: 15
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (U3 both halves delivered, gate-miss fix PR 714 open)
+updated_by: orchestrator session dc08d709 (EPIC CLOSED, all units verified and swept)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -238,18 +238,21 @@ units:
     goal: 'Recast a semicolon in the purchase saga code comment, which shipped in both
       doc guard test files via PR 713 despite that unit reporting its writing gate
       clean'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U3]
     session: orchestrator inline (bucket B trivial edit, branch johan/stepcond-comment-semicolon)
     deliverables:
     - check: pr_merged
       ref: 714
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED 2026-08-10T14:10:17+00:00 pinned to 2c429700140421c6424f08c26390cfc1b3c7023b,
+        squash 573316d4babf5d1cb3723e69374d0361b3d26d20. 26/26 checks success, zero
+        review threads, semicolon confirmed gone from both files on main, worktree and
+        both branches swept.'
     blocking_on: []
-    next_action: waiting on checks, then CAS merge
+    next_action: none, merged and swept
     last_meaningful_progress_at: '2026-08-10T13:53:09+00:00'
     observed: {}
     assessment: 'Found only because the docs worker hit the semicolon while copying the
