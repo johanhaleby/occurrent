@@ -82,16 +82,16 @@ turn stored data into an exception on the path that fires timers, for a saga tha
 from the compact constructor. These are public records, so `new Simple("a:b")` compiles, and without the refusal it
 would build a value that writes itself out as `"a:b"` and reads back as `Qualified("a", "b")`.
 
-Refusing the separator was first written down as an alternative to reading names one way, and the two are not
-alternatives, because they hold up different halves of the same property.
+Refusing the separator was first written down as an alternative to letting `of` read every string the same way, and
+the two are not alternatives, because they hold up different halves of the same property.
 
 - `of(x.encode()).equals(x)`, a value surviving its trip to storage, holds because `Simple` and `Qualified` refuse the
   values that would come back as something else.
 - `of(s).encode().equals(s)`, a stored string surviving its trip through the API, holds for every string because `of`
   splits at the first colon and `encode` puts the same colon back.
 
-Reading names one way is what the second needs, and it leaves `new Simple("a:b")` constructible, so the first breaks.
-Both rules ship. The refusal costs the 0.32.0 caller nothing, because they never write `new Simple(..)`, they write
+`of` on its own is what the second needs, and it leaves `new Simple("a:b")` constructible, so the first breaks. Both
+rules ship. The refusal costs the 0.32.0 caller nothing, because they never write `new Simple(..)`, they write
 `startTimeout("a:b", ..)`, which goes through `of`.
 
 One rule generates all of it. A value can be built directly exactly when `of` can produce it.
