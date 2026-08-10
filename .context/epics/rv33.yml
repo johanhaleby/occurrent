@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 40
-updated_at: 2026-08-10T09:43:07Z
+revision: 41
+updated_at: 2026-08-10T09:49:28Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -236,11 +236,12 @@ units:
     depends_on: [U10]
     session: local_c89160d2-b174-445c-ac1d-05f6be3c1861
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 708, met: false, evidence: null}
     blocking_on: []
-    next_action: "running as session local_c89160d2; probe rename of->findIn folded in 2026-08-10T08:12:29Z (two more ChangeMethodName entries for the shipped pair, view-dsl ReplayAware javadoc reference updated). Was: chip task_4ed2c7ee spawned 2026-08-10T08:04:01Z, awaiting Johan's click"
+    next_action: "PR 708 reviewed clean, awaiting CI then CAS merge, then dispatch U16. Was: running as session local_c89160d2; probe rename of->findIn folded in 2026-08-10T08:12:29Z (two more ChangeMethodName entries for the shipped pair, view-dsl ReplayAware javadoc reference updated). Was: chip task_4ed2c7ee spawned 2026-08-10T08:04:01Z, awaiting Johan's click"
     last_meaningful_progress_at: 2026-08-10T08:12:48Z
-    observed: {}
+    observed:
+      pr_708_review: {root: "pure marker, no methods, both stacks", extends_wiring: "Subscribable, CancellableSubscriptions, Pushable, Repositionable, ReplayAware, Introspectable, SubscriptionModelWrapper all extend it", adr: "0118 carries the EventStoreCapability asymmetry section with the TemporalUnit/ChronoUnit precedent and the reserved SubscriptionModelFeature name", recipe: "10 entries, 6 ChangeType plus 4 ChangeMethodName", migration_proof: "classpath-shaped dependsOn tests prove old-type-plus-old-of migrates to new-type-plus-findIn in one run, generalized from the U10 lesson without being told", via: "orchestrator read of the PR branch", at: "2026-08-10T09:49:28Z"}
     assessment: "vehicle: session chip at the U10-merge sweep (Johan is at the computer), Sonnet/high, no plan gate (design settled in-session) but the ADR holds for wording confirm. All extends additions are source and binary compatible on shipped types. ADR carries a dedicated paragraph on the EventStoreCapability asymmetry (Johan raised it 2026-08-10): the enum-vs-interface split is deliberate and unremovable (a root must be a type, a config value must be a value, TemporalUnit vs ChronoUnit is the JDK precedent), and the ADR pre-names the hypothetical future subscription-side declared-capability enum as SubscriptionModelFeature so that name collision is resolved before it exists. Do not rename the mixins to *Capability, the extends wiring is the consistency."
   U13:
     issue: null
