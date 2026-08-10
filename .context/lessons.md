@@ -316,3 +316,13 @@
   deliverable auto-merges only after its design gate is explicitly closed (the unit's
   handover or the user saying the design is final), never on green gates or per-PR asks,
   because prose runs no CI and its only real reviewer is the human still reading it.
+
+- A rename's ripples belong to the same unit as the rename, and every file the renamed
+  type touches must be checked against the ownership map at planning time (2026-08-09,
+  rv33 U2/U3). The briefs gave U3 "the rename plus ripples" and U2 the file
+  RecordingReactiveUpdate.java, which implements the renamed marker, so U3 could not
+  complete without editing U2's file. The worker did the right thing (mechanical
+  type-name edits only, flagged it), and the recovery was a coordination message plus
+  merge sequencing, but the contradiction was findable before dispatch by grepping the
+  renamed type's implementors against the collision map. The adversarial plan review
+  checked file sets for overlap, not type-reference closures.
