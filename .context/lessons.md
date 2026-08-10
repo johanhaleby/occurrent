@@ -408,3 +408,16 @@
   revert. Same family as the FETCH_HEAD lesson: the tooling answered a slightly
   different question than the one being asked, and answered it confidently.
 
+- A worker's "writing gate ran clean" is a claim, and the cheapest place to catch a miss
+  is the next unit that copies the text (2026-08-10, stepcond U3). The library unit
+  reported the johan-writing greps run with zero hits, and a semicolon nonetheless
+  shipped in a code comment in BOTH doc guard test files. It surfaced only because the
+  documentation unit copied that comment into a snippet, noticed the semicolon was a
+  borderline case, recast it, and SAID SO in its report rather than silently working
+  around it. Two rules follow. Treat a gate claim like a DELIVERY_RESULT claim, spot-check
+  it on the merged artifact when the text is short enough to grep, which for code comments
+  it always is. And name comment text explicitly as a gate surface in any brief that
+  copies code between repositories, because the copying unit inherits prose it did not
+  write. The fix went out as its own small PR rather than a direct push, since the
+  standing push grant covers memory checkpoints and never code.
+

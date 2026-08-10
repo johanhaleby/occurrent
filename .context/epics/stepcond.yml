@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 13
+revision: 14
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (U3 library half merged, docs half running)
+updated_by: orchestrator session dc08d709 (U3 both halves delivered, gate-miss fix PR 714 open)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -187,11 +187,13 @@ units:
       only: doc-snippet guard tests covering allOf with nesting, a leaf predicate, and
       a step mixing a classic on<T> branch with a condition branch, then extend the
       held docs branch (PR 61) to show them'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U1, U2]
-    session: subagent a617fdcf (worktree-isolated, library half)
+    swept_note: 'library worker worktree clean and branch deleted; docs worker removed
+      its own worktrees'
+    session: 'subagents a617fdcf (library half) and a604ae63 (docs half)'
     observed_pr:
       number: 713
       head: 20512b2729b1b78ac61c2443a794a66813a06dd5
@@ -215,10 +217,14 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: 61
-      met: false
-      evidence: null
+      met: true
+      evidence: 'PR 61 updated in place to head 8455caffb, +190/-20 on
+        pages/docs/docs.md, no new PR opened. Verified independently: both anchors
+        present, three sagas (shipment, sensor, purchase) in both languages, zero
+        dash/arrow hits on added lines, docs worktrees removed. Main matrix on the
+        library squash ee91f9919 was 26/26 success.'
     blocking_on: []
-    next_action: 'library half merged and main matrix 26/26 success on squash ee91f9919; docs half (subagent a604ae63) extending PR 61 held branch'
+    next_action: 'DONE pending PR 714, the follow-up fixing a writing-gate miss the docs worker surfaced'
     last_meaningful_progress_at: '2026-08-10T13:13:53+00:00'
     observed: {}
     assessment: 'Adopted by Johan at a structured ask after U2 reported the gap honestly
@@ -227,3 +233,28 @@ units:
       The docs half must not run until the library half merges, because a documented
       example has to come from a test that exists on main. Johan is on mobile, so both
       halves run as subagents, never chips.'
+  U4:
+    issue: null
+    goal: 'Recast a semicolon in the purchase saga code comment, which shipped in both
+      doc guard test files via PR 713 despite that unit reporting its writing gate
+      clean'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: [U3]
+    session: orchestrator inline (bucket B trivial edit, branch johan/stepcond-comment-semicolon)
+    deliverables:
+    - check: pr_merged
+      ref: 714
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: waiting on checks, then CAS merge
+    last_meaningful_progress_at: '2026-08-10T13:53:09+00:00'
+    observed: {}
+    assessment: 'Found only because the docs worker hit the semicolon while copying the
+      snippet and said so instead of silently working around it. Two lessons, both
+      recorded: a worker claiming its writing gate ran clean is a CLAIM like any other,
+      and code comments copied between repositories are a gate surface the copying unit
+      inherits. Fixed as its own PR rather than pushed to main, because the standing
+      push grant covers memory checkpoints only, never code.'
