@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 49
-updated_at: 2026-08-10T17:06:19Z
+revision: 50
+updated_at: 2026-08-10T18:45:20Z
 updated_by: orchestrator session 496ca320 (U18 adopted, ReceivedEvents any/none)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -325,16 +325,16 @@ units:
   U18:
     issue: null
     goal: "Add any/none predicates to ReceivedEvents so a flow reaction can ask whether a type was received instead of fetching the list and testing it for emptiness (Johan 2026-08-10)"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_8d398409 (worktree busy-banach-9c6901, branch johan/busy-banach-9c6901)
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/707-step-conditions, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: '715', met: true, evidence: "PR 715 squash-merged as 9d8583394, CAS-pinned to 1262e2633. Matrix 27 of 27 green on the code head 0909206a6, and the only later commit changed changelog.md alone, which runs no test checks in this repo by design"}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/707-step-conditions, met: true, evidence: "snippet plus its prose reference at 0d35f3a on PR 61's branch, news bullet at 89c0525 on PR 54's branch, both merged into docs/0.33.0-preview at 17058af and rendering"}
     blocking_on: []
-    next_action: "running since 2026-08-10T17:11Z as session local_8d398409, chip task_117d1dc6"
+    next_action: none, merged and swept
     last_meaningful_progress_at: 2026-08-10T17:06:19Z
     observed: {}
     assessment: "Johan spotted received.all(Rejected::class.java).isEmpty() in the step-conditions example and asked for a none predicate plus reified Kotlin forms. Verified before adopting: reified all<T>() and any<T>() ALREADY exist in ReceivedEventsExtensions.kt, so the Kotlin half of his ask is already shipped and the example simply was not using it. The real gap is that neither stack has a none, and Java has no any either, so Java can only write all(X.class).isEmpty(). Design: two default methods on the ReceivedEvents interface (any/none delegating to first(type)), one new reified Kotlin none<T>(), and retarget the existing any<T>() onto the new Java member so the two stacks share one implementation. Additive, no break. Docs example is guard-tested twice, DocumentedFlowSagaKotlinTest.kt:523 and DocumentedFlowSagaTest.java, so both must change with the docs. Docs land on PR 61's held branch, which the stepcond epic owns, so that epic must be told. Naming note NOT actioned: Kotlin collections use any/none/all as a predicate triple, but this all<T>() returns a List, so the released name already breaks that symmetry and renaming it is a break for another release."

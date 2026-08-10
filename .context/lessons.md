@@ -476,3 +476,27 @@ the tag. Repeating the same line at the top of the prompt is fine and useful for
 it is not a substitute. **It is recoverable after the fact:** `set_session_title` renames another
 session in place, so a mis-titled running unit is fixed with `list_sessions` to get the id and
 one rename, with no need to dismiss the chip or restart the work.
+
+## A `cd` to the repo root in a worktree session silently targets another branch (2026-08-10, rv33 U18)
+
+The recorded worktree-path rule says never target the primary checkout from a worktree session,
+but the way it actually happens is subtler than editing the wrong file by name. Every shell call
+here starts in the session worktree, so a bare `python3 - <<EOF` writing `.context/epics/rv33.yml`
+is correct. Prefixing the same call with `cd /Users/johan/devtools/java/projects/occurrent`,
+which reads like "go to the repo", lands in the **primary checkout**, and another session had
+left that on `stepcond/707-matcher-step-conditions`. The epic file there was 6 revisions and one
+unit behind, so `validate` reported "revision 44, 17 units" for a file this session had already
+taken to 49 and 18.
+
+**The tell is a state file reading older than what you just wrote to it**, not an error, because
+nothing fails. Here the string replacements simply found no match against the older content, the
+file was rewritten byte-identical, and `git status` stayed clean, so the wrong-tree write left no
+trace at all. A replacement that *had* matched would have committed epic state onto a sibling
+epic's branch.
+
+**How to apply:** in a worktree session, never `cd` to the repository root in a shell call. Let
+the call inherit the session worktree, and when a path outside it is genuinely needed use
+`git -C <path>` for that one command rather than moving the shell. Prefer the Edit tool for files
+in the session worktree, since the `block-cross-worktree-edit.sh` hook catches this class of
+mistake for Edit but cannot see a shell redirect. Cheap check before trusting any state-file read
+in a shared repository: `git branch --show-current` with no `cd`.
