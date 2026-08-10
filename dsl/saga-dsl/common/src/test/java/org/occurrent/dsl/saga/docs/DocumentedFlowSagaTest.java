@@ -585,7 +585,7 @@ class DocumentedFlowSagaTest {
                 .step("awaiting-decision", step -> step
                         .on(StepCondition.anyOf(StepCondition.event(Approved.class, 2), StepCondition.event(Rejected.class)),
                                 Continuation.end(),
-                                received -> received.all(Rejected.class).isEmpty()
+                                received -> received.none(Rejected.class)
                                         ? List.of(new Publish(received.initiating(ReviewStarted.class).reviewId()))
                                         : List.of(new Discard(received.initiating(ReviewStarted.class).reviewId()))))
                 .build();
