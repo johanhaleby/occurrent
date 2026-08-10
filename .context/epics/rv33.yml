@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 37
-updated_at: 2026-08-10T08:59:36Z
+revision: 38
+updated_at: 2026-08-10T09:04:43Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -290,7 +290,7 @@ units:
     assessment: "raised by U13 after Johan caught PR 59 calling a 0.33.0 interface part of the unreleased library, which a reader can never see as true because held branches merge only after the release. Verified all seven held docs branches across every added line: PR 59 was the sole occurrence and is already fixed at 88771f3, so no cleanup work exists. Routed to AGENTS.md rather than lessons.md because it binds every contributor, per the enforceable-home rule."
   U16:
     issue: null
-    goal: "Instance-side capability lookup: a default capability(Class<T>) returning Optional<T> on SubscriptionModelCapability (both stacks), a Kotlin reified extension in the subscription DSL module, and a docs commit on held PR 59's branch (Johan adopted 2026-08-10, chose Optional over the boolean hasCapability shape)"
+    goal: "Instance-side capability lookup on SubscriptionModelCapability (both stacks): a default capability(Class<T>) returning Optional<T> plus a default hasCapability(Class<? extends SubscriptionModelCapability>) returning boolean that delegates to it, Kotlin reified extensions for both in the subscription DSL module, and a docs commit on held PR 59 branch (Johan adopted 2026-08-10)"
     phase: PLANNED
     health: PROGRESSING
     swept: false
@@ -303,4 +303,4 @@ units:
     next_action: "dispatch at the U12 merge sweep; both edit SubscriptionModelCapability and U12 is the unit creating it"
     last_meaningful_progress_at: 2026-08-10T08:59:36Z
     observed: {}
-    assessment: "purely additive so it was free to defer, Johan chose to ship it in 0.33.0 anyway. Design settled: default method (statics are not inherited, which is why the static findIn could not move to the root, but a default method can), Optional return rather than boolean because a boolean invites check-then-act and a second chain walk. Kotlin goes in the subscription DSL module since subscription/api ships zero Kotlin files. No event store precedent exists, EventStoreCapability is a config value never queried at runtime, so this establishes the pattern. Docs go as a commit on PR 59's existing held branch rather than a new docs PR."
+    assessment: "purely additive so it was free to defer, Johan chose to ship it in 0.33.0 anyway. Design settled: default method (statics are not inherited, which is why the static findIn could not move to the root, but a default method can), BOTH shapes ship, corrected after Johan pushed back: the orchestrator first argued a boolean invites check-then-act and a second chain walk, but that objection is about caller patterns rather than about having both methods, and it dissolves when hasCapability is a one-line delegate to capability(..).isPresent(). Precedent is Map.containsKey beside Map.get, and it matches the recorded tell-dont-ask preference for a direct accessor over chaining through a wrapper even at the cost of a thin duplicate. Signatures differ: capability needs the type parameter to return Optional<T>, hasCapability does not and takes Class<? extends SubscriptionModelCapability>. Kotlin goes in the subscription DSL module since subscription/api ships zero Kotlin files. No event store precedent exists, EventStoreCapability is a config value never queried at runtime, so this establishes the pattern. Docs go as a commit on PR 59's existing held branch rather than a new docs PR."
