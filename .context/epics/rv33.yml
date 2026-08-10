@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 23
-updated_at: 2026-08-10T06:40:38Z
+revision: 24
+updated_at: 2026-08-10T06:43:41Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -241,4 +241,4 @@ units:
     next_action: "dispatch once U10 is merged; they collide in the same files"
     last_meaningful_progress_at: 2026-08-10T06:33:25Z
     observed: {}
-    assessment: "vehicle: session chip at the U10-merge sweep (Johan is at the computer), Sonnet/high, no plan gate (design settled in-session) but the ADR holds for wording confirm. All extends additions are source and binary compatible on shipped types. ADR notes the EventStoreCapability enum vs marker-supertype vocabulary distinction. Do not rename the mixins to *Capability, the extends wiring is the consistency."
+    assessment: "vehicle: session chip at the U10-merge sweep (Johan is at the computer), Sonnet/high, no plan gate (design settled in-session) but the ADR holds for wording confirm. All extends additions are source and binary compatible on shipped types. ADR carries a dedicated paragraph on the EventStoreCapability asymmetry (Johan raised it 2026-08-10): the enum-vs-interface split is deliberate and unremovable (a root must be a type, a config value must be a value, TemporalUnit vs ChronoUnit is the JDK precedent), and the ADR pre-names the hypothetical future subscription-side declared-capability enum as SubscriptionModelFeature so that name collision is resolved before it exists. Do not rename the mixins to *Capability, the extends wiring is the consistency."
