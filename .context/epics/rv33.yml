@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 42
-updated_at: 2026-08-10T09:55:22Z
+revision: 43
+updated_at: 2026-08-10T09:58:14Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -246,15 +246,15 @@ units:
   U13:
     issue: null
     goal: "Document every subscription model capability on occurrent.org, what each does, which models implement it, how the of() probe works, and where ordering genuinely matters (Johan 2026-08-10)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_39365907-5638-4680-b9eb-fdc60f538226
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/subscription-model-capabilities, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/subscription-model-capabilities, met: true, evidence: "PR 59 head 88771f3d2, held; findIn used throughout, zero unreleased framing, ordering answered (outermost implementer answers) with a worked example, registered on docs issue 57 after PR 58"}
     blocking_on: []
-    next_action: "running as session local_39365907; told to document findIn rather than of. Was: chip task_085aafc1 spawned 2026-08-10T08:08:45Z, awaiting Johan's click"
+    next_action: "delivered and verified, session idle; archive after the release merges PR 59. Was: running as session local_39365907. Was: chip task_085aafc1 spawned 2026-08-10T08:08:45Z, awaiting Johan's click"
     last_meaningful_progress_at: 2026-08-10T08:12:48Z
     observed: {}
     assessment: "docs-repo only, held for release like every docs PR. Branched from PR 58's branch rather than main because the existing capability prose sits on the lines 58 renames. Documents the post-U12 end state (SubscriptionModelCapability root, of() narrowed) while U12 runs in parallel, so it needs a re-check if U12's design shifts at its ADR gate. Merge order: immediately after PR 58."
@@ -299,24 +299,24 @@ units:
     session: null
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/subscription-model-capabilities, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/subscription-model-capabilities, met: true, evidence: "PR 59 head 88771f3d2, held; findIn used throughout, zero unreleased framing, ordering answered (outermost implementer answers) with a worked example, registered on docs issue 57 after PR 58"}
     blocking_on: []
-    next_action: "chip task_b2342954 spawned 2026-08-10T09:55:22Z, awaiting Johan's click"
+    next_action: "chip spawned at the U12 merge, awaiting Johan click. Ref task_b2342954 spawned 2026-08-10T09:55:22Z, awaiting Johan's click"
     last_meaningful_progress_at: 2026-08-10T08:59:36Z
     observed: {}
     assessment: "purely additive so it was free to defer, Johan chose to ship it in 0.33.0 anyway. Design settled: default method (statics are not inherited, which is why the static findIn could not move to the root, but a default method can), BOTH shapes ship, corrected after Johan pushed back: the orchestrator first argued a boolean invites check-then-act and a second chain walk, but that objection is about caller patterns rather than about having both methods, and it dissolves when hasCapability is a one-line delegate to capability(..).isPresent(). Precedent is Map.containsKey beside Map.get, and it matches the recorded tell-dont-ask preference for a direct accessor over chaining through a wrapper even at the cost of a thin duplicate. Signatures differ: capability needs the type parameter to return Optional<T>, hasCapability does not and takes Class<? extends SubscriptionModelCapability>. Kotlin goes in the subscription DSL module since subscription/api ships zero Kotlin files. No event store precedent exists, EventStoreCapability is a config value never queried at runtime, so this establishes the pattern. Docs go as a commit on PR 59's existing held branch rather than a new docs PR."
   U17:
     issue: null
     goal: "Cut ten interpretive-metadiscourse statements from the docs and rewrite the Firing a timeout without waiting section, which Johan still finds too complex (Johan 2026-08-10)"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/prose-metadiscourse-and-timeout-section, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/prose-metadiscourse-and-timeout-section, met: true, evidence: "PR 60 into docs main, 18 additions 12 deletions in docs.md only, zero metadiscourse survivors document-wide, timeout section rewritten with the anchor preserved, awaiting Johan merge"}
     blocking_on: []
-    next_action: "chip task_466ca838 spawned 2026-08-10T09:28:25Z, awaiting Johan's click"
+    next_action: "delivered as PR 60, awaiting Johan merge since it targets docs main and is prose he asked for. Was: chip task_466ca838 spawned 2026-08-10T09:28:25Z, awaiting Johan's click"
     last_meaningful_progress_at: 2026-08-10T09:28:25Z
     observed: {}
     assessment: "targets docs main normally rather than being held for release, the one documentation PR in this epic that does, because it rewords already-published prose about already-shipped behaviour instead of documenting an unreleased feature. All ten instances are pre-existing on main and no held branch adds any, verified across every added line. Held PR 49 touches one of the edited paragraphs so it may need a trivial rebase afterwards. The johan-writing skill gained a bullet for this worth-knowing family the same day, committed as e6ad659 in the johan-skills repo."
