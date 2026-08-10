@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rv33
-revision: 48
-updated_at: 2026-08-10T11:25:27Z
-updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
+revision: 49
+updated_at: 2026-08-10T17:06:19Z
+updated_by: orchestrator session 496ca320 (U18 adopted, ReceivedEvents any/none)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
 pending_actions:
@@ -322,3 +322,19 @@ units:
     last_meaningful_progress_at: 2026-08-10T09:28:25Z
     observed: {}
     assessment: "targets docs main normally rather than being held for release, the one documentation PR in this epic that does, because it rewords already-published prose about already-shipped behaviour instead of documenting an unreleased feature. All ten instances are pre-existing on main and no held branch adds any, verified across every added line. Held PR 49 touches one of the edited paragraphs so it may need a trivial rebase afterwards. The johan-writing skill gained a bullet for this worth-knowing family the same day, committed as e6ad659 in the johan-skills repo."
+  U18:
+    issue: null
+    goal: "Add any/none predicates to ReceivedEvents so a flow reaction can ask whether a type was received instead of fetching the list and testing it for emptiness (Johan 2026-08-10)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/707-step-conditions, met: false, evidence: null}
+    blocking_on: []
+    next_action: "chip task_117d1dc6 spawned 2026-08-10T17:06:19Z, awaiting Johan's click"
+    last_meaningful_progress_at: 2026-08-10T17:06:19Z
+    observed: {}
+    assessment: "Johan spotted received.all(Rejected::class.java).isEmpty() in the step-conditions example and asked for a none predicate plus reified Kotlin forms. Verified before adopting: reified all<T>() and any<T>() ALREADY exist in ReceivedEventsExtensions.kt, so the Kotlin half of his ask is already shipped and the example simply was not using it. The real gap is that neither stack has a none, and Java has no any either, so Java can only write all(X.class).isEmpty(). Design: two default methods on the ReceivedEvents interface (any/none delegating to first(type)), one new reified Kotlin none<T>(), and retarget the existing any<T>() onto the new Java member so the two stacks share one implementation. Additive, no break. Docs example is guard-tested twice, DocumentedFlowSagaKotlinTest.kt:523 and DocumentedFlowSagaTest.java, so both must change with the docs. Docs land on PR 61's held branch, which the stepcond epic owns, so that epic must be told. Naming note NOT actioned: Kotlin collections use any/none/all as a predicate triple, but this all<T>() returns a List, so the released name already breaks that symmetry and renaming it is a break for another release."
