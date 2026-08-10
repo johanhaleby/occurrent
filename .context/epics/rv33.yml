@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 45
-updated_at: 2026-08-10T11:09:56Z
+revision: 46
+updated_at: 2026-08-10T11:16:45Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -261,14 +261,14 @@ units:
   U14:
     issue: null
     goal: "Rename AppliedPositionStore and its two Mongo implementations to AppliedProjectionPositionStore, naming the projection whose position they hold (Johan 2026-08-10)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/vgpr-361-version-gated-projection-reads, met: false, evidence: null}
+      - {check: pr_merged, ref: 711, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/vgpr-361-version-gated-projection-reads, met: true, evidence: "commit a191b83 on PR 52 held branch, three AppliedProjectionPositionStore mentions"}
     blocking_on: []
     next_action: "chip task_d1bc7045 spawned 2026-08-10T08:30:48Z, awaiting Johan's click"
     last_meaningful_progress_at: 2026-08-10T08:30:48Z
@@ -293,7 +293,7 @@ units:
   U16:
     issue: null
     goal: "Instance-side capability lookup on SubscriptionModelCapability (both stacks): a default capability(Class<T>) returning Optional<T> plus a default hasCapability(Class<? extends SubscriptionModelCapability>) returning boolean that delegates to it, Kotlin reified extensions for both in the subscription DSL module, and a docs commit on held PR 59 branch (Johan adopted 2026-08-10)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U12]
@@ -316,7 +316,7 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/prose-metadiscourse-and-timeout-section, met: true, evidence: "PR 60 into docs main, 18 additions 12 deletions in docs.md only, zero metadiscourse survivors document-wide, timeout section rewritten with the anchor preserved, awaiting Johan merge"}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/prose-metadiscourse-and-timeout-section, met: true, evidence: "MERGED as squash 7c64016fb on Johan approval, live on the docs site. PR 60 into docs main, 18 additions 12 deletions in docs.md only, zero metadiscourse survivors document-wide, timeout section rewritten with the anchor preserved, awaiting Johan merge"}
     blocking_on: []
     next_action: "delivered as PR 60, awaiting Johan merge since it targets docs main and is prose he asked for. Was: chip task_466ca838 spawned 2026-08-10T09:28:25Z, awaiting Johan's click"
     last_meaningful_progress_at: 2026-08-10T09:28:25Z
