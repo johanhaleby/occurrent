@@ -125,7 +125,7 @@ class SubscriptionModeManualMongoTest {
 
     private Set<String> subscriptionIdsKnownToTheChangeStreamModel() {
         SubscriptionModel innermost = ((SubscriptionModelWrapper) subscriptionModel).getWrappedSubscriptionModelRecursively();
-        return IntrospectableSubscriptions.of(innermost).orElseThrow().subscriptionIds();
+        return IntrospectableSubscriptions.findIn(innermost).orElseThrow().subscriptionIds();
     }
 
     private static TestEvent event() {

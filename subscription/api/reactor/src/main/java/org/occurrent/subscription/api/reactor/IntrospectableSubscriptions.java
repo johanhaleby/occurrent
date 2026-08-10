@@ -28,7 +28,7 @@ import java.util.Set;
  * subscription DSL wrappers do not forward it, so ask the subscription model itself. See ADR 89.
  */
 @NullMarked
-public interface IntrospectableSubscriptions {
+public interface IntrospectableSubscriptions extends SubscriptionModelCapability {
 
     /**
      * @return Every subscription id this model knows, whether running or paused.

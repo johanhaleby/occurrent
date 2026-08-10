@@ -8,8 +8,9 @@ placeholder plus a review comment each, so the module compiles again. Filling in
 section 2. [ADR 116](../architecture/decisions/0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md)
 has the reasoning.
 
-Five subscription-capability interfaces are also renamed. None of them extended `SubscriptionModel`, and the old
-names claimed a relationship they never had. `UpgradeToOccurrent_0_33` renames those too, see
+Five subscription-capability interfaces are also renamed, and two of their static lookup methods go from `of` to
+`findIn`. None of the interfaces extended `SubscriptionModel`, and the old names claimed a relationship they never
+had. `UpgradeToOccurrent_0_33` renames those too, see
 [section 5](#5-five-subscription-capability-interfaces-are-renamed).
 
 ## 1. What changed
@@ -127,14 +128,32 @@ One published TCK base class moves with the interface it is named after:
 
 Only relevant if you extend it yourself to check your own subscription model against the introspection contract.
 
+The static lookup on `ReplayAwareSubscriptions` and `IntrospectableSubscriptions` is also renamed, `of` becomes
+`findIn`, and narrows its parameter from `Object` to the new `SubscriptionModelCapability` marker:
+
+| Old | New |
+|---|---|
+| `ReplayAwareSubscriptions.of(Object)` | `ReplayAwareSubscriptions.findIn(SubscriptionModelCapability)` |
+| `IntrospectableSubscriptions.of(Object)` | `IntrospectableSubscriptions.findIn(SubscriptionModelCapability)` |
+
+`of` is the convention Java uses for constructing a value, and `Optional.of` in particular never returns empty, but
+this method searches a `SubscriptionModelWrapper` chain and can come back empty, so `findIn` says what it actually
+does. Every `Subscribable`, `SubscriptionModelLifeCycle`, `SubscriptionModel` and `SubscriptionModelWrapper` now
+extends `SubscriptionModelCapability`, so every existing caller's argument still satisfies the narrowed parameter
+without change. Only relevant if you call the old `of` yourself, or pass something that is none of those, which did
+not do anything useful before either, since the lookup would only ever return empty for it.
+[ADR 118](../architecture/decisions/0118-a-subscription-model-capability-marker-replaces-object-in-the-of-lookups.md)
+has the reasoning. `RepositionableSubscriptions.findIn` never shipped under the `of` name, so it is not in this table.
+
 ### Run the recipe
 
-`UpgradeToOccurrent_0_33` renames all five interfaces, both methods and the TCK base class for you, in Java and
-Kotlin alike, the same way
+`UpgradeToOccurrent_0_33` renames all five interfaces, both methods, the `of` to `findIn` rename above, and the TCK
+base class for you, in Java and Kotlin alike, the same way
 [section 5 of the 0.32.0 guide](upgrading-to-0.32.0.md#5-the-reactor-subscriptionmodel-is-now-fluxsubscriptionmodel)
 renamed the reactor `SubscriptionModel`. Run it once, as part of the upgrade.
 
 ### By hand
 
-Change the import and the type name at every use listed in the tables above, and the two method names on
-`SubscriptionModelWrapper`.
+Change the import and the type name at every use listed in the tables above, the two method names on
+`SubscriptionModelWrapper`, and `of` to `findIn` wherever you call `ReplayAwareSubscriptions` or
+`IntrospectableSubscriptions`.

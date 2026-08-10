@@ -322,7 +322,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-        return RepositionableSubscriptions.of(getWrappedSubscriptionModel())
+        return RepositionableSubscriptions.findIn(getWrappedSubscriptionModel())
                 .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"))
                 .resumeSubscription(subscriptionId, startAt);
     }

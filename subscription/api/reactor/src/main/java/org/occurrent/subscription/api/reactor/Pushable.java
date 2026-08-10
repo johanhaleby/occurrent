@@ -31,7 +31,7 @@ import reactor.core.publisher.Mono;
  * listener can depend on the capability rather than a concrete model.
  */
 @NullMarked
-public interface Pushable {
+public interface Pushable extends SubscriptionModelCapability {
 
     /**
      * Push a single event to the target. The returned {@link Mono} completes once every matching handler has completed.

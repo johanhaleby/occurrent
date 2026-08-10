@@ -229,7 +229,7 @@ class SagaAnnotationRegistrar {
         // mid-replay decides against state that is only half folded up, which is the one thing a saga catching up
         // before it goes live is meant to avoid. Asked through the capability rather than a concrete class, so an
         // event-store catch-up model behind a durable wrapper is held to it too, not only the push one.
-        return ReplayAwareSubscriptions.of(subscribable)
+        return ReplayAwareSubscriptions.findIn(subscribable)
                 .<BooleanSupplier>map(replayAware -> () -> lifeCycle.isRunning(subscriptionId) && !replayAware.isCatchingUp(subscriptionId))
                 .orElse(() -> lifeCycle.isRunning(subscriptionId));
     }

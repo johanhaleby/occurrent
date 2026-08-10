@@ -25,7 +25,7 @@ package org.occurrent.dsl.view;
  * A view that does not implement this interface is never told anything and keeps writing through per event, exactly as
  * before this capability existed. Whoever drives a replay (a catch-up handover, for example) probes for it with an
  * {@code instanceof} check at the point of need, the same idiom {@code SagaInstances} uses for
- * {@code SagaStateStoreQueries}. There is deliberately no {@code static Optional<ReplayAware> of(Object)}
+ * {@code SagaStateStoreQueries}. There is deliberately no {@code static Optional<ReplayAware> findIn(...)}
  * helper. That shape exists elsewhere to unwrap a delegating view. The one delegating {@link MaterializedView} this
  * library builds, the position recorder from
  * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>,

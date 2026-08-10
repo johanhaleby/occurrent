@@ -103,7 +103,7 @@ class ManualStartSubscriptionModelTest {
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
         });
 
-        assertThat(IntrospectableSubscriptions.of(model)).containsSame(model);
+        assertThat(IntrospectableSubscriptions.findIn(model)).containsSame(model);
     }
 
     @Test

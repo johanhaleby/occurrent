@@ -314,7 +314,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     @Override
     public Set<String> subscriptionIds() {
         Set<String> ids = new HashSet<>(registrations.keySet());
-        IntrospectableSubscriptions.of(delegate)
+        IntrospectableSubscriptions.findIn(delegate)
                 .map(IntrospectableSubscriptions::subscriptionIds)
                 .ifPresent(ids::addAll);
         return Set.copyOf(ids);

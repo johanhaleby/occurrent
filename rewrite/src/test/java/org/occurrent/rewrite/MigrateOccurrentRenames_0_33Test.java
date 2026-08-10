@@ -359,6 +359,102 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
     }
 
     @Test
+    void aRealUpgradeRenamesReplayAwareSubscriptionsOfToFindIn() {
+        // ReplayAwareSubscriptionModel is supplied as a compiled dependency with the of(Object) shape it actually
+        // shipped with in 0.32.0, the way a user's classpath looks before the upgrade, rather than as a rewritten
+        // source. One user source using the old type and the old of(..) call, migrated to the new type and findIn
+        // in a single recipe run.
+        rewriteRun(
+                spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(
+                        """
+                        package org.occurrent.subscription.api.blocking;
+
+                        import java.util.Optional;
+
+                        public interface ReplayAwareSubscriptionModel {
+                            boolean isCatchingUp(String subscriptionId);
+
+                            static Optional<ReplayAwareSubscriptionModel> of(Object subscriptionModel) {
+                                return subscriptionModel instanceof ReplayAwareSubscriptionModel r ? Optional.of(r) : Optional.empty();
+                            }
+                        }
+                        """
+                )),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
+
+                        class Foo {
+                            void bar(Object model) {
+                                ReplayAwareSubscriptionModel.of(model);
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
+
+                        class Foo {
+                            void bar(Object model) {
+                                ReplayAwareSubscriptions.findIn(model);
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void aRealUpgradeRenamesIntrospectableSubscriptionsOfToFindIn() {
+        // Same shape as the ReplayAwareSubscriptions case above, for IntrospectableSubscriptionModel's of(Object).
+        rewriteRun(
+                spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(
+                        """
+                        package org.occurrent.subscription.api.blocking;
+
+                        import java.util.Optional;
+                        import java.util.Set;
+
+                        public interface IntrospectableSubscriptionModel {
+                            Set<String> subscriptionIds();
+
+                            static Optional<IntrospectableSubscriptionModel> of(Object subscriptionModel) {
+                                return subscriptionModel instanceof IntrospectableSubscriptionModel i ? Optional.of(i) : Optional.empty();
+                            }
+                        }
+                        """
+                )),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+
+                        class Foo {
+                            void bar(Object model) {
+                                IntrospectableSubscriptionModel.of(model);
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
+
+                        class Foo {
+                            void bar(Object model) {
+                                IntrospectableSubscriptions.findIn(model);
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void theRenamesApplyInKotlinToo() {
         rewriteRun(
                 kotlin(

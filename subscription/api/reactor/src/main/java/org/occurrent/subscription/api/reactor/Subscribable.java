@@ -36,7 +36,7 @@ import java.util.function.Function;
  * through {@link SubscriptionModelLifeCycle}. A model implementing both is a {@link SubscriptionModel}.
  */
 @NullMarked
-public interface Subscribable {
+public interface Subscribable extends SubscriptionModelCapability {
 
     /**
      * Start listening to cloud events persisted to the event store using the supplied start position and <code>filter</code>.

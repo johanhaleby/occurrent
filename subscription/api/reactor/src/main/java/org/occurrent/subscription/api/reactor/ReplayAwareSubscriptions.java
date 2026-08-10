@@ -34,7 +34,7 @@ import org.jspecify.annotations.NullMarked;
  * DSL wrappers do not forward it, so ask the subscription model itself.
  */
 @NullMarked
-public interface ReplayAwareSubscriptions {
+public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
 
     /**
      * Whether {@code subscriptionId} is still replaying history and has not yet handed over to live delivery.

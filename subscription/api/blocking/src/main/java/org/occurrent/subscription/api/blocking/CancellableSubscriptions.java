@@ -24,7 +24,7 @@ import org.jspecify.annotations.NullMarked;
  * or pause: its events arrive from the caller rather than from a feed it drives.
  */
 @NullMarked
-public interface CancellableSubscriptions {
+public interface CancellableSubscriptions extends SubscriptionModelCapability {
 
     /**
      * Cancel a subscription so it receives no further events, and release its id for reuse. Cancelling an id that is

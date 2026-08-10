@@ -31,7 +31,7 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Covers {@link ReplayAwareSubscriptions#of(Object)}, the lookup a caller uses instead of casting to a concrete
+ * Covers {@link ReplayAwareSubscriptions#findIn(SubscriptionModelCapability)}, the lookup a caller uses instead of casting to a concrete
  * catch-up model, since the model that knows about the replay is usually behind a {@link SubscriptionModelWrapper}
  * such as {@code DurableSubscriptionModel(CatchupSubscriptionModel(..))}.
  */
@@ -42,7 +42,7 @@ class ReplayAwareSubscriptionsTest {
     void finds_the_model_itself_when_it_is_replay_aware() {
         ReplayAwareModel model = new ReplayAwareModel(Set.of("orders"));
 
-        Optional<ReplayAwareSubscriptions> found = ReplayAwareSubscriptions.of(model);
+        Optional<ReplayAwareSubscriptions> found = ReplayAwareSubscriptions.findIn(model);
 
         assertThat(found).containsSame(model);
     }
@@ -51,7 +51,7 @@ class ReplayAwareSubscriptionsTest {
     void unwraps_a_delegating_model_to_reach_the_replay_aware_one() {
         ReplayAwareModel inner = new ReplayAwareModel(Set.of("orders"));
 
-        Optional<ReplayAwareSubscriptions> found = ReplayAwareSubscriptions.of(new Wrapper(inner));
+        Optional<ReplayAwareSubscriptions> found = ReplayAwareSubscriptions.findIn(new Wrapper(inner));
 
         assertThat(found).containsSame(inner);
         assertThat(found.orElseThrow().isCatchingUp("orders")).isTrue();
@@ -61,14 +61,14 @@ class ReplayAwareSubscriptionsTest {
     void unwraps_through_several_layers_of_wrapping() {
         ReplayAwareModel inner = new ReplayAwareModel(Set.of("orders"));
 
-        Optional<ReplayAwareSubscriptions> found = ReplayAwareSubscriptions.of(new Wrapper(new Wrapper(inner)));
+        Optional<ReplayAwareSubscriptions> found = ReplayAwareSubscriptions.findIn(new Wrapper(new Wrapper(inner)));
 
         assertThat(found).containsSame(inner);
     }
 
     @Test
     void is_empty_when_nothing_in_the_chain_replays() {
-        Optional<ReplayAwareSubscriptions> found = ReplayAwareSubscriptions.of(new Wrapper(new PlainModel()));
+        Optional<ReplayAwareSubscriptions> found = ReplayAwareSubscriptions.findIn(new Wrapper(new PlainModel()));
 
         assertThat(found).isEmpty();
     }
