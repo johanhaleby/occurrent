@@ -205,10 +205,59 @@ class DocumentedFlowSagaKotlinTest {
         }
     }
 
+    @Nested
+    @DisplayName("when a step waits for either two approvals or a single rejection")
+    inner class WhenAStepWaitsForEitherTwoApprovalsOrASingleRejection {
+
+        @Test
+        fun `one approval does not fulfil the condition`() {
+            // Given
+            val started = start(review(), ReviewStarted(REVIEW_ID))
+
+            // When
+            val step = review().step(started.state, SagaInput.event(Approved(REVIEW_ID)))
+
+            // Then
+            assertThat(step.state.completed()).isFalse()
+        }
+
+        @Test
+        fun `two approvals publish and complete the saga`() {
+            // Given
+            val started = start(review(), ReviewStarted(REVIEW_ID))
+            val afterFirst = review().step(started.state, SagaInput.event(Approved(REVIEW_ID)))
+
+            // When
+            val afterSecond = review().step(afterFirst.state, SagaInput.event(Approved(REVIEW_ID)))
+
+            // Then
+            assertAll(
+                { assertThat(afterSecond.state.completed()).isTrue() },
+                { assertThat(afterSecond.effects).containsExactly(SagaEffect.issue(Publish(REVIEW_ID))) }
+            )
+        }
+
+        @Test
+        fun `a single rejection discards and completes the saga immediately`() {
+            // Given
+            val started = start(review(), ReviewStarted(REVIEW_ID))
+
+            // When
+            val step = review().step(started.state, SagaInput.event(Rejected(REVIEW_ID)))
+
+            // Then
+            assertAll(
+                { assertThat(step.state.completed()).isTrue() },
+                { assertThat(step.effects).containsExactly(SagaEffect.issue(Discard(REVIEW_ID))) }
+            )
+        }
+    }
+
     companion object {
 
         private const val GAME_ID = "game-1"
         private const val AUCTION_ID = "auction-1"
+        private const val REVIEW_ID = "review-1"
 
         /** Fixed so the absolute timeout never depends on the machine's clock or zone. */
         private val ENDS_AT: Instant = Instant.parse("2026-07-28T18:00:00Z")
@@ -232,6 +281,18 @@ class DocumentedFlowSagaKotlinTest {
 
         data class CloseAuction(val auctionId: String)
 
+        sealed interface ReviewEvent {
+            val reviewId: String
+        }
+
+        data class ReviewStarted(override val reviewId: String) : ReviewEvent
+        data class Approved(override val reviewId: String) : ReviewEvent
+        data class Rejected(override val reviewId: String) : ReviewEvent
+
+        sealed interface ReviewCommand
+        data class Publish(val reviewId: String) : ReviewCommand
+        data class Discard(val reviewId: String) : ReviewCommand
+
         private fun lobby(): Saga<GameEvent, FlowState<GameEvent>, CloseGame> = saga {
             startsOn<GameCreated>()
             correlateAll { it.gameId }
@@ -254,6 +315,20 @@ class DocumentedFlowSagaKotlinTest {
                 on<BidPlaced>(then = transitionTo("bidding"))
                 timeout(at = { received -> received.initiating<AuctionStarted>().endsAt }, then = end) { received ->
                     issue(CloseAuction(received.initiating<AuctionStarted>().auctionId))
+                }
+            }
+        }
+
+        private fun review(): Saga<ReviewEvent, FlowState<ReviewEvent>, ReviewCommand> = saga {
+            startsOn<ReviewStarted>()
+            correlateAll { it.reviewId }
+            step("awaiting-decision") {
+                on(anyOf(event<Approved>(2), event<Rejected>()), then = end) { received ->
+                    if (received.all(Rejected::class.java).isEmpty()) {
+                        issue(Publish(received.initiating<ReviewStarted>().reviewId))
+                    } else {
+                        issue(Discard(received.initiating<ReviewStarted>().reviewId))
+                    }
                 }
             }
         }

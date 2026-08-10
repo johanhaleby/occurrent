@@ -35,6 +35,7 @@ import org.occurrent.command.CommandDispatchers;
 import org.occurrent.dsl.decider.Decider;
 import org.occurrent.dsl.decider.DeciderApplicationService;
 import org.occurrent.dsl.saga.*;
+import org.occurrent.dsl.saga.flow.*;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
@@ -900,6 +901,70 @@ class SagaRunnerTest {
             timersEnabled.set(true);
 
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> assertThat(issued).containsExactly(new CancelOrder(orderId)));
+        }
+    }
+
+    @Nested
+    class FlowSagaConditionStep {
+
+        // The lowered-join path already gets runner coverage for free through the unchanged InvocationSagaTest. A native
+        // on(StepCondition) step does not, so this drives one through the real executor, subscription, timer poller and
+        // command dispatch together, not the pure evolve/react unit tests FlowSagaTest and SagaFlowExtensionsTest cover.
+        sealed interface ReviewEvent permits ReviewRequested, Approved, Escalated {
+            String eventId();
+
+            String reviewId();
+        }
+
+        record ReviewRequested(String eventId, String reviewId) implements ReviewEvent {
+        }
+
+        record Approved(String eventId, String reviewId, int score) implements ReviewEvent {
+        }
+
+        record Escalated(String eventId, String reviewId) implements ReviewEvent {
+        }
+
+        sealed interface ReviewCommand permits Publish {
+        }
+
+        record Publish(String reviewId) implements ReviewCommand {
+        }
+
+        private Saga<ReviewEvent, FlowState<ReviewEvent>, ReviewCommand> reviewSaga() {
+            return FlowSaga.<ReviewEvent, ReviewCommand>builder()
+                    .startsOn(ReviewRequested.class)
+                    .correlateAll(ReviewEvent::reviewId)
+                    .step("awaiting-approval", step -> step
+                            .on(StepCondition.anyOf(
+                                            StepCondition.event(Approved.class, (Approved a) -> a.score() >= 80),
+                                            StepCondition.event(Escalated.class)),
+                                    Continuation.end(),
+                                    received -> List.of(new Publish(received.initiating(ReviewRequested.class).reviewId()))))
+                    .build();
+        }
+
+        @Test
+        void an_anyOf_predicate_condition_step_fires_through_the_real_executor() {
+            String reviewId = "review-1";
+            CloudEventConverter<ReviewEvent> reviewConverter =
+                    new JacksonCloudEventConverter.Builder<ReviewEvent>(new ObjectMapper(), URI.create("urn:test"))
+                            .idMapper(ReviewEvent::eventId).build();
+            SagaStateStore<FlowState<ReviewEvent>> stateStore = SagaStateStore.inMemory();
+            CopyOnWriteArrayList<ReviewCommand> issued = new CopyOnWriteArrayList<>();
+            SagaRunner<ReviewEvent, ReviewCommand> runner = SagaRunner.agnostic(subscriptionModel, reviewConverter);
+            SagaSubscription subscription = runner.run("condition-step", reviewSaga(), stateStore, issued::add, null, FAST_POLL_CONFIG);
+            subscriptionsToClose.add(subscription);
+            subscription.waitUntilStarted();
+
+            eventStore.write(reviewId, reviewConverter.toCloudEvents(List.of(new ReviewRequested(UUID.randomUUID().toString(), reviewId))));
+            // A low-scoring approval satisfies neither alternative in the anyOf, so the saga stays open on it alone.
+            eventStore.write(reviewId, reviewConverter.toCloudEvents(List.of(new Approved(UUID.randomUUID().toString(), reviewId, 50))));
+            eventStore.write(reviewId, reviewConverter.toCloudEvents(List.of(new Escalated(UUID.randomUUID().toString(), reviewId))));
+
+            await().untilAsserted(() -> assertThat(issued).containsExactly(new Publish(reviewId)));
+            SagaEnvelope<FlowState<ReviewEvent>> envelope = stateStore.find(reviewId).orElseThrow();
+            assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED);
         }
     }
 }
