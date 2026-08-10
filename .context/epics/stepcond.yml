@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 7
+revision: 8
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (U1 MERGED and swept, U2 re-routed to a subagent for mobile)
+updated_by: orchestrator session dc08d709 (U1 DELIVERY_RESULT cross-checked post-merge)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -117,6 +117,17 @@ units:
           @Nullable. Left to the worker, which is still running.'
         via: gh pr view, graphql reviewThreads, git show at the pinned head SHA
         at: '2026-08-10T12:32:35+00:00'
+      delivery_result:
+        note: 'arrived AFTER the merge, outcome done, blocker none. Cross-checked and
+          consistent: stated head 3a252075c equals the CAS pin actually merged, thread
+          resolved, checks green, no out-of-scope findings. Merging before it arrived
+          was legitimate under the sweep rule (the block is a claim, not evidence, and
+          the session was confirmed STOPPED before the sweep touched its worktree).
+          Claims not independently re-verified because the PR is merged and its tree is
+          now main: mutation testing of the new tests, the johan-writing greps, and the
+          282-test local run. Main matrix on the squash is the standing check on those.'
+        via: cross-session DELIVERY_RESULT from local_abfbd577
+        at: '2026-08-10T12:57:30+00:00'
       worker_report:
         note: 'U1 rebased onto origin/main tip 9a5d407bb (post rv33 merges) before
           pushing, diff is 18 files and stepcond-only, changelog.md purely additive
