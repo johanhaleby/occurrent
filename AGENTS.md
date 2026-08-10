@@ -84,6 +84,7 @@ How docs branches work there, and why it matters:
 
 - **One branch per feature, named `docs/<feature>`, and never push to `main`.** `main` documents the API that has shipped, so a branch documenting an unreleased feature is held until the matching library release goes out. `_config.yml` carries `occurrentversion`, which is what makes `main` a statement about a released version rather than about the current code.
 - **Several such branches are usually held at once.** They all touch `pages/docs/docs.md`, so what looks like a one-line fix is really one commit per held branch. Before editing, `git grep -l <what-you-are-changing> <branch> -- pages/docs/docs.md` over every branch, because a regex sweep undercounts.
+- **Write the prose as settled fact, never as unreleased or upcoming.** The branch only merges once the release ships, so by the time anyone reads the merged text the feature is already out and any "not yet released" framing is false. When the prose still needs checking against a library change that is landing in parallel, put that note in the pull request body, where a reviewer reads it before the merge, rather than in the documentation, where a reader only meets it afterwards.
 - Being a separate repository means the docs never appear in this repository's diff, which is exactly how they get forgotten. Treat them as part of the change, not as follow-up.
 
 ## Design intentions
