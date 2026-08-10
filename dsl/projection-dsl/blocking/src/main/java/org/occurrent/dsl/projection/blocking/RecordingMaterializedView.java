@@ -19,12 +19,12 @@ package org.occurrent.dsl.projection.blocking;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
 
 /**
- * The {@link MaterializedView} {@link Projections#recordingAppliedPosition(MaterializedView, AppliedPositionStore, String)}
+ * The {@link MaterializedView} {@link Projections#recordingAppliedPosition(MaterializedView, AppliedProjectionPositionStore, String)}
  * builds
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
  * Delegates every update to the wrapped view and then advances {@code store}, so the recorded position is written
@@ -39,7 +39,7 @@ import org.occurrent.dsl.view.ReplayAware;
 final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayAware {
 
     private final MaterializedView<E> delegate;
-    private final AppliedPositionStore store;
+    private final AppliedProjectionPositionStore store;
     private final String projectionId;
 
     // Volatile because the replay runs on the catch-up thread and live updates run on whichever thread delivers them,
@@ -48,7 +48,7 @@ final class RecordingMaterializedView<E> implements MaterializedView<E>, ReplayA
     private volatile boolean replaying = false;
     private volatile long highestPositionSeenDuringReplay = 0;
 
-    RecordingMaterializedView(MaterializedView<E> delegate, AppliedPositionStore store, String projectionId) {
+    RecordingMaterializedView(MaterializedView<E> delegate, AppliedProjectionPositionStore store, String projectionId) {
         this.delegate = delegate;
         this.store = store;
         this.projectionId = projectionId;

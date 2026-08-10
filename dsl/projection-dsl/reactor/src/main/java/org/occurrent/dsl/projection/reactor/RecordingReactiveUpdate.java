@@ -19,14 +19,14 @@ package org.occurrent.dsl.projection.reactor;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.function.BiFunction;
 
 /**
- * The reactive update {@link Projections#recordingAppliedPosition(BiFunction, AppliedPositionStore, String)}
+ * The reactive update {@link Projections#recordingAppliedPosition(BiFunction, AppliedProjectionPositionStore, String)}
  * builds
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
  * Applies the wrapped update and then advances {@code store}, so the recorded position is written only after the
@@ -39,7 +39,7 @@ import java.util.function.BiFunction;
  * {@code lock} guards the mutable state because the reactor catch-up handover can hop between worker threads even
  * though its calls never run concurrently.
  * <p>
- * {@link AppliedPositionStore} is a blocking-shaped interface, so both store advances below hop to
+ * {@link AppliedProjectionPositionStore} is a blocking-shaped interface, so both store advances below hop to
  * {@link Schedulers#boundedElastic()} first. The delegate this class wraps is caller-supplied
  * ({@code Projections.recordingAppliedPosition(..)} accepts any {@code BiFunction}), and nothing guarantees it
  * completes off a non-blocking thread the way the framework's own coalescing update does. A delegate that finishes
@@ -49,14 +49,14 @@ import java.util.function.BiFunction;
 final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAware {
 
     private final BiFunction<EventMetadata, E, Mono<Void>> delegate;
-    private final AppliedPositionStore store;
+    private final AppliedProjectionPositionStore store;
     private final String projectionId;
 
     private final Object lock = new Object();
     private boolean replaying = false;
     private long highestPositionSeenDuringReplay = 0;
 
-    RecordingReactiveUpdate(BiFunction<EventMetadata, E, Mono<Void>> delegate, AppliedPositionStore store, String projectionId) {
+    RecordingReactiveUpdate(BiFunction<EventMetadata, E, Mono<Void>> delegate, AppliedProjectionPositionStore store, String projectionId) {
         this.delegate = delegate;
         this.store = store;
         this.projectionId = projectionId;

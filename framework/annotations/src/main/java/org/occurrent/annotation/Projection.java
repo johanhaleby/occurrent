@@ -206,7 +206,7 @@ public @interface Projection {
      * it. {@code false} by default, since it costs one extra store write per delivered event.
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>)
      * <p>
-     * Requires an {@code AppliedPositionStore} bean, resolved the same way {@link #store()} resolves a read-model
+     * Requires an {@code AppliedProjectionPositionStore} bean, resolved the same way {@link #store()} resolves a read-model
      * store, the unique bean of that type, or the store starter's zero-config default when one is configured. How
      * long a waiting caller sleeps between polls is set by {@code occurrent.projection.applied-position.initial},
      * {@code .max} and {@code .multiplier}.

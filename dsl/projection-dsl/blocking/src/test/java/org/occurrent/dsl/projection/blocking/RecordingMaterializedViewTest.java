@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
 
@@ -39,7 +39,7 @@ class RecordingMaterializedViewTest {
     void a_live_update_advances_storage_with_the_events_position_after_the_delegate_has_written() {
         List<String> calls = new ArrayList<>();
         MaterializedView<String> delegate = recordingDelegate(calls);
-        AppliedPositionStore storage = recordingStorage(calls);
+        AppliedProjectionPositionStore storage = recordingStorage(calls);
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
 
         recording.update(metadataWithPosition(42), "event-1");
@@ -52,7 +52,7 @@ class RecordingMaterializedViewTest {
     void an_event_with_no_position_throws_and_never_reaches_the_delegate() {
         List<String> calls = new ArrayList<>();
         MaterializedView<String> delegate = recordingDelegate(calls);
-        AppliedPositionStore storage = recordingStorage(calls);
+        AppliedProjectionPositionStore storage = recordingStorage(calls);
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
 
         assertThatThrownBy(() -> recording.update(EventMetadata.empty(), "event-1"))
@@ -64,7 +64,7 @@ class RecordingMaterializedViewTest {
     @Test
     void the_single_argument_update_overload_folds_with_empty_metadata_and_therefore_always_throws() {
         MaterializedView<String> delegate = recordingDelegate(new ArrayList<>());
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
 
         assertThatThrownBy(() -> recording.update("event-1")).isInstanceOf(IllegalStateException.class);
@@ -74,7 +74,7 @@ class RecordingMaterializedViewTest {
     void a_replay_buffers_the_highest_position_seen_and_advances_storage_once_in_replayCompleted_after_the_delegate_flushes() {
         List<String> calls = new ArrayList<>();
         MaterializedView<String> delegate = recordingDelegate(calls);
-        AppliedPositionStore storage = recordingStorage(calls);
+        AppliedProjectionPositionStore storage = recordingStorage(calls);
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
         ReplayAware replayAware = (ReplayAware) recording;
 
@@ -93,7 +93,7 @@ class RecordingMaterializedViewTest {
     void a_replay_that_is_abandoned_discards_the_buffered_position_instead_of_advancing_storage() {
         List<String> calls = new ArrayList<>();
         MaterializedView<String> delegate = recordingDelegate(calls);
-        AppliedPositionStore storage = recordingStorage(calls);
+        AppliedProjectionPositionStore storage = recordingStorage(calls);
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
         ReplayAware replayAware = (ReplayAware) recording;
 
@@ -109,7 +109,7 @@ class RecordingMaterializedViewTest {
     void a_delegate_that_is_itself_replay_aware_is_flushed_before_storage_advances() {
         List<String> calls = new ArrayList<>();
         MaterializedView<String> delegate = replayAwareDelegate(calls);
-        AppliedPositionStore storage = recordingStorage(calls);
+        AppliedProjectionPositionStore storage = recordingStorage(calls);
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
         ReplayAware replayAware = (ReplayAware) recording;
 
@@ -122,7 +122,7 @@ class RecordingMaterializedViewTest {
 
     @Test
     void advance_never_moves_the_recorded_position_backwards() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
         MaterializedView<String> delegate = recordingDelegate(new ArrayList<>());
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
 
@@ -189,9 +189,9 @@ class RecordingMaterializedViewTest {
 
     // A storage that both persists in memory and appends "advance:<position>" to the shared call log, so ordering
     // against the delegate's own log entries can be asserted.
-    private static AppliedPositionStore recordingStorage(List<String> calls) {
-        AppliedPositionStore inMemory = AppliedPositionStore.inMemory();
-        return new AppliedPositionStore() {
+    private static AppliedProjectionPositionStore recordingStorage(List<String> calls) {
+        AppliedProjectionPositionStore inMemory = AppliedProjectionPositionStore.inMemory();
+        return new AppliedProjectionPositionStore() {
             @Override
             public OptionalLong appliedPosition(String projectionId) {
                 return inMemory.appliedPosition(projectionId);

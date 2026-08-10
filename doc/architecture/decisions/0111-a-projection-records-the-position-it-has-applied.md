@@ -91,12 +91,12 @@ coincide.
 Per-key applied positions are not ruled out forever. They are a strictly narrower answer that can be added later
 without changing anything decided here, and the place to add them is the state type rather than this storage.
 
-### 3. `AppliedPositionStore` is one small interface with three methods
+### 3. `AppliedProjectionPositionStore` is one small interface with three methods
 
 Add to `dsl/projection-dsl/common`, in `org.occurrent.dsl.projection`:
 
 ```java
-public interface AppliedPositionStore {
+public interface AppliedProjectionPositionStore {
     OptionalLong appliedPosition(String projectionId);
 
     void advance(String projectionId, long position);
@@ -105,7 +105,7 @@ public interface AppliedPositionStore {
 
     default boolean waitUntilApplied(String projectionId, long position, Duration timeout, Backoff backoff) { /* polls */ }
 
-    static AppliedPositionStore inMemory() { /* a map, for tests and single-process applications */ }
+    static AppliedProjectionPositionStore inMemory() { /* a map, for tests and single-process applications */ }
 }
 ```
 
@@ -122,7 +122,7 @@ the projection, which is the common deployment. An implementation backed by a st
 override the method.
 
 **No reactive `Mono`-returning `waitUntilApplied` exists on the reactor stack, deliberately.**
-`AppliedPositionStore` is blocking-shaped on both stacks, and `ReactiveMongoAppliedPositionStore` implements that
+`AppliedProjectionPositionStore` is blocking-shaped on both stacks, and `ReactiveMongoAppliedProjectionPositionStore` implements that
 same interface directly. A reactor caller that waits blocks the calling thread, the same bridge the rest of that
 stack already makes in the other direction.
 
@@ -164,7 +164,7 @@ redelivery for something the store would have accepted a moment later. A transie
 otherwise abort a caller's wait with an exception rather than being absorbed. The blocking store uses
 `RetryStrategy`, the reactor one uses `reactor.util.retry.Retry`, matching how each stack retries elsewhere.
 
-Retry stays out of `AppliedPositionStore` itself. Error policy belongs to an implementation, and the in-memory store
+Retry stays out of `AppliedProjectionPositionStore` itself. Error policy belongs to an implementation, and the in-memory store
 has nothing to retry. Keep the two mechanisms apart when reading this. The retry policy decides what happens when a
 store operation **fails**, and `Backoff` decides how long to wait between polls that **succeeded** and found the
 projection still behind. They never apply to the same event.
@@ -212,7 +212,7 @@ boolean attribute:
 
 The registrar then wraps the view it built with the recorder, keyed by `annotation.id()`, which is already the
 subscription id, the single-instance view key, and the id handed to `DefaultProjectionStoreProvider`. It resolves an
-`AppliedPositionStore` bean and fails at startup with a message naming the attribute when there is none, following
+`AppliedProjectionPositionStore` bean and fails at startup with a message naming the attribute when there is none, following
 [ADR 11](0011-introduce-optional-capability-interface-for-filtered-stream-reads.md) on refusing a requested capability
 that is not configured.
 
@@ -221,7 +221,7 @@ already updated the read model by the time the command returns, so recording a p
 nothing else, and asking for both means one of the two was misunderstood.
 
 The Mongo starters contribute the implementation, the same way they contribute `CheckpointStorage` and
-`DefaultProjectionStoreProvider`. `occurrentAppliedPositionStore` is `@ConditionalOnMissingBean`, writes to the
+`DefaultProjectionStoreProvider`. `occurrentAppliedProjectionPositionStore` is `@ConditionalOnMissingBean`, writes to the
 collection named by `occurrent.projection.applied-position-collection` (default `appliedPositions`), and stores one
 document per projection id.
 
@@ -257,7 +257,7 @@ behind it, so it has no position to record and never will. That is ADR 68's dist
 given. A domain-event feed is the "was not given" side, since it has a position only when the application passes
 metadata in, and one that opts into recording without doing so hits the refusal in decision 6.
 
-No conformance suite in the TCK for `AppliedPositionStore`. There is exactly one implementation plus an in-memory one
+No conformance suite in the TCK for `AppliedProjectionPositionStore`. There is exactly one implementation plus an in-memory one
 when this lands, and `CheckpointStorageConformance` exists because five implementations across four backends had to
 agree. If a second backend implements this, that is the moment to add one.
 

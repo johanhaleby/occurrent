@@ -45,7 +45,7 @@ import static java.util.Objects.requireNonNull;
  * or {@link #waitUntilApplied(String, long, Duration)}.
  */
 @NullMarked
-public interface AppliedPositionStore {
+public interface AppliedProjectionPositionStore {
 
     /**
      * The pace {@link #waitUntilApplied(String, long, Duration)} polls at, 25 ms doubling up to 250 ms. The first
@@ -143,11 +143,11 @@ public interface AppliedPositionStore {
     }
 
     /**
-     * An {@code AppliedPositionStore} backed by a plain map, for tests and single-process applications with no
+     * An {@code AppliedProjectionPositionStore} backed by a plain map, for tests and single-process applications with no
      * store of their own to persist the position in. The recorded position does not survive a restart.
      */
-    static AppliedPositionStore inMemory() {
-        return new AppliedPositionStore() {
+    static AppliedProjectionPositionStore inMemory() {
+        return new AppliedProjectionPositionStore() {
             private final Map<String, Long> positions = new ConcurrentHashMap<>();
 
             @Override
