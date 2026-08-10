@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 18
-updated_at: 2026-08-10T00:45:00Z
+revision: 20
+updated_at: 2026-08-10T01:25:00Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -194,3 +194,34 @@ units:
     last_meaningful_progress_at: 2026-08-10T00:15:00Z
     observed: {}
     assessment: "fix shape fully specified in the issue by U2 (the code author); epic reopened, monitor re-armed per the lifetime rule"
+  U10:
+    issue: null
+    goal: "Rename six capability interfaces that claim to be types they do not implement, with recipe entries for the three shipped ones (Johan-adopted 2026-08-10 after a repo-wide naming audit)"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "in-session subagent, worktree-isolated, Sonnet (dispatched 2026-08-10 ~01:10Z)"
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "await subagent completion with PR"
+    last_meaningful_progress_at: 2026-08-10T01:10:00Z
+    observed: {}
+    assessment: "window closes at the 0.33.0 tag; three renames are free (unreleased), five shipped ChangeType entries ride the existing UpgradeToOccurrent_0_33 recipe. Final names (Johan, 2026-08-10): RepositionableSubscriptions, ReplayAwareSubscriptions, IntrospectableSubscriptions, SubscriptionModelWrapper, ReplayAware, ReactiveReplayAware. DelegatingSubscriptions was an intermediate choice, superseded mid-flight and relayed to both workers."
+  U11:
+    issue: null
+    goal: "Carry the U10 renames into the occurrent.org docs, on a held branch plus the one held PR that adds a reference, and record the merge order in docs issue 57"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "in-session subagent, worktree-isolated, Haiku (dispatched 2026-08-10 ~01:10Z)"
+    deliverables:
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/capability-interface-renames, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/replay-batching, met: false, evidence: null}
+    blocking_on: []
+    next_action: "await subagent completion with the held PR"
+    last_meaningful_progress_at: 2026-08-10T01:10:00Z
+    observed: {}
+    assessment: "docs main carries 11 references, held PR 49 adds one more; never merges, held for release day"
