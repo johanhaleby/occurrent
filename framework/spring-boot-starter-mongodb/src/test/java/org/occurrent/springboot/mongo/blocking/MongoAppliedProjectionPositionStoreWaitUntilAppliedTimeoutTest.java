@@ -21,7 +21,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -41,7 +41,7 @@ import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link MongoAppliedPositionStore#waitUntilApplied(String, long, Duration)} promises to return {@code false} once
+ * {@link MongoAppliedProjectionPositionStore#waitUntilApplied(String, long, Duration)} promises to return {@code false} once
  * {@code timeout} elapses. The store's read is wrapped in a {@link RetryStrategy} that, left to its own default,
  * retries forever, so a wait against a store that never stops failing must bound that retry to its own deadline
  * itself rather than inherit the store's unbounded one. No Testcontainers needed, a mocked {@link MongoOperations}
@@ -49,7 +49,7 @@ import static org.mockito.Mockito.when;
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(10)
-class MongoAppliedPositionStoreWaitUntilAppliedTimeoutTest {
+class MongoAppliedProjectionPositionStoreWaitUntilAppliedTimeoutTest {
 
     @Test
     void returns_false_within_its_timeout_against_a_store_whose_reads_keep_failing() {
@@ -57,7 +57,7 @@ class MongoAppliedPositionStoreWaitUntilAppliedTimeoutTest {
         when(mongoOperations.findOne(any(Query.class), eq(Document.class), anyString()))
                 .thenThrow(new RuntimeException("store outage"));
         RetryStrategy fastRetry = RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(50), 2.0);
-        AppliedPositionStore storage = new MongoAppliedPositionStore(mongoOperations, "appliedPositions", fastRetry, Backoff.fixed(20));
+        AppliedProjectionPositionStore storage = new MongoAppliedProjectionPositionStore(mongoOperations, "appliedPositions", fastRetry, Backoff.fixed(20));
         Duration timeout = Duration.ofMillis(200);
 
         Instant start = Instant.now();
@@ -78,7 +78,7 @@ class MongoAppliedPositionStoreWaitUntilAppliedTimeoutTest {
         when(mongoOperations.findOne(any(Query.class), eq(Document.class), anyString()))
                 .thenThrow(storeFailure);
         RetryStrategy finiteRetry = RetryStrategy.retry().backoff(Backoff.fixed(10)).maxAttempts(2);
-        AppliedPositionStore storage = new MongoAppliedPositionStore(mongoOperations, "appliedPositions", finiteRetry, Backoff.fixed(100));
+        AppliedProjectionPositionStore storage = new MongoAppliedProjectionPositionStore(mongoOperations, "appliedPositions", finiteRetry, Backoff.fixed(100));
         Duration generousTimeout = Duration.ofSeconds(10);
 
         assertThatThrownBy(() ->

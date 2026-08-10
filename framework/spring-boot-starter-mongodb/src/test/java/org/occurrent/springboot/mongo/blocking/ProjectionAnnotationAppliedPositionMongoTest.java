@@ -27,7 +27,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -56,7 +56,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Verifies {@code @Projection(recordAppliedPosition = true)} end to end on the blocking stack: the registrar wraps
- * the resolved store with the recorder, resolves the zero-config {@link MongoAppliedPositionStore}, and a client
+ * the resolved store with the recorder, resolves the zero-config {@link MongoAppliedProjectionPositionStore}, and a client
  * can wait for the projection to reach a position it already knows about
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
  * Docker-based, run by the CI/integration step.
@@ -74,7 +74,7 @@ class ProjectionAnnotationAppliedPositionMongoTest {
         try (ConfigurableApplicationContext context = SpringApplication.run(new Class<?>[]{RecordingApplication.class}, new String[]{"--spring.main.web-application-type=none"})) {
             EventStore eventStore = context.getBean(EventStore.class);
             CloudEventConverter<OrderPlaced> converter = context.getBean(CloudEventConverter.class);
-            AppliedPositionStore storage = context.getBean(AppliedPositionStore.class);
+            AppliedProjectionPositionStore storage = context.getBean(AppliedProjectionPositionStore.class);
 
             List<CloudEvent> cloudEvents = converter.toCloudEvents(List.of(new OrderPlaced()));
             eventStore.write("order-1", cloudEvents);

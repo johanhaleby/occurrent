@@ -34,18 +34,18 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class AppliedPositionStoreTest {
+class AppliedProjectionPositionStoreTest {
 
     @Test
     void appliedPosition_is_empty_for_a_projection_that_has_never_advanced() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
 
         assertThat(storage.appliedPosition("orders")).isEmpty();
     }
 
     @Test
     void advance_records_the_position_and_appliedPosition_reads_it_back() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
 
         storage.advance("orders", 42);
 
@@ -54,7 +54,7 @@ class AppliedPositionStoreTest {
 
     @Test
     void advance_never_moves_the_recorded_position_backwards() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
 
         storage.advance("orders", 50);
         storage.advance("orders", 10);
@@ -64,7 +64,7 @@ class AppliedPositionStoreTest {
 
     @Test
     void advance_rejects_a_non_positive_position() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
 
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> storage.advance("orders", 0)))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -72,7 +72,7 @@ class AppliedPositionStoreTest {
 
     @Test
     void waitUntilApplied_rejects_a_non_positive_position() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
 
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> storage.waitUntilApplied("orders", 0, Duration.ofSeconds(5))))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -80,7 +80,7 @@ class AppliedPositionStoreTest {
 
     @Test
     void waitUntilApplied_rejects_a_backoff_of_none_because_that_would_poll_the_store_in_a_busy_loop() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
 
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> storage.waitUntilApplied("orders", 42, Duration.ofMillis(50), Backoff.none())))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -91,7 +91,7 @@ class AppliedPositionStoreTest {
     void an_exponential_backoff_grows_the_interval_between_polls_and_stops_growing_at_its_max() {
         List<Long> pollGapsMillis = new ArrayList<>();
         long[] previousPoll = {System.nanoTime()};
-        AppliedPositionStore neverApplied = new AppliedPositionStore() {
+        AppliedProjectionPositionStore neverApplied = new AppliedProjectionPositionStore() {
             @Override
             public OptionalLong appliedPosition(String projectionId) {
                 long now = System.nanoTime();
@@ -118,7 +118,7 @@ class AppliedPositionStoreTest {
 
     @Test
     void waitUntilApplied_returns_true_immediately_when_the_position_is_already_applied() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
         storage.advance("orders", 42);
 
         boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofSeconds(5));
@@ -128,7 +128,7 @@ class AppliedPositionStoreTest {
 
     @Test
     void waitUntilApplied_returns_true_once_a_position_at_or_beyond_the_requested_one_is_advanced_to() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         try {
             scheduler.schedule(() -> storage.advance("orders", 42), 50, TimeUnit.MILLISECONDS);
@@ -143,7 +143,7 @@ class AppliedPositionStoreTest {
 
     @Test
     void waitUntilApplied_returns_false_on_timeout_rather_than_throwing_when_the_position_never_arrives() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
 
         boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofMillis(100), Backoff.fixed(10));
 
@@ -152,7 +152,7 @@ class AppliedPositionStoreTest {
 
     @Test
     void waitUntilApplied_returns_true_for_a_position_lower_than_the_one_already_applied() {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
         storage.advance("orders", 100);
 
         boolean caughtUp = storage.waitUntilApplied("orders", 42, Duration.ofSeconds(5));
@@ -162,7 +162,7 @@ class AppliedPositionStoreTest {
 
     @Test
     void an_interrupted_wait_returns_false_and_restores_the_interrupt_flag() throws InterruptedException {
-        AppliedPositionStore storage = AppliedPositionStore.inMemory();
+        AppliedProjectionPositionStore storage = AppliedProjectionPositionStore.inMemory();
         CountDownLatch started = new CountDownLatch(1);
         boolean[] result = new boolean[1];
         boolean[] interruptedAfterwards = new boolean[1];

@@ -430,12 +430,12 @@ public class OccurrentProperties {
 
         /**
          * The collection a {@code @Projection(recordAppliedPosition = true)} records its applied position into, on
-         * the Mongo starter's zero-config {@code AppliedPositionStore}. One document per projection id.
+         * the Mongo starter's zero-config {@code AppliedProjectionPositionStore}. One document per projection id.
          */
         private String appliedPositionCollection = "appliedPositions";
 
         /**
-         * How {@code AppliedPositionStore.waitUntilApplied(..)} paces its polls.
+         * How {@code AppliedProjectionPositionStore.waitUntilApplied(..)} paces its polls.
          */
         private AppliedPositionProperties appliedPosition = new AppliedPositionProperties();
 

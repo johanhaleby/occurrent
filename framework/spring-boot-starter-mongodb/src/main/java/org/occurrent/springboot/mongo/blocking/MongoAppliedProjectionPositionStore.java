@@ -19,7 +19,7 @@ package org.occurrent.springboot.mongo.blocking;
 import jakarta.annotation.PreDestroy;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -36,12 +36,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
- * The {@link AppliedPositionStore} the Mongo starter contributes as {@code @Projection(recordAppliedPosition = true)}'s
+ * The {@link AppliedProjectionPositionStore} the Mongo starter contributes as {@code @Projection(recordAppliedPosition = true)}'s
  * zero-config default. One document per projection id, {@code _id} the projection id and {@code position} the applied
  * position.
  * <p>
  * {@link #advance(String, long)} writes with MongoDB's {@code $max} update operator in one round trip, so the
- * never-moves-backwards guarantee {@link AppliedPositionStore#advance(String, long)} makes holds even under
+ * never-moves-backwards guarantee {@link AppliedProjectionPositionStore#advance(String, long)} makes holds even under
  * concurrent advances for the same projection id, with no read-modify-write race.
  * <p>
  * Two different mechanisms pace two different things here, and they do not overlap. The {@link RetryStrategy} retries
@@ -52,7 +52,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * between polls that succeeded and simply found the projection still behind.
  */
 @NullMarked
-class MongoAppliedPositionStore implements AppliedPositionStore {
+class MongoAppliedProjectionPositionStore implements AppliedProjectionPositionStore {
 
     private static final String ID = "_id";
     private static final String POSITION = "position";
@@ -66,13 +66,13 @@ class MongoAppliedPositionStore implements AppliedPositionStore {
 
     /**
      * Retries a failing read or write with exponential backoff from 100 ms up to 2 seconds, the same default
-     * {@code NativeMongoCheckpointStorage} uses, and polls a wait at {@link AppliedPositionStore#DEFAULT_POLL_BACKOFF}.
+     * {@code NativeMongoCheckpointStorage} uses, and polls a wait at {@link AppliedProjectionPositionStore#DEFAULT_POLL_BACKOFF}.
      */
-    MongoAppliedPositionStore(MongoOperations mongoOperations, String collection) {
+    MongoAppliedProjectionPositionStore(MongoOperations mongoOperations, String collection) {
         this(mongoOperations, collection, defaultRetryStrategy(), DEFAULT_POLL_BACKOFF);
     }
 
-    MongoAppliedPositionStore(MongoOperations mongoOperations, String collection, RetryStrategy retryStrategy, Backoff pollBackoff) {
+    MongoAppliedProjectionPositionStore(MongoOperations mongoOperations, String collection, RetryStrategy retryStrategy, Backoff pollBackoff) {
         this.mongoOperations = requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collection = requireNonNull(collection, "collection cannot be null");
         this.retryStrategy = requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
@@ -130,7 +130,7 @@ class MongoAppliedPositionStore implements AppliedPositionStore {
     }
 
     /**
-     * Overrides {@link AppliedPositionStore}'s default loop so each poll's read retries against {@link #retryStrategy}
+     * Overrides {@link AppliedProjectionPositionStore}'s default loop so each poll's read retries against {@link #retryStrategy}
      * bounded to this wait's own deadline, rather than {@link #retryStrategy}'s unbounded schedule. Without this, a
      * sustained store outage keeps a single read retrying forever and the wait never reaches the deadline check that
      * is supposed to end it. The loop shape (read, check, sleep, grow the backoff) otherwise matches the interface

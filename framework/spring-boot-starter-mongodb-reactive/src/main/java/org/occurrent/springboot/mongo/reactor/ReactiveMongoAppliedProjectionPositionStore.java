@@ -18,7 +18,7 @@ package org.occurrent.springboot.mongo.reactor;
 
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.retry.Backoff;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
@@ -32,8 +32,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
- * The {@link AppliedPositionStore} the reactive Mongo starter contributes as
- * {@code @Projection(recordAppliedPosition = true)}'s zero-config default. {@link AppliedPositionStore} is a
+ * The {@link AppliedProjectionPositionStore} the reactive Mongo starter contributes as
+ * {@code @Projection(recordAppliedPosition = true)}'s zero-config default. {@link AppliedProjectionPositionStore} is a
  * blocking-shaped interface on both stacks, called from the reactor recorder's {@code doOnSuccess} callback, which
  * already runs on {@code boundedElastic}, so blocking on the underlying reactive Mongo call here is the same bridge
  * the rest of this reactor stack makes in the other direction.
@@ -57,7 +57,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * the same way under a sustained outage, and an application that needs parity should supply its own {@link Retry}.
  */
 @NullMarked
-class ReactiveMongoAppliedPositionStore implements AppliedPositionStore {
+class ReactiveMongoAppliedProjectionPositionStore implements AppliedProjectionPositionStore {
 
     private static final String ID = "_id";
     private static final String POSITION = "position";
@@ -70,16 +70,16 @@ class ReactiveMongoAppliedPositionStore implements AppliedPositionStore {
     /**
      * Retries a failing read or write with backoff from 100 ms up to 2 seconds, giving up after 5 retries (6
      * attempts total) and surfacing the last failure. The blocking store does not give up this way.
-     * {@code MongoAppliedPositionStore} retries the same backoff forever, since it keeps {@code advance(..)} durable
+     * {@code MongoAppliedProjectionPositionStore} retries the same backoff forever, since it keeps {@code advance(..)} durable
      * under an outage and bounds only {@code waitUntilApplied(..)}'s own reads to the wait's deadline instead. This
      * store has no such wait-local bound, so its default retries a fixed number of times rather than forever, and
-     * polls a wait at {@link AppliedPositionStore#DEFAULT_POLL_BACKOFF}.
+     * polls a wait at {@link AppliedProjectionPositionStore#DEFAULT_POLL_BACKOFF}.
      */
-    ReactiveMongoAppliedPositionStore(ReactiveMongoOperations mongoOperations, String collection) {
+    ReactiveMongoAppliedProjectionPositionStore(ReactiveMongoOperations mongoOperations, String collection) {
         this(mongoOperations, collection, defaultRetry(), DEFAULT_POLL_BACKOFF);
     }
 
-    ReactiveMongoAppliedPositionStore(ReactiveMongoOperations mongoOperations, String collection, Retry retry, Backoff pollBackoff) {
+    ReactiveMongoAppliedProjectionPositionStore(ReactiveMongoOperations mongoOperations, String collection, Retry retry, Backoff pollBackoff) {
         this.mongoOperations = requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collection = requireNonNull(collection, "collection cannot be null");
         this.retry = requireNonNull(retry, "retry cannot be null");

@@ -31,7 +31,7 @@ import org.occurrent.application.service.reactor.generic.GenericApplicationServi
 import org.occurrent.application.service.spring.reactor.SpringReactiveTransactionExecutor;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
@@ -162,19 +162,19 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     }
 
     /**
-     * The zero-config {@link AppliedPositionStore} a {@code @Projection(recordAppliedPosition = true)} resolves
+     * The zero-config {@link AppliedProjectionPositionStore} a {@code @Projection(recordAppliedPosition = true)} resolves
      * when the application declares none.
      */
     @Bean
-    @ConditionalOnMissingBean(AppliedPositionStore.class)
-    public AppliedPositionStore occurrentAppliedPositionStore(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
+    @ConditionalOnMissingBean(AppliedProjectionPositionStore.class)
+    public AppliedProjectionPositionStore occurrentAppliedProjectionPositionStore(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
         OccurrentProperties.ProjectionProperties projection = occurrentProperties.getProjection();
         OccurrentProperties.ProjectionProperties.AppliedPositionProperties pollProperties = projection.getAppliedPosition();
         Backoff pollBackoff = Backoff.exponential(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
         Retry storeRetry = Retry.backoff(5, Duration.ofMillis(100))
                 .maxBackoff(Duration.ofSeconds(2))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
-        return new ReactiveMongoAppliedPositionStore(mongo, projection.getAppliedPositionCollection(), storeRetry, pollBackoff);
+        return new ReactiveMongoAppliedProjectionPositionStore(mongo, projection.getAppliedPositionCollection(), storeRetry, pollBackoff);
     }
 
     /**

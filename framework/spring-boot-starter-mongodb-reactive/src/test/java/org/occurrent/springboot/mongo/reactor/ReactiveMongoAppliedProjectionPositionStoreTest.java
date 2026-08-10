@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.mongo.reactor;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -23,14 +23,15 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.retry.Backoff;
+import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
@@ -43,23 +44,23 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Exercises {@link MongoAppliedPositionStore} against a real MongoDB replica set, since {@code $max} upsert
- * behaviour, one document per projection id, and cross-instance visibility of {@link AppliedPositionStore#advance}
+ * Exercises {@link ReactiveMongoAppliedProjectionPositionStore} against a real MongoDB replica set, since {@code $max} upsert
+ * behaviour, one document per projection id, and cross-instance visibility of {@link AppliedProjectionPositionStore#advance}
  * are not something an in-memory fake would catch.
  */
-@DisplayName("MongoAppliedPositionStore")
+@DisplayName("ReactiveMongoAppliedProjectionPositionStore")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Testcontainers
 @Timeout(60)
-class MongoAppliedPositionStoreTest {
+class ReactiveMongoAppliedProjectionPositionStoreTest {
 
     private static ConfigurableApplicationContext context;
-    private static MongoOperations mongoOperations;
+    private static ReactiveMongoOperations mongoOperations;
 
     @BeforeAll
     static void startContext() {
         context = SpringApplication.run(new Class<?>[]{Application.class}, new String[]{"--spring.main.web-application-type=none"});
-        mongoOperations = context.getBean(MongoOperations.class);
+        mongoOperations = context.getBean(ReactiveMongoOperations.class);
     }
 
     @AfterAll
@@ -69,20 +70,20 @@ class MongoAppliedPositionStoreTest {
         }
     }
 
-    private AppliedPositionStore storage(String collection) {
-        return new MongoAppliedPositionStore(mongoOperations, collection);
+    private AppliedProjectionPositionStore storage(String collection) {
+        return new ReactiveMongoAppliedProjectionPositionStore(mongoOperations, collection);
     }
 
     @Test
     void appliedPosition_is_empty_for_a_projection_that_has_never_advanced() {
-        AppliedPositionStore storage = storage(freshCollection());
+        AppliedProjectionPositionStore storage = storage(freshCollection());
 
         assertThat(storage.appliedPosition("orders")).isEmpty();
     }
 
     @Test
     void advance_records_the_position_and_appliedPosition_reads_it_back() {
-        AppliedPositionStore storage = storage(freshCollection());
+        AppliedProjectionPositionStore storage = storage(freshCollection());
 
         storage.advance("orders", 42);
 
@@ -91,7 +92,7 @@ class MongoAppliedPositionStoreTest {
 
     @Test
     void advance_never_moves_the_recorded_position_backwards() {
-        AppliedPositionStore storage = storage(freshCollection());
+        AppliedProjectionPositionStore storage = storage(freshCollection());
 
         storage.advance("orders", 50);
         storage.advance("orders", 10);
@@ -101,7 +102,7 @@ class MongoAppliedPositionStoreTest {
 
     @Test
     void advance_rejects_a_non_positive_position() {
-        AppliedPositionStore storage = storage(freshCollection());
+        AppliedProjectionPositionStore storage = storage(freshCollection());
 
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> storage.advance("orders", 0)))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -110,21 +111,21 @@ class MongoAppliedPositionStoreTest {
     @Test
     void each_projection_id_gets_its_own_document_in_the_same_collection() {
         String collection = freshCollection();
-        AppliedPositionStore storage = storage(collection);
+        AppliedProjectionPositionStore storage = storage(collection);
 
         storage.advance("orders", 10);
         storage.advance("shipments", 20);
 
         assertThat(storage.appliedPosition("orders")).hasValue(10L);
         assertThat(storage.appliedPosition("shipments")).hasValue(20L);
-        assertThat(mongoOperations.getCollection(collection).countDocuments()).isEqualTo(2);
+        assertThat(mongoOperations.findAll(org.bson.Document.class, collection).collectList().block()).hasSize(2);
     }
 
     @Test
     void waitUntilApplied_observes_a_position_advanced_by_a_different_storage_instance_reading_the_same_collection() {
         String collection = freshCollection();
-        AppliedPositionStore writer = storage(collection);
-        AppliedPositionStore reader = storage(collection);
+        AppliedProjectionPositionStore writer = storage(collection);
+        AppliedProjectionPositionStore reader = storage(collection);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         try {
             scheduler.schedule(() -> writer.advance("orders", 42), 100, TimeUnit.MILLISECONDS);
@@ -146,7 +147,7 @@ class MongoAppliedPositionStoreTest {
         @Bean
         @ServiceConnection
         MongoDBContainer mongoDbContainer() {
-            return org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
+            return ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
         }
     }
 }

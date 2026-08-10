@@ -20,7 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
@@ -306,10 +306,10 @@ public final class Projections {
      * position should not wrap its view with this in the first place.
      *
      * @param projectionId the id {@code store} records the position under, read back with
-     *                      {@link AppliedPositionStore#appliedPosition(String)} or
-     *                      {@link AppliedPositionStore#waitUntilApplied(String, long, java.time.Duration)}.
+     *                      {@link AppliedProjectionPositionStore#appliedPosition(String)} or
+     *                      {@link AppliedProjectionPositionStore#waitUntilApplied(String, long, java.time.Duration)}.
      */
-    public static <E> MaterializedView<E> recordingAppliedPosition(MaterializedView<E> view, AppliedPositionStore store, String projectionId) {
+    public static <E> MaterializedView<E> recordingAppliedPosition(MaterializedView<E> view, AppliedProjectionPositionStore store, String projectionId) {
         requireNonNull(view, "view cannot be null");
         requireNonNull(store, "store cannot be null");
         requireNonNull(projectionId, "projectionId cannot be null");

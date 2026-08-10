@@ -37,7 +37,7 @@ import org.occurrent.command.StreamIdResolver;
 import org.occurrent.command.annotation.AnnotationStreamIdResolver;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
-import org.occurrent.dsl.projection.AppliedPositionStore;
+import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -179,16 +179,16 @@ public class OccurrentMongoAutoConfiguration<E> {
     }
 
     /**
-     * The zero-config {@link AppliedPositionStore} a {@code @Projection(recordAppliedPosition = true)} resolves
+     * The zero-config {@link AppliedProjectionPositionStore} a {@code @Projection(recordAppliedPosition = true)} resolves
      * when the application declares none.
      */
     @Bean
-    @ConditionalOnMissingBean(AppliedPositionStore.class)
-    public AppliedPositionStore occurrentAppliedPositionStore(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
+    @ConditionalOnMissingBean(AppliedProjectionPositionStore.class)
+    public AppliedProjectionPositionStore occurrentAppliedProjectionPositionStore(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
         OccurrentProperties.ProjectionProperties projection = occurrentProperties.getProjection();
         OccurrentProperties.ProjectionProperties.AppliedPositionProperties pollProperties = projection.getAppliedPosition();
         Backoff pollBackoff = Backoff.exponential(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
-        return new MongoAppliedPositionStore(mongoTemplate, projection.getAppliedPositionCollection(),
+        return new MongoAppliedProjectionPositionStore(mongoTemplate, projection.getAppliedPositionCollection(),
                 RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), pollBackoff);
     }
 
