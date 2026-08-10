@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 19
+revision: 20
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (reconciliation done and verified, docs set ready)
+updated_by: orchestrator session dc08d709 (final content edits done, preview ready for Johan)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -347,7 +347,7 @@ units:
       repo: occurrent-org/occurrent-org.github.io
       ref: 61
       met: true
-      evidence: 'PR 61 head 302fa0306 carries the four readability fixes it owned.
+      evidence: 'PR 61 head 9f0a77d (was 302fa0306) carries the four readability fixes it owned.
         Verified independently at 2026-08-10T15:29:10+00:00: the split step-definition sentence is present,
         PR 62 head b9a14b209 and the preview branch 55ac34a89 each carry exactly ONE
         historyWindow paragraph, and that paragraph carries all eight facts checked
