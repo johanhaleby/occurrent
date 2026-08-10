@@ -500,3 +500,31 @@ the call inherit the session worktree, and when a path outside it is genuinely n
 in the session worktree, since the `block-cross-worktree-edit.sh` hook catches this class of
 mistake for Edit but cannot see a shell redirect. Cheap check before trusting any state-file read
 in a shared repository: `git branch --show-current` with no `cd`.
+
+## A hand-rolled monitor watches delivery, the tested one watches readiness (2026-08-10, rv33 U18)
+
+U18's monitor was written fresh and keyed only on the open-PR set, so it fired on "a PR appeared"
+and on "no PRs left" and said nothing in between. The unit then sat merge-ready for about twenty
+minutes while this session waited on a matrix that had already finished, and Johan asked for status
+twice before the orchestrator noticed. By the skill's own rule that is a detection defect, and the
+fix is the missing signal rather than a shorter heartbeat.
+
+The v7 pattern in `references/fleet-monitor.md` already selects `statusCheckRollup` and derives both
+a failure count and a `DONE`/`running` flag, so it would have emitted `0fail DONE` against a `CLEAN`
+mergeable state the moment the run completed. It also handles the case that actually confused this
+session: a head carrying **no** checks at all yields an empty rollup, which the pattern reports as
+`DONE` rather than leaving it looking like something still pending.
+
+That matters because Occurrent's workflow has `paths-ignore: ['**/*.md']`, so pushing a changelog
+correction onto a green PR produces a head with almost no checks. Two checks sat there unchanged
+and were read as CI ramping up rather than as a terminal state. The governing fact was already
+recorded in two places, the CI reference memory and `ORCHESTRATOR.md`, so this was not a missing
+fact, it was a fact nothing forced anyone to apply.
+
+**How to apply:** arm the v7 pattern from the reference, do not write a fresh monitor because the
+epic looks simple. A monitor keyed on the PR set alone can only ever report arrival and departure,
+which is the least useful pair, since arrival is already covered by the task notification and
+departure arrives after the decision was needed. When a head shows fewer checks than the matrix
+normally runs, treat it as terminal and settle it immediately with
+`git diff --name-only <last-verified-sha>..HEAD`, judging the code on the last head that carried
+code. See [[reference-ci-check-state-and-paths-ignore]].
