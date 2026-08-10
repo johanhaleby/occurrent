@@ -253,11 +253,176 @@ class DocumentedFlowSagaKotlinTest {
         }
     }
 
+    @Nested
+    @DisplayName("when a step needs two packed items plus either a courier or a pickup slot")
+    inner class WhenAStepNeedsTwoPackedItemsPlusEitherACourierOrAPickupSlot {
+
+        @Test
+        fun `two packed items alone do not fulfil the condition`() {
+            // Given
+            val started = start(shipment(), ShipmentStarted(SHIPMENT_ID))
+            val afterFirstItem = shipment().step(started.state, SagaInput.event(ItemPacked(SHIPMENT_ID, "sku-1")))
+
+            // When
+            val afterSecondItem = shipment().step(afterFirstItem.state, SagaInput.event(ItemPacked(SHIPMENT_ID, "sku-2")))
+
+            // Then
+            assertThat(afterSecondItem.state.completed()).isFalse()
+        }
+
+        @Test
+        fun `two packed items and a courier assignment dispatch and complete the saga`() {
+            // Given
+            val started = start(shipment(), ShipmentStarted(SHIPMENT_ID))
+            val afterFirstItem = shipment().step(started.state, SagaInput.event(ItemPacked(SHIPMENT_ID, "sku-1")))
+            val afterItems = shipment().step(afterFirstItem.state, SagaInput.event(ItemPacked(SHIPMENT_ID, "sku-2")))
+
+            // When
+            val step = shipment().step(afterItems.state, SagaInput.event(CourierAssigned(SHIPMENT_ID)))
+
+            // Then
+            assertAll(
+                { assertThat(step.state.completed()).isTrue() },
+                { assertThat(step.effects).containsExactly(SagaEffect.issue(DispatchShipment(SHIPMENT_ID))) }
+            )
+        }
+
+        @Test
+        fun `two packed items and a pickup slot dispatch and complete the saga too`() {
+            // Given
+            val started = start(shipment(), ShipmentStarted(SHIPMENT_ID))
+            val afterFirstItem = shipment().step(started.state, SagaInput.event(ItemPacked(SHIPMENT_ID, "sku-1")))
+            val afterItems = shipment().step(afterFirstItem.state, SagaInput.event(ItemPacked(SHIPMENT_ID, "sku-2")))
+
+            // When
+            val step = shipment().step(afterItems.state, SagaInput.event(PickupScheduled(SHIPMENT_ID)))
+
+            // Then
+            assertAll(
+                { assertThat(step.state.completed()).isTrue() },
+                { assertThat(step.effects).containsExactly(SagaEffect.issue(DispatchShipment(SHIPMENT_ID))) }
+            )
+        }
+    }
+
+    @Nested
+    @DisplayName("when a step waits for a reading above a threshold")
+    inner class WhenAStepWaitsForAReadingAboveAThreshold {
+
+        @Test
+        fun `a reading at the threshold does not fulfil the condition`() {
+            // Given
+            val started = start(sensor(), SensorArmed(SENSOR_ID))
+
+            // When
+            val step = sensor().step(started.state, SagaInput.event(ReadingTaken(SENSOR_ID, 40)))
+
+            // Then
+            assertThat(step.state.completed()).isFalse()
+        }
+
+        @Test
+        fun `a reading above the threshold raises the alarm and completes the saga`() {
+            // Given
+            val started = start(sensor(), SensorArmed(SENSOR_ID))
+
+            // When
+            val step = sensor().step(started.state, SagaInput.event(ReadingTaken(SENSOR_ID, 41)))
+
+            // Then
+            assertAll(
+                { assertThat(step.state.completed()).isTrue() },
+                { assertThat(step.effects).containsExactly(SagaEffect.issue(RaiseAlarm(SENSOR_ID))) }
+            )
+        }
+
+        @Test
+        fun `a low reading followed by a high one still raises the alarm`() {
+            // Given
+            val started = start(sensor(), SensorArmed(SENSOR_ID))
+            val afterLow = sensor().step(started.state, SagaInput.event(ReadingTaken(SENSOR_ID, 10)))
+
+            // When
+            val afterHigh = sensor().step(afterLow.state, SagaInput.event(ReadingTaken(SENSOR_ID, 45)))
+
+            // Then
+            assertAll(
+                { assertThat(afterLow.state.completed()).isFalse() },
+                { assertThat(afterHigh.state.completed()).isTrue() },
+                { assertThat(afterHigh.effects).containsExactly(SagaEffect.issue(RaiseAlarm(SENSOR_ID))) }
+            )
+        }
+    }
+
+    @Nested
+    @DisplayName("when a step mixes a classic branch with a window condition")
+    inner class WhenAStepMixesAClassicBranchWithAWindowCondition {
+
+        @Test
+        fun `a single full payment releases the goods through the classic branch`() {
+            // Given
+            val started = start(purchase(), PurchaseStarted(PURCHASE_ID, 80))
+
+            // When
+            val step = purchase().step(started.state, SagaInput.event(PaymentReceived(PURCHASE_ID, 80)))
+
+            // Then
+            assertAll(
+                { assertThat(step.state.completed()).isTrue() },
+                { assertThat(step.effects).containsExactly(SagaEffect.issue(ReleaseGoods(PURCHASE_ID))) }
+            )
+        }
+
+        @Test
+        fun `two partial payments release the goods through the window condition`() {
+            // Given
+            val started = start(purchase(), PurchaseStarted(PURCHASE_ID, 80))
+            val afterFirst = purchase().step(started.state, SagaInput.event(PaymentReceived(PURCHASE_ID, 30)))
+
+            // When
+            val afterSecond = purchase().step(afterFirst.state, SagaInput.event(PaymentReceived(PURCHASE_ID, 30)))
+
+            // Then
+            assertAll(
+                { assertThat(afterFirst.state.completed()).isFalse() },
+                { assertThat(afterSecond.state.completed()).isTrue() },
+                {
+                    assertThat(afterSecond.effects).containsExactly(
+                        SagaEffect.issue(ReleaseGoods(PURCHASE_ID)),
+                        SagaEffect.issue(NotifyLayawayComplete(PURCHASE_ID))
+                    )
+                }
+            )
+        }
+
+        @Test
+        fun `a full payment arriving second satisfies both branches but the declared first classic branch wins`() {
+            // Given
+            val started = start(purchase(), PurchaseStarted(PURCHASE_ID, 80))
+            val afterFirst = purchase().step(started.state, SagaInput.event(PaymentReceived(PURCHASE_ID, 30)))
+
+            // When
+            val afterSecond = purchase().step(afterFirst.state, SagaInput.event(PaymentReceived(PURCHASE_ID, 80)))
+
+            // Then
+            assertAll(
+                { assertThat(afterSecond.state.completed()).isTrue() },
+                {
+                    // The window condition is also satisfied here (two PaymentReceived events), but the classic branch is declared first.
+                    assertThat(afterSecond.effects).containsExactly(SagaEffect.issue(ReleaseGoods(PURCHASE_ID)))
+                }
+            )
+        }
+    }
+
     companion object {
 
         private const val GAME_ID = "game-1"
         private const val AUCTION_ID = "auction-1"
         private const val REVIEW_ID = "review-1"
+        private const val SHIPMENT_ID = "shipment-1"
+        private const val SENSOR_ID = "sensor-1"
+        private const val PURCHASE_ID = "purchase-1"
 
         /** Fixed so the absolute timeout never depends on the machine's clock or zone. */
         private val ENDS_AT: Instant = Instant.parse("2026-07-28T18:00:00Z")
@@ -292,6 +457,37 @@ class DocumentedFlowSagaKotlinTest {
         sealed interface ReviewCommand
         data class Publish(val reviewId: String) : ReviewCommand
         data class Discard(val reviewId: String) : ReviewCommand
+
+        sealed interface ShipmentEvent {
+            val shipmentId: String
+        }
+
+        data class ShipmentStarted(override val shipmentId: String) : ShipmentEvent
+        data class ItemPacked(override val shipmentId: String, val sku: String) : ShipmentEvent
+        data class CourierAssigned(override val shipmentId: String) : ShipmentEvent
+        data class PickupScheduled(override val shipmentId: String) : ShipmentEvent
+
+        data class DispatchShipment(val shipmentId: String)
+
+        sealed interface SensorEvent {
+            val sensorId: String
+        }
+
+        data class SensorArmed(override val sensorId: String) : SensorEvent
+        data class ReadingTaken(override val sensorId: String, val celsius: Int) : SensorEvent
+
+        data class RaiseAlarm(val sensorId: String)
+
+        sealed interface PurchaseEvent {
+            val purchaseId: String
+        }
+
+        data class PurchaseStarted(override val purchaseId: String, val total: Int) : PurchaseEvent
+        data class PaymentReceived(override val purchaseId: String, val amount: Int) : PurchaseEvent
+
+        sealed interface PurchaseCommand
+        data class ReleaseGoods(val purchaseId: String) : PurchaseCommand
+        data class NotifyLayawayComplete(val purchaseId: String) : PurchaseCommand
 
         private fun lobby(): Saga<GameEvent, FlowState<GameEvent>, CloseGame> = saga {
             startsOn<GameCreated>()
@@ -329,6 +525,44 @@ class DocumentedFlowSagaKotlinTest {
                     } else {
                         issue(Discard(received.initiating<ReviewStarted>().reviewId))
                     }
+                }
+            }
+        }
+
+        private fun shipment(): Saga<ShipmentEvent, FlowState<ShipmentEvent>, DispatchShipment> = saga {
+            startsOn<ShipmentStarted>()
+            correlateAll { it.shipmentId }
+            step("packing") {
+                on(allOf(event<ItemPacked>(2), anyOf(event<CourierAssigned>(), event<PickupScheduled>())), then = end) { received ->
+                    issue(DispatchShipment(received.initiating<ShipmentStarted>().shipmentId))
+                }
+            }
+        }
+
+        private fun sensor(): Saga<SensorEvent, FlowState<SensorEvent>, RaiseAlarm> = saga {
+            startsOn<SensorArmed>()
+            correlateAll { it.sensorId }
+            step("monitoring") {
+                on(event<ReadingTaken> { it.celsius > 40 }, then = end) { received ->
+                    issue(RaiseAlarm(received.initiating<SensorArmed>().sensorId))
+                }
+            }
+        }
+
+        private fun purchase(): Saga<PurchaseEvent, FlowState<PurchaseEvent>, PurchaseCommand> = saga {
+            startsOn<PurchaseStarted>()
+            correlateAll { it.purchaseId }
+            // A single payment covering the total releases immediately; otherwise two installments, of any amount, do.
+            step("collecting-payment") {
+                on<PaymentReceived>(
+                    then = end,
+                    onlyIf = { payment, received -> payment.amount >= received.initiating<PurchaseStarted>().total }
+                ) { payment ->
+                    issue(ReleaseGoods(payment.purchaseId))
+                }
+                on(event<PaymentReceived>(2), then = end) { received ->
+                    issue(ReleaseGoods(received.initiating<PurchaseStarted>().purchaseId))
+                    issue(NotifyLayawayComplete(received.initiating<PurchaseStarted>().purchaseId))
                 }
             }
         }
