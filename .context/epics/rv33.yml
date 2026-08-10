@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 28
-updated_at: 2026-08-10T07:54:44Z
+revision: 29
+updated_at: 2026-08-10T07:55:53Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -205,7 +205,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: 705, met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 705 sent back for two migration-path defects, see assessment. Was: resumed after the background-Maven trap (util modules BUILD SUCCESS); doing the method renames, ChangeMethodName entries and the internal adapter rename, then commit/push/PR. Was: no branch pushed as of 2026-08-10T06:33:25Z"
+    next_action: "both defects verified fixed at head 37f538b06 (classpath-shaped upgrade test proves type+method rename in one run, TCK ChangeType added with guide and changelog lines); awaiting CI, merge on green, rerun same commit if the known-flaky subscription-mongodb-spring shard trips. Was: PR 705 sent back for two migration-path defects. Was: resumed after the background-Maven trap (util modules BUILD SUCCESS); doing the method renames, ChangeMethodName entries and the internal adapter rename, then commit/push/PR. Was: no branch pushed as of 2026-08-10T06:33:25Z"
     last_meaningful_progress_at: 2026-08-10T06:33:25Z
     observed:
       branch_pushed: {value: false, via: "git ls-remote --heads origin", at: 2026-08-10T06:33:25Z}
