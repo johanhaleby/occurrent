@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 17
-updated_at: 2026-08-10T00:15:00Z
+revision: 18
+updated_at: 2026-08-10T00:45:00Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -181,16 +181,16 @@ units:
   U9:
     issue: 703
     goal: "Swallow only the deadline-expiry case in readOnceBoundedBy, rethrow everything else (post-closeout adoption by Johan 2026-08-10)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "in-session subagent, worktree-isolated, Haiku (dispatched 2026-08-10 ~00:15Z)"
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: issue_closed, ref: 703, met: false, evidence: null}
+      - {check: pr_merged, ref: 704, met: true, evidence: "squash 28281a3d5, merged head equals verified faec90832, CAS pin honoured, 0 threads, 2026-08-10 ~00:40Z"}
+      - {check: issue_closed, ref: 703, met: true, evidence: "auto-closed by the merge, verified CLOSED via gh"}
     blocking_on: []
-    next_action: "await subagent completion with PR"
+    next_action: "sweep complete"
     last_meaningful_progress_at: 2026-08-10T00:15:00Z
     observed: {}
     assessment: "fix shape fully specified in the issue by U2 (the code author); epic reopened, monitor re-armed per the lifetime rule"
