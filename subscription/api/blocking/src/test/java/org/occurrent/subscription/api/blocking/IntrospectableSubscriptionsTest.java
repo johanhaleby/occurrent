@@ -31,55 +31,45 @@ import java.util.function.Consumer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Covers {@link ReplayAwareSubscriptionModel#of(Object)}, the lookup a caller uses instead of casting to a concrete
- * catch-up model, since the model that knows about the replay is usually behind a {@link DelegatingSubscriptionModel}
- * such as {@code DurableSubscriptionModel(CatchupSubscriptionModel(..))}.
+ * Covers {@link IntrospectableSubscriptions#of(Object)}, the lookup a caller uses instead of casting, since the
+ * model it needs is often behind one or more {@link SubscriptionModelWrapper} wrappers.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class ReplayAwareSubscriptionModelTest {
+class IntrospectableSubscriptionsTest {
 
     @Test
-    void finds_the_model_itself_when_it_is_replay_aware() {
-        ReplayAwareModel model = new ReplayAwareModel(Set.of("orders"));
+    void finds_the_model_itself_when_it_is_introspectable() {
+        IntrospectableModel model = new IntrospectableModel(Set.of("orders"));
 
-        Optional<ReplayAwareSubscriptionModel> found = ReplayAwareSubscriptionModel.of(model);
+        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.of(model);
 
         assertThat(found).containsSame(model);
     }
 
     @Test
-    void unwraps_a_delegating_model_to_reach_the_replay_aware_one() {
-        ReplayAwareModel inner = new ReplayAwareModel(Set.of("orders"));
+    void unwraps_a_delegating_model_to_reach_the_introspectable_one() {
+        IntrospectableModel inner = new IntrospectableModel(Set.of("orders", "shipments"));
 
-        Optional<ReplayAwareSubscriptionModel> found = ReplayAwareSubscriptionModel.of(new Wrapper(inner));
+        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.of(new Wrapper(inner));
 
         assertThat(found).containsSame(inner);
-        assertThat(found.orElseThrow().isCatchingUp("orders")).isTrue();
+        assertThat(found.orElseThrow().subscriptionIds()).containsExactlyInAnyOrder("orders", "shipments");
     }
 
     @Test
     void unwraps_through_several_layers_of_wrapping() {
-        ReplayAwareModel inner = new ReplayAwareModel(Set.of("orders"));
+        IntrospectableModel inner = new IntrospectableModel(Set.of("orders"));
 
-        Optional<ReplayAwareSubscriptionModel> found = ReplayAwareSubscriptionModel.of(new Wrapper(new Wrapper(inner)));
+        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.of(new Wrapper(new Wrapper(inner)));
 
         assertThat(found).containsSame(inner);
     }
 
     @Test
-    void is_empty_when_nothing_in_the_chain_replays() {
-        Optional<ReplayAwareSubscriptionModel> found = ReplayAwareSubscriptionModel.of(new Wrapper(new PlainModel()));
+    void is_empty_when_nothing_in_the_chain_can_be_introspected() {
+        Optional<IntrospectableSubscriptions> found = IntrospectableSubscriptions.of(new Wrapper(new PlainModel()));
 
         assertThat(found).isEmpty();
-    }
-
-    @Test
-    void an_id_the_model_never_saw_is_not_catching_up() {
-        ReplayAwareModel model = new ReplayAwareModel(Set.of("orders"));
-
-        // The same answer as a subscription that has handed over, which is what lets a readiness poll ask one question
-        // rather than two.
-        assertThat(model.isCatchingUp("never-subscribed")).isFalse();
     }
 
     private static class PlainModel implements SubscriptionModel {
@@ -125,21 +115,21 @@ class ReplayAwareSubscriptionModelTest {
         }
     }
 
-    private static final class ReplayAwareModel extends PlainModel implements ReplayAwareSubscriptionModel {
-        private final Set<String> replaying;
+    private static final class IntrospectableModel extends PlainModel implements IntrospectableSubscriptions {
+        private final Set<String> ids;
 
-        private ReplayAwareModel(Set<String> replaying) {
-            this.replaying = replaying;
+        private IntrospectableModel(Set<String> ids) {
+            this.ids = ids;
         }
 
         @Override
-        public boolean isCatchingUp(String subscriptionId) {
-            return replaying.contains(subscriptionId);
+        public Set<String> subscriptionIds() {
+            return ids;
         }
     }
 
     // Both interfaces, the way every real wrapper in this repository is shaped.
-    private static final class Wrapper extends PlainModel implements DelegatingSubscriptionModel {
+    private static final class Wrapper extends PlainModel implements SubscriptionModelWrapper {
         private final SubscriptionModel delegate;
 
         private Wrapper(SubscriptionModel delegate) {
@@ -147,7 +137,7 @@ class ReplayAwareSubscriptionModelTest {
         }
 
         @Override
-        public SubscriptionModel getDelegatedSubscriptionModel() {
+        public SubscriptionModel getWrappedSubscriptionModel() {
             return delegate;
         }
     }

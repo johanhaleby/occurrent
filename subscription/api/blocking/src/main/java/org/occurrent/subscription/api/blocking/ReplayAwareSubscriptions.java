@@ -32,7 +32,7 @@ import java.util.Optional;
  * Not every subscription model replays, so reach it with {@link #of(Object)} rather than assuming a concrete class.
  */
 @NullMarked
-public interface ReplayAwareSubscriptionModel {
+public interface ReplayAwareSubscriptions {
 
     /**
      * Whether {@code subscriptionId} is still replaying history and has not yet handed over to live delivery.
@@ -48,18 +48,18 @@ public interface ReplayAwareSubscriptionModel {
     boolean isCatchingUp(String subscriptionId);
 
     /**
-     * The replay-aware model behind {@code subscriptionModel}, unwrapping a {@link DelegatingSubscriptionModel} until
+     * The replay-aware model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper} until
      * one is found. An empty result means the model cannot say whether it is replaying, which is not the same as
      * having handed over.
      *
      * @param subscriptionModel Any subscription model, wrapped or not.
      * @return The replay-aware model, or empty if nothing in the chain implements this.
      */
-    static Optional<ReplayAwareSubscriptionModel> of(Object subscriptionModel) {
-        if (subscriptionModel instanceof ReplayAwareSubscriptionModel replayAware) {
+    static Optional<ReplayAwareSubscriptions> of(Object subscriptionModel) {
+        if (subscriptionModel instanceof ReplayAwareSubscriptions replayAware) {
             return Optional.of(replayAware);
-        } else if (subscriptionModel instanceof DelegatingSubscriptionModel delegating) {
-            return of(delegating.getDelegatedSubscriptionModel());
+        } else if (subscriptionModel instanceof SubscriptionModelWrapper delegating) {
+            return of(delegating.getWrappedSubscriptionModel());
         }
         return Optional.empty();
     }

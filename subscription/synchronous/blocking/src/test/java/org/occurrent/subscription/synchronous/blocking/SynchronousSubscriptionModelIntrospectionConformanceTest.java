@@ -16,10 +16,10 @@
 
 package org.occurrent.subscription.synchronous.blocking;
 
-import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance;
+import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 
-class SynchronousSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionModelConformance {
+class SynchronousSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionsConformance {
 
     @Override
     protected SubscriptionModelFixture createFixture() {

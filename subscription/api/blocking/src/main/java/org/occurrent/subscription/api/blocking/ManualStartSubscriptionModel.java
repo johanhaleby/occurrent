@@ -61,7 +61,7 @@ import static java.util.Objects.requireNonNull;
  * @see #stoppedByDefault(SubscriptionModel)
  */
 @NullMarked
-public final class ManualStartSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, IntrospectableSubscriptionModel {
+public final class ManualStartSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, IntrospectableSubscriptions {
 
     private final SubscriptionModel delegate;
     private final @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource;
@@ -309,22 +309,22 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, De
     }
 
     /**
-     * @see IntrospectableSubscriptionModel#subscriptionIds()
+     * @see IntrospectableSubscriptions#subscriptionIds()
      */
     @Override
     public Set<String> subscriptionIds() {
         Set<String> ids = new HashSet<>(registrations.keySet());
-        IntrospectableSubscriptionModel.of(delegate)
-                .map(IntrospectableSubscriptionModel::subscriptionIds)
+        IntrospectableSubscriptions.of(delegate)
+                .map(IntrospectableSubscriptions::subscriptionIds)
                 .ifPresent(ids::addAll);
         return Set.copyOf(ids);
     }
 
     /**
-     * @see DelegatingSubscriptionModel#getDelegatedSubscriptionModel()
+     * @see SubscriptionModelWrapper#getWrappedSubscriptionModel()
      */
     @Override
-    public SubscriptionModel getDelegatedSubscriptionModel() {
+    public SubscriptionModel getWrappedSubscriptionModel() {
         return delegate;
     }
 

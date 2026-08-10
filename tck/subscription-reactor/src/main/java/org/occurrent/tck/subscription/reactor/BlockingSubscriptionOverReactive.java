@@ -23,7 +23,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import reactor.core.publisher.Mono;
@@ -51,7 +51,7 @@ import static java.util.Objects.requireNonNull;
  * {@link ReactiveSubscriptionModelConformance}.
  */
 @NullMarked
-public class BlockingSubscriptionOverReactive implements SubscriptionModel, IntrospectableSubscriptionModel {
+public class BlockingSubscriptionOverReactive implements SubscriptionModel, IntrospectableSubscriptions {
 
     /**
      * Above this, a timeout is treated as "wait forever". The blocking no-arg {@code waitUntilStarted()} default
@@ -70,10 +70,10 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
     private static final Duration CHECKPOINT_TIMEOUT = Duration.ofSeconds(20);
 
     private final org.occurrent.subscription.api.reactor.SubscriptionModel subscriptionModel;
-    private final org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel introspectable;
+    private final org.occurrent.subscription.api.reactor.IntrospectableSubscriptions introspectable;
 
     private BlockingSubscriptionOverReactive(org.occurrent.subscription.api.reactor.SubscriptionModel subscriptionModel,
-                                             org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel introspectable) {
+                                             org.occurrent.subscription.api.reactor.IntrospectableSubscriptions introspectable) {
         this.subscriptionModel = requireNonNull(subscriptionModel, "Reactive subscription model cannot be null");
         this.introspectable = requireNonNull(introspectable, "Reactive introspectable subscription model cannot be null");
     }
@@ -83,7 +83,7 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
      * out-of-tree model is likely to be too.
      */
     public static <T extends org.occurrent.subscription.api.reactor.SubscriptionModel
-            & org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel> BlockingSubscriptionOverReactive of(T subscriptionModel) {
+            & org.occurrent.subscription.api.reactor.IntrospectableSubscriptions> BlockingSubscriptionOverReactive of(T subscriptionModel) {
         requireNonNull(subscriptionModel, "Reactive subscription model cannot be null");
         return new BlockingSubscriptionOverReactive(subscriptionModel, subscriptionModel);
     }
@@ -92,7 +92,7 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
      * Bridges capabilities that live on different objects.
      */
     public static BlockingSubscriptionOverReactive of(org.occurrent.subscription.api.reactor.SubscriptionModel subscriptionModel,
-                                                      org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel introspectable) {
+                                                      org.occurrent.subscription.api.reactor.IntrospectableSubscriptions introspectable) {
         return new BlockingSubscriptionOverReactive(subscriptionModel, introspectable);
     }
 
@@ -108,7 +108,7 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
      * empty completion is a real answer in the wild, not a hypothetical. See issue #517.
      */
     public static <T extends org.occurrent.subscription.api.reactor.SubscriptionModel
-            & org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel
+            & org.occurrent.subscription.api.reactor.IntrospectableSubscriptions
             & org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel> BlockingSubscriptionOverReactive ofCheckpointAware(T subscriptionModel) {
         requireNonNull(subscriptionModel, "Reactive subscription model cannot be null");
         return new CheckpointAwareBridge(subscriptionModel, subscriptionModel, subscriptionModel);
@@ -119,7 +119,7 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
         private final org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel checkpointAware;
 
         private CheckpointAwareBridge(org.occurrent.subscription.api.reactor.SubscriptionModel subscriptionModel,
-                                      org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel introspectable,
+                                      org.occurrent.subscription.api.reactor.IntrospectableSubscriptions introspectable,
                                       org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel checkpointAware) {
             super(subscriptionModel, introspectable);
             this.checkpointAware = checkpointAware;
@@ -190,7 +190,7 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
         subscriptionModel.shutdown();
     }
 
-    // IntrospectableSubscriptionModel
+    // IntrospectableSubscriptions
 
     @Override
     public Set<String> subscriptionIds() {

@@ -19,32 +19,32 @@ package org.occurrent.subscription.api.blocking;
 import org.jspecify.annotations.NullMarked;
 
 /**
- * A delegating subscription model is a subscription model that wraps another subscription model
- * and delegates to it when {@code subscribe} methods are called. Sometimes it's useful to get the underlying
- * subscription model (mainly for testing purposes), since it may support more features than the {@code DelegatingSubscriptionModel} instance,
+ * A subscription model wrapper wraps another subscription model and delegates to it when {@code subscribe}
+ * methods are called. Sometimes it's useful to get the underlying
+ * subscription model (mainly for testing purposes), since it may support more features than the {@code SubscriptionModelWrapper} instance,
  * such as implementing {@link SubscriptionModelLifeCycle}.
  */
 @NullMarked
-public interface DelegatingSubscriptionModel {
+public interface SubscriptionModelWrapper {
 
     /**
      * @return The wrapped {@link SubscriptionModel} that this {@code SubscriptionModel} delegates to.
      */
-    SubscriptionModel getDelegatedSubscriptionModel();
+    SubscriptionModel getWrappedSubscriptionModel();
 
     /**
      * Get the first {@link SubscriptionModel} that is not wrapped. For example, if
      * this {@code SubscriptionModel} wraps another {@code SubscriptionModel} (S) that
-     * is also a {@code DelegatingSubscriptionModel}, then this method will return the
+     * is also a {@code SubscriptionModelWrapper}, then this method will return the
      * {@code SubscriptionModel} that (S) is wrapping.
      *
      * @return The first {@link SubscriptionModel} that is not wrapped.
      */
-    default SubscriptionModel getDelegatedSubscriptionModelRecursively() {
-        SubscriptionModel delegatedSubscriptionModel = getDelegatedSubscriptionModel();
-        if (delegatedSubscriptionModel instanceof DelegatingSubscriptionModel) {
-            return ((DelegatingSubscriptionModel) delegatedSubscriptionModel).getDelegatedSubscriptionModelRecursively();
+    default SubscriptionModel getWrappedSubscriptionModelRecursively() {
+        SubscriptionModel wrappedSubscriptionModel = getWrappedSubscriptionModel();
+        if (wrappedSubscriptionModel instanceof SubscriptionModelWrapper) {
+            return ((SubscriptionModelWrapper) wrappedSubscriptionModel).getWrappedSubscriptionModelRecursively();
         }
-        return delegatedSubscriptionModel;
+        return wrappedSubscriptionModel;
     }
 }

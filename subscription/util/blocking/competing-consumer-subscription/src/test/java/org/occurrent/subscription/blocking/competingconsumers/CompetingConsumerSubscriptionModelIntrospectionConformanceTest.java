@@ -20,7 +20,7 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance;
+import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -29,12 +29,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 /**
- * {@link CompetingConsumerSubscriptionModel} implements {@link org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel}
+ * {@link CompetingConsumerSubscriptionModel} implements {@link org.occurrent.subscription.api.blocking.IntrospectableSubscriptions}
  * by combining its own in-flight consumers with whatever the delegate reports, and that union had no test before this
  * class.
  */
 @Testcontainers
-class CompetingConsumerSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionModelConformance {
+class CompetingConsumerSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionsConformance {
 
     private static final String DATABASE = "competingconsumerintrospectionconformance";
 

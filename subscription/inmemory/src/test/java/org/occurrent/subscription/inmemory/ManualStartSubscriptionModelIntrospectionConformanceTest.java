@@ -16,7 +16,7 @@
 
 package org.occurrent.subscription.inmemory;
 
-import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance;
+import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 
 /**
@@ -24,7 +24,7 @@ import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
  * reports, and that union had no test before this class. See {@link ManualStartSubscriptionModelFixture} for why the
  * fixture starts the model before handing it over.
  */
-class ManualStartSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionModelConformance {
+class ManualStartSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionsConformance {
 
     @Override
     protected SubscriptionModelFixture createFixture() {

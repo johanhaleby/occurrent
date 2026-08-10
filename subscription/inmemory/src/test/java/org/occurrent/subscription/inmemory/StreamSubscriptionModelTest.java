@@ -105,7 +105,7 @@ class StreamSubscriptionModelTest {
     }
 
     /**
-     * The half the two typed facades genuinely share, and the only half: {@code AbstractDelegatingSubscriptionModelAdapter}
+     * The half the two typed facades genuinely share, and the only half: {@code AbstractSubscriptionModelAdapter}
      * forwards the whole life cycle, while {@code StreamSubscriptionModelAdapter} and {@code DcbSubscriptionModelAdapter}
      * translate {@code subscribe} separately, the DCB one additionally re-filtering what it delivers. So this is
      * asserted once, here, rather than a second time through the DCB facade where it would be the same code again.

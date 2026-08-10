@@ -16,10 +16,10 @@
 
 package org.occurrent.subscription.push.reactor;
 
-import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance;
+import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 
-class PushSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionModelConformance {
+class PushSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionsConformance {
 
     @Override
     protected SubscriptionModelFixture createFixture() {

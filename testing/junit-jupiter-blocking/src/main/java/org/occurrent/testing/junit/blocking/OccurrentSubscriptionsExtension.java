@@ -23,7 +23,7 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 
@@ -251,7 +251,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
         Set<String> ids = new LinkedHashSet<>(modelSubscriptionIds().orElseThrow(() -> new IllegalStateException(
                 "Cannot start all subscriptions because at least one subscription model cannot list them. "
                         + "Name each subscription with start(String) instead, or use models implementing "
-                        + IntrospectableSubscriptionModel.class.getSimpleName() + ".")));
+                        + IntrospectableSubscriptions.class.getSimpleName() + ".")));
         ids.removeIf(subscriptionId -> subscriptionModels.stream().noneMatch(model -> model.isPaused(subscriptionId)));
         ids.forEach(this::resumeAndWait);
         return Set.copyOf(ids);
@@ -303,7 +303,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     private Optional<Set<String>> modelSubscriptionIds() {
         Set<String> ids = new LinkedHashSet<>();
         for (SubscriptionModelLifeCycle model : subscriptionModels) {
-            Optional<IntrospectableSubscriptionModel> introspectable = IntrospectableSubscriptionModel.of(model);
+            Optional<IntrospectableSubscriptions> introspectable = IntrospectableSubscriptions.of(model);
             if (introspectable.isEmpty()) {
                 return Optional.empty();
             }

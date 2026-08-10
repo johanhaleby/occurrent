@@ -84,7 +84,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * {@link ReactorDurableSubscriptionModelConfig}.
  */
 @NullMarked
-public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptionModel {
+public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel, IntrospectableSubscriptions {
     private static final Logger log = LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
 
     private final CheckpointAwareSubscriptionModel subscription;
@@ -479,7 +479,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         if (delegate != null) {
             // The wrapped model owns the subscriptions now, so ask it when it can be asked. The ids handed to it
             // through this model are the fallback for one that cannot.
-            return delegate instanceof IntrospectableSubscriptionModel introspectable
+            return delegate instanceof IntrospectableSubscriptions introspectable
                     ? introspectable.subscriptionIds()
                     : Set.copyOf(delegatedSubscriptionIds);
         }

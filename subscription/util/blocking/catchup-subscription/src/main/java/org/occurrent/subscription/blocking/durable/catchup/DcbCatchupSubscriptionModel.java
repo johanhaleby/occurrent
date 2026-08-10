@@ -136,7 +136,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // Capture the live resume token before the bulk replay so an event committed during the replay is still
         // delivered live. On a replay longer than the change stream history the token ages out, or the delegate
         // reports none at all, and the handover fails loudly instead of dropping the event (captureLiveResumeCheckpoint).
-        Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
+        Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getWrappedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
 

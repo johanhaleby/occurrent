@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
-import org.occurrent.dsl.view.ReplayAwareMaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
@@ -69,7 +69,7 @@ class BlockingMaterializedViewUpdateTest {
         assertThat(view.calls).containsExactly("update:1", "update:2");
     }
 
-    private static final class FakeReplayAwareView implements MaterializedView<Counted>, ReplayAwareMaterializedView {
+    private static final class FakeReplayAwareView implements MaterializedView<Counted>, ReplayAware {
         private final List<String> calls = new CopyOnWriteArrayList<>();
         private boolean replaying = false;
 

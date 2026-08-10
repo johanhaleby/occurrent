@@ -65,7 +65,7 @@ import static java.util.function.Predicate.not;
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0112-a-competing-consumer-can-be-paused-while-still-waiting-for-the-lock.md">ADR 112</a>).
  */
 @NullMarked
-public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, IntrospectableSubscriptionModel, CompetingConsumerListener {
+public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrapper, SubscriptionModel, SubscriptionModelLifeCycle, IntrospectableSubscriptions, CompetingConsumerListener {
     private static final Logger log = LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class);
 
     private final SubscriptionModel delegate;
@@ -109,7 +109,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             // Not allowed to start the competing consumer subscription, delegate to parent instead. One case: a
             // non-durable in-memory subscription started on multiple nodes, where every node should receive every
             // event, so competing consumption is not wanted.
-            subscription = getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+            subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
             // Recorded only once the delegate has accepted it. Recording first would leave the id occupied by a
             // subscription that was refused, and the check above would then refuse it for good.
             nonCompetingConsumersSubscriptions.add(subscriptionId);
@@ -203,7 +203,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      */
     @Override
     public boolean isRunning() {
-        return getDelegatedSubscriptionModel().isRunning();
+        return getWrappedSubscriptionModel().isRunning();
     }
 
     /**
@@ -211,7 +211,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      */
     @Override
     public boolean isRunning(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isRunning(subscriptionId);
+        return getWrappedSubscriptionModel().isRunning(subscriptionId);
     }
 
     // Reports its own consumers as well as the delegate's, because a consumer that has not won the lock yet is only
@@ -221,8 +221,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         Set<String> ids = competingConsumers.keySet().stream()
                 .map(SubscriptionIdAndSubscriberId::subscriptionId)
                 .collect(Collectors.toCollection(HashSet::new));
-        IntrospectableSubscriptionModel.of(getDelegatedSubscriptionModel())
-                .map(IntrospectableSubscriptionModel::subscriptionIds)
+        IntrospectableSubscriptions.of(getWrappedSubscriptionModel())
+                .map(IntrospectableSubscriptions::subscriptionIds)
                 .ifPresent(ids::addAll);
         return Set.copyOf(ids);
     }
@@ -380,10 +380,10 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     }
 
     /**
-     * @see DelegatingSubscriptionModel#getDelegatedSubscriptionModel()
+     * @see SubscriptionModelWrapper#getWrappedSubscriptionModel()
      */
     @Override
-    public SubscriptionModel getDelegatedSubscriptionModel() {
+    public SubscriptionModel getWrappedSubscriptionModel() {
         return delegate;
     }
 

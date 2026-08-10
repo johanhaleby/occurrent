@@ -23,8 +23,8 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -40,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * that is only half rebuilt, which is the one thing catching up before going live is meant to avoid.
  * <p>
  * {@code isRunning(id)} cannot express the second half, because it is true throughout a replay. Only
- * {@link ReplayAwareSubscriptionModel} can, which is why the gate asks through that rather than through a concrete
+ * {@link ReplayAwareSubscriptions} can, which is why the gate asks through that rather than through a concrete
  * model class.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -145,7 +145,7 @@ class SagaTimerGateTest {
         }
     }
 
-    private static final class Model extends PlainModel implements ReplayAwareSubscriptionModel {
+    private static final class Model extends PlainModel implements ReplayAwareSubscriptions {
         private final boolean catchingUp;
 
         private Model(boolean running, boolean catchingUp) {
@@ -160,7 +160,7 @@ class SagaTimerGateTest {
     }
 
     // Reports running itself, so a gate that asked only the wrapper would answer true and fire timers mid-replay.
-    private static final class Wrapper extends PlainModel implements DelegatingSubscriptionModel {
+    private static final class Wrapper extends PlainModel implements SubscriptionModelWrapper {
         private final SubscriptionModel delegate;
 
         private Wrapper(SubscriptionModel delegate) {
@@ -169,7 +169,7 @@ class SagaTimerGateTest {
         }
 
         @Override
-        public SubscriptionModel getDelegatedSubscriptionModel() {
+        public SubscriptionModel getWrappedSubscriptionModel() {
             return delegate;
         }
     }

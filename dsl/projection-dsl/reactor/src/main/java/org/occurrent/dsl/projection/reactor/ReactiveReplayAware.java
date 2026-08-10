@@ -19,7 +19,7 @@ package org.occurrent.dsl.projection.reactor;
 import reactor.core.publisher.Mono;
 
 /**
- * The reactive twin of the blocking view DSL's {@code ReplayAwareMaterializedView}
+ * The reactive twin of the blocking view DSL's {@code ReplayAware}
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0110-a-replay-tells-the-view-where-it-begins-and-ends.md">ADR 110</a>).
  * It cannot live beside the blocking capability in {@code dsl/view-dsl}, because that module carries no reactor
  * dependency.
@@ -37,7 +37,7 @@ import reactor.core.publisher.Mono;
  * A {@link Mono} that errors here fails the whole catch-up, exactly as a failed write inside the per-event fold does
  * today.
  */
-public interface ReactiveReplayAwareMaterializedView {
+public interface ReactiveReplayAware {
 
     /** A catch-up replay is about to start delivering events to this view. */
     void replayStarted();

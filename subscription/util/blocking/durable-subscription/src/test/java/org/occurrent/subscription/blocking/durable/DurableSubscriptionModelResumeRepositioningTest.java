@@ -26,7 +26,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.RepositionableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
@@ -185,7 +185,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
     /**
      * The same fake, additionally repositionable, recording what it was asked to reposition to.
      */
-    private static class RecordingRepositionableSubscriptionModel extends RecordingSubscriptionModel implements RepositionableSubscriptionModel {
+    private static class RecordingRepositionableSubscriptionModel extends RecordingSubscriptionModel implements RepositionableSubscriptions {
         @Nullable StartAt repositionedTo = null;
 
         @Override

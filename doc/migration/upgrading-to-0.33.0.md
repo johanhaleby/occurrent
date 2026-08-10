@@ -8,6 +8,10 @@ placeholder plus a review comment each, so the module compiles again. Filling in
 section 2. [ADR 116](../architecture/decisions/0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md)
 has the reasoning.
 
+Five subscription-capability interfaces are also renamed. None of them extended `SubscriptionModel`, and the old
+names claimed a relationship they never had. `UpgradeToOccurrent_0_33` renames those too, see
+[section 5](#5-five-subscription-capability-interfaces-are-renamed).
+
 ## 1. What changed
 
 `CheckpointStorage.save` gained a third parameter, `CheckpointWriteCondition condition`, stating what must be true
@@ -94,3 +98,34 @@ redelivered, which is within the at-least-once contract this library has always 
 `SpringRedisCheckpointStorage` refuses `notOlderThan` and `ifAbsent` on Redis Cluster, on the first conditional
 write, because the checkpoint and its stored version live in two differently named keys that Cluster will not
 guarantee land in the same slot.
+
+## 5. Five subscription-capability interfaces are renamed
+
+Only relevant if you implement or call one of these directly.
+
+| Old | New |
+|---|---|
+| `org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel` | `ReplayAwareSubscriptions` |
+| `org.occurrent.subscription.api.reactor.ReplayAwareSubscriptionModel` | `ReplayAwareSubscriptions` |
+| `org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel` | `IntrospectableSubscriptions` |
+| `org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel` | `IntrospectableSubscriptions` |
+| `org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel` | `SubscriptionModelWrapper` |
+
+None of the five ever extended `SubscriptionModel`. `SubscriptionModelWrapper`'s two methods are renamed with it,
+so the type and its methods share one vocabulary:
+
+| Old method | New method |
+|---|---|
+| `getDelegatedSubscriptionModel()` | `getWrappedSubscriptionModel()` |
+| `getDelegatedSubscriptionModelRecursively()` | `getWrappedSubscriptionModelRecursively()` |
+
+### Run the recipe
+
+`UpgradeToOccurrent_0_33` renames all five interfaces and both methods for you, in Java and Kotlin alike, the same
+way [section 5 of the 0.32.0 guide](upgrading-to-0.32.0.md#5-the-reactor-subscriptionmodel-is-now-fluxsubscriptionmodel)
+renamed the reactor `SubscriptionModel`. Run it once, as part of the upgrade.
+
+### By hand
+
+Change the import and the type name at every use listed in the first table, and the two method names on
+`SubscriptionModelWrapper` listed in the second.

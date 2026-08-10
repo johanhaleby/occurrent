@@ -47,12 +47,12 @@ import java.util.function.BiFunction;
  * {@link Schedulers#boundedElastic()}. {@link #apply(EventMetadata, Object)} and {@link #replayCompleted()} hop there
  * explicitly because they do real work (a repository round trip); {@link #replayStarted()} and
  * {@link #replayAbandoned()} do not, since the engine only ever calls them from inside that same pipeline and never
- * awaits them (see {@link ReactiveReplayAwareMaterializedView}). {@code lock} still guards the mutable state throughout,
+ * awaits them (see {@link ReactiveReplayAware}). {@code lock} still guards the mutable state throughout,
  * because a plain field write on one worker thread is not guaranteed visible to whichever worker thread runs the next
  * call, even though the calls themselves never run concurrently.
  */
 @NullMarked
-final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAwareMaterializedView {
+final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAware {
 
     private final View<S, E> view;
     private final ViewStateRepository<S, ID> repository;

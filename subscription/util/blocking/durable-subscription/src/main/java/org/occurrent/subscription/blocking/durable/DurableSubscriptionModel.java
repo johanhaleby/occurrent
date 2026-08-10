@@ -51,7 +51,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * writes for events being re-delivered (must be handled idempotently) after a crash.
  */
 @NullMarked
-public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, DelegatingSubscriptionModel {
+public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final CheckpointStorage storage;
@@ -134,7 +134,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         if (startAtToUse == null) {
             // Not allowed to start, delegate to the wrapped subscription instead
             notCheckpointedSubscriptions.add(subscriptionId);
-            return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+            return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
         }
 
         return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
@@ -189,27 +189,27 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
     @Override
     public void stop() {
-        getDelegatedSubscriptionModel().stop();
+        getWrappedSubscriptionModel().stop();
     }
 
     @Override
     public void start(boolean resumeSubscriptionsAutomatically) {
-        getDelegatedSubscriptionModel().start(resumeSubscriptionsAutomatically);
+        getWrappedSubscriptionModel().start(resumeSubscriptionsAutomatically);
     }
 
     @Override
     public boolean isRunning() {
-        return getDelegatedSubscriptionModel().isRunning();
+        return getWrappedSubscriptionModel().isRunning();
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isRunning(subscriptionId);
+        return getWrappedSubscriptionModel().isRunning(subscriptionId);
     }
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isPaused(subscriptionId);
+        return getWrappedSubscriptionModel().isPaused(subscriptionId);
     }
 
     /**
@@ -220,7 +220,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * know that happened.
      * <p>
      * Falls back to the wrapped model's own {@link SubscriptionModelLifeCycle#resumeSubscription(String)} when no
-     * checkpoint is stored yet, when the wrapped model does not implement {@link RepositionableSubscriptionModel},
+     * checkpoint is stored yet, when the wrapped model does not implement {@link RepositionableSubscriptions},
      * or when the subscription opted out of this model's checkpoint management in the first place (see
      * {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}). The fallback is deliberately the wrapped
      * model's own tracked position, never {@link StartAt#subscriptionModelDefault()}, which resolves to the
@@ -229,7 +229,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
         if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
-            Optional<RepositionableSubscriptionModel> repositionable = RepositionableSubscriptionModel.of(getDelegatedSubscriptionModel());
+            Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.of(getWrappedSubscriptionModel());
             if (repositionable.isPresent()) {
                 Checkpoint checkpoint = storage.read(subscriptionId);
                 if (checkpoint != null) {
@@ -237,12 +237,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 }
             }
         }
-        return getDelegatedSubscriptionModel().resumeSubscription(subscriptionId);
+        return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
     }
 
     @Override
     public void pauseSubscription(String subscriptionId) {
-        getDelegatedSubscriptionModel().pauseSubscription(subscriptionId);
+        getWrappedSubscriptionModel().pauseSubscription(subscriptionId);
     }
 
     /**
@@ -271,7 +271,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     @Override
-    public CheckpointAwareSubscriptionModel getDelegatedSubscriptionModel() {
+    public CheckpointAwareSubscriptionModel getWrappedSubscriptionModel() {
         return subscriptionModel;
     }
 

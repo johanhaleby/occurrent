@@ -29,10 +29,10 @@ import static java.util.Objects.requireNonNull;
 /**
  * Translates {@link StreamSubscriptionModel} calls into the shared {@link SubscriptionModel}, wrapping the
  * {@link Filter} in an {@link StreamSubscriptionFilter}. All life-cycle calls forward to the delegate (see
- * {@link AbstractDelegatingSubscriptionModelAdapter}).
+ * {@link AbstractSubscriptionModelAdapter}).
  */
 @NullMarked
-final class StreamSubscriptionModelAdapter extends AbstractDelegatingSubscriptionModelAdapter implements StreamSubscriptionModel {
+final class StreamSubscriptionModelAdapter extends AbstractSubscriptionModelAdapter implements StreamSubscriptionModel {
 
     StreamSubscriptionModelAdapter(SubscriptionModel delegate) {
         super(delegate);

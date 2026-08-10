@@ -38,7 +38,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
-import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
@@ -229,7 +229,7 @@ class SagaAnnotationRegistrar {
         // mid-replay decides against state that is only half folded up, which is the one thing a saga catching up
         // before it goes live is meant to avoid. Asked through the capability rather than a concrete class, so an
         // event-store catch-up model behind a durable wrapper is held to it too, not only the push one.
-        return ReplayAwareSubscriptionModel.of(subscribable)
+        return ReplayAwareSubscriptions.of(subscribable)
                 .<BooleanSupplier>map(replayAware -> () -> lifeCycle.isRunning(subscriptionId) && !replayAware.isCatchingUp(subscriptionId))
                 .orElse(() -> lifeCycle.isRunning(subscriptionId));
     }

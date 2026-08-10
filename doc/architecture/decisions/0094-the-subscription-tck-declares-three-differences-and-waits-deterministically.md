@@ -503,3 +503,9 @@ its decider dependency. One behavioural difference from the four private copies 
 published publishers are cold. The copies stored the checkpoint when `save(..)` was called; the published class does
 nothing until subscription, which is the contract ADR 93 holds every published reactive publisher to, and its test
 asserts both the cold branch and the eager argument validation.
+
+**Amended for 0.33.0: `IntrospectableSubscriptionModel` is renamed to `IntrospectableSubscriptions`, and
+`DelegatingSubscriptionModel` to `SubscriptionModelWrapper`.** Neither capability changed. Both names moved
+because neither interface ever extended `SubscriptionModel`. The shared base class
+`AbstractDelegatingSubscriptionModelAdapter` is renamed too, to `AbstractSubscriptionModelAdapter`, since its old
+name embedded `DelegatingSubscriptionModel`.

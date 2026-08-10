@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedPositionStore;
 import org.occurrent.dsl.view.MaterializedView;
-import org.occurrent.dsl.view.ReplayAwareMaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -76,7 +76,7 @@ class RecordingMaterializedViewTest {
         MaterializedView<String> delegate = recordingDelegate(calls);
         AppliedPositionStore storage = recordingStorage(calls);
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
-        ReplayAwareMaterializedView replayAware = (ReplayAwareMaterializedView) recording;
+        ReplayAware replayAware = (ReplayAware) recording;
 
         replayAware.replayStarted();
         recording.update(metadataWithPosition(10), "event-1");
@@ -95,7 +95,7 @@ class RecordingMaterializedViewTest {
         MaterializedView<String> delegate = recordingDelegate(calls);
         AppliedPositionStore storage = recordingStorage(calls);
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
-        ReplayAwareMaterializedView replayAware = (ReplayAwareMaterializedView) recording;
+        ReplayAware replayAware = (ReplayAware) recording;
 
         replayAware.replayStarted();
         recording.update(metadataWithPosition(10), "event-1");
@@ -111,7 +111,7 @@ class RecordingMaterializedViewTest {
         MaterializedView<String> delegate = replayAwareDelegate(calls);
         AppliedPositionStore storage = recordingStorage(calls);
         MaterializedView<String> recording = Projections.recordingAppliedPosition(delegate, storage, "orders");
-        ReplayAwareMaterializedView replayAware = (ReplayAwareMaterializedView) recording;
+        ReplayAware replayAware = (ReplayAware) recording;
 
         replayAware.replayStarted();
         recording.update(metadataWithPosition(10), "event-1");
@@ -154,7 +154,7 @@ class RecordingMaterializedViewTest {
         return new DelegateWithReplayAwareness(calls);
     }
 
-    private static final class DelegateWithReplayAwareness implements MaterializedView<String>, ReplayAwareMaterializedView {
+    private static final class DelegateWithReplayAwareness implements MaterializedView<String>, ReplayAware {
         private final List<String> calls;
 
         DelegateWithReplayAwareness(List<String> calls) {

@@ -51,9 +51,9 @@ every implementation outside this repository, and Occurrent cannot see those.
 and `live(E)` differs from both only in having no metadata, so what the payload records is whether metadata arrived with
 the event rather than which phase it belongs to. `deliver` then reads it exactly that way, as "has metadata or not",
 because that is what picks the `MaterializedView` overload (`:193-204`). The replay/live distinction does exist
-elsewhere. `ReplayAwareSubscriptionModel.isCatchingUp`
-(`ReplayAwareSubscriptionModel.java:48`) answers it, reached through
-`static Optional<ReplayAwareSubscriptionModel> of(Object)` (`:58-65`). But its only consumers are the Spring registrars
+elsewhere. `ReplayAwareSubscriptions.isCatchingUp`
+(`ReplayAwareSubscriptions.java:48`) answers it, reached through
+`static Optional<ReplayAwareSubscriptions> of(Object)` (`:58-65`). But its only consumers are the Spring registrars
 and the saga timer check (`SagaAnnotationRegistrar.java:226-227`). Nothing in the projection DSL, in `MaterializedView`,
 or in `ViewStateRepository` consults it, and the DSL does not hold the subscription model to ask.
 
@@ -93,7 +93,7 @@ widening is optional, the coalescing is not.
 **2. A view learns the replay boundaries from a small capability interface, not from the payload.** Add to the view DSL:
 
 ```java
-public interface ReplayAwareMaterializedView {
+public interface ReplayAware {
     void replayStarted();
     void replayCompleted();
     void replayAbandoned();
@@ -107,12 +107,12 @@ anything and keeps writing through per event, exactly as today.
 Three alternatives were rejected. A `replayed` flag on the delivery payload does not carry a boundary, which is the
 whole requirement. A third `update` overload taking a phase argument puts a subscription-layer concept into the one
 method every user of `MaterializedView` must implement, for the benefit of the few that batch. Asking
-`ReplayAwareSubscriptionModel.isCatchingUp` is both unreachable from the DSL and racy, since the answer can change
+`ReplayAwareSubscriptions.isCatchingUp` is both unreachable from the DSL and racy, since the answer can change
 between the question and the update, and it makes the view ask where the runner already knows the answer and can simply
 say so.
 
-No `static Optional<ReplayAwareMaterializedView> of(Object)` helper, unlike `ReplayAwareSubscriptionModel` and
-`IntrospectableSubscriptionModel`. Those exist to unwrap `DelegatingSubscriptionModel`. There is no delegating
+No `static Optional<ReplayAware> of(Object)` helper, unlike `ReplayAwareSubscriptions` and
+`IntrospectableSubscriptions`. Those exist to unwrap `SubscriptionModelWrapper`. There is no delegating
 materialized view, so the helper would be ceremony around a bare `instanceof`.
 
 > **Amended on 2026-08-08 by [ADR 111](0111-a-projection-records-the-position-it-has-applied.md).** A
@@ -130,7 +130,7 @@ write can be asynchronous. Both engines live under `.internal`, so this costs no
 
 The subscription-fed runners (`ProjectionRunner.java:149-161` and its reactor twin) are deliberately out of scope. They
 hand a `Consumer<CloudEvent>` to a subscription model and never see a replay boundary. The model knows it, but
-`ReplayAwareSubscriptionModel` only answers when asked and has no completion callback. Giving those paths a boundary
+`ReplayAwareSubscriptions` only answers when asked and has no completion callback. Giving those paths a boundary
 means adding a tell-shaped signal to seven subscription model implementations, which is disproportionate to the win and
 is its own decision. Until then those paths simply never call the lifecycle methods and write through per event. The
 degradation is silent by construction rather than by oversight, because a view that is never told a replay started

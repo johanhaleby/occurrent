@@ -201,3 +201,6 @@ recording `Live` at registration time. It never replays, but it is only live onc
 `Unknown` is deliberately distinct from `Live`: a probe asking about a name nothing recognises has not been told yes.
 The rename cost nothing, since none of this had shipped. Resolves
 [#589](https://github.com/johanhaleby/occurrent/issues/589).
+
+**Amended for 0.33.0: `ReplayAwareSubscriptionModel` is renamed to `ReplayAwareSubscriptions`.** The capability
+is unchanged, only the name moved, since the interface never extended `SubscriptionModel`.

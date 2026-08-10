@@ -19,7 +19,7 @@ package org.occurrent.dsl.projection.reactor;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
-import org.occurrent.dsl.view.ReplayAwareMaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -28,13 +28,13 @@ import java.util.function.BiFunction;
 /**
  * Built by {@link Projections#reactiveUpdateWithMetadata(MaterializedView)} and its single-instance twin. Calls the
  * blocking {@code materializedView.update(metadata, event)} on {@link Schedulers#boundedElastic()}. Implements
- * {@link ReactiveReplayAwareMaterializedView} and forwards every lifecycle call to {@code materializedView} when it
- * implements the blocking {@link ReplayAwareMaterializedView} capability, so a batching view built with the blocking
+ * {@link ReactiveReplayAware} and forwards every lifecycle call to {@code materializedView} when it
+ * implements the blocking {@link ReplayAware} capability, so a batching view built with the blocking
  * view DSL (for example {@code org.occurrent.dsl.projection.blocking.Projections.materializedView(..)}) keeps
  * batching instead of silently falling back to a write-through per event.
  */
 @NullMarked
-final class BlockingMaterializedViewUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAwareMaterializedView {
+final class BlockingMaterializedViewUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAware {
 
     private final MaterializedView<E> materializedView;
 
@@ -49,14 +49,14 @@ final class BlockingMaterializedViewUpdate<E> implements BiFunction<EventMetadat
 
     @Override
     public void replayStarted() {
-        if (materializedView instanceof ReplayAwareMaterializedView replayAware) {
+        if (materializedView instanceof ReplayAware replayAware) {
             replayAware.replayStarted();
         }
     }
 
     @Override
     public Mono<Void> replayCompleted() {
-        if (materializedView instanceof ReplayAwareMaterializedView replayAware) {
+        if (materializedView instanceof ReplayAware replayAware) {
             return Mono.<Void>fromRunnable(replayAware::replayCompleted).subscribeOn(Schedulers.boundedElastic());
         }
         return Mono.empty();
@@ -64,7 +64,7 @@ final class BlockingMaterializedViewUpdate<E> implements BiFunction<EventMetadat
 
     @Override
     public void replayAbandoned() {
-        if (materializedView instanceof ReplayAwareMaterializedView replayAware) {
+        if (materializedView instanceof ReplayAware replayAware) {
             replayAware.replayAbandoned();
         }
     }

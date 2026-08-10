@@ -20,7 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.view.MaterializedView;
-import org.occurrent.dsl.view.ReplayAwareMaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.retry.RetryStrategy;
@@ -53,7 +53,7 @@ import java.util.function.BiFunction;
  * recovery.
  */
 @NullMarked
-final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implements MaterializedView<E>, ReplayAwareMaterializedView {
+final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implements MaterializedView<E>, ReplayAware {
 
     private final View<S, E> view;
     private final ViewStateRepository<S, ID> repository;

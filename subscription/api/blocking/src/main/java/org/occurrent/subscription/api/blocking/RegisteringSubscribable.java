@@ -64,7 +64,7 @@ import java.util.function.Predicate;
  * {@link Consumers#MANY}. See ADR 90.
  */
 @NullMarked
-public abstract class RegisteringSubscribable implements SubscriptionModel, IntrospectableSubscriptionModel {
+public abstract class RegisteringSubscribable implements SubscriptionModel, IntrospectableSubscriptions {
 
     /**
      * How many consumers a subclass accepts, fixed at construction.

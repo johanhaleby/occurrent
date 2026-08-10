@@ -23,6 +23,10 @@ description: >-
   implementing either interface that is missing the two members and inserts a throwing stub for each, marked
   with a review comment, so the class compiles again. It only fixes the signature, filling in real behaviour
   for a store that can evaluate a write condition is a manual pass, see
-  doc/migration/upgrading-to-0.33.0.md.
+  doc/migration/upgrading-to-0.33.0.md. Also renames ReplayAwareSubscriptionModel and
+  IntrospectableSubscriptionModel to ReplayAwareSubscriptions and IntrospectableSubscriptions on both the
+  blocking and reactor stacks, and DelegatingSubscriptionModel to SubscriptionModelWrapper, correcting names
+  that claimed a SubscriptionModel relationship none of these capability interfaces ever had.
 recipeList:
   - org.occurrent.MigrateCheckpointStorageConditionalWrite_0_33
+  - org.occurrent.MigrateOccurrentRenames_0_33

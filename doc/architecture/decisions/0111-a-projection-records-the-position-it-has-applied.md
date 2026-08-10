@@ -190,7 +190,7 @@ again. More importantly, wrapping works for a view Occurrent did not build, whic
 `materialized(..)`, the `CrudRepository` adapter, and anything an application wrote itself. Recording only for
 framework-built views would leave most real projections out.
 
-The recorder implements `ReplayAwareMaterializedView` and forwards every lifecycle call to whatever it wraps. It also
+The recorder implements `ReplayAware` and forwards every lifecycle call to whatever it wraps. It also
 uses those calls itself, and it must. During a replay the view it wraps is buffering, so a position written per event
 would describe state that is still in memory. The recorder therefore keeps the highest position it has seen while a
 replay is running and writes it in `replayCompleted()`, after the delegate has flushed. `replayAbandoned()` discards

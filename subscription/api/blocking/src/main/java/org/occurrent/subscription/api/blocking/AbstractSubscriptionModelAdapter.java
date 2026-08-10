@@ -25,11 +25,11 @@ import static java.util.Objects.requireNonNull;
  * every life-cycle call to it, so each facade adapter only has to implement its own typed {@code subscribe}.
  */
 @NullMarked
-abstract class AbstractDelegatingSubscriptionModelAdapter implements SubscriptionModelLifeCycle {
+abstract class AbstractSubscriptionModelAdapter implements SubscriptionModelLifeCycle {
 
     final SubscriptionModel delegate;
 
-    AbstractDelegatingSubscriptionModelAdapter(SubscriptionModel delegate) {
+    AbstractSubscriptionModelAdapter(SubscriptionModel delegate) {
         this.delegate = requireNonNull(delegate, SubscriptionModel.class.getSimpleName() + " cannot be null");
     }
 

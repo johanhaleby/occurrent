@@ -20,7 +20,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance;
+import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -28,11 +28,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 /**
- * {@link ReactorMongoSubscriptionModel} implements the reactor {@code IntrospectableSubscriptionModel}, reached
+ * {@link ReactorMongoSubscriptionModel} implements the reactor {@code IntrospectableSubscriptions}, reached
  * through {@link org.occurrent.tck.subscription.reactor.BlockingSubscriptionOverReactive}.
  */
 @Testcontainers
-class ReactorMongoSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionModelConformance {
+class ReactorMongoSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionsConformance {
 
     private static final String DATABASE = "reactormongosubscriptionintrospection";
 

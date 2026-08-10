@@ -30,10 +30,10 @@ import static java.util.Objects.requireNonNull;
 /**
  * Translates {@link DcbSubscriptionModel} calls into the shared {@link SubscriptionModel}, building a
  * {@link DcbSubscriptionFilter} from the criteria and converting the {@link DcbStartAt} to a generic start position. All
- * life-cycle calls forward to the delegate (see {@link AbstractDelegatingSubscriptionModelAdapter}).
+ * life-cycle calls forward to the delegate (see {@link AbstractSubscriptionModelAdapter}).
  */
 @NullMarked
-final class DcbSubscriptionModelAdapter extends AbstractDelegatingSubscriptionModelAdapter implements DcbSubscriptionModel {
+final class DcbSubscriptionModelAdapter extends AbstractSubscriptionModelAdapter implements DcbSubscriptionModel {
 
     DcbSubscriptionModelAdapter(SubscriptionModel delegate) {
         super(delegate);

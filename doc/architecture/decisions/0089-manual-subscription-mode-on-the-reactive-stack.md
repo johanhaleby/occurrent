@@ -112,3 +112,7 @@ model, which already knows about it, and duplicate ids are caught where they alw
 A missed wait is the failure mode to watch for if a registrar grows a new subscription path. It hangs the
 build rather than failing a test, which is a bad way to find out. The reactive mode tests exist mostly to
 find it, and they only find it by hanging.
+
+**Amended for 0.33.0: `IntrospectableSubscriptionModel` is renamed to `IntrospectableSubscriptions`, and
+`DelegatingSubscriptionModel` to `SubscriptionModelWrapper`.** Neither capability changed. Both names moved
+because neither interface ever extended `SubscriptionModel`.

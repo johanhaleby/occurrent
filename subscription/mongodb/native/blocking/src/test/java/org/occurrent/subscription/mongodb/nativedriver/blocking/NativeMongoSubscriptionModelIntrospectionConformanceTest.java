@@ -21,7 +21,7 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionModelConformance;
+import org.occurrent.tck.subscription.blocking.IntrospectableSubscriptionsConformance;
 import org.occurrent.tck.subscription.blocking.SubscriptionModelFixture;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -29,7 +29,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 @Testcontainers
-class NativeMongoSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionModelConformance {
+class NativeMongoSubscriptionModelIntrospectionConformanceTest extends IntrospectableSubscriptionsConformance {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =

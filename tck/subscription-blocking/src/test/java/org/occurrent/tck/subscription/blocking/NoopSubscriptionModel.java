@@ -22,7 +22,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
@@ -37,7 +37,7 @@ import java.util.function.Consumer;
  * assertions that only ask about state, and a model whose {@code isRunning} answered {@code false} would pass the two
  * tests about a subscription nobody started.
  */
-class NoopSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, CheckpointAwareSubscriptionModel {
+class NoopSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, CheckpointAwareSubscriptionModel {
 
     static final NoopSubscriptionModel INSTANCE = new NoopSubscriptionModel();
 

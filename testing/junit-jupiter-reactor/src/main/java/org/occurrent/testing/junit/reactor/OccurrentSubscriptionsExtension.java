@@ -23,7 +23,7 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.reactor.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 
@@ -43,8 +43,8 @@ import java.util.*;
  * {@link CheckpointStorage#delete(String)}, both of which return a {@code Mono} rather than blocking the calling
  * thread. A JUnit {@code beforeEach} is synchronous, so this extension blocks on them itself, bounded by
  * {@link #withStartTimeout(Duration)} rather than waiting forever, instead of asking every test to. And there is no
- * reactive {@code DelegatingSubscriptionModel} to unwrap, so introspection is a plain {@code instanceof} check on the
- * model handed in, through {@link IntrospectableSubscriptionModel}, rather than the recursive {@code of(..)} the
+ * reactive {@code SubscriptionModelWrapper} to unwrap, so introspection is a plain {@code instanceof} check on the
+ * model handed in, through {@link IntrospectableSubscriptions}, rather than the recursive {@code of(..)} the
  * blocking side has.
  * <p>
  * Accepts more than one subscription model, because a reactive Spring context typically has two life-cycle bearing
@@ -265,7 +265,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
         Set<String> ids = new LinkedHashSet<>(modelSubscriptionIds().orElseThrow(() -> new IllegalStateException(
                 "Cannot start all subscriptions because at least one subscription model cannot list them. "
                         + "Name each subscription with start(String) instead, or use models implementing "
-                        + IntrospectableSubscriptionModel.class.getSimpleName() + ".")));
+                        + IntrospectableSubscriptions.class.getSimpleName() + ".")));
         ids.removeIf(subscriptionId -> subscriptionModels.stream().noneMatch(model -> model.isPaused(subscriptionId)));
         ids.forEach(this::resumeAndWait);
         return Set.copyOf(ids);
@@ -318,7 +318,7 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     private Optional<Set<String>> modelSubscriptionIds() {
         Set<String> ids = new LinkedHashSet<>();
         for (SubscriptionModelLifeCycle model : subscriptionModels) {
-            if (!(model instanceof IntrospectableSubscriptionModel introspectable)) {
+            if (!(model instanceof IntrospectableSubscriptions introspectable)) {
                 return Optional.empty();
             }
             ids.addAll(introspectable.subscriptionIds());

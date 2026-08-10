@@ -33,7 +33,7 @@ import org.occurrent.subscription.SubscriptionFilterMatcher;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.UnsupportedStartAtException;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
@@ -53,7 +53,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
  * An in-memory subscription model
  */
 @NullMarked
-public class InMemorySubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, Consumer<List<CloudEvent>> {
+public class InMemorySubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, Consumer<List<CloudEvent>> {
 
     private final ConcurrentMap<String, InMemorySubscription> subscriptions;
     private final ConcurrentMap<String, Boolean> pausedSubscriptions;

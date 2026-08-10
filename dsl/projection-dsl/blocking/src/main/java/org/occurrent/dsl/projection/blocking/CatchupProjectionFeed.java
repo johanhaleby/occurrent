@@ -23,7 +23,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.view.MaterializedView;
-import org.occurrent.dsl.view.ReplayAwareMaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
@@ -246,21 +246,21 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public void replayStarted() {
-                if (view instanceof ReplayAwareMaterializedView replayAware) {
+                if (view instanceof ReplayAware replayAware) {
                     replayAware.replayStarted();
                 }
             }
 
             @Override
             public void replayCompleted() {
-                if (view instanceof ReplayAwareMaterializedView replayAware) {
+                if (view instanceof ReplayAware replayAware) {
                     replayAware.replayCompleted();
                 }
             }
 
             @Override
             public void replayAbandoned() {
-                if (view instanceof ReplayAwareMaterializedView replayAware) {
+                if (view instanceof ReplayAware replayAware) {
                     replayAware.replayAbandoned();
                 }
             }

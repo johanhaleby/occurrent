@@ -38,8 +38,8 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
-import org.occurrent.subscription.api.blocking.RepositionableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
@@ -78,7 +78,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptionModel, RepositionableSubscriptionModel {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions {
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
 
     private final MongoCollection<Document> eventCollection;
@@ -463,7 +463,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     /**
      * Resume a paused subscription at {@code startAt}, instead of the change-stream position it had read to.
      *
-     * @see RepositionableSubscriptionModel#resumeSubscription(String, StartAt)
+     * @see RepositionableSubscriptions#resumeSubscription(String, StartAt)
      */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId, StartAt startAt) {

@@ -20,7 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel;
+import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
@@ -46,7 +46,7 @@ import java.util.function.Predicate;
  * exercises those two branches of the fixture's declarations. The opposite branches are exercised by Occurrent's own
  * models.
  */
-public class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptionModel, CheckpointAwareSubscriptionModel {
+public class WorkingSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, CheckpointAwareSubscriptionModel {
 
     private final Map<String, Registration> registrations = new ConcurrentHashMap<>();
     private final Set<String> paused = ConcurrentHashMap.newKeySet();

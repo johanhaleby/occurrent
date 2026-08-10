@@ -103,7 +103,7 @@ class ManualStartSubscriptionModelTest {
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
         });
 
-        assertThat(IntrospectableSubscriptionModel.of(model)).containsSame(model);
+        assertThat(IntrospectableSubscriptions.of(model)).containsSame(model);
     }
 
     @Test
@@ -657,7 +657,7 @@ class ManualStartSubscriptionModelTest {
     // Records what it is asked to do rather than doing anything, since these tests are about which calls reach the
     // wrapped model and when. parkOnSubscribe stands in for a model whose feed is stopped, which registers a paused
     // subscription instead of a running one.
-    private static final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptionModel {
+    private static final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions {
         final List<SubscribeCall> subscribeCalls = new CopyOnWriteArrayList<>();
         final Map<String, Subscription> subscriptions = new HashMap<>();
         final List<String> resumeCalls = new CopyOnWriteArrayList<>();
