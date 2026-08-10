@@ -552,7 +552,7 @@ class DocumentedFlowSagaKotlinTest {
         private fun purchase(): Saga<PurchaseEvent, FlowState<PurchaseEvent>, PurchaseCommand> = saga {
             startsOn<PurchaseStarted>()
             correlateAll { it.purchaseId }
-            // A single payment covering the total releases immediately; otherwise two installments, of any amount, do.
+            // A single payment covering the total releases immediately, otherwise two installments, of any amount, do.
             step("collecting-payment") {
                 on<PaymentReceived>(
                     then = end,

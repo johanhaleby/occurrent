@@ -619,7 +619,7 @@ class DocumentedFlowSagaTest {
         return FlowSaga.<PurchaseEvent, PurchaseCommand>builder()
                 .startsOn(PurchaseStarted.class)
                 .correlateAll(PurchaseEvent::purchaseId)
-                // A single payment covering the total releases immediately; otherwise two installments, of any amount, do.
+                // A single payment covering the total releases immediately, otherwise two installments, of any amount, do.
                 .step("collecting-payment", step -> step
                         .on(PaymentReceived.class,
                                 (payment, received) -> payment.amount() >= received.initiating(PurchaseStarted.class).total(),
