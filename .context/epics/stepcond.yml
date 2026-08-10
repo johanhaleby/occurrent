@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 9
+revision: 10
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (combined verification green, tracker scan clean)
+updated_by: orchestrator session dc08d709 (U2 delivered and verified, U3 adopted at Johan ask)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -152,9 +152,9 @@ units:
       (first documentation of step predicates at all, onlyIf was never documented),
       rewrite the join testing section keeping its #testing-saga-joins anchor, add a
       0.33.0 news paragraph; held branch per docs-repo issue 57'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U1]
     session: 'subagent af4b20ec (chip task_b9538b4a withdrawn: Johan went mobile and
       cannot click chips, so U2 re-routed to a worktree-isolated subagent working in
@@ -162,14 +162,53 @@ units:
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
-      ref: null
-      met: false
-      evidence: null
+      ref: 61
+      met: true
+      evidence: 'PR 61 open, non-draft, base main, head a4dc319f9, hold suffix in the
+        title, one file (pages/docs/docs.md +95/-20). Verified independently of the
+        worker report: the old either-branches-or-join wording and the stale non-goal
+        return zero hits, both anchors present (join testing section retitled but
+        {#testing-saga-joins} kept), zero dash/semicolon/arrow/jargon/puffery hits on
+        added lines, heading check shows only the pre-existing Synchronous Subscriptions
+        defect. Release note is a separate unopened branch
+        docs/707-step-conditions-release-note at 2f3b5c4, one commit on PR 54 tip.
+        Issue 57 merge-order comment confirmed. Both docs worktrees removed.'
     blocking_on: []
-    next_action: subagent running, syntax frozen by merged PR 712
+    next_action: none, delivered and verified; held until the 0.33.0 release
     last_meaningful_progress_at: '2026-08-10T12:32:35+00:00'
     observed: {}
     assessment: 'Docs PR 60 is open, not held, and touches the same saga sections, so
       U2 rebases over it or lands after it. Historical surfaces are out of scope: no
       dated news post other than the 0.33.0 one may be touched (the rv33 U11 lesson,
       a rename inside a 2021 announcement).'
+  U3:
+    issue: null
+    goal: 'Guarded examples for the composition the docs currently describe in prose
+      only: doc-snippet guard tests covering allOf with nesting, a leaf predicate, and
+      a step mixing a classic on<T> branch with a condition branch, then extend the
+      held docs branch (PR 61) to show them'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: [U1, U2]
+    session: subagent a617fdcf (worktree-isolated, library half)
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: 61
+      met: false
+      evidence: null
+    blocking_on: []
+    next_action: library subagent a617fdcf running; docs follow-up dispatches after it merges
+    last_meaningful_progress_at: '2026-08-10T13:13:53+00:00'
+    observed: {}
+    assessment: 'Adopted by Johan at a structured ask after U2 reported the gap honestly
+      rather than inventing unguarded snippets. Two repositories, two deliverables: a
+      library PR adding the guard tests, then a commit on PR 61 existing held branch.
+      The docs half must not run until the library half merges, because a documented
+      example has to come from a test that exists on main. Johan is on mobile, so both
+      halves run as subagents, never chips.'
