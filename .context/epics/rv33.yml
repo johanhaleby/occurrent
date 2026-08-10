@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 34
-updated_at: 2026-08-10T08:30:48Z
+revision: 35
+updated_at: 2026-08-10T08:41:13Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -273,3 +273,18 @@ units:
     last_meaningful_progress_at: 2026-08-10T08:30:48Z
     observed: {}
     assessment: "unreleased (absent from occurrent-0.32.0) so no recipe and no migration entry, changelog folds into the existing unreleased entry, ADR 111 edited in place. Docs live on held PR 52's branch, not docs main, so it is a push to that branch and issue 57 needs no change. Rationale: SagaStateStore and SnapshotStore both name their domain inside a matching package, so AppliedPositionStore was the odd one out; the stutter objection does not hold against this repo's own precedent. No file overlap with U12 (subscription api) or U13 (docs capabilities on its own branch)."
+  U15:
+    issue: null
+    goal: "Record in AGENTS.md that docs prose is written as settled fact, never as unreleased or upcoming (U13 finding, Johan approved the wording 2026-08-10)"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "orchestrator inline, one-line edit"
+    deliverables:
+      - {check: pr_merged, ref: 706, met: false, evidence: null}
+    blocking_on: []
+    next_action: "markdown only so no CI runs by design; merge once Johan is happy with it"
+    last_meaningful_progress_at: 2026-08-10T08:41:13Z
+    observed: {}
+    assessment: "raised by U13 after Johan caught PR 59 calling a 0.33.0 interface part of the unreleased library, which a reader can never see as true because held branches merge only after the release. Verified all seven held docs branches across every added line: PR 59 was the sole occurrence and is already fixed at 88771f3, so no cleanup work exists. Routed to AGENTS.md rather than lessons.md because it binds every contributor, per the enforceable-home rule."
