@@ -361,10 +361,10 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
     @Test
     void aRealUpgradeRenamesReplayAwareSubscriptionsOfToFindIn() {
         // ReplayAwareSubscriptionModel and its of(Object) are supplied as a compiled dependency, the way a user's
-        // classpath looks before the upgrade, rather than as a rewritten source. The caller's own parameter is typed
-        // as the real 0.33.0 SubscriptionModelCapability marker rather than Object, so the migrated example matches
-        // the narrowed findIn(SubscriptionModelCapability) it now calls, instead of only compiling by accident
-        // because the stub dependency's of(Object) still accepts anything.
+        // classpath looks before the upgrade, rather than as a rewritten source. ReplayAwareSubscriptions, the
+        // rename target, is also supplied with its real narrowed findIn(SubscriptionModelCapability) signature,
+        // so the migrated "after" example is type-attributed against the actual post-upgrade contract rather than
+        // an unresolved type the parser cannot check.
         rewriteRun(
                 spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(
                         """
@@ -383,6 +383,19 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
 
                             static Optional<ReplayAwareSubscriptionModel> of(Object subscriptionModel) {
                                 return subscriptionModel instanceof ReplayAwareSubscriptionModel r ? Optional.of(r) : Optional.empty();
+                            }
+                        }
+                        """,
+                        """
+                        package org.occurrent.subscription.api.blocking;
+
+                        import java.util.Optional;
+
+                        public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
+                            boolean isCatchingUp(String subscriptionId);
+
+                            static Optional<ReplayAwareSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
+                                return subscriptionModel instanceof ReplayAwareSubscriptions r ? Optional.of(r) : Optional.empty();
                             }
                         }
                         """
@@ -418,8 +431,9 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
 
     @Test
     void aRealUpgradeRenamesIntrospectableSubscriptionsOfToFindIn() {
-        // Same shape as the ReplayAwareSubscriptions case above, for IntrospectableSubscriptionModel's of(Object),
-        // with the caller's parameter typed as SubscriptionModelCapability for the same reason.
+        // Same shape as the ReplayAwareSubscriptions case above, for IntrospectableSubscriptionModel's of(Object):
+        // IntrospectableSubscriptions, the rename target, is supplied too, with its real narrowed
+        // findIn(SubscriptionModelCapability) signature, so the "after" example is checked against it.
         rewriteRun(
                 spec -> spec.parser(JavaParser.fromJavaVersion().dependsOn(
                         """
@@ -439,6 +453,20 @@ class MigrateOccurrentRenames_0_33Test implements RewriteTest {
 
                             static Optional<IntrospectableSubscriptionModel> of(Object subscriptionModel) {
                                 return subscriptionModel instanceof IntrospectableSubscriptionModel i ? Optional.of(i) : Optional.empty();
+                            }
+                        }
+                        """,
+                        """
+                        package org.occurrent.subscription.api.blocking;
+
+                        import java.util.Optional;
+                        import java.util.Set;
+
+                        public interface IntrospectableSubscriptions extends SubscriptionModelCapability {
+                            Set<String> subscriptionIds();
+
+                            static Optional<IntrospectableSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
+                                return subscriptionModel instanceof IntrospectableSubscriptions i ? Optional.of(i) : Optional.empty();
                             }
                         }
                         """
