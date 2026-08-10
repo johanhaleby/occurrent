@@ -19,9 +19,10 @@ package org.occurrent.dsl.saga.flow;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.Saga;
-import org.occurrent.dsl.saga.flow.FlowSagaImpl.ChoiceBody;
+import org.occurrent.dsl.saga.flow.FlowSagaImpl.ArrivingEvent;
+import org.occurrent.dsl.saga.flow.FlowSagaImpl.Branch;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.CompiledStep;
-import org.occurrent.dsl.saga.flow.FlowSagaImpl.JoinBody;
+import org.occurrent.dsl.saga.flow.FlowSagaImpl.WindowCondition;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
 
 import java.util.*;
@@ -32,10 +33,10 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Builds a flow saga: a linear, declarative process of steps, branches, joins and timeouts, which compiles down to the
+ * Builds a flow saga, a linear, declarative process of steps, branches and timeouts, which compiles down to the
  * core {@code Saga<E, FlowState<E>, C>} the executor runs. Use it for the common case where a process moves
  * through a small number of named steps. Drop to {@code Saga.builder(...)} for anything the flow model cannot express
- * (dynamic joins, accumulators, an event valid in every step).
+ * (runtime-varying counts, accumulators, an event valid in every step).
  * <p>
  * Kotlin has an equivalent {@code saga { }} block, see {@code SagaFlowExtensions.kt}.
  */
@@ -70,12 +71,12 @@ public final class FlowSaga {
         }
 
         /**
-         * Sets how many received events are retained behind the current step's entry, and so how far back a guard, a join
-         * reaction, or a timeout reaction can read history through {@link ReceivedEvents}. The initiating event and the
-         * current step's own events are always retained on top of this (a join must count over the current step's events),
-         * so this only bounds the earlier history. The default is {@value FlowSagaImpl#DEFAULT_HISTORY_WINDOW}. Raise it for
-         * a guard that counts far across a self-looping step (for example a retry cap higher than the default), and lower
-         * it to trim the persisted state of a long-running instance. Must be at least zero.
+         * Sets how many received events are retained behind the current step's entry, and so how far back a guard, a window
+         * condition, or a timeout reaction can read history through {@link ReceivedEvents}. The initiating event and the
+         * current step's own events are always retained on top of this (a window condition must count over the current
+         * step's events), so this only bounds the earlier history. The default is {@value FlowSagaImpl#DEFAULT_HISTORY_WINDOW}.
+         * Raise it for a guard that counts far across a self-looping step (for example a retry cap higher than the default),
+         * and lower it to trim the persisted state of a long-running instance. Must be at least zero.
          */
         public Builder<E, C> historyWindow(int events) {
             if (events < 0) {
@@ -197,27 +198,33 @@ public final class FlowSaga {
             }
         }
 
+        // Every branch, whatever its trigger, carries exactly one continuation, so the unified branch list needs no
+        // per-trigger-kind handling here the way collectEventTypes below still does.
         private List<Continuation> continuationsOf(CompiledStep<E, C> step) {
             List<Continuation> continuations = new ArrayList<>();
-            switch (step.body()) {
-                case ChoiceBody<E, C> choice -> choice.branches().forEach(branch -> continuations.add(branch.then()));
-                case JoinBody<E, C> join -> continuations.add(join.then());
-            }
+            step.branches().forEach(branch -> continuations.add(branch.then()));
             if (step.timeout() != null) {
                 continuations.add(step.timeout().then());
             }
             return continuations;
         }
 
+        // An ArrivingEvent trigger contributes its one type directly. A WindowCondition trigger walks its whole tree, since
+        // a mixed allOf/anyOf can name several leaf types that must each get build-time correlation coverage.
         private Set<Class<? extends E>> collectEventTypes() {
             Set<Class<? extends E>> types = new LinkedHashSet<>();
             if (startType != null) {
                 types.add(startType);
             }
             for (CompiledStep<E, C> step : steps) {
-                switch (step.body()) {
-                    case ChoiceBody<E, C> choice -> choice.branches().forEach(branch -> types.add(branch.eventType()));
-                    case JoinBody<E, C> join -> join.expectations().forEach(expectation -> types.add(expectation.eventType()));
+                for (Branch<E, C> branch : step.branches()) {
+                    switch (branch.trigger()) {
+                        case ArrivingEvent<E> arriving -> types.add(arriving.eventType());
+                        case WindowCondition<E> windowCondition -> {
+                            StepCondition<E> condition = windowCondition.condition();
+                            StepConditionWalk.forEachLeafEventType(condition, type -> types.add(type));
+                        }
+                    }
                 }
             }
             return Set.copyOf(types);

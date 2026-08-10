@@ -25,6 +25,7 @@ import org.occurrent.dsl.saga.flow.Continuation;
 import org.occurrent.dsl.saga.flow.Expectation;
 import org.occurrent.dsl.saga.flow.FlowSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
+import org.occurrent.dsl.saga.flow.StepCondition;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -76,6 +77,28 @@ class DocumentedFlowSagaTest {
     }
 
     record CloseAuction(String auctionId) {
+    }
+
+    sealed interface ReviewEvent permits ReviewStarted, Approved, Rejected {
+        String reviewId();
+    }
+
+    record ReviewStarted(String reviewId) implements ReviewEvent {
+    }
+
+    record Approved(String reviewId) implements ReviewEvent {
+    }
+
+    record Rejected(String reviewId) implements ReviewEvent {
+    }
+
+    sealed interface ReviewCommand permits Publish, Discard {
+    }
+
+    record Publish(String reviewId) implements ReviewCommand {
+    }
+
+    record Discard(String reviewId) implements ReviewCommand {
     }
 
     @Nested
@@ -248,6 +271,58 @@ class DocumentedFlowSagaTest {
         }
     }
 
+    @Nested
+    @DisplayName("when a step waits for either two approvals or a single rejection")
+    class When_a_step_waits_for_either_two_approvals_or_a_single_rejection {
+
+        private static final String REVIEW_ID = "review-1";
+
+        @Test
+        void one_approval_does_not_fulfil_the_condition() {
+            // Given
+            Saga.Step<FlowState<ReviewEvent>, ReviewCommand> started = start(review(), new ReviewStarted(REVIEW_ID));
+
+            // When
+            Saga.Step<FlowState<ReviewEvent>, ReviewCommand> step = review().step(started.state(), SagaInput.event(new Approved(REVIEW_ID)));
+
+            // Then
+            assertThat(step.state().completed()).isFalse();
+        }
+
+        @Test
+        void two_approvals_publish_and_complete_the_saga() {
+            // Given
+            Saga.Step<FlowState<ReviewEvent>, ReviewCommand> started = start(review(), new ReviewStarted(REVIEW_ID));
+            Saga.Step<FlowState<ReviewEvent>, ReviewCommand> afterFirst =
+                    review().step(started.state(), SagaInput.event(new Approved(REVIEW_ID)));
+
+            // When
+            Saga.Step<FlowState<ReviewEvent>, ReviewCommand> afterSecond =
+                    review().step(afterFirst.state(), SagaInput.event(new Approved(REVIEW_ID)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(afterSecond.state().completed()).isTrue(),
+                    () -> assertThat(afterSecond.effects()).containsExactly(SagaEffect.issue(new Publish(REVIEW_ID)))
+            );
+        }
+
+        @Test
+        void a_single_rejection_discards_and_completes_the_saga_immediately() {
+            // Given
+            Saga.Step<FlowState<ReviewEvent>, ReviewCommand> started = start(review(), new ReviewStarted(REVIEW_ID));
+
+            // When
+            Saga.Step<FlowState<ReviewEvent>, ReviewCommand> step = review().step(started.state(), SagaInput.event(new Rejected(REVIEW_ID)));
+
+            // Then
+            assertAll(
+                    () -> assertThat(step.state().completed()).isTrue(),
+                    () -> assertThat(step.effects()).containsExactly(SagaEffect.issue(new Discard(REVIEW_ID)))
+            );
+        }
+    }
+
     private static Saga<GameEvent, FlowState<GameEvent>, CloseGame> lobby() {
         return FlowSaga.<GameEvent, CloseGame>builder()
                 .startsOn(GameCreated.class)
@@ -270,6 +345,19 @@ class DocumentedFlowSagaTest {
                         .on(BidPlaced.class, Continuation.transitionTo("bidding"))
                         .timeout(received -> received.initiating(AuctionStarted.class).endsAt(), Continuation.end(),
                                 received -> List.of(new CloseAuction(received.initiating(AuctionStarted.class).auctionId()))))
+                .build();
+    }
+
+    private static Saga<ReviewEvent, FlowState<ReviewEvent>, ReviewCommand> review() {
+        return FlowSaga.<ReviewEvent, ReviewCommand>builder()
+                .startsOn(ReviewStarted.class)
+                .correlateAll(ReviewEvent::reviewId)
+                .step("awaiting-decision", step -> step
+                        .on(StepCondition.anyOf(StepCondition.event(Approved.class, 2), StepCondition.event(Rejected.class)),
+                                Continuation.end(),
+                                received -> received.all(Rejected.class).isEmpty()
+                                        ? List.of(new Publish(received.initiating(ReviewStarted.class).reviewId()))
+                                        : List.of(new Discard(received.initiating(ReviewStarted.class).reviewId()))))
                 .build();
     }
 
