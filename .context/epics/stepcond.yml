@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 6
+revision: 7
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (712 green, one open Copilot thread, worker still running)
+updated_by: orchestrator session dc08d709 (U1 MERGED and swept, U2 re-routed to a subagent for mobile)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -67,22 +67,28 @@ units:
       ArrivingEvent/WindowCondition triggers, join deprecated and lowered to sugar,
       Kotlin sugar incl. KClass and reified arity shortcuts, a new ADR (120, audited) plus the ADR 63
       non-goal reversal, changelog and 0.33.0 migration guide'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_abfbd577 (worktree jolly-cray-936341, branch johan/jolly-cray-936341)
     deliverables:
     - check: pr_merged
       ref: 712
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CAS-MERGED %s pinned to 3a252075cf2914fd4bda4f7e1ab9ec865df473d5,
+        squash 9a26411be298cee40d3f63843223af34cf4156b2, head-at-merge equals the pin,
+        27/27 SUCCESS, mergeStateStatus CLEAN, the one Copilot thread RESOLVED with a
+        real fix (@Nullable on BranchReaction.triggering). ADR 0120 confirmed present
+        on main. Design gate closed by Johan at a structured ask (merge on green, no
+        separate ADR read).'
     - check: issue_closed
       ref: 707
-      met: false
-      evidence: null
+      met: true
+      evidence: 'CLOSED via Fixes #707, verified by gh issue view; in-progress label
+        removed'
     blocking_on: []
-    next_action: NOT merge-ready, one unresolved Copilot thread and no DELIVERY_RESULT yet; worker still running, let it answer its own thread
+    next_action: none, merged and swept; main matrix on the squash still being watched as combined verification
     last_meaningful_progress_at: '2026-08-10T12:17:33+00:00'
     observed:
       adr_number:
@@ -139,7 +145,9 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: [U1]
-    session: null (chip task_b9538b4a dispatched, awaiting Johan's click)
+    session: 'subagent af4b20ec (chip task_b9538b4a withdrawn: Johan went mobile and
+      cannot click chips, so U2 re-routed to a worktree-isolated subagent working in
+      the docs repo)'
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
@@ -147,7 +155,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip dispatched, syntax frozen by PR 712
+    next_action: subagent running, syntax frozen by merged PR 712
     last_meaningful_progress_at: '2026-08-10T12:32:35+00:00'
     observed: {}
     assessment: 'Docs PR 60 is open, not held, and touches the same saga sections, so
