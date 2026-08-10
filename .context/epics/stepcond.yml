@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 4
-updated_at: '2026-08-10T12:17:33+00:00'
-updated_by: orchestrator session dc08d709 (ADR correction verified, U1 pre-PR report)
+revision: 5
+updated_at: '2026-08-10T12:32:35+00:00'
+updated_by: orchestrator session dc08d709 (U1 PR 712 open and inspected, U2 dispatched)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -74,7 +74,7 @@ units:
     session: local_abfbd577 (worktree jolly-cray-936341, branch johan/jolly-cray-936341)
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 712
       met: false
       evidence: null
     - check: issue_closed
@@ -82,7 +82,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: simplify pass running, PR opens next
+    next_action: PR 712 open, checks running, verify at merge-readiness
     last_meaningful_progress_at: '2026-08-10T12:17:33+00:00'
     observed:
       adr_number:
@@ -91,6 +91,17 @@ units:
           told to re-audit across all remote branches because rv33 may take 120'
         via: git ls-tree over all origin branches
         at: '2026-08-10T11:50:00+00:00'  # approximate, wall clock was not read at the time
+      pr_712:
+        head: b9526afbb8024a95c192d186153a0d6d8054f308
+        note: 'opened on johan/jolly-cray-936341, 18 files +2022/-94, ADR 0120 as
+          corrected, changelog +2/-0 additive, nothing under subscription/ or
+          dsl/subscription-dsl/. One UNDECLARED incidental write, dsl/saga-dsl/mongodb-spring/pom.xml
+          +39, all <scope>test</scope> dependencies for the new Mongo round-trip test
+          (the module had no tests before), so the published artifact is unaffected.
+          Accepted, noted rather than sent back. Public surface verified against the
+          plan including the reified arity sugar allOf<A,B>()/<A,B,C>().'
+        via: gh pr view plus git show over the fetched branch
+        at: '2026-08-10T12:32:35+00:00'
       worker_report:
         note: 'U1 rebased onto origin/main tip 9a5d407bb (post rv33 merges) before
           pushing, diff is 18 files and stepcond-only, changelog.md purely additive
@@ -115,11 +126,11 @@ units:
       (first documentation of step predicates at all, onlyIf was never documented),
       rewrite the join testing section keeping its #testing-saga-joins anchor, add a
       0.33.0 news paragraph; held branch per docs-repo issue 57'
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U1]
-    session: null
+    session: null (chip task_b9538b4a dispatched, awaiting Johan's click)
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
@@ -127,8 +138,8 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch after U1's first push freezes the syntax
-    last_meaningful_progress_at: '2026-08-10T10:35:24+00:00'
+    next_action: chip dispatched, syntax frozen by PR 712
+    last_meaningful_progress_at: '2026-08-10T12:32:35+00:00'
     observed: {}
     assessment: 'Docs PR 60 is open, not held, and touches the same saga sections, so
       U2 rebases over it or lands after it. Historical surfaces are out of scope: no
