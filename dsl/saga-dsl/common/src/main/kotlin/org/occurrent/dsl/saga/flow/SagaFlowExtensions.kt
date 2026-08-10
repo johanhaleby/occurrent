@@ -22,6 +22,8 @@ import java.time.Duration
 import java.time.Instant
 import java.util.function.BiFunction
 import java.util.function.Function
+import java.util.function.Predicate
+import kotlin.reflect.KClass
 
 /**
  * Marks the flow-saga builder receivers so that, inside a nested `step { }` block, a member of an outer scope (such as
@@ -63,11 +65,11 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     internal val delegate: FlowSaga.Builder<E, C> = FlowSaga.builder()
 
     /**
-     * Sets how many received events are retained behind the current step's entry, and so how far back a guard, a join
-     * reaction, or a timeout reaction can read history through [ReceivedEvents]. The initiating event and the current
-     * step's own events are always retained on top of this, so this only bounds the earlier history. Raise it for a
-     * guard that counts far across a self-looping step, and lower it to trim the persisted state of a long-running
-     * instance. Must be at least zero.
+     * Sets how many received events are retained behind the current step's entry, and so how far back a guard, a
+     * window-condition reaction, or a timeout reaction can read history through [ReceivedEvents]. The initiating event
+     * and the current step's own events are always retained on top of this, so this only bounds the earlier history.
+     * Raise it for a guard that counts far across a self-looping step, and lower it to trim the persisted state of a
+     * long-running instance. Must be at least zero.
      */
     fun historyWindow(events: Int) {
         delegate.historyWindow(events)
@@ -123,8 +125,62 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     /** Continuation: jump to the named step (a back-edge models a loop or retry). */
     fun transitionTo(step: String): Continuation = Continuation.transitionTo(step)
 
-    /** An expectation of [count] events of type [T], for a [join]. */
+    /**
+     * An expectation of [count] events of type [T], for a [join].
+     *
+     * @deprecated in favor of [event], for [on] with [allOf]/[anyOf]. `join` and `expect` are the sugar for a step that
+     * is nothing but a conjunction of counts. [StepCondition] expresses that plus alternatives and predicates.
+     */
+    @Deprecated("Replaced by event<T>(count), used with on(allOf(...)) or on(anyOf(...)). See StepCondition.")
     inline fun <reified T : E> expect(count: Int = 1): Expectation<E> = Expectation(T::class.java, count)
+
+    /**
+     * A leaf [StepCondition] matching [count] events of type [T], optionally also satisfying [predicate]. Combine leaves
+     * with [allOf]/[anyOf] and hand the tree to [on].
+     */
+    inline fun <reified T : E> event(count: Int = 1, noinline predicate: ((T) -> Boolean)? = null): StepCondition<E> {
+        val javaPredicate: Predicate<T>? = predicate?.let { test -> Predicate { candidate: T -> test(candidate) } }
+        return StepCondition.event<E, T>(T::class.java, count, javaPredicate)
+    }
+
+    /** [allOf] over an existing [StepCondition] tree, fulfilled once every one of [first] plus [rest] is. */
+    fun allOf(first: StepCondition<out E>, vararg rest: StepCondition<out E>): StepCondition<E> =
+        StepCondition.allOf<E>(listOf(first) + rest)
+
+    /** [anyOf] over an existing [StepCondition] tree, fulfilled once any one of [first] plus [rest] is. */
+    fun anyOf(first: StepCondition<out E>, vararg rest: StepCondition<out E>): StepCondition<E> =
+        StepCondition.anyOf<E>(listOf(first) + rest)
+
+    /** [allOf] shorthand, [first] and [rest] each become a predicate-less, count-one [event] leaf. */
+    fun allOf(first: KClass<out E>, vararg rest: KClass<out E>): StepCondition<E> =
+        StepCondition.allOf<E>(classLeaves(first, rest))
+
+    /** [anyOf] shorthand, [first] and [rest] each become a predicate-less, count-one [event] leaf. */
+    fun anyOf(first: KClass<out E>, vararg rest: KClass<out E>): StepCondition<E> =
+        StepCondition.anyOf<E>(classLeaves(first, rest))
+
+    private fun classLeaves(first: KClass<out E>, rest: Array<out KClass<out E>>): List<StepCondition<E>> =
+        (listOf(first) + rest).map { type -> classLeaf(type.java) }
+
+    private fun <T : E> classLeaf(type: Class<T>): StepCondition<E> = StepCondition.event<E, T>(type)
+
+    /** [allOf] over [A] and [B], each a predicate-less, count-one leaf. Beyond three types, use the [KClass] or leaf spelling. */
+    inline fun <reified A : E, reified B : E> allOf(): StepCondition<E> =
+        StepCondition.allOf<E>(event<A>(), event<B>())
+
+    /** As the two-type [allOf], for three leaf types. */
+    @JvmName("allOfThree")
+    inline fun <reified A : E, reified B : E, reified C : E> allOf(): StepCondition<E> =
+        StepCondition.allOf<E>(event<A>(), event<B>(), event<C>())
+
+    /** [anyOf] over [A] and [B], each a predicate-less, count-one leaf. Beyond three types, use the [KClass] or leaf spelling. */
+    inline fun <reified A : E, reified B : E> anyOf(): StepCondition<E> =
+        StepCondition.anyOf<E>(event<A>(), event<B>())
+
+    /** As the two-type [anyOf], for three leaf types. */
+    @JvmName("anyOfThree")
+    inline fun <reified A : E, reified B : E, reified C : E> anyOf(): StepCondition<E> =
+        StepCondition.anyOf<E>(event<A>(), event<B>(), event<C>())
 
     /**
      * A branch: on an event of type [T] (optionally only when [onlyIf] is true), issue commands and follow [then].
@@ -163,7 +219,30 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
         }
     }
 
-    /** A join: wait until all [expecting] are met (counted since the step was entered), then issue commands and follow [then]. */
+    /**
+     * A branch that issues commands and follows [then] once the events received since the step was entered satisfy
+     * [condition]. [whenFulfilled] reads [ReceivedEvents], not a single triggering event. Whichever leaf tipped
+     * [condition] over, the tipping event is always `received.asList().last()`.
+     *
+     * A [StepCondition] first argument cannot bind to the reified `on<T>` overloads above, so there is no resolution
+     * collision between a classic branch and a window-condition one.
+     */
+    fun on(
+        condition: StepCondition<E>,
+        then: Continuation,
+        whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }
+    ) {
+        delegate.on(condition, then) { received -> FlowReactions<C>().whenFulfilled(received).build() }
+    }
+
+    /**
+     * A join that waits until all [expecting] are met (counted since the step was entered), then issues commands and
+     * follows [then].
+     *
+     * @deprecated in favor of `on(allOf(...))`, which this now lowers to internally. An expectation of `n` events of a
+     * type becomes `event<T>(n)`, and the whole list becomes one `allOf(...)` tree. See [StepCondition].
+     */
+    @Deprecated("Replaced by on(allOf(...)), see StepCondition.")
     fun join(expecting: Expectation<E>, vararg more: Expectation<E>, then: Continuation, whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }) {
         delegate.join(listOf(expecting, *more), then) { received -> FlowReactions<C>().whenFulfilled(received).build() }
     }
