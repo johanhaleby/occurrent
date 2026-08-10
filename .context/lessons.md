@@ -440,3 +440,16 @@
   explicitly at his request. The first ordinary, unheld docs PR is where the gap shows:
   it is green, mergeable, and still not mine to merge. Route it as a structured ask.
 
+- Two branches rewriting the same paragraph DUPLICATE it silently, git reports no conflict
+  (2026-08-10, stepcond, docs PRs 61 and 62). Both rewrote the flow saga `historyWindow`
+  paragraph, one adding step-condition facts and the other recasting the prose for
+  readability. Because the two versions had diverged enough to look like separate
+  additions rather than competing edits, a cherry-pick produced BOTH paragraphs and exited
+  zero. The result was the exact duplicated-paragraph defect PR 62 existed to fix, with the
+  surviving stale copy missing every step-condition fact. A conflict marker would have been
+  the safe outcome; silence was the dangerous one. Two rules. When two branches are known
+  to touch the same prose region, TRIAL MERGE them and read the result, never infer safety
+  from a clean exit code. And after any merge or rebase of prose branches, grep for the
+  distinctive opening clause of each rewritten paragraph and assert it appears exactly
+  once. Recorded on the merge-order issue too, because a later rebase can recreate it.
+

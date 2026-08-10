@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 17
+revision: 18
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (audit delivered and verified, U6 dispatched)
+updated_by: orchestrator session dc08d709 (PR 62 held per Johan, reconciliation unit running)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -318,11 +318,14 @@ units:
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
-      ref: null
-      met: false
-      evidence: null
-    blocking_on: []
-    next_action: subagent running; merge to docs main, then U7 rebases PR 61 onto it
+      ref: 62
+      met: true
+      evidence: 'PR 62 open at 5f2c0e270, +17/-17, verified independently: duplicated
+        paragraph now appears once, TOC entry added, headings byte-identical to main,
+        14 anchors intact, dash/semicolon/jargon/puffery gates clean on added lines,
+        remaining colon matches are code comments, YAML and Maven coordinates. HELD per
+        Johan at 2026-08-10T15:19:20+00:00, merges AFTER the release rather than with it, title updated to say
+        so.'
     last_meaningful_progress_at: '2026-08-10T14:58:44+00:00'
     observed: {}
     assessment: 'Sequenced BEFORE the PR 61 fixes deliberately, because both edit
@@ -346,7 +349,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: dispatch after U6 merges
+    next_action: rolled into U8 together with the historyWindow reconciliation and the preview update
     last_meaningful_progress_at: '2026-08-10T14:58:44+00:00'
     observed: {}
     assessment: 'The four items the audit attributed to PR 61 rather than to main: the
