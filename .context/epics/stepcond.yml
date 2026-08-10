@@ -267,7 +267,7 @@ units:
       branch and the seven held docs branches: readability, writing-convention
       violations, and above all stale claims the step-conditions feature contradicted
       that a held branch would reintroduce if merged after it'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U2, U3]
