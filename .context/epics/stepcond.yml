@@ -1,7 +1,7 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 12
+revision: 13
 updated_at: '2026-08-10T12:32:35+00:00'
 updated_by: orchestrator session dc08d709 (U3 library half merged, docs half running)
 baseline:
@@ -218,7 +218,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: library half merged; docs half (subagent a604ae63) extending PR 61's held branch with the three examples
+    next_action: 'library half merged and main matrix 26/26 success on squash ee91f9919; docs half (subagent a604ae63) extending PR 61 held branch'
     last_meaningful_progress_at: '2026-08-10T13:13:53+00:00'
     observed: {}
     assessment: 'Adopted by Johan at a structured ask after U2 reported the gap honestly
