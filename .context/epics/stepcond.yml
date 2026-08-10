@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 5
+revision: 6
 updated_at: '2026-08-10T12:32:35+00:00'
-updated_by: orchestrator session dc08d709 (U1 PR 712 open and inspected, U2 dispatched)
+updated_by: orchestrator session dc08d709 (712 green, one open Copilot thread, worker still running)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -82,7 +82,7 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: PR 712 open, checks running, verify at merge-readiness
+    next_action: NOT merge-ready, one unresolved Copilot thread and no DELIVERY_RESULT yet; worker still running, let it answer its own thread
     last_meaningful_progress_at: '2026-08-10T12:17:33+00:00'
     observed:
       adr_number:
@@ -100,7 +100,16 @@ units:
           (the module had no tests before), so the published artifact is unaffected.
           Accepted, noted rather than sent back. Public surface verified against the
           plan including the reified arity sugar allOf<A,B>()/<A,B,C>().'
-        via: gh pr view plus git show over the fetched branch
+        checks: 27/27 SUCCESS, MERGEABLE, mergeStateStatus CLEAN, reviewDecision empty
+        open_thread: 'copilot-pull-request-reviewer on FlowSagaImpl.java:435, unresolved:
+          reactToJoin passes null for BranchReaction.react''s non-null E triggering,
+          which hides an intentional placeholder from nullness tooling. Assessed by the
+          orchestrator as a REAL type-honesty finding worth fixing, not a decline: the
+          arm is unreachable through Saga.step, but react is public API an unknown
+          caller can invoke directly, and the repo rule is to prevent a footgun at the
+          type level rather than document it. Cheapest fix is marking the parameter
+          @Nullable. Left to the worker, which is still running.'
+        via: gh pr view, graphql reviewThreads, git show at the pinned head SHA
         at: '2026-08-10T12:32:35+00:00'
       worker_report:
         note: 'U1 rebased onto origin/main tip 9a5d407bb (post rv33 merges) before

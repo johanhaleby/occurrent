@@ -381,3 +381,17 @@
   be recovered, mark it approximate in the file rather than writing a confident wrong
   value.
 
+- `FETCH_HEAD` is volatile and a later `git fetch` silently repoints it, so never verify
+  a worker's branch through it (2026-08-10, stepcond U1). The sequence that nearly
+  produced a wrong review: fetch the worker branch, read files from `FETCH_HEAD`
+  correctly, then run a routine memory checkpoint whose `git fetch origin main`
+  repointed `FETCH_HEAD` at main, then read another file from `FETCH_HEAD` and get
+  main's OLD version while believing it was the worker's. The file still parsed and
+  still looked plausible, so nothing announced the error. It was caught only because a
+  Copilot comment quoted code that did not appear in what had just been read, and the
+  mismatch was investigated rather than dismissed. Verify a worker's code at the PR's
+  full head SHA (`git show <sha>:<path>`), which is the same pin the CAS merge uses,
+  or through an explicit remote-tracking ref, never `FETCH_HEAD`. This is a git fact
+  rather than an Occurrent one, so it belongs in the orchestrator skill itself at the
+  next edit, not only here.
+
