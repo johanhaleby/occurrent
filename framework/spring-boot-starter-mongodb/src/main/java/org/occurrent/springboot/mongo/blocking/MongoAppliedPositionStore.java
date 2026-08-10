@@ -107,7 +107,10 @@ class MongoAppliedPositionStore implements AppliedPositionStore {
         try {
             return requireNonNull(executeWithRetry(read, notShutdownAndBeforeDeadline, retryStrategy).get());
         } catch (RuntimeException e) {
-            return OptionalLong.empty();
+            if (System.nanoTime() >= deadlineNanos) {
+                return OptionalLong.empty();
+            }
+            throw e;
         }
     }
 

@@ -31,6 +31,7 @@ import java.time.Duration;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -68,5 +69,20 @@ class MongoAppliedPositionStoreWaitUntilAppliedTimeoutTest {
         // to one retry interval. This slack stays well short of whole extra retry cycles.
         assertThat(elapsed).isLessThan(timeout.plusSeconds(2));
         verify(mongoOperations, atLeast(2)).findOne(any(Query.class), eq(Document.class), anyString());
+    }
+
+    @Test
+    void propagates_exception_when_finite_retry_attempts_exhausted() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        RuntimeException storeFailure = new RuntimeException("persistent store error");
+        when(mongoOperations.findOne(any(Query.class), eq(Document.class), anyString()))
+                .thenThrow(storeFailure);
+        RetryStrategy finiteRetry = RetryStrategy.retry().backoff(Backoff.fixed(10)).maxAttempts(2);
+        AppliedPositionStore storage = new MongoAppliedPositionStore(mongoOperations, "appliedPositions", finiteRetry, Backoff.fixed(100));
+        Duration generousTimeout = Duration.ofSeconds(10);
+
+        assertThatThrownBy(() ->
+                storage.waitUntilApplied("orders", 1, generousTimeout)
+        ).isEqualTo(storeFailure);
     }
 }
