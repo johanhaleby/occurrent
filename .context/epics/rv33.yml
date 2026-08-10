@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rv33
-revision: 46
-updated_at: 2026-08-10T11:16:45Z
+revision: 48
+updated_at: 2026-08-10T11:25:27Z
 updated_by: orchestrator session local_496ca320-3871-4f2c-9b27-5e47d1bbadea (derived from scratchpad path, verify on first worker message)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 and U5 merge only after Johan confirms wording (plan decision 2026-08-09, plan-to-fix-this-serialized-storm.md)"
@@ -248,7 +248,7 @@ units:
     goal: "Document every subscription model capability on occurrent.org, what each does, which models implement it, how the of() probe works, and where ordering genuinely matters (Johan 2026-08-10)"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_39365907-5638-4680-b9eb-fdc60f538226
     deliverables:
@@ -261,13 +261,13 @@ units:
   U14:
     issue: null
     goal: "Rename AppliedPositionStore and its two Mongo implementations to AppliedProjectionPositionStore, naming the projection whose position they hold (Johan 2026-08-10)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, ref: 711, met: false, evidence: null}
+      - {check: pr_merged, ref: 711, met: true, evidence: "squash 701f8bd42, merged head equals verified ddc49ba90, CAS pin honoured, 27/27, re-verified after the disk fix"}
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/vgpr-361-version-gated-projection-reads, met: true, evidence: "commit a191b83 on PR 52 held branch, three AppliedProjectionPositionStore mentions"}
     blocking_on: []
     next_action: "chip task_d1bc7045 spawned 2026-08-10T08:30:48Z, awaiting Johan's click"
@@ -295,11 +295,11 @@ units:
     goal: "Instance-side capability lookup on SubscriptionModelCapability (both stacks): a default capability(Class<T>) returning Optional<T> plus a default hasCapability(Class<? extends SubscriptionModelCapability>) returning boolean that delegates to it, Kotlin reified extensions for both in the subscription DSL module, and a docs commit on held PR 59 branch (Johan adopted 2026-08-10)"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U12]
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 710, met: true, evidence: "squash 4f6c387bd, merged head equals verified c31e413f6, CAS pin honoured, 27/27, Johan approved the ADR 119 merge"}
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/subscription-model-capabilities, met: true, evidence: "PR 59 head 88771f3d2, held; findIn used throughout, zero unreleased framing, ordering answered (outermost implementer answers) with a worked example, registered on docs issue 57 after PR 58"}
     blocking_on: []
     next_action: "PR 710 delivered and reviewed clean, awaiting CI then merge (ADR 119 holds for Johan wording read). Was: chip spawned at the U12 merge. Ref task_b2342954 spawned 2026-08-10T09:55:22Z, awaiting Johan's click"
@@ -312,7 +312,7 @@ units:
     goal: "Cut ten interpretive-metadiscourse statements from the docs and rewrite the Firing a timeout without waiting section, which Johan still finds too complex (Johan 2026-08-10)"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
