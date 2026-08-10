@@ -1,9 +1,9 @@
 ---
 schema_version: 1
 epic: stepcond
-revision: 2
-updated_at: '2026-08-10T10:40:00+00:00'
-updated_by: orchestrator session dc08d709 (registration plus U1 dispatch)
+revision: 3
+updated_at: '2026-08-10T11:10:00+00:00'
+updated_by: orchestrator session dc08d709 (U1 started, ADR-number correction sent)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -16,7 +16,7 @@ authority: 'see .context/orchestrator-policy.yml (standing merge, sibling lenien
   /Users/johan/.claude/plans/https-github-com-johanhaleby-occurrent-i-whimsical-glade.md;
   epic scoped to issue 707 (library) plus its docs unit; milestone deliberately
   skipped, matching every prior epic in this repo'
-definition_of_done: 'U1 merged to main with ADR 118, the ADR 63 amendment, the
+definition_of_done: 'U1 merged to main with the new ADR (120 after the cross-branch audit, NOT 118 which rv33 took), the ADR 63 amendment, the
   changelog entry and the 0.33.0 migration-guide section; U2 docs branch pushed and
   review-clean, slotted into the docs-repo issue 57 merge order; issue 707 closed.
   0.33.0 release execution itself is Johan''s manual act and is NOT part of this
@@ -37,11 +37,25 @@ pending_actions:
   target: 'U1 chip task_abdd6422: ⌁[stepcond/U1#707] Matcher step conditions ·
     Sonnet/high (full brief, plan by path, johan-writing surfaces named, delivery
     defaults, finding-routing protocol)'
-  expected: chip visible to Johan; session enters the fleet on his click
-  status: PENDING
+  expected: 'chip visible to Johan; session enters the fleet on his click; DONE:
+    Johan started it, session local_abfbd577 running in worktree jolly-cray-936341
+    on branch johan/jolly-cray-936341'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-10T10:40:00+00:00'
+- id: act-003
+  type: message-session
+  target: 'ADR-number correction to U1 session local_abfbd577: 0118 taken by rv33 on
+    main and 0119 claimed on rv33/u16-instance-capability-lookup, so take 0120 after
+    running the cross-branch audit; plus the rv33 boundaries (rv33/* branches,
+    subscription trees, shared changelog.md keep-both)'
+  expected: 'message delivered and acted on, the PR body states which ADR number was
+    taken and what the audit showed'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-10T11:10:00+00:00'
 units:
   U1:
     issue: 707
@@ -49,13 +63,13 @@ units:
       (AtLeast/AllOf/AnyOf over a nested EventMatcher), on(StepCondition<? extends E>)
       overloads, internal unification of ChoiceBody/JoinBody into one branch list with
       ArrivingEvent/WindowCondition triggers, join deprecated and lowered to sugar,
-      Kotlin sugar incl. KClass and reified arity shortcuts, ADR 118 plus the ADR 63
+      Kotlin sugar incl. KClass and reified arity shortcuts, a new ADR (120, audited) plus the ADR 63
       non-goal reversal, changelog and 0.33.0 migration guide'
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: local_abfbd577 (worktree jolly-cray-936341, branch johan/jolly-cray-936341)
     deliverables:
     - check: pr_merged
       ref: null
@@ -66,9 +80,15 @@ units:
       met: false
       evidence: null
     blocking_on: []
-    next_action: chip dispatched, waiting on Johan's click and the first PR
-    last_meaningful_progress_at: '2026-08-10T10:35:24+00:00'
-    observed: {}
+    next_action: implementing, waiting on the first PR
+    last_meaningful_progress_at: '2026-08-10T11:09:33+00:00'
+    observed:
+      adr_number:
+        note: 'plan said 118, corrected to 120 at 11:10Z: rv33 merged 0118 to main
+          and claims 0119 on rv33/u16-instance-capability-lookup (PR 710); worker
+          told to re-audit across all remote branches because rv33 may take 120'
+        via: git ls-tree over all origin branches
+        at: '2026-08-10T10:52:00+00:00'
     assessment: 'Additive on public API but it rewrites the flow evaluator, which is
       shipped 0.31.0 behavior, so the sugar-equivalence guard is the unchanged join
       test suite. Settled by the plan, do not re-litigate: no new ActionKind (rollback

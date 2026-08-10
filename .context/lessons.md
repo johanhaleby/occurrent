@@ -349,3 +349,22 @@
   as some unit has an unmet deliverable a PR event could advance); the gap was applying it
   at the reopening rather than only at the sweep. Run `date -u` before writing any
   timestamp, and re-arm the monitor in the same action that registers a post-closeout unit.
+
+- An ADR number is audited across every remote branch at the moment of writing, never
+  read once at planning time (2026-08-10, stepcond registration). The plan recorded
+  "next free ADR number is 118" as a VERIFIED assumption with real evidence (ADR 0117
+  was max on main), and it was already about to be false: a concurrent epic's unit
+  merged 0118 minutes later and a second unit had 0119 claimed on an unmerged branch,
+  invisible to both a working-tree check and a main-only check. ORCHESTRATOR.md
+  already carried the cross-branch audit rule, but only as advice for after a
+  collision recurs, so the registration used the cheap check and pinned the result
+  into a brief. Two rules: a number claimed on an unmerged branch is real, so the
+  audit is `git ls-tree` over every `origin/*` branch, and a brief that names an ADR
+  number must carry the audit command rather than the number, because the dispatch
+  and the write are hours apart in a repository with concurrent epics.
+  The recovery also exposed a chip-replacement hazard worth its own line: the
+  skill says spawn the replacement first and dismiss the old chip second, which is
+  correct when the old chip is still pending, but when the user has ALREADY started
+  it that ordering leaves a live worker plus a pending duplicate aimed at the same
+  files. Check whether the chip started before replacing it, and if it did, correct
+  the running session with a message and withdraw the replacement instead.
