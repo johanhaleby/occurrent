@@ -427,11 +427,12 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     /**
      * A branch's reaction, unified across both trigger kinds. A classic on(...) adapter uses {@code metadata} and
      * {@code triggering} and ignores {@code received}. A window-condition adapter (on(StepCondition, ...), and the join
-     * sugar) reads only {@code received} and ignores the other two.
+     * sugar) reads only {@code received} and ignores the other two, so it tolerates the null {@code triggering} that
+     * {@code reactToJoin}'s defensive path passes.
      */
     @FunctionalInterface
     interface BranchReaction<E, C> {
-        List<C> react(EventMetadata metadata, E triggering, ReceivedEvents<E> received);
+        List<C> react(EventMetadata metadata, @Nullable E triggering, ReceivedEvents<E> received);
     }
 
     record TimeoutSpec<E, C>(@Nullable Duration after, @Nullable Function<ReceivedEvents<E>, Instant> at, Function<ReceivedEvents<E>, List<C>> onExpiry, Continuation then) {
