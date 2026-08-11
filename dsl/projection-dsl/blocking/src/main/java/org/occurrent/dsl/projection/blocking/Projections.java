@@ -20,14 +20,12 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
-import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.ProjectionKeys;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.view.MaterializedView;
-import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.dsl.view.View;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.filter.Filter;
@@ -290,29 +288,5 @@ public final class Projections {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         requireNonNull(queries, "queries cannot be null");
         return dcbProjection.projection().view().evolve(queries.query(dcbProjection.criteria()));
-    }
-
-    /**
-     * Wraps {@code view} so every update also advances {@code store} with the applied event's global position,
-     * after the delegate has written its state
-     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>).
-     * Works with any {@link MaterializedView}, framework-built or your own, including one that batches its writes
-     * during a catch-up replay through {@link ReplayAware}: the returned view forwards the lifecycle
-     * calls to {@code view} and only records the position once the delegate's own write for that replay is durable.
-     * <p>
-     * An event whose {@link EventMetadata#getPosition()} is {@code null} makes the returned view throw an
-     * {@link IllegalStateException}, either because the event store has position writing turned off, or because the
-     * event arrived on a path that carries no metadata. Recording is opt-in, so a projection that cannot supply a
-     * position should not wrap its view with this in the first place.
-     *
-     * @param projectionId the id {@code store} records the position under, read back with
-     *                      {@link AppliedProjectionPositionStore#appliedPosition(String)} or
-     *                      {@link AppliedProjectionPositionStore#waitUntilApplied(String, long, java.time.Duration)}.
-     */
-    public static <E> MaterializedView<E> recordingAppliedPosition(MaterializedView<E> view, AppliedProjectionPositionStore store, String projectionId) {
-        requireNonNull(view, "view cannot be null");
-        requireNonNull(store, "store cannot be null");
-        requireNonNull(projectionId, "projectionId cannot be null");
-        return new RecordingMaterializedView<>(view, store, projectionId);
     }
 }

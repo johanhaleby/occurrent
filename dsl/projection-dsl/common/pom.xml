@@ -36,11 +36,6 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-retry</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
             <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>

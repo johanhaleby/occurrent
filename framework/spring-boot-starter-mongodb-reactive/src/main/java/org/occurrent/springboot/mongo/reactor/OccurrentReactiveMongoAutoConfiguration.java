@@ -31,7 +31,6 @@ import org.occurrent.application.service.reactor.generic.GenericApplicationServi
 import org.occurrent.application.service.spring.reactor.SpringReactiveTransactionExecutor;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
-import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.dsl.subscription.reactor.Subscriptions;
@@ -46,7 +45,6 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
-import org.occurrent.retry.Backoff;
 import org.occurrent.springboot.common.*;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
 import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
@@ -77,7 +75,6 @@ import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import reactor.util.retry.Retry;
 
-import java.time.Duration;
 
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -159,22 +156,6 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointStorage occurrentCheckpointStorage(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
         return new ReactorCheckpointStorage(mongo, occurrentProperties.getSubscription().getCollection());
-    }
-
-    /**
-     * The zero-config {@link AppliedProjectionPositionStore} a {@code @Projection(recordAppliedPosition = true)} resolves
-     * when the application declares none.
-     */
-    @Bean
-    @ConditionalOnMissingBean(AppliedProjectionPositionStore.class)
-    public AppliedProjectionPositionStore occurrentAppliedProjectionPositionStore(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
-        OccurrentProperties.ProjectionProperties projection = occurrentProperties.getProjection();
-        OccurrentProperties.ProjectionProperties.AppliedPositionProperties pollProperties = projection.getAppliedPosition();
-        Backoff pollBackoff = Backoff.exponential(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
-        Retry storeRetry = Retry.backoff(5, Duration.ofMillis(100))
-                .maxBackoff(Duration.ofSeconds(2))
-                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
-        return new ReactiveMongoAppliedProjectionPositionStore(mongo, projection.getAppliedPositionCollection(), storeRetry, pollBackoff);
     }
 
     /**
