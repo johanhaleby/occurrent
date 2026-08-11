@@ -867,3 +867,28 @@ is a red flag on the signal, not on the worker. Threshold above the longest legi
 foreground Maven chunks capped near ten minutes, 20 was too tight and 35 holds. Same family as the
 rollup that described only the checks that happened to exist, and the `git show` whose ref the shell
 had eaten: the tool answered confidently, just not the question I asked.
+
+## A worker's diagnosis of a tool is a claim too, and this one did not reproduce (2026-08-11, cdx33)
+
+U3b reported that "the rtk hook silently truncates piped `grep`", having seen a
+`grep -E "^\+" diff.txt | grep ...` pipeline return 28 of 837 lines, and concluded its first
+writing-gate pass had been a false PASS. That would have been serious for me too, since every
+"verified from the remote" claim I have made this session runs a piped `grep -c`.
+
+I tested it rather than propagating it. Counting through `cat | grep -c`, through
+`git archive | tar -xO | grep -c`, and through the worker's own `grep | grep -c` shape on a
+synthetic 837-line file: identical counts with the default `grep` and with `/usr/bin/grep`, 837 in
+every variant. The truncation does not reproduce here. So my remote read-backs stand, and the
+mechanism the worker named is UNCONFIRMED.
+
+What is not in doubt is that its gate missed something real, the same class of miss that once shipped
+a semicolon in this area. The likeliest explanation is that its pipeline matched fewer lines than it
+assumed (`^\+` also catches a diff's `+++` header, and a narrower second pattern would explain 28),
+which is a reasoning error rather than a tooling one, and a more useful thing to know.
+
+**How to apply.** Treat a worker's tooling diagnosis exactly like a worker's DELIVERY_RESULT claim:
+useful, and unverified until you run it yourself, especially before relaying it to sibling workers as
+fact. Keep the cheap defensive practice regardless, because it costs nothing and would have caught
+either cause: when a grep is the EVIDENCE for a gate, print the input line count beside the match
+count, so a suspiciously small denominator is visible rather than invisible. A count with no
+denominator cannot be sanity-checked, which is the actual lesson under both explanations.
