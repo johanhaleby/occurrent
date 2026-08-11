@@ -13,11 +13,12 @@ review. Reopens [#361](https://github.com/johanhaleby/occurrent/issues/361), whi
 ADR 111 built `AppliedProjectionPositionStore` so a caller holding a position (one a command handed back) could
 ask whether a projection has caught up to it, and wait if not. `waitUntilApplied(projectionId, position, timeout)`
 answers `true` once the store's recorded position for that projection is at or beyond `position`
-([AppliedProjectionPositionStore.java:121-125](../../../dsl/projection-dsl/common/src/main/java/org/occurrent/dsl/projection/AppliedProjectionPositionStore.java)),
+([AppliedProjectionPositionStore.java:121-125](https://github.com/johanhaleby/occurrent/blob/96f6db174301976e90e7026624f25aad171ff729/dsl/projection-dsl/common/src/main/java/org/occurrent/dsl/projection/AppliedProjectionPositionStore.java#L121-L125)),
 and the recorded position only ever moves forward
-([:166](../../../dsl/projection-dsl/common/src/main/java/org/occurrent/dsl/projection/AppliedProjectionPositionStore.java)).
+([:166](https://github.com/johanhaleby/occurrent/blob/96f6db174301976e90e7026624f25aad171ff729/dsl/projection-dsl/common/src/main/java/org/occurrent/dsl/projection/AppliedProjectionPositionStore.java#L166)).
 The Mongo store does the same with a single `Update().max` write
-([MongoAppliedProjectionPositionStore.java:123](../../../framework/spring-boot-starter-mongodb/src/main/java/org/occurrent/springboot/mongo/blocking/MongoAppliedProjectionPositionStore.java)).
+([MongoAppliedProjectionPositionStore.java:123](https://github.com/johanhaleby/occurrent/blob/96f6db174301976e90e7026624f25aad171ff729/framework/spring-boot-starter-mongodb/src/main/java/org/occurrent/springboot/mongo/blocking/MongoAppliedProjectionPositionStore.java#L123)),
+pinned to the commit before this withdrawal, since the file does not survive it.
 
 Reading a maximum as an answer to "has everything up to here been applied" treats it as a completed prefix. That
 reading is sound only when a projection is fed its events in position order, which ADR 111 decision 7 asserted:
