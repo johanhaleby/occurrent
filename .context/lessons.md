@@ -528,3 +528,34 @@ departure arrives after the decision was needed. When a head shows fewer checks 
 normally runs, treat it as terminal and settle it immediately with
 `git diff --name-only <last-verified-sha>..HEAD`, judging the code on the last head that carried
 code. See [[reference-ci-check-state-and-paths-ignore]].
+
+## Merging on a green matrix is not merging on a green PR (2026-08-11, timerid U2)
+
+PR 719 merged with an unresolved Copilot thread on it, and the thread was right: the javadoc on
+`SagaInput.timeout(String, TimerName)` used `stepTimer("awaiting-players")` as its example, and
+`stepTimer` did not exist yet, so the only occurrence of that symbol on `main` was the javadoc
+naming it. Johan found it minutes after the merge.
+
+Two failures, both the orchestrator's, and the second is the one that let the first through.
+
+**The brief omitted the standing `/pr-fix` loop.** `ORCHESTRATOR.md:344` records it as Johan's
+directive from 2026-08-06: every implementation brief includes a loop over the unit's pull request
+until the matrix is green **and every review thread is addressed and resolved**. The U2 brief asked
+for `pr-create` and a `DELIVERY_RESULT` block and never mentioned threads, so the worker had no
+reason to look at them. The rule was in the file read at session start.
+
+**The merge gate never looked at threads.** The check was the check-run rollup plus
+`mergeStateStatus`, and `CLEAN` does not mean "no unresolved conversations" unless the repository
+enforces it, which this one does not. A green matrix says the code compiles and passes, not that
+review is finished.
+
+**How to apply.** Put the `/pr-fix` loop in every implementation brief, and say why, since a worker
+told only to open a pull request treats delivery as the finish line. Before any merge, query the
+review threads as well as the checks, with a GraphQL call filtering `reviewThreads` on
+`isResolved == false`, and treat empty output as part of the merge condition alongside the rollup.
+A reasoned-decline thread left open on purpose is fine under the policy, but it has to be a
+decision someone took rather than one nobody saw.
+
+Related: this same epic already lost twenty minutes to a hand-rolled monitor when the tested
+pattern was on the shelf. Both misses were recorded rules that existed and were not applied, which
+is a different failure from not knowing them.
