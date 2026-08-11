@@ -545,6 +545,27 @@ class SagaFlowExtensionsTest {
                 { assertThat(atTen).describedAs("bounded by the window plus the pinned initiating event").isLessThanOrEqualTo(3 + 2) }
             )
         }
+
+        @Test
+        fun `stepWindow set through the Kotlin block caps the events of the step it waits in`() {
+            val saga = saga<WinEvent, WinCommand> {
+                stepWindow(2)
+                correlateAll { it.id }
+                startsOn<Begin>()
+                step("wait") { on(event<Tick>(count = 3), then = end) }
+            }
+            var state = saga.evolve(saga.initialState(), SagaInput.event(Begin("w")))
+
+            state = saga.evolve(state, SagaInput.event(Tick("w")))
+            state = saga.evolve(state, SagaInput.event(Tick("w")))
+            val keptWhileWaiting = state.received().size
+            val afterThird = saga.evolve(state, SagaInput.event(Tick("w")))
+
+            assertAll(
+                { assertThat(keptWhileWaiting).describedAs("two ticks plus the initiating event").isEqualTo(3) },
+                { assertThat(saga.isTerminal(afterThird)).describedAs("the third tick still completes the count").isTrue() }
+            )
+        }
     }
 
     // --- Scenario F: the metadata-aware `on` overload receives the delivered event's real metadata -------------------

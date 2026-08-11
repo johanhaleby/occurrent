@@ -84,6 +84,17 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     }
 
     /**
+     * Sets how many of the current step's own received events are kept, which limits what the instance stores rather than
+     * what a step condition counts. Unbounded by default, so a step keeps every event it receives unless this is set.
+     * A condition's counts are carried in the instance's state, so a step still completes on the same event it would have
+     * without this set, while a guard, a window-condition reaction and a timeout reaction read only the events still kept.
+     * Must be at least 1.
+     */
+    fun stepWindow(events: Int) {
+        delegate.stepWindow(events)
+    }
+
+    /**
      * Declares the event type [T] that starts an instance, and optionally the commands to issue on start. Correlate [T] with
      * [correlate] or [correlateAll] like any other event type.
      */
@@ -150,6 +161,15 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
         val javaPredicate: Predicate<T>? = predicate?.let { test -> Predicate { candidate: T -> test(candidate) } }
         return StepCondition.event<E, T>(T::class.java, count, javaPredicate)
     }
+
+    /**
+     * A leaf [StepCondition] matching [count] events of type [T] that also satisfy [predicate], with [predicateId] naming
+     * that predicate so a saga can keep the leaf's count in its state instead of counting the step's events again. Naming a
+     * predicate is what makes `stepWindow` usable on the step. Change the name whenever the predicate's meaning changes,
+     * since keeping the name while changing the test is the one thing this cannot detect.
+     */
+    inline fun <reified T : E> event(count: Int = 1, predicateId: String, noinline predicate: (T) -> Boolean): StepCondition<E> =
+        StepCondition.event<E, T>(T::class.java, count, predicateId, Predicate { candidate: T -> predicate(candidate) })
 
     /** [allOf] over an existing [StepCondition] tree, fulfilled once every one of [first] plus [rest] is. */
     fun allOf(first: StepCondition<out E>, vararg rest: StepCondition<out E>): StepCondition<E> =

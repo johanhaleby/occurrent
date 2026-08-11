@@ -34,6 +34,7 @@ import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.StepConditionProgress;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -133,7 +134,7 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
         // Mid-transition, where previousStepEntryIndex is what react slices the fired window with, so a store that loses it
         // hands a reaction the whole retained history instead of its own step's window.
         FlowStateImpl<ReviewEvent> original = new FlowStateImpl<>(
-                "next", received, 1, 2, false, "awaiting-decision", 1, ActionKind.BRANCH, 0);
+                "next", received, 1, 2, false, "awaiting-decision", 1, ActionKind.BRANCH, 0, null);
         SagaEnvelope<FlowState<ReviewEvent>> envelope = new SagaEnvelope<>(
                 "review-2", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null);
 
@@ -186,6 +187,121 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
                         .as("absent means not known, and a window-condition reaction falls back to the whole retained history")
                         .isEqualTo(-1)
         );
+    }
+
+    @Test
+    void the_step_condition_counts_round_trip_through_mongo_for_an_instance_whose_older_events_were_dropped() {
+        SagaStateStore<FlowState<ReviewEvent>> store =
+                new SpringMongoSagaStateStore<>(mongoOperations(), "saga-review", rawFlowStateType(), converter());
+
+        // What stepWindow leaves behind. The tail starts past the step's entry (windowStart 7, entered at 2), so the two
+        // Approved counted earlier are only in the counts, and losing them would leave the step one short forever.
+        List<ReviewEvent> received = List.of(
+                new ReviewRequested("e1", "review-3"),
+                new Approved("e9", "review-3", 70));
+        StepConditionProgress progress = new StepConditionProgress(
+                "awaiting-decision|" + Approved.class.getName(), List.of(2));
+        FlowStateImpl<ReviewEvent> original = new FlowStateImpl<>(
+                "awaiting-decision", received, 7, 2, false, "awaiting-decision", -1, ActionKind.NONE, -1, progress);
+        SagaEnvelope<FlowState<ReviewEvent>> envelope = new SagaEnvelope<>(
+                "review-3", original, SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, null, null, null, null);
+
+        store.compareAndSave("review-3", envelope, 0);
+        FlowStateImpl<ReviewEvent> roundTripped = (FlowStateImpl<ReviewEvent>) store.find("review-3").orElseThrow().state();
+
+        assertAll(
+                () -> assertThat(roundTripped).isEqualTo(original),
+                () -> assertThat(requireNonNull(roundTripped.stepConditionProgress()).matchCounts()).containsExactly(2),
+                () -> assertThat(requireNonNull(roundTripped.stepConditionProgress()).leafFingerprint())
+                        .isEqualTo(progress.leafFingerprint()),
+                () -> assertThat(roundTripped.windowStart()).as("the tail still starts past the step's entry").isEqualTo(7)
+        );
+    }
+
+    @Test
+    void reads_a_0_33_0_flow_document_written_before_the_step_condition_counts_existed() {
+        // An instance parked mid-condition by an earlier 0.33.0 build, so it has previousStepEntryIndex but no counts. The
+        // document is inserted by hand, since one this store wrote a moment ago only proves it agrees with itself.
+        MongoOperations mongoOperations = mongoOperations();
+        CloudEventConverter<ReviewEvent> converter = converter();
+        SagaStateStore<FlowState<ReviewEvent>> store =
+                new SpringMongoSagaStateStore<>(mongoOperations, "saga-review", rawFlowStateType(), converter);
+        List<ReviewEvent> received = List.of(
+                new ReviewRequested("e1", "mid-condition"),
+                new Approved("e2", "mid-condition", 90));
+
+        mongoOperations.insert(new Document("_id", "mid-condition")
+                .append("status", SagaStatus.ACTIVE.name())
+                .append("version", 1L)
+                .append("state", new Document("currentStep", "awaiting-decision")
+                        .append("windowStart", 1)
+                        .append("stepEntryIndex", 1)
+                        .append("completed", false)
+                        .append("previousStep", "awaiting-decision")
+                        .append("previousStepEntryIndex", -1)
+                        .append("lastAction", ActionKind.NONE.name())
+                        .append("matchedBranchIndex", -1)
+                        .append("received", received.stream().map(event -> cloudEventJson(converter, event)).toList()))
+                .append("timers", List.of())
+                .append("streamWatermarks", new Document())
+                .append("createdAt", 1_000L)
+                .append("updatedAt", 1_000L), "saga-review");
+
+        FlowStateImpl<ReviewEvent> loaded = (FlowStateImpl<ReviewEvent>) store.find("mid-condition").orElseThrow().state();
+
+        assertAll(
+                () -> assertThat(loaded.received()).as("the received log decodes unchanged").containsExactlyElementsOf(received),
+                () -> assertThat(loaded.stepConditionProgress())
+                        .as("absent means not known, and the counts are derived from the window again")
+                        .isNull()
+        );
+    }
+
+    @Test
+    void reads_a_flow_document_whose_stored_counts_cannot_describe_any_declaration() {
+        // Each field is defaulted on its own by a store, so a combination no evolve ever wrote can come back. A count list
+        // holding a negative, or one missing its fingerprint, has to reach the flow lowering as it is rather than be
+        // repaired into something plausible, since only the lowering knows whether the window can be counted instead.
+        MongoOperations mongoOperations = mongoOperations();
+        CloudEventConverter<ReviewEvent> converter = converter();
+        SagaStateStore<FlowState<ReviewEvent>> store =
+                new SpringMongoSagaStateStore<>(mongoOperations, "saga-review", rawFlowStateType(), converter);
+        List<ReviewEvent> received = List.of(new ReviewRequested("e1", "mangled"), new ReviewRequested("e2", "no-fingerprint"));
+
+        mongoOperations.insert(seededFlowDocument("mangled", converter, received.subList(0, 1),
+                new Document("leafFingerprint", "awaiting-decision|x").append("matchCounts", List.of(-4))), "saga-review");
+        mongoOperations.insert(seededFlowDocument("no-fingerprint", converter, received.subList(1, 2),
+                new Document("matchCounts", List.of(3))), "saga-review");
+
+        FlowStateImpl<ReviewEvent> mangled = (FlowStateImpl<ReviewEvent>) store.find("mangled").orElseThrow().state();
+        FlowStateImpl<ReviewEvent> withoutFingerprint = (FlowStateImpl<ReviewEvent>) store.find("no-fingerprint").orElseThrow().state();
+
+        assertAll(
+                () -> assertThat(requireNonNull(mangled.stepConditionProgress()).matchCounts())
+                        .as("handed on as stored, so the lowering decides what to do about it").containsExactly(-4),
+                () -> assertThat(withoutFingerprint.stepConditionProgress())
+                        .as("counts with nothing saying what they were counted for are not counts")
+                        .isNull()
+        );
+    }
+
+    private static Document seededFlowDocument(String sagaId, CloudEventConverter<ReviewEvent> converter,
+                                               List<ReviewEvent> received, Document progress) {
+        return new Document("_id", sagaId)
+                .append("status", SagaStatus.ACTIVE.name())
+                .append("version", 1L)
+                .append("state", new Document("currentStep", "awaiting-decision")
+                        .append("windowStart", 1)
+                        .append("stepEntryIndex", 1)
+                        .append("completed", false)
+                        .append("lastAction", ActionKind.NONE.name())
+                        .append("matchedBranchIndex", -1)
+                        .append("stepConditionProgress", progress)
+                        .append("received", received.stream().map(event -> cloudEventJson(converter, event)).toList()))
+                .append("timers", List.of())
+                .append("streamWatermarks", new Document())
+                .append("createdAt", 1_000L)
+                .append("updatedAt", 1_000L);
     }
 
     private static String cloudEventJson(CloudEventConverter<ReviewEvent> converter, ReviewEvent event) {

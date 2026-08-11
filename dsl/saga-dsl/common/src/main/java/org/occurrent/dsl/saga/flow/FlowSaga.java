@@ -80,28 +80,61 @@ public final class FlowSaga {
         private final List<CompiledStep<E, C>> steps = new ArrayList<>();
         private final Set<String> stepNames = new LinkedHashSet<>();
         private int historyWindow = FlowSagaImpl.DEFAULT_HISTORY_WINDOW;
+        private int stepWindow = FlowSagaImpl.UNBOUNDED_STEP_WINDOW;
 
         private Builder() {
         }
 
         /**
-         * Sets how many received events are retained behind the current step's entry, and so how far back a guard, a window
+         * Sets how many received events are kept behind the current step's entry, and so how far back a guard, a window
          * condition, or a timeout reaction can read history through {@link ReceivedEvents}. The initiating event and the
-         * current step's own events are always retained on top of this (a window condition must count over the current
-         * step's events), so this only bounds the earlier history. The default is {@value FlowSagaImpl#DEFAULT_HISTORY_WINDOW}.
-         * Raise it for a guard that counts far across a self-looping step (for example a retry cap higher than the default),
-         * and lower it to trim the persisted state of a long-running instance. Must be at least zero.
+         * current step's own events are kept on top of this, so this only limits the earlier history. The default is
+         * {@value FlowSagaImpl#DEFAULT_HISTORY_WINDOW}. Raise it for a guard that counts far across a self-looping step (for
+         * example a retry cap higher than the default), and lower it to trim the persisted state of a long-running instance.
+         * Must be at least zero.
          * <p>
-         * What this bounds is the carry-over, and only that. Trimming happens on a transition, and the step being left keeps
-         * all of its own events, so an instance parked in one step while a large number of correlated events arrive grows
-         * however low this is set, {@code 0} included. A flow whose steps turn over stays within the window, and one that can
-         * idle in a noisy step needs a {@code timeout} to move it on.
+         * This is applied when a step is left, and it puts no limit at all on the events of the step being left, so an
+         * instance parked in one step while a large number of correlated events arrive grows however low this is set,
+         * {@code 0} included. That is what {@link #stepWindow(int)} caps.
          */
         public Builder<E, C> historyWindow(int events) {
             if (events < 0) {
                 throw new IllegalArgumentException("historyWindow cannot be negative");
             }
             this.historyWindow = events;
+            return this;
+        }
+
+        /**
+         * Sets how many of the current step's own received events are kept, which limits what the instance stores rather
+         * than what a step condition counts. Unbounded by default, so a step keeps every event it receives unless this is
+         * set. Set it on a flow that can idle in a step a large number of correlated events arrive in, and where a
+         * {@code timeout} moving the instance on is not enough on its own.
+         * <p>
+         * A condition's counts are carried in the instance's state rather than recounted from the events, so a step still
+         * completes on the same event it would have without this set. What shrinks is what a guard, a window-condition
+         * reaction and a {@code timeout}'s {@code onExpiry} can read, down to the events still kept. Must be at least 1, so
+         * the event that fired a branch is always the last element of {@link ReceivedEvents#asList()}, and
+         * {@link ReceivedEvents#initiating()} reaches the start event as always.
+         * <p>
+         * A step that is inside its cap keeps whatever carry-over {@link #historyWindow(int)} granted, and one that is over
+         * it keeps only its own newest {@code events}, because reaching its oldest events means dropping the carry-over
+         * standing ahead of them. A transition keeps the events of the step it left as well, for that step's reaction, and
+         * the step it enters then fills its own cap before anything is dropped, so the most an instance holds at any one
+         * moment is {@code historyWindow + 2 * stepWindow + 1} rather than one {@code stepWindow}'s worth.
+         * <p>
+         * Keeping a count means being able to match it to a leaf again after a redeploy, so a window-condition leaf in a capped
+         * step names its predicate, {@code event(Payment.class, 2, "isBig", p -> p.isBig())}. {@link #build()} refuses a capped
+         * flow with a leaf whose predicate has no name, and one where two leaves share a name while holding different
+         * predicates, naming the step and what to do in both cases. A guard's {@code onlyIf} needs no name, since it is checked
+         * against the arriving event rather than counted over a window, and a predicate with no name costs nothing on a flow
+         * without a cap.
+         */
+        public Builder<E, C> stepWindow(int events) {
+            if (events < 1) {
+                throw new IllegalArgumentException("stepWindow must be at least 1, was " + events);
+            }
+            this.stepWindow = events;
             return this;
         }
 
@@ -201,9 +234,27 @@ public final class FlowSaga {
             validateTransitionToTargets(stepsByName.keySet());
             Set<Class<? extends E>> eventTypes = collectEventTypes();
             validateCorrelationCoverage(eventTypes);
+            validateStepWindowCanKeepCounts();
 
             return new FlowSagaImpl<>(startType, onStartCommands, List.copyOf(steps), stepIndex, stepsByName,
-                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow);
+                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow, stepWindow);
+        }
+
+        // Dropping a step's older events means its condition counts have to live in the instance's state, and a count can
+        // only be kept for a leaf a later declaration can still be matched to. A step whose leaves cannot all be matched to
+        // one counts its window instead, which is fine until its events are dropped, so refuse the pair here.
+        private void validateStepWindowCanKeepCounts() {
+            if (stepWindow == FlowSagaImpl.UNBOUNDED_STEP_WINDOW) {
+                return;
+            }
+            for (CompiledStep<E, C> step : steps) {
+                String why = step.leaves().uncountableWhy();
+                if (why != null) {
+                    throw new IllegalStateException("step '" + step.name() + "' cannot keep its condition counts, so it cannot"
+                            + " be used with stepWindow(" + stepWindow + "), which drops the events those counts would"
+                            + " otherwise be derived from. " + why + ", or drop stepWindow(...) for this flow");
+                }
+            }
         }
 
         private void validateTransitionToTargets(Set<String> stepNamesInGraph) {
