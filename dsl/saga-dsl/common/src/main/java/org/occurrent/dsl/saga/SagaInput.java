@@ -78,7 +78,8 @@ public sealed interface SagaInput<E> {
     /**
      * Wraps a fired timer as a saga input, building the {@link SagaTimeout} for you. This is what a test writes to fire
      * a timer, {@code SagaInput.timeout("order-1", TimerName.parse("payment"))} for a core DSL saga and
-     * {@code SagaInput.timeout("game-1", stepTimer("awaiting-players"))} for a flow saga.
+     * {@code SagaInput.timeout("game-1", FlowSaga.stepTimer("awaiting-players"))} for a flow saga, where
+     * {@link org.occurrent.dsl.saga.flow.FlowSaga#stepTimer(String) stepTimer} names the step's timer for you.
      */
     static <E> SagaInput<E> timeout(String sagaId, TimerName timerName) {
         return new Timeout<>(new SagaTimeout(sagaId, timerName));

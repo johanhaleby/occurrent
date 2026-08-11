@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test
 import org.occurrent.dsl.saga.Saga
 import org.occurrent.dsl.saga.SagaEffect
 import org.occurrent.dsl.saga.SagaInput
-import org.occurrent.dsl.saga.TimerName
 import java.time.Instant
 
 @DisplayName("flow saga with an absolute (data-derived) timeout")
@@ -60,7 +59,7 @@ class AbsoluteTimeoutFlowSagaTest {
 
         val startEffects = auctionSaga.onStart(afterStart, started) + auctionSaga.react(afterStart, SagaInput.event(started))
 
-        assertThat(startEffects).containsExactly(SagaEffect.startTimeoutAt<AuctionCommand>("step:bidding", endsAt))
+        assertThat(startEffects).containsExactly(SagaEffect.startTimeoutAt<AuctionCommand>(stepTimer("bidding"), endsAt))
     }
 
     @Test
@@ -69,7 +68,7 @@ class AbsoluteTimeoutFlowSagaTest {
         val started = AuctionStarted("a1", endsAt)
         val afterStart = auctionSaga.evolve(auctionSaga.initialState(), SagaInput.event(started))
 
-        val step = auctionSaga.step(afterStart, SagaInput.timeout("a1", TimerName.parse("step:bidding")))
+        val step = auctionSaga.step(afterStart, SagaInput.timeout("a1", stepTimer("bidding")))
 
         assertThat(auctionSaga.isTerminal(step.state())).isTrue()
         assertThat(step.effects()).containsExactly(SagaEffect.issue<AuctionCommand>(CloseAuction("a1")))
