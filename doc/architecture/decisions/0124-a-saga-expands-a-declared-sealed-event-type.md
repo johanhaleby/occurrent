@@ -149,8 +149,9 @@ convention that says to run that grep is now in AGENTS.md.
 **Comparing the two copies is what found the next defect, which is why they are diffed rather than one being deleted.**
 The subscription copy expands a sealed type and drops the declared type, keeping only what it permits. So a subscription
 never asks for the declared type's own CloudEvent type, and any event stored under that string is missed without a word.
-That is a real gap under the mappers Occurrent ships whenever the declared type is itself concrete, since an event stored
-as an instance of it directly then has no CloudEvent type of its own in the filter, no custom mapper needed.
+That is a real gap whenever the declared type is itself concrete, an event is stored as an instance of it directly, and
+the mapper gives that instance a CloudEvent type none of the permitted concrete types share, which the class-keyed
+mapper Occurrent ships does automatically, no custom mapper needed.
 `@Subscription(OrderEvent.class)` on a concrete sealed `OrderEvent` receives every permitted concrete type but never an
 `OrderEvent` stored on its own, which is this ADR's defect one module over. The saga version kept the declared type and
 did not have it.
@@ -239,9 +240,10 @@ annotation registrars), and the reasoning for not widening a change the release 
 the day of the tag. Anyone who reads the difference should find #750 before concluding one side is wrong.
 
 A subscription's derived filter now also names the declared sealed type. That matters whenever the declared type is
-itself concrete and an event is stored as an instance of it directly, under the mappers Occurrent ships or any other,
-since such a subscription missed exactly those events before, even while every concrete type it named kept arriving, so
-it gets its own changelog entry as a change to released behaviour.
+itself concrete, an event is stored as an instance of it directly, and the mapper gives that instance a CloudEvent type
+none of the permitted concrete types share, true automatically under the class-keyed mapper Occurrent ships, since such
+a subscription missed exactly those events before, even while every concrete type it named kept arriving, so it gets its
+own changelog entry as a change to released behaviour.
 
 **No OpenRewrite recipe helps with the refusal, and a review marker was tried and abandoned rather than skipped on
 principle.** Rewriting was never possible, since the concrete subtypes of an open hierarchy cannot be read off the
