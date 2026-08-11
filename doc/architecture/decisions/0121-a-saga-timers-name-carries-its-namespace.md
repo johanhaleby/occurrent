@@ -187,21 +187,19 @@ registered for one timer already knows which timer fired, so the accessor is mos
 The saga DSL shipped one release ago in 0.32.0, and the accessor's type is the whole point of the change, so the break
 is taken now rather than carried, with the recipe and guide above as the migration path.
 
-**Whether to add a `SagaTimeout(String sagaId, String timerName)` constructor beside the `TimerName` one is a departure
-from the approved plan and is the maintainer's call.** The plan scoped one open question on `SagaTimeout`, the
-accessor's type, and this is a second one that the accessor's type forces into view. `SagaTimeout`'s own constructor changes
-type either way. The question is whether a secondary constructor calling `parse` should sit next to it.
+**`SagaTimeout` has one constructor, and it takes a `TimerName`.** There is no two-string constructor calling `parse`
+alongside it. This went beyond what the approved plan scoped, which was the accessor's type alone, and the maintainer
+ruled on it with the alternative written out, on the grounds that it is the better shape to live with.
 
-The two sides are close. Adding it keeps every 0.32.0 caller compiling with its meaning exactly preserved, including
-the flow-saga test that passes `"step:awaiting-players"`, which `parse` reads correctly. Leaving it out closes a
-spelling where somebody writes `new SagaTimeout("game-1", "awaiting-players")` for a flow step timer and gets
-`Simple("awaiting-players")`, which matches nothing.
+The reason is the recipe rather than the trap. The constructor is the one part of this migration a recipe can rewrite
+completely and provably, since `parse` gives back the value the old string already meant, so every existing call site
+is fixed mechanically. That is what the migration convention exists for, and a compatibility constructor kept for a
+population the recipe already reaches would earn its place only by being permanent.
 
-Leaving it out is the recommendation, and the reason is the recipe rather than the trap. The constructor rewrite is
-the one part of this migration a recipe can do completely and provably, so every existing call site is fixed
-mechanically, which is what the migration convention exists for. Note that the silent-no-op argument that rules out
-`SagaInput.timeout(String, String)` below does not carry here on its own, because that overload would be new API whose
-only use is the trap, while this one has a population of correct existing callers.
+The silent-no-op argument that rules out `SagaInput.timeout(String, String)` below does not carry here on its own, and
+it is worth saying so, because the two look alike. That overload would be new API whose only use is the trap. This
+constructor had correct existing callers, including a flow-saga test passing `"step:awaiting-players"`, which `parse`
+reads correctly.
 
 `sagaId` stays. The core DSL hands the whole `SagaTimeout` to the handlers registered by `evolveOnTimeout` and
 `reactOnTimeout` (`Saga.java:474,489`), so removing it would take away something those handlers can read. It is unused
@@ -305,8 +303,12 @@ input is consumed without doing anything, and nothing throws. A call that looks 
 worse than the prefix it was meant to remove. Requiring a `TimerName` makes it impossible to get wrong, because the
 only way to name a step's timer is to ask the flow DSL for it.
 
-This argument is about new API and does not by itself settle the `SagaTimeout(String, String)` constructor above,
-which has existing callers whose meaning `parse` preserves.
+**A `SagaTimeout(String sagaId, String timerName)` constructor kept beside the `TimerName` one, calling `parse`.** It
+would have kept every 0.32.0 caller compiling with its meaning exactly preserved, so unlike the overload above it had
+a real population of correct callers and could not be dismissed by the same argument. Rejected because the recipe
+rewrites those call sites completely and provably, which leaves the constructor with nothing to do except stay
+forever, and because it would leave `new SagaTimeout("game-1", "awaiting-players")` reading like a way to name a flow
+step timer when it gives `Simple("awaiting-players")` and matches nothing.
 
 **A helper that builds the string, `stepTimerName("awaiting-players")` returning `"step:awaiting-players"`.**
 Considered first and rejected by the maintainer. It hands the caller the formatted string back, so the prefix is still
