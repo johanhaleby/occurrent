@@ -1274,3 +1274,30 @@ a summary of what it decided to surface, not of what it found. More generally: o
 green signal, threads resolved, then checks green, then the reviewer saying it found nothing, arrived
 just before a real defect, so treat an accumulation of clean signals on a change that has already
 needed six rounds as weak evidence rather than strong.
+
+## paths-ignore and cancel-in-progress interact, in opposite directions, and both matter at the gate
+
+**What happened.** PR 756 alternated Java-bearing and markdown-only commits. Two facts about this repo's
+workflows combined in ways worth writing down, because I got the first one wrong in the safe direction
+and nearly got the second wrong in the unsafe one.
+
+First, the safe surprise. `maven.yml` declares `concurrency: ci-${{ github.ref }}` with
+`cancel-in-progress: true`, so I expected a markdown-only push to cancel the Java run still in flight
+on the previous head, leaving the Java change with no completed run anywhere. It does not.
+`cancel-in-progress` cancels only when a NEW run ENTERS the group, and `paths-ignore` meant the
+markdown push started no Java run at all, so there was nothing to do the cancelling. The earlier run
+survives to completion. Worth knowing precisely, because the same two settings on a workflow WITHOUT
+a paths filter would behave the opposite way.
+
+Second, the unsafe one. While that Java run was still going, the fleet monitor reported
+`PR-DELTA: ... MERGEABLE NOREVIEW 0fail DONE` for the current head, and it was accurate: on a
+markdown-only head every workflow that runs has finished and none failed. "The PR is green" was true
+and meaningless at the same time, because the verification that matters for the Java in that tree was
+still running against an earlier SHA.
+
+**How to apply.** On a mixed PR, the gate question is never "is the head green". It is "which head last
+carried non-markdown changes, is that head's full run terminal and successful, and is the current
+tree's non-markdown content identical to it". `git diff --name-only <that-head> HEAD | grep -v '\.md$'`
+answers the third part, and an empty result is what licenses reusing the earlier head's verdict.
+Poll the specific workflow on the specific SHA rather than the PR rollup, since the rollup answers
+about the head and cannot tell you what it did not run.
