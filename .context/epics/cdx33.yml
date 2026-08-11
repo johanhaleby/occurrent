@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 13
-updated_at: 2026-08-11T10:23:26Z
-updated_by: "orchestrator session faee3625 (U8 PR 727 and U9 PR 730 merged; U5 PR 731 caught with NO matrix run on its head and a dispatch forced)"
+revision: 14
+updated_at: 2026-08-11T10:27:16Z
+updated_by: "orchestrator session faee3625 (U2 returned BLOCKED after refuting four disambiguation mechanisms; orchestrator proposed Option E, pin at registration, for the worker to verify)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -49,11 +49,11 @@ units:
     session: local_cff3efc3-ade2-406e-8aac-a3f25e144bce
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: false, evidence: "**HELD, DO NOT MERGE.** PR 728 head 9370abb6f8fa15119da611341410365092d59f87 is fully green (27 of 27, 0 pending) with 0 unresolved threads, so it LOOKS merge-ready and is not. Johan ruled 2026-08-11 that the shipped shape is wrong: the worker changed from fail-loud to warn-and-proceed after review, which leaves the blocker event loss visible rather than prevented, against the AGENTS.md hard isolation rule. Required shape: record enough beside the pin to tell another node FIRST-RUN pin from an ADVANCED checkpoint, fail loud only on a differing first-run pin, accept an advanced checkpoint silently. Worker messaged, running /johan-plan on the mechanism, presenting to Johan before implementing"}
-    blocking_on: [{what: "redesign per Johan ruling, mechanism plan gate pending; CheckpointStorage contract is frozen so a derived-key scheme must prove it cannot collide with a real subscription id", since: 2026-08-11T10:16:46Z, recheck_after: "on worker plan"}]
-    next_action: await the worker mechanism plan; NEVER merge 728 in its current shape
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+    blocking_on: [{what: "Option E feasibility check by the worker: pin at REGISTRATION instead of at start, which removes the ambiguity rather than detecting it, since every stored value then is either an earlier registrant pin or a real advanced checkpoint and both are safe to accept (worst case duplicates, never loss, and at-least-once with dedup by event id is the delivery contract)", since: 2026-08-11T10:27:16Z, recheck_after: "on worker plan gate"}]
+    next_action: await the worker verdict on Option E; if it fails, take A (accept WARN) versus B (reopen the contract) to Johan with the worker evidence
+    last_meaningful_progress_at: 2026-08-11T10:27:16Z
     observed: {}
-    assessment: "Worker analysis was correct and prompted the escalation: a stored position differing from the captured one is genuinely ambiguous between a sibling first-run pin (harmful skip) and a subscription another node has advanced (legitimate leader-election late start), and Checkpoint exposes only asString() so there is no ordering to compare. Its reordering of checkpointAlreadyExisted to before capturePositionToPin is a real catch and stays. What Johan rejected is settling that ambiguity with a log line"
+    assessment: "Worker refuted all four in-contract mechanisms with evidence: (1) writeVersion conflates unadvanced with UNFENCED, and unfenced is this class own documented use case, so it would wrongly refuse legitimate late starts on any deployment without a competing-consumer strategy; (2) no derived storage key is provably collision-free because subscription ids are unconstrained Strings; (3) wrapping the Checkpoint downgrades a Mongo resume token to an opaque string via the MongoCommons instanceof dispatch, breaking resume on the very path this protects, and subclassing the Mongo type would add a forbidden module dependency; (4) decorating CheckpointStorage is unreachable because the delegate is constructed against the same storage instance before the wrapper exists. Finding (3) is worth keeping whatever happens. Orchestrator response is Option E rather than escalation, since it satisfies Johan ruling by dissolving the ambiguity"
   U3:
     issue: null
     goal: "StepCondition semantics AND evaluation (findings 2, 3 in full per D4, 4, ADR 0120 drift): fired-window reactions with initiating() reachable, compiled per-step matcher state, determinism contract, duplicate-children rule. Hard constraint: reads 0.32.0-written saga documents (seed-by-hand proof)"
