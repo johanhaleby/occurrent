@@ -159,15 +159,15 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
 
         claim(subscriptionId);
         try {
+            // Checked before capturing the position, not after, so a checkpoint written in between is never missed.
+            // Reading it the other way round could observe no checkpoint, then have one land before the position
+            // is captured, and wrongly treat that write as a first-run pin to compare against later instead of the
+            // existing checkpoint it actually is.
+            boolean checkpointAlreadyExisted = checkpointStorage != null && checkpointStorage.exists(subscriptionId);
             // Captured before taking the lock, so a slow position source cannot block start(boolean), and captured
             // whatever the state looks like from here, because a stop() landing in between would otherwise leave this
             // registration deferred with no position to start from.
             @Nullable Checkpoint positionToPin = capturePositionToPin();
-            // Told apart from a checkpoint that only appears later, because only the latter can be another node's
-            // first-run pin. One already here means this subscription has run before, or another node already
-            // pinned and started it, and either way that stored position is authoritative regardless of what this
-            // node captures for itself.
-            boolean checkpointAlreadyExisted = checkpointStorage != null && checkpointStorage.exists(subscriptionId);
             synchronized (stateLock) {
                 if (state != State.RUNNING) {
                     registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action, positionToPin, checkpointAlreadyExisted));

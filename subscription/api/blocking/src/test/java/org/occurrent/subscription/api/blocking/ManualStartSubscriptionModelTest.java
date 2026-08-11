@@ -629,6 +629,34 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_checkpoint_written_between_the_existence_check_and_capturing_the_position_is_treated_as_a_race_not_prior_history() {
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        // Writes another node's pin as a side effect of answering the position query, standing for that node's
+        // write landing between this node's existence check and its own position capture.
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> {
+            storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("landed-during-registration"));
+            return new StringCheckpoint("this-nodes-own-position");
+        };
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        CapturingLogHandler logHandler = CapturingLogHandler.attached();
+        try {
+            assertThatCode(() -> model.start(true)).doesNotThrowAnyException();
+        } finally {
+            logHandler.detach();
+        }
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("landed-during-registration");
+        assertThat(logHandler.records())
+                .as("existence is checked before the position is captured, so this write is a race to compare against rather than prior history to accept silently")
+                .anySatisfy(record -> assertThat(record.getMessage())
+                        .contains("this-nodes-own-position", "landed-during-registration"));
+    }
+
+    @Test
     void two_nodes_racing_to_pin_the_same_subscription_id_at_different_positions_logs_the_second_nodes_loss_instead_of_leaving_it_silent() {
         // Two separate model instances stand for two nodes. Their own bookkeeping is independent, but they share the
         // one resource that matters here: the checkpoint storage both are about to pin the same subscription id in.
