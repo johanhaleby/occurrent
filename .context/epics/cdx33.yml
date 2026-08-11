@@ -1,10 +1,16 @@
 schema_version: 1
 epic: cdx33
+<<<<<<< HEAD
 revision: 20
 updated_at: 2026-08-11T11:29:38Z
 updated_by: "orchestrator session faee3625 (U5 swept, U6 dispatched as chip task_4ff34e51 with D5 settled and the corrected changelog wording; 739 carries 5 Copilot threads for its worker)"
+=======
+revision: 21
+updated_at: 2026-08-11T11:34:46Z
+updated_by: "orchestrator session faee3625 (U2 delivered Option E on head 1de6225f6, both orchestrator additions verified, HOLD LIFTED and now waiting only on the matrix)"
+>>>>>>> c8984d181 ([ci flip] lift the 728 hold, Option E delivered and verified)
 baseline: {repo: johanhaleby/occurrent, branch: main}
-authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
+authority: "PR 728 hold LIFTED 2026-08-11: the Option E rewrite landed on head 1de6225f6db43ed524510ae82dbe86d300608fa9 and is orchestrator-verified, so it merges on the normal gate (matrix on the exact head plus resolved threads). Any head at or before 3d6abd2089b626ae96254e711a71f7da24b6c5f1 carries the SUPERSEDED warn-and-proceed shape and must never be merged. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
   - id: act-001
     type: dispatch-chip
@@ -48,10 +54,10 @@ units:
     depends_on: []
     session: local_cff3efc3-ade2-406e-8aac-a3f25e144bce
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: false, evidence: "HELD no longer for a decision, now for the Option E rewrite. Pre-Option-E head 883f53b8922fae50fd38c9bdac0e858fd23d12f1 is green with threads resolved, and that shape (WARN-and-proceed) is SUPERSEDED and must never be merged. Await the Option E head"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: false, evidence: "OPTION E DELIVERED on head 1de6225f6db43ed524510ae82dbe86d300608fa9, threads 0 unresolved, matrix QUEUED on that exact head as a push event. Orchestrator verified both required additions: the write is unconditional but justified by an ordering requirement stronger than my ask (pin before the registration becomes visible, so a resumeSubscription racing in cannot let the wrapped model capture its own later position) AND covered by a new test, a_subscription_registered_on_a_running_model_still_pins_its_registration_position_before_starting_live; the ADR 0086 amendment records that writing at registration is what makes the wrapper a faithful stand-in for the subscribe call it withholds, rather than a safer ordering chosen on its own terms. Also present: the earlier-registrant-wins test, ADR 0116 amendment, INFO-level diagnostic, one new Changes bullet. MERGE WHEN THE MATRIX PASSES"}
     blocking_on: []
-    next_action: worker implementing Option E; on delivery verify the live-path scoping choice and the ADR 86 amendment argument
-    last_meaningful_progress_at: 2026-08-11T11:08:42Z
+    next_action: merge on matrix success for head 1de6225f6, verified by run list not rollup
+    last_meaningful_progress_at: 2026-08-11T11:34:46Z
     observed: {}
     assessment: "OPTION E APPROVED 2026-08-11T11:08:42Z. Pin moves from start to REGISTRATION so the earliest registrant wins and every refusal is safe to accept (worst case a duplicate, never a skip, and at-least-once with dedup by event id is the contract). Reduces the reversal window from routine (capture-to-write spans until someone starts, minutes to hours) to pathological (milliseconds against a registration gap of minutes). Two worker findings reshaped it: the class public javadoc has promised pin-at-registration since 0.32.0 while the code did the opposite (ADR 86 Decision text matched the code), and the reactor twin at ReactorDurableSubscriptionModel:298-299 still carries the same read-then-save race #669 fixed here, filed as #738 leave-for-later. Orchestrator additions: scope or prove the new live-path write (today the live path never pins), and the ADR 86 amendment must record that pinning at registration RESTORES what deferring subscribe displaced from DurableSubscriptionModel, which is the real argument. Costs accepted: a new Changes bullet for 0.32.0-released behavior, no recipe, deliberate reactor divergence, INFO-level diagnostic on a differing accepted position"
   U3:
