@@ -27,10 +27,19 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Works out which event types a type filter has to name when a caller declares one type. A sealed type stands for the
- * concrete types it permits, all the way down, so a filter built from the declared type alone would silently miss the
- * events that are actually stored. A type that is never stored under its own name and whose concrete types cannot all be
- * found cannot be turned into a filter at all, and is reported back to the caller.
+ * Works out which event types a type filter has to name when a caller declares one type.
+ * <p>
+ * <strong>The rule this exists to enforce. The derived filter must name every event type that dispatch would accept.</strong>
+ * Dispatch accepts an event by assignability, through {@code isInstance} and a handler lookup that walks superclasses and
+ * interfaces, so a declared supertype accepts every concrete subtype. A filter that names fewer types than that loses
+ * events with nothing to show for it. So a sealed type expands to the concrete types it permits, all the way down, and a
+ * declared type whose concrete types cannot all be found is refused rather than turned into a filter that would miss
+ * some of them.
+ * <p>
+ * One case is exempt on purpose. A non-sealed concrete class declared directly is accepted, and its subclasses are not
+ * found, so dispatch accepts events the filter does not name. Refusing it would refuse every saga and subscription that
+ * declares a class which is not final, which is behaviour that shipped. Events written as records or Kotlin data classes
+ * are final already, so the exemption is narrow in practice.
  * <p>
  * Shared by the saga DSL and the subscription annotations, which each derive a type filter from declared event types and
  * each used to walk the hierarchy themselves. The caller formats and throws, because a saga and a subscription have
@@ -72,9 +81,12 @@ public final class EventTypeExpansion {
         requireNonNull(cannotExpand, "cannotExpand cannot be null");
         Set<Class<? extends E>> concrete = new LinkedHashSet<>();
         boolean foundAll = collect(declaredType, concrete, new HashSet<>());
-        // A declared type that is stored under its own name is never refused, however little of the hierarchy below it
-        // can be found, because it already names events that exist.
-        if (!isStoredUnderItsOwnName(declaredType) && (!foundAll || concrete.isEmpty())) {
+        // A non-sealed concrete class declared directly is accepted even though its subclasses cannot be found, which is
+        // how every saga declaring a non-final event class kept working. Being instantiable is not itself enough. A
+        // sealed root says its subtypes are knowable, so an incomplete hierarchy under one is refused whether or not the
+        // root can be stored.
+        boolean declaredConcreteAndOpen = !declaredType.isSealed() && isStoredUnderItsOwnName(declaredType);
+        if (!declaredConcreteAndOpen && (!foundAll || concrete.isEmpty())) {
             throw cannotExpand.apply(declaredType);
         }
         return List.copyOf(concrete);

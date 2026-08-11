@@ -45,6 +45,39 @@ derivation without either the note or the override. The constraint travelled and
 
 ## Decision
 
+### The property, stated once
+
+**The derived filter must name every event type that dispatch would accept.**
+
+There is exactly one deliberate exemption, named at the end of this section, and one case nobody has checked, also named
+there. Everything below follows from that sentence, and it is written here because it was not written down soon enough. Three
+variants of the same defect were found one at a time, each by review rather than by design, and each fix revealed the
+next. First the declared supertype itself. Then a non-sealed concrete class inside a sealed hierarchy, whose branch was
+called complete. Then an instantiable sealed root, whose incomplete hierarchy was excused because the root itself could be
+stored. Approximating the property case by case is what produced that sequence, so it is now stated positively and tested
+as a property rather than as a list of shapes.
+
+`EventTypeExpansionTest.the_filter_names_every_type_dispatch_would_accept` is that test. It runs 13 declared-type shapes,
+a record, a sealed interface, a nested sealed interface, an instantiable sealed class, a diamond, a plain interface, an
+abstract class, three kinds of reopened hierarchy, an array, and a non-sealed concrete class, and for each asserts that
+expansion either names every concrete type in the fixture that an `isInstance` dispatch would accept, or refuses. Adding a
+hierarchy shape to the fixture adds a row, which is what should catch the fourth variant before a release rather than
+after one.
+
+**The one deliberate exemption.** A non-sealed concrete class declared directly is accepted, and its subclasses cannot be
+found, so dispatch accepts events the filter does not name. This is pre-existing behaviour and the exemption preserves it
+on purpose, because refusing it would refuse every saga and subscription that declares an event class which is not final,
+a much larger break than the defect being fixed. The repository's own convention of records for domain events makes it
+rare, since a record is implicitly final, and Kotlin data classes are final too. The property test asserts this case as
+its own outcome rather than letting it pass as though nothing were missing, so it is visible in the test output instead of
+hiding in it. #753 tracks closing it.
+
+**The case nobody has checked.** `Class.getPermittedSubclasses()` is documented to omit a permitted subclass it cannot
+resolve, and no test here covers a sealed hierarchy with a permitted subclass missing from the runtime classpath. If it
+returns a short list rather than failing, the walk would call that hierarchy complete and derive a filter missing those
+types. A class absent at runtime cannot be dispatched to either, so the two probably stay consistent, but that is
+reasoning rather than evidence and it is recorded as unverified rather than claimed.
+
 ### A sealed declared type is joined by the concrete types it permits
 
 `EventTypeExpansion.expand(Set)` (`dsl/saga-dsl/common/src/main/java/org/occurrent/dsl/saga/internal/EventTypeExpansion.java`)
@@ -61,7 +94,8 @@ The declared type stays in the set for the same reason. Dropping it in favour of
 the caller whose mapper collapses the hierarchy.
 
 An intermediate sealed interface is left out, because it cannot be instantiated and the caller never
-declared it. A sealed class that can be instantiated stays, because events do carry its name.
+declared it. A sealed class that can be instantiated stays in the set, because events do carry its name, and its
+hierarchy still has to be complete for it to be accepted at all.
 
 The filter shape does not change. A saga declaring several types already produced `Filter.type(Condition.or(eq, ..))`,
 which both `SubscriptionFilterMatcher` and the MongoDB change stream already handle, so an expanded set asks nothing new
@@ -86,6 +120,13 @@ miss and was missed in the first version of this change: `non-sealed class Base 
 `class Special extends Base` stayed invisible. The filter then asked for `Base` and not `Special`, and a saga handling
 `SealedEvent` silently missed every `Special`. That is the defect this ADR exists to remove, surviving one level down, so
 the walk requires a level to be sealed or final before it calls a branch complete.
+
+**Whether the declared root can be stored says nothing about the hierarchy below it, which was the third variant.** A
+sealed class that can be instantiated, `sealed class Base permits Done, Reopened` where `Base` is concrete, used to have
+its incomplete hierarchy excused because `Base` itself names real events. It does, and the concrete types under
+`Reopened` still went missing while dispatch accepted them. A sealed declaration is a claim that the subtypes are
+knowable, so an incomplete hierarchy under a sealed root is refused whether or not the root can be stored. The exemption
+is narrowed to a non-sealed concrete class declared directly, which is the compatibility case and nothing more.
 
 The refused failure is best described as silently missing stored event types rather than as matching nothing. Matching
 nothing is only the degenerate case where the declared type is the sole entry. A reopened sealed hierarchy expands to the

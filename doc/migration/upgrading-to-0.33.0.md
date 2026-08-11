@@ -448,6 +448,10 @@ You are affected when a declared type is one of these:
 | An abstract class that is not sealed | `abstract class OrderEvent` | `abstract class OrderEvent` |
 | A sealed hierarchy reopened below the declared type | `non-sealed class Base implements OrderEvent` | `open class Base : OrderEvent` or `abstract class Base : OrderEvent` |
 
+The third row applies even when the declared type can be instantiated. A `sealed class` that is not abstract still claims
+its subtypes are knowable, so a reopened level below it is refused just the same, and the events under that level are
+exactly the ones that were going missing.
+
 A saga that declares concrete types is unaffected, and so is one that declares a sealed type whose every level is sealed
 or final. Java records and Kotlin data classes are final already, so an ordinary sealed hierarchy of records needs
 nothing.

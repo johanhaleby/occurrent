@@ -20,10 +20,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -71,6 +76,10 @@ class EventTypeExpansionTest {
     static abstract non-sealed class ReopenedBase implements PartlyOpenEvent {
     }
 
+    // Dispatch accepts this for a handler on PartlyOpenEvent, and no walk of permitted subclasses can reach it.
+    static final class ConcreteBelowReopenedBase extends ReopenedBase {
+    }
+
     sealed static class InstantiableBase permits SealedSubclass {
     }
 
@@ -101,6 +110,9 @@ class EventTypeExpansionTest {
     static abstract non-sealed class DeepReopened implements DeepMiddle {
     }
 
+    static final class ConcreteBelowDeepReopened extends DeepReopened {
+    }
+
     sealed interface ReopenedByConcreteEvent permits ExtensibleEvent {
     }
 
@@ -118,6 +130,79 @@ class EventTypeExpansionTest {
     }
 
     static abstract non-sealed class ReopenedAbstractSubclass extends PartlyOpenInstantiableBase {
+    }
+
+    static final class ConcreteBelowReopenedAbstractSubclass extends ReopenedAbstractSubclass {
+    }
+
+    /**
+     * Every concrete event type in this file. A handler declared on some supertype accepts each of these that is
+     * assignable to it, because dispatch matches with {@code isInstance}, so this is what a derived filter is measured
+     * against.
+     */
+    private static final List<Class<?>> EVERY_CONCRETE_TYPE = List.of(
+            OrderPlaced.class, PaymentReserved.class, PaymentFailed.class,
+            ConcreteOpenEvent.class, SealedLeaf.class, ConcreteBelowReopenedBase.class,
+            InstantiableBase.class, SealedSubclass.class,
+            PartlyOpenInstantiableBase.class, ReopenedSubclassHolder.class, ConcreteBelowReopenedAbstractSubclass.class,
+            ExtensibleEvent.class, SubclassOfExtensibleEvent.class,
+            DiamondShared.class, DeepConcrete.class, ConcreteBelowDeepReopened.class);
+
+    enum Outcome {
+        /** The filter names every type dispatch would accept. */
+        NAMES_EVERY_DISPATCHED_TYPE,
+        /** The hierarchy cannot be enumerated, so it is refused rather than turned into a filter that misses events. */
+        REFUSED,
+        /** The one exemption. Accepted, and dispatch accepts subclasses the filter does not name. */
+        EXEMPT_AND_MISSES_SUBCLASSES
+    }
+
+    static List<Arguments> hierarchyShapes() {
+        return List.of(
+                Arguments.of("a record", OrderPlaced.class, Outcome.NAMES_EVERY_DISPATCHED_TYPE),
+                Arguments.of("a sealed interface", OrderEvent.class, Outcome.NAMES_EVERY_DISPATCHED_TYPE),
+                Arguments.of("a nested sealed interface", PaymentEvent.class, Outcome.NAMES_EVERY_DISPATCHED_TYPE),
+                Arguments.of("a sealed class that can be instantiated", InstantiableBase.class, Outcome.NAMES_EVERY_DISPATCHED_TYPE),
+                Arguments.of("a diamond of sealed interfaces", DiamondTop.class, Outcome.NAMES_EVERY_DISPATCHED_TYPE),
+                Arguments.of("an interface that is not sealed", OpenEvent.class, Outcome.REFUSED),
+                Arguments.of("an abstract class that is not sealed", OpenBase.class, Outcome.REFUSED),
+                Arguments.of("a sealed interface reopened by an abstract class", PartlyOpenEvent.class, Outcome.REFUSED),
+                Arguments.of("a sealed interface reopened by a concrete class", ReopenedByConcreteEvent.class, Outcome.REFUSED),
+                Arguments.of("an instantiable sealed root reopened below it", PartlyOpenInstantiableBase.class, Outcome.REFUSED),
+                Arguments.of("a sealed hierarchy reopened two levels down", DeepTop.class, Outcome.REFUSED),
+                Arguments.of("an array", OrderPlaced[].class, Outcome.REFUSED),
+                Arguments.of("a concrete class that is not final", ExtensibleEvent.class, Outcome.EXEMPT_AND_MISSES_SUBCLASSES));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("hierarchyShapes")
+    void the_filter_names_every_type_dispatch_would_accept(String shape, Class<?> declaredType, Outcome expected) {
+        Set<Class<?>> dispatchAccepts = EVERY_CONCRETE_TYPE.stream()
+                .filter(declaredType::isAssignableFrom)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        Set<Class<?>> named;
+        try {
+            named = new LinkedHashSet<>(expandOne(declaredType));
+        } catch (IllegalArgumentException refused) {
+            assertThat(expected).as("%s was refused", shape).isEqualTo(Outcome.REFUSED);
+            return;
+        }
+
+        assertThat(expected).as("%s was accepted", shape).isNotEqualTo(Outcome.REFUSED);
+        if (expected == Outcome.NAMES_EVERY_DISPATCHED_TYPE) {
+            assertThat(named).as("%s names every type dispatch accepts", shape).containsAll(dispatchAccepts);
+        } else {
+            assertThat(named).as("%s names itself", shape).contains(declaredType);
+            assertThat(dispatchAccepts).as("%s is the known hole, dispatch accepts more than the filter names", shape)
+                    .isNotEmpty()
+                    .anySatisfy(accepted -> assertThat(named).doesNotContain(accepted));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<Class<?>> expandOne(Class<?> declaredType) {
+        return (Set<Class<?>>) (Set<?>) EventTypeExpansion.expand(Set.of((Class<Object>) declaredType), REFUSAL);
     }
 
     @Test
@@ -258,12 +343,12 @@ class EventTypeExpansionTest {
     }
 
     @Test
-    void a_sealed_class_that_can_be_instantiated_is_kept_even_when_a_branch_below_it_is_reopened() {
-        Set<Class<? extends PartlyOpenInstantiableBase>> expanded =
-                EventTypeExpansion.expand(Set.of(PartlyOpenInstantiableBase.class), REFUSAL);
-
-        // Not refused, because events do carry this class's own name, so it never receives nothing.
-        assertThat(expanded).contains(PartlyOpenInstantiableBase.class, ReopenedSubclassHolder.class);
+    void a_sealed_class_that_can_be_instantiated_is_refused_when_a_branch_below_it_is_reopened() {
+        // Being instantiable makes the root storable, it says nothing about the hierarchy below it. Accepting this used
+        // to drop ConcreteBelowReopenedAbstractSubclass from the filter while dispatch still accepted it.
+        assertThatThrownBy(() -> EventTypeExpansion.expand(Set.of(PartlyOpenInstantiableBase.class), REFUSAL))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(PartlyOpenInstantiableBase.class.getName());
     }
 
     @Test
