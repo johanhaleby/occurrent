@@ -724,3 +724,25 @@ API, as the earlier `paths-ignore` lesson describes). Otherwise force one with
 mistaking a legitimately skipped matrix for a pending one, and this one warns against mistaking a
 MISSING matrix for a passing one. Both come from the same root, that the rollup describes only the
 checks that happen to exist.
+
+## A workflow_dispatch rerun does not attach to the PR's check rollup (2026-08-11, cdx33)
+
+Having caught PR 731 with no matrix run on its head, I forced one with
+`gh workflow run maven.yml --ref <branch>`. That run FAILED, and the pull request's rollup went on
+reporting `failing=0 pending=0 total=3`, because a `workflow_dispatch` run is not associated with
+the pull request the way a `push` or `pull_request` run is. So the remediation for a false green
+produced a second, worse false green: a red matrix that the PR cannot show.
+
+Both halves of this now have to be checked by run list rather than by rollup, and the run list is
+where the real answer lives either way:
+`gh run list --branch <branch> --workflow maven.yml --json headSha,status,conclusion,event`.
+Read `conclusion` for the exact head, and note `event` while you are there, because a
+`workflow_dispatch` conclusion will never appear on the PR.
+
+Prefer the fix that produces an attached run: have the worker rebase onto current main and push, so
+a `push`-event matrix runs and lands in the rollup where every later reader can see it. Reserve
+`workflow_dispatch` for when no push is coming and you intend to read the result out of band, and
+when you use it, say in the epic state that the PR's own rollup is not evidence for that head.
+
+Third variant of one root cause, recorded twice already today: the rollup describes the checks that
+happen to exist and attach, never the validation that actually ran.
