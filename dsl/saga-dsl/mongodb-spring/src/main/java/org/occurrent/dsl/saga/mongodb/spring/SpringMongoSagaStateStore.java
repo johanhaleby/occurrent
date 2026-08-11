@@ -91,6 +91,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String FLOW_STEP_ENTRY_INDEX = "stepEntryIndex";
     private static final String FLOW_COMPLETED = "completed";
     private static final String FLOW_PREVIOUS_STEP = "previousStep";
+    private static final String FLOW_PREVIOUS_STEP_ENTRY_INDEX = "previousStepEntryIndex";
     private static final String FLOW_LAST_ACTION = "lastAction";
     private static final String FLOW_MATCHED_BRANCH_INDEX = "matchedBranchIndex";
     private static final String FLOW_RECEIVED = "received";
@@ -273,6 +274,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (flowState.previousStep() != null) {
             document.append(FLOW_PREVIOUS_STEP, flowState.previousStep());
         }
+        document.append(FLOW_PREVIOUS_STEP_ENTRY_INDEX, flowState.previousStepEntryIndex());
         document.append(FLOW_LAST_ACTION, flowState.lastAction().name());
         document.append(FLOW_MATCHED_BRANCH_INDEX, flowState.matchedBranchIndex());
         List<String> received = new ArrayList<>();
@@ -339,6 +341,10 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 document.getInteger(FLOW_STEP_ENTRY_INDEX, 0),
                 document.getBoolean(FLOW_COMPLETED, false),
                 document.getString(FLOW_PREVIOUS_STEP),
+                // -1 is the record's own "not known" value, so a document written before this field existed reads back as an
+                // instance whose window-condition reaction falls back to the whole retained history, which is what such a
+                // reaction saw when that document was written.
+                document.getInteger(FLOW_PREVIOUS_STEP_ENTRY_INDEX, -1),
                 ActionKind.valueOf(document.getString(FLOW_LAST_ACTION)),
                 document.getInteger(FLOW_MATCHED_BRANCH_INDEX, -1));
     }

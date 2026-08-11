@@ -31,8 +31,14 @@ import static java.util.Objects.requireNonNull;
  * earlier ones, see the flow builder's {@code historyWindow}), so counts and lookups here span that window. A retry guard
  * such as {@code count(PaymentFailed.class) < 3} works as long as its threshold fits inside the window, which the default
  * comfortably covers. A guard that must count far beyond it needs a wider {@code historyWindow}. {@link #initiating()} is
- * the exception. It always returns the start event even after the window has moved past it. A {@code join} step's own
- * fulfilment is counted separately, over the events received since it was entered.
+ * the exception. It always returns the start event even after the window has moved past it.
+ * <p>
+ * How much of that retained history a given callback reads depends on which callback it is. A guard
+ * ({@code on(Class, onlyIf, ...)}) and a {@code timeout}'s {@code onExpiry} read all of it, which is what makes a count
+ * spanning several steps possible. A window-condition reaction ({@code on(StepCondition, ...)}, and the deprecated
+ * {@code join}) reads the step window its condition was evaluated over instead, the events received since the step it
+ * fired from was entered, so a count it takes agrees with the count that fulfilled the condition. {@link #initiating()}
+ * reaches past the window either way.
  *
  * @param <E> the domain event type
  */
@@ -74,10 +80,10 @@ public interface ReceivedEvents<E> {
         return first(type).isEmpty();
     }
 
-    /** All received events, in arrival order, initiating first. */
+    /** The events in the window this view answers over, in arrival order. */
     List<E> asList();
 
-    /** A view over {@code events} (which must be non-empty, element 0 is the initiating event). */
+    /** A view over all of {@code events} (which must be non-empty, element 0 is the initiating event). */
     static <E> ReceivedEvents<E> of(List<E> events) {
         return new ReceivedEventsList<>(events);
     }
@@ -85,13 +91,27 @@ public interface ReceivedEvents<E> {
 
 final class ReceivedEventsList<E> implements ReceivedEvents<E> {
     private final List<E> events;
+    // Where the window this view answers over begins. 0 is the whole retained list, what a guard and a timeout reaction
+    // read. A window-condition reaction gets the index its own step's window starts at instead, so the events it counts are
+    // the events the condition counted. initiating() ignores this and always answers element 0, which is why it keeps
+    // working from a reaction whose window has long since moved past the start event.
+    private final int windowStart;
 
     ReceivedEventsList(List<E> events) {
+        this(events, 0);
+    }
+
+    ReceivedEventsList(List<E> events, int windowStart) {
         requireNonNull(events, "events cannot be null");
         if (events.isEmpty()) {
             throw new IllegalArgumentException("received events cannot be empty; the initiating event is always present");
         }
+        if (windowStart < 0 || windowStart > events.size()) {
+            throw new IllegalArgumentException("windowStart must be between 0 and the number of received events ("
+                    + events.size() + "), was " + windowStart);
+        }
         this.events = List.copyOf(events);
+        this.windowStart = windowStart;
     }
 
     @Override
@@ -106,7 +126,7 @@ final class ReceivedEventsList<E> implements ReceivedEvents<E> {
 
     @Override
     public <T extends E> Optional<T> first(Class<T> type) {
-        for (E event : events) {
+        for (E event : window()) {
             if (type.isInstance(event)) {
                 return Optional.of(type.cast(event));
             }
@@ -117,7 +137,7 @@ final class ReceivedEventsList<E> implements ReceivedEvents<E> {
     @Override
     public <T extends E> List<T> all(Class<T> type) {
         List<T> result = new ArrayList<>();
-        for (E event : events) {
+        for (E event : window()) {
             if (type.isInstance(event)) {
                 result.add(type.cast(event));
             }
@@ -128,7 +148,7 @@ final class ReceivedEventsList<E> implements ReceivedEvents<E> {
     @Override
     public <T extends E> int count(Class<T> type) {
         int count = 0;
-        for (E event : events) {
+        for (E event : window()) {
             if (type.isInstance(event)) {
                 count++;
             }
@@ -138,6 +158,11 @@ final class ReceivedEventsList<E> implements ReceivedEvents<E> {
 
     @Override
     public List<E> asList() {
-        return events;
+        return window();
+    }
+
+    // events is already immutable, so a subList of it is an immutable view and needs no copy.
+    private List<E> window() {
+        return windowStart == 0 ? events : events.subList(windowStart, events.size());
     }
 }

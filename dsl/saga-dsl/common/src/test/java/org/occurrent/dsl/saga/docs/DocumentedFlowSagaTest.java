@@ -582,12 +582,14 @@ class DocumentedFlowSagaTest {
         return FlowSaga.<ReviewEvent, ReviewCommand>builder()
                 .startsOn(ReviewStarted.class)
                 .correlateAll(ReviewEvent::reviewId)
+                // One branch per outcome, in declaration order, first satisfied one winning. A single anyOf(...) branch that
+                // works out afterwards which alternative fired would have to guess from the events, and the ordering that
+                // decides a tie would sit inside the tree instead of in the declaration.
                 .step("awaiting-decision", step -> step
-                        .on(StepCondition.anyOf(StepCondition.event(Approved.class, 2), StepCondition.event(Rejected.class)),
-                                Continuation.end(),
-                                received -> received.none(Rejected.class)
-                                        ? List.of(new Publish(received.initiating(ReviewStarted.class).reviewId()))
-                                        : List.of(new Discard(received.initiating(ReviewStarted.class).reviewId()))))
+                        .on(StepCondition.event(Rejected.class), Continuation.end(),
+                                received -> List.of(new Discard(received.initiating(ReviewStarted.class).reviewId())))
+                        .on(StepCondition.event(Approved.class, 2), Continuation.end(),
+                                received -> List.of(new Publish(received.initiating(ReviewStarted.class).reviewId()))))
                 .build();
     }
 

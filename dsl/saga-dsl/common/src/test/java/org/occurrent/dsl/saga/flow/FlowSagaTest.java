@@ -23,6 +23,8 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.TimerName;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -817,6 +819,347 @@ class FlowSagaTest {
             assertThat(saga.isTerminal(afterStart))
                     .as("the start delivery only enters the first step, its window opens after it, so the start event itself never counts")
                     .isFalse();
+        }
+    }
+
+    @Nested
+    class FiredWindow {
+
+        sealed interface WindowEvent permits Started, Approved, Rejected, Go {
+            String id();
+        }
+
+        record Started(String id) implements WindowEvent {
+        }
+
+        record Approved(String id) implements WindowEvent {
+        }
+
+        record Rejected(String id) implements WindowEvent {
+        }
+
+        record Go(String id) implements WindowEvent {
+        }
+
+        sealed interface WindowCommand permits Saw {
+        }
+
+        record Saw(String what) implements WindowCommand {
+        }
+
+        @Test
+        void a_reaction_does_not_see_an_event_an_earlier_step_left_behind() {
+            // The Rejected arrives while step "first" is active and matches nothing there, so it stays in the retained log.
+            // Step "second" then fires on its two approvals, and its reaction must not be able to mistake that leftover
+            // Rejected for one of its own window's events, which is what the anyOf(...) plus received.none(...) pattern used
+            // to teach.
+            Saga<WindowEvent, FlowState<WindowEvent>, WindowCommand> saga = FlowSaga.<WindowEvent, WindowCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(WindowEvent::id)
+                    .step("first", step -> step.on(Go.class, Continuation.next()))
+                    .step("second", step -> step.on(
+                            StepCondition.anyOf(StepCondition.event(Approved.class, 2), StepCondition.event(Rejected.class)),
+                            Continuation.end(),
+                            received -> List.of(new Saw(received.any(Rejected.class) ? "rejected" : "approved"))))
+                    .build();
+
+            FlowState<WindowEvent> afterStart = start(saga, new Started("w")).state();
+            FlowState<WindowEvent> afterRejected = saga.evolve(afterStart, SagaInput.event(new Rejected("w")));
+            FlowState<WindowEvent> inSecond = saga.evolve(afterRejected, SagaInput.event(new Go("w")));
+            FlowState<WindowEvent> afterFirstApproval = saga.evolve(inSecond, SagaInput.event(new Approved("w")));
+            Saga.Step<FlowState<WindowEvent>, WindowCommand> fired = saga.step(afterFirstApproval, SagaInput.event(new Approved("w")));
+
+            assertAll(
+                    () -> assertThat(afterRejected.received()).as("the Rejected is retained, it just matched nothing in step one")
+                            .contains(new Rejected("w")),
+                    () -> assertThat(fired.state().completed()).isTrue(),
+                    () -> assertThat(fired.effects()).containsExactly(SagaEffect.issue(new Saw("approved")))
+            );
+        }
+
+        @Test
+        void a_reaction_counts_the_same_events_its_condition_counted_when_the_condition_names_the_start_type() {
+            // The evaluator deliberately never counts the start delivery, so a reaction must not either. Handing the reaction
+            // the initiating event on top of its window would make the two disagree by exactly one.
+            Saga<WindowEvent, FlowState<WindowEvent>, WindowCommand> saga = FlowSaga.<WindowEvent, WindowCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(WindowEvent::id)
+                    .step("wait", step -> step.on(
+                            StepCondition.event(Started.class, 1),
+                            Continuation.end(),
+                            received -> List.of(new Saw("count=" + received.count(Started.class)))))
+                    .build();
+
+            FlowState<WindowEvent> afterStart = start(saga, new Started("w")).state();
+            Saga.Step<FlowState<WindowEvent>, WindowCommand> fired = saga.step(afterStart, SagaInput.event(new Started("w")));
+
+            assertAll(
+                    () -> assertThat(fired.state().completed()).as("the second Started fulfils the count-one leaf").isTrue(),
+                    () -> assertThat(fired.effects()).as("one Started in the window, the start delivery excluded")
+                            .containsExactly(SagaEffect.issue(new Saw("count=1")))
+            );
+        }
+
+        @Test
+        void a_reaction_in_a_step_entered_after_the_retained_window_advanced_still_sees_only_its_own_window() {
+            // historyWindow(0) makes windowStart advance on every transition, so by step three the retained list no longer
+            // begins at absolute position one and the slice arithmetic is the only thing keeping the window right.
+            Saga<WindowEvent, FlowState<WindowEvent>, WindowCommand> saga = FlowSaga.<WindowEvent, WindowCommand>builder()
+                    .historyWindow(0)
+                    .startsOn(Started.class)
+                    .correlateAll(WindowEvent::id)
+                    .step("one", step -> step.on(Go.class, Continuation.next()))
+                    .step("two", step -> step.on(Go.class, Continuation.next()))
+                    .step("three", step -> step.on(
+                            StepCondition.event(Go.class, 1),
+                            Continuation.end(),
+                            received -> List.of(new Saw("window=" + received.asList() + " started=" + received.count(Started.class)
+                                    + " initiating=" + received.initiating(Started.class).id()))))
+                    .build();
+
+            FlowState<WindowEvent> state = start(saga, new Started("w")).state();
+            FlowState<WindowEvent> inTwo = saga.evolve(state, SagaInput.event(new Go("w")));
+            FlowState<WindowEvent> inThree = saga.evolve(inTwo, SagaInput.event(new Go("w")));
+            Saga.Step<FlowState<WindowEvent>, WindowCommand> fired = saga.step(inThree, SagaInput.event(new Go("w")));
+
+            assertThat(fired.effects()).containsExactly(
+                    SagaEffect.issue(new Saw("window=[" + new Go("w") + "] started=0 initiating=w")));
+        }
+
+        @Test
+        void a_guard_and_a_timeout_reaction_still_read_the_whole_retained_history() {
+            // The other half of the rule, since only a window condition's own reaction is narrowed. A guard counting across
+            // steps is the documented reason the retained history exists at all.
+            List<String> guardSaw = new ArrayList<>();
+            Saga<WindowEvent, FlowState<WindowEvent>, WindowCommand> saga = FlowSaga.<WindowEvent, WindowCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(WindowEvent::id)
+                    .step("first", step -> step.on(Go.class, Continuation.next()))
+                    .step("second", step -> step
+                            .on(Approved.class, (approved, received) -> {
+                                guardSaw.add("rejected=" + received.count(Rejected.class));
+                                return true;
+                            }, Continuation.end())
+                            .timeout(Duration.ofMinutes(1), Continuation.end(),
+                                    received -> List.of(new Saw("rejected=" + received.count(Rejected.class)))))
+                    .build();
+
+            FlowState<WindowEvent> afterStart = start(saga, new Started("w")).state();
+            FlowState<WindowEvent> afterRejected = saga.evolve(afterStart, SagaInput.event(new Rejected("w")));
+            FlowState<WindowEvent> inSecond = saga.evolve(afterRejected, SagaInput.event(new Go("w")));
+            Saga.Step<FlowState<WindowEvent>, WindowCommand> expired =
+                    saga.step(inSecond, SagaInput.timeout("w", stepTimer("second")));
+            saga.evolve(inSecond, SagaInput.event(new Approved("w")));
+
+            assertAll(
+                    () -> assertThat(guardSaw).as("the guard counts the Rejected an earlier step left behind").containsExactly("rejected=1"),
+                    () -> assertThat(expired.effects()).as("so does the timeout reaction")
+                            .containsExactly(SagaEffect.issue(new Saw("rejected=1")))
+            );
+        }
+    }
+
+    @Nested
+    class ReconstructedState {
+
+        // A store defaults each absent bookkeeping field on its own, so a document written before one of them existed can
+        // decode to a combination no evolve ever produced, either a windowStart past stepEntryIndex or a stepEntryIndex past
+        // the end of the retained list. Both are seeded here by hand, which is the only way to reach them, and neither may
+        // reach a window-condition evaluation as a raw subList index.
+
+        sealed interface SeedEvent permits Started, Tick {
+            String id();
+        }
+
+        record Started(String id) implements SeedEvent {
+        }
+
+        record Tick(String id) implements SeedEvent {
+        }
+
+        sealed interface SeedCommand permits Noop {
+        }
+
+        record Noop() implements SeedCommand {
+        }
+
+        private static Saga<SeedEvent, FlowState<SeedEvent>, SeedCommand> countingTheStartType() {
+            return FlowSaga.<SeedEvent, SeedCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(SeedEvent::id)
+                    .step("wait", step -> step.on(StepCondition.event(Started.class, 1), Continuation.end()))
+                    .build();
+        }
+
+        @Test
+        void a_window_start_past_the_step_entry_does_not_pull_the_initiating_event_into_the_window() {
+            FlowStateImpl<SeedEvent> seeded = new FlowStateImpl<>("wait", List.of(new Started("s"), new Tick("s")),
+                    1, 0, false, null, ActionKind.NONE, -1);
+
+            FlowState<SeedEvent> afterTick = countingTheStartType().evolve(seeded, SagaInput.event(new Tick("s")));
+
+            assertThat(countingTheStartType().isTerminal(afterTick))
+                    .as("the condition names the start type, and the initiating event is not in any step's window")
+                    .isFalse();
+        }
+
+        @Test
+        void a_step_entry_past_the_end_of_the_retained_list_yields_an_empty_window_rather_than_an_exception() {
+            FlowStateImpl<SeedEvent> seeded = new FlowStateImpl<>("wait", List.of(new Started("s")),
+                    1, 99, false, null, ActionKind.NONE, -1);
+
+            FlowState<SeedEvent> afterTick = countingTheStartType().evolve(seeded, SagaInput.event(new Tick("s")));
+
+            assertThat(countingTheStartType().isTerminal(afterTick)).isFalse();
+        }
+
+        @Test
+        void a_previous_step_entry_past_the_end_of_the_retained_list_does_not_break_a_reaction() {
+            // The react side of the same exposure. Saga.react is public and a test or a custom executor can call it on a state
+            // a store handed back, so the clamp has to cover this path too.
+            List<String> saw = new ArrayList<>();
+            Saga<SeedEvent, FlowState<SeedEvent>, SeedCommand> saga = FlowSaga.<SeedEvent, SeedCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(SeedEvent::id)
+                    .step("wait", step -> step.on(StepCondition.event(Tick.class, 1), Continuation.end(), received -> {
+                        saw.add("ticks=" + received.count(Tick.class));
+                        return List.of();
+                    }))
+                    .build();
+            FlowStateImpl<SeedEvent> seeded = new FlowStateImpl<>(null, List.of(new Started("s"), new Tick("s")),
+                    1, 2, true, "wait", 99, ActionKind.BRANCH, 0);
+
+            saga.react(seeded, SagaInput.event(new Tick("s")));
+
+            assertThat(saw).as("an out-of-range entry gives an empty window, not an IndexOutOfBoundsException").containsExactly("ticks=0");
+        }
+
+        @Test
+        void a_state_built_through_the_pre_0_33_0_constructor_reads_the_whole_retained_history_in_a_reaction() {
+            // What an out-of-repo store that never learned about the new field produces. The reaction degrades to what it saw
+            // before the field existed rather than slicing on a value nobody wrote.
+            List<String> saw = new ArrayList<>();
+            Saga<SeedEvent, FlowState<SeedEvent>, SeedCommand> saga = FlowSaga.<SeedEvent, SeedCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(SeedEvent::id)
+                    .step("wait", step -> step.on(StepCondition.event(Tick.class, 1), Continuation.end(), received -> {
+                        saw.add("window=" + received.asList().size());
+                        return List.of();
+                    }))
+                    .build();
+            FlowStateImpl<SeedEvent> seeded = new FlowStateImpl<>(null, List.of(new Started("s"), new Tick("s")),
+                    1, 2, true, "wait", ActionKind.BRANCH, 0);
+
+            saga.react(seeded, SagaInput.event(new Tick("s")));
+
+            assertAll(
+                    () -> assertThat(seeded.previousStepEntryIndex()).isEqualTo(-1),
+                    () -> assertThat(saw).containsExactly("window=2")
+            );
+        }
+    }
+
+    @Nested
+    class LoweredJoin {
+
+        sealed interface JoinEvent permits Started, Ready, Note, Go {
+            String id();
+        }
+
+        record Started(String id) implements JoinEvent {
+        }
+
+        record Ready(String id) implements JoinEvent {
+        }
+
+        record Note(String id) implements JoinEvent {
+        }
+
+        record Go(String id) implements JoinEvent {
+        }
+
+        sealed interface JoinCommand permits Noop, Saw {
+        }
+
+        record Noop() implements JoinCommand {
+        }
+
+        record Saw(String what) implements JoinCommand {
+        }
+
+        @SuppressWarnings("deprecation")
+        @Test
+        void a_join_reaction_still_reads_the_whole_retained_history_and_not_just_its_own_window() {
+            // join shipped in 0.31.0 reading the whole retained history, and ADR 120 lowers it to a condition tree as sugar,
+            // which means the semantics are preserved exactly. Narrowing an on(StepCondition, ...) reaction to its own window
+            // must therefore not narrow a join's, since a caller's second-step join callback can be counting an event an
+            // earlier step left behind.
+            Saga<JoinEvent, FlowState<JoinEvent>, JoinCommand> saga = FlowSaga.<JoinEvent, JoinCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(JoinEvent::id)
+                    .step("first", step -> step.on(Go.class, Continuation.next()))
+                    .step("second", step -> step.join(List.of(Expectation.of(Ready.class, 1)), Continuation.end(),
+                            received -> List.of(new Saw("notes=" + received.count(Note.class)))))
+                    .build();
+
+            FlowState<JoinEvent> afterStart = start(saga, new Started("j")).state();
+            FlowState<JoinEvent> afterNote = saga.evolve(afterStart, SagaInput.event(new Note("j")));
+            FlowState<JoinEvent> inSecond = saga.evolve(afterNote, SagaInput.event(new Go("j")));
+            Saga.Step<FlowState<JoinEvent>, JoinCommand> fired = saga.step(inSecond, SagaInput.event(new Ready("j")));
+
+            assertAll(
+                    () -> assertThat(fired.state().completed()).isTrue(),
+                    () -> assertThat(fired.effects()).as("the Note from step one is still visible to the join's callback")
+                            .containsExactly(SagaEffect.issue(new Saw("notes=1")))
+            );
+        }
+
+        @SuppressWarnings("deprecation")
+        @Test
+        void a_join_collapses_repeated_types_to_their_highest_count_and_keeps_first_appearance_order() {
+            Saga<JoinEvent, FlowState<JoinEvent>, JoinCommand> saga = FlowSaga.<JoinEvent, JoinCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(JoinEvent::id)
+                    .step("wait", step -> step.join(
+                            List.of(Expectation.of(Ready.class, 1), Expectation.of(Note.class, 1), Expectation.of(Ready.class, 3)),
+                            Continuation.end()))
+                    .build();
+
+            FlowState<JoinEvent> state = start(saga, new Started("j")).state();
+            state = saga.evolve(state, SagaInput.event(new Note("j")));
+            state = saga.evolve(state, SagaInput.event(new Ready("j")));
+            state = saga.evolve(state, SagaInput.event(new Ready("j")));
+            FlowState<JoinEvent> afterTwoReady = state;
+            FlowState<JoinEvent> afterThirdReady = saga.evolve(afterTwoReady, SagaInput.event(new Ready("j")));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(afterTwoReady)).as("two Ready is short of the highest count asked for").isFalse(),
+                    () -> assertThat(saga.isTerminal(afterThirdReady)).isTrue()
+            );
+        }
+
+        @SuppressWarnings("deprecation")
+        @Test
+        void a_join_naming_one_type_twice_still_means_the_higher_of_its_counts() {
+            // allOf refuses two children matching the same events, and join is a shipped API that is allowed to hold them.
+            // Its lowering collapses them to the maximum, which is what such a join has always meant, so a caller's working
+            // declaration keeps working instead of failing at startup on an upgrade.
+            Saga<JoinEvent, FlowState<JoinEvent>, JoinCommand> saga = FlowSaga.<JoinEvent, JoinCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(JoinEvent::id)
+                    .step("wait", step -> step.join(
+                            List.of(Expectation.of(Ready.class, 2), Expectation.of(Ready.class, 3)), Continuation.end()))
+                    .build();
+
+            FlowState<JoinEvent> state = start(saga, new Started("j")).state();
+            FlowState<JoinEvent> afterFirst = saga.evolve(state, SagaInput.event(new Ready("j")));
+            FlowState<JoinEvent> afterSecond = saga.evolve(afterFirst, SagaInput.event(new Ready("j")));
+            FlowState<JoinEvent> afterThird = saga.evolve(afterSecond, SagaInput.event(new Ready("j")));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(afterSecond)).as("two Ready is short of the higher count").isFalse(),
+                    () -> assertThat(saga.isTerminal(afterThird)).as("the third fulfils it").isTrue()
+            );
         }
     }
 

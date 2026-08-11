@@ -23,7 +23,9 @@ import org.occurrent.dsl.saga.flow.FlowSagaImpl.*;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
@@ -100,6 +102,11 @@ public final class StepBuilder<E, C> {
      * {@code condition}. Issues no commands. {@code condition} takes {@code StepCondition<? extends E>}, not the
      * invariant {@code StepCondition<E>}, so a tree built by combining leaves of different concrete event types (its
      * inferred type is their least upper bound) is accepted without a cast, see {@link StepCondition}'s javadoc.
+     * <p>
+     * The window a condition counts over opens when the step is entered, and <em>every</em> transition into a step resets it,
+     * a {@code transitionTo} naming the step it is already in included. So a self-loop restarts every window in this step,
+     * and in a mixed step a classic branch that self-loops wipes a sibling condition's partial count, the same way
+     * it already wipes a {@code join}'s. That is deliberate, since the step has been re-entered and its waiting starts over.
      */
     public StepBuilder<E, C> on(StepCondition<? extends E> condition, Continuation then) {
         return on(condition, then, received -> List.of());
@@ -109,6 +116,12 @@ public final class StepBuilder<E, C> {
      * As {@link #on(StepCondition, Continuation)}, plus the commands to issue once {@code condition} is satisfied.
      * {@code whenFulfilled} reads {@link ReceivedEvents}, not the triggering event alone. The tipping event, whichever
      * leaf it matched, is always {@code received.asList().getLast()}.
+     * <p>
+     * {@code whenFulfilled} reads the same window the condition was evaluated over, the events received since this step was
+     * entered, so a count it takes is the count that fulfilled the condition and an event left over from an earlier step
+     * cannot be mistaken for one of this step's. {@code received.initiating()} reaches past the window as always. A guard and
+     * a {@code timeout}'s {@code onExpiry} read the whole retained history instead, which is what makes a count spanning
+     * several steps possible there.
      */
     @SuppressWarnings("unchecked") // Safe. A StepCondition only ever reads an event through eventType.isInstance, never writes one.
     public StepBuilder<E, C> on(StepCondition<? extends E> condition, Continuation then, Function<ReceivedEvents<E>, List<C>> whenFulfilled) {
@@ -116,7 +129,7 @@ public final class StepBuilder<E, C> {
         requireNonNull(then, "then cannot be null");
         requireNonNull(whenFulfilled, "whenFulfilled cannot be null");
         requireNoJoin();
-        WindowCondition<E> trigger = new WindowCondition<>((StepCondition<E>) condition);
+        WindowCondition<E> trigger = new WindowCondition<>((StepCondition<E>) condition, false);
         BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
         branches.add(new Branch<>(trigger, reaction, then));
         return this;
@@ -127,8 +140,10 @@ public final class StepBuilder<E, C> {
      * runs {@code whenFulfilled} and follows {@code then}.
      *
      * @deprecated in favor of {@code on(allOf(...))}, which this now lowers to internally. An expectation of {@code n}
-     * events of a type becomes {@code event(type, n)}, and the whole list becomes one {@code allOf(...)} tree. Behavior is
-     * unchanged, only the authoring surface is. See {@link StepCondition}.
+     * events of a type becomes {@code event(type, n)}, and the whole list becomes one {@code allOf(...)} tree. Two
+     * expectations naming the same type collapse to the higher of their counts, which is what such a join has always meant,
+     * since each expectation is checked against the same window independently. Behavior is unchanged, only the way you write
+     * it. See {@link StepCondition}.
      */
     @Deprecated
     public StepBuilder<E, C> join(List<Expectation<E>> expecting, Continuation then, Function<ReceivedEvents<E>, List<C>> whenFulfilled) {
@@ -145,7 +160,9 @@ public final class StepBuilder<E, C> {
             throw new IllegalArgumentException("a join step needs at least one expectation");
         }
         joinDeclared = true;
-        WindowCondition<E> trigger = new WindowCondition<>(StepCondition.allOf(toConditions(expecting)));
+        // Marked as lowered from join, so the reaction keeps reading the whole retained history. join shipped in 0.31.0 with
+        // that contract and lowering it to a condition tree must not change what its callback sees.
+        WindowCondition<E> trigger = new WindowCondition<>(StepCondition.allOf(toConditions(expecting)), true);
         BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
         branches.add(new Branch<>(trigger, reaction, then));
         return this;
@@ -161,11 +178,18 @@ public final class StepBuilder<E, C> {
         return join(expecting, then, events -> List.of());
     }
 
+    // Collapse expectations naming the same type to the highest count asked for, before the tree is built. allOf refuses two
+    // children that match the same events, and a join is allowed to carry them, because join(expect(A, 2), expect(A, 3))
+    // already means "at least three A" and inheriting allOf's rejection would turn a working declaration in a shipped,
+    // deprecated API into a startup failure on a patch upgrade. Declaration order follows each type's first appearance.
     private static <E> List<StepCondition<E>> toConditions(List<Expectation<E>> expecting) {
-        List<StepCondition<E>> conditions = new ArrayList<>();
+        Map<Class<? extends E>, Integer> highestCount = new LinkedHashMap<>();
         for (Expectation<E> expectation : expecting) {
-            StepCondition<E> leaf = StepCondition.event(expectation.eventType(), expectation.count());
-            conditions.add(leaf);
+            highestCount.merge(expectation.eventType(), expectation.count(), Math::max);
+        }
+        List<StepCondition<E>> conditions = new ArrayList<>();
+        for (Map.Entry<Class<? extends E>, Integer> entry : highestCount.entrySet()) {
+            conditions.add(StepCondition.event(entry.getKey(), entry.getValue()));
         }
         return conditions;
     }

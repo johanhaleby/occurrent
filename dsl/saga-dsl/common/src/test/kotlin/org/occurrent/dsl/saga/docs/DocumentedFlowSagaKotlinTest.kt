@@ -519,13 +519,15 @@ class DocumentedFlowSagaKotlinTest {
         private fun review(): Saga<ReviewEvent, FlowState<ReviewEvent>, ReviewCommand> = saga {
             startsOn<ReviewStarted>()
             correlateAll { it.reviewId }
+            // One branch per outcome, in declaration order, first satisfied one winning. A single anyOf(...) branch that works
+            // out afterwards which alternative fired would have to guess from the events, and the ordering that decides a tie
+            // would sit inside the tree instead of in the declaration.
             step("awaiting-decision") {
-                on(anyOf(event<Approved>(2), event<Rejected>()), then = end) { received ->
-                    if (received.none<Rejected>()) {
-                        issue(Publish(received.initiating<ReviewStarted>().reviewId))
-                    } else {
-                        issue(Discard(received.initiating<ReviewStarted>().reviewId))
-                    }
+                on(event<Rejected>(), then = end) { received ->
+                    issue(Discard(received.initiating<ReviewStarted>().reviewId))
+                }
+                on(event<Approved>(2), then = end) { received ->
+                    issue(Publish(received.initiating<ReviewStarted>().reviewId))
                 }
             }
         }

@@ -191,13 +191,123 @@ class StepConditionTest {
     }
 
     @Test
-    void allOf_does_not_deduplicate_a_repeated_condition() {
+    void anyOf_does_not_deduplicate_a_repeated_alternative() {
         StepCondition<TestEvent> a = event(A.class);
 
-        StepCondition<TestEvent> condition = allOf(a, a);
+        StepCondition<TestEvent> condition = anyOf(a, a);
 
-        assertThat(condition).isInstanceOfSatisfying(AllOf.class, allOf ->
-                assertThat(allOf.conditions()).containsExactly(a, a));
+        assertThat(condition).isInstanceOfSatisfying(AnyOf.class, anyOf ->
+                assertThat(anyOf.conditions()).containsExactly(a, a));
+    }
+
+    // --- allOf refuses two children one event satisfies at once ------------------------------------------------------
+
+    @Test
+    void allOf_rejects_a_repeated_condition() {
+        StepCondition<TestEvent> a = event(A.class);
+
+        assertThatThrownBy(() -> allOf(a, a))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1")
+                .hasMessageContaining("A")
+                .hasMessageContaining("event(A, count)");
+        assertThatThrownBy(() -> allOf(List.of(a, a)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1");
+    }
+
+    @Test
+    void allOf_rejects_a_repeated_class_literal() {
+        assertThatThrownBy(() -> allOf(A.class, A.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1")
+                .hasMessageContaining("A");
+    }
+
+    @Test
+    void allOf_rejects_two_leaves_over_one_matcher_that_ask_for_different_counts() {
+        // The misleading case the rule mainly exists for, since this reads as five A and is fulfilled by three, each leaf
+        // counting over the same window independently.
+        assertThatThrownBy(() -> allOf(event(A.class, 2), event(A.class, 3)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1")
+                .hasMessageContaining("sooner than it reads");
+    }
+
+    @Test
+    void allOf_rejects_a_child_a_nested_allOf_flattened_in_beside_its_twin() {
+        StepCondition<TestEvent> a = event(A.class);
+        StepCondition<TestEvent> b = event(B.class);
+
+        // allOf(allOf(a, b), a) flattens to [a, b, a], so the clash is between positions 0 and 2 after flattening.
+        assertThatThrownBy(() -> allOf(allOf(a, b), a))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 2");
+    }
+
+    @Test
+    void allOf_rejects_two_equal_composite_children() {
+        StepCondition<TestEvent> alternative = anyOf(event(A.class), event(B.class));
+
+        assertThatThrownBy(() -> allOf(alternative, alternative, event(C.class)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1");
+    }
+
+    @Test
+    void allOf_rejects_a_matcher_a_leaf_shares_with_a_composite_child() {
+        // allOf(event(A), anyOf(event(A), event(B))) reads as "an A and either an A or a B" and is fulfilled by one A, so the
+        // matcher has to be looked for inside a composite child too, not only between two leaf siblings.
+        assertThatThrownBy(() -> allOf(event(A.class), anyOf(event(A.class), event(B.class))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1")
+                .hasMessageContaining("A");
+        assertThatThrownBy(() -> allOf(anyOf(event(A.class), event(B.class)), event(A.class, 2)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1");
+    }
+
+    @Test
+    void allOf_rejects_two_composite_children_that_overlap_on_one_matcher() {
+        assertThatThrownBy(() -> allOf(anyOf(event(A.class), event(B.class)), anyOf(event(C.class), event(A.class))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1")
+                .hasMessageContaining("A");
+    }
+
+    @Test
+    void allOf_accepts_composite_children_that_share_no_matcher() {
+        StepCondition<TestEvent> condition = allOf(anyOf(event(A.class), event(B.class)), event(C.class));
+
+        assertThat(condition).isInstanceOfSatisfying(AllOf.class, allOf -> assertThat(allOf.conditions()).hasSize(2));
+    }
+
+    @Test
+    void allOf_rejects_a_repeated_child_constructed_directly_rather_than_through_the_factory() {
+        StepCondition<TestEvent> a = event(A.class);
+
+        assertThatThrownBy(() -> new AllOf<>(List.of(a, a)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1");
+    }
+
+    @Test
+    void allOf_accepts_two_leaves_over_the_same_type_with_different_predicates() {
+        // Two separately written predicates over one type are two different requirements, and the check cannot tell them
+        // apart from a duplicate either way, since distinct lambdas never compare equal. Accepted, and documented as the
+        // limit of the guarantee.
+        StepCondition<TestEvent> condition = allOf(event(A.class, (A a) -> a.value() > 0), event(A.class, (A a) -> a.value() < 100));
+
+        assertThat(condition).isInstanceOfSatisfying(AllOf.class, allOf -> assertThat(allOf.conditions()).hasSize(2));
+    }
+
+    @Test
+    void allOf_accepts_leaves_over_a_supertype_and_a_subtype_of_one_another() {
+        // Different matchers, so different requirements, even though one A satisfies both leaves. Rejecting these would
+        // refuse a legitimate "one of any TestEvent plus one A specifically" declaration.
+        StepCondition<TestEvent> condition = allOf(event(TestEvent.class, 2), event(A.class));
+
+        assertThat(condition).isInstanceOfSatisfying(AllOf.class, allOf -> assertThat(allOf.conditions()).hasSize(2));
     }
 
     // --- allOf/anyOf normalization: same-kind flatten ---------------------------------------------------------------
