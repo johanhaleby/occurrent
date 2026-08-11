@@ -1,7 +1,7 @@
 schema_version: 1
 epic: timerid
-revision: 10
-updated_at: 2026-08-11T06:37:29Z
+revision: 11
+updated_at: 2026-08-11T06:57:28Z
 updated_by: orchestrator session 496ca320 (design gate satisfied, U2 dispatched)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 design gate SATISFIED 2026-08-11, Johan confirmed both open decisions, take the source break and take the constructor change, on AGENTS.md long-term grounds. Chips are usable again from the same message"
@@ -71,16 +71,16 @@ units:
   U4:
     issue: 716
     goal: "Persistence proof: a 0.32.0-shaped envelope with step:X already stored loads and fires correctly, so no in-flight saga is stranded"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U3]
-    session: null
+    session: "local_1659b37c"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "723", met: true, evidence: "MERGED as squash 75fa299e2, CAS-pinned to 0804b1dbd, matrix 26 of 26 and zero unresolved threads. StoredTimerNameTest seeds a store with the pre-change name and runs the real timer poll over step:awaiting-players, payment and a:b, every literal written out with a comment saying why it must never be derived from stepTimer or encode. Consumption case added to TimerConsumptionSupportTest, Mongo raw-document assertion added additively with the existing format pins intact. The pr-fix loop worked visibly here, Copilot raised two findings and the worker fixed and closed both before the merge"}
     blocking_on: []
-    next_action: "chip task_31919938 spawned 2026-08-11T06:06:59Z"
-    last_meaningful_progress_at: 2026-08-11T06:06:59Z
+    next_action: none, merged
+    last_meaningful_progress_at: 2026-08-11T06:57:28Z
     observed: {}
     assessment: "This is the unit that makes the change safe to ship rather than merely correct in isolation, so it is not optional and not foldable into U3."
   U6:
