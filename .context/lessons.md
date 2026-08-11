@@ -1041,3 +1041,26 @@ passing something else) and which I had approved as `IllegalStateException` with
 before approving it, not after. And when a duplicate turns up, do not just delete one copy: DIFF THEM.
 The differences are where one side has a bug the other has already fixed, or a rule the other forgot,
 and in this case the older copy was right about two things and wrong about the one that mattered.
+
+## Overclaimed prose has a mechanical tell: absolute quantifiers (2026-08-11, cdx33 U11)
+
+Three of eight review findings on one PR, and five once the worker swept for the pattern, were the same
+defect: a stated guarantee wider than the code. A documented total bound that the retention algorithm
+does not reach, a changelog line saying every same-type predicated pair is refused when equal ones are
+allowed, javadoc requiring a name for "every predicate in a capped step" when a guard's `onlyIf` needs
+none, and an exception whose suggested remedy could not work.
+
+The worker found the tell, and it is checkable rather than a matter of care: **every one of these was a
+sentence that could have been written before the code existed**, and the two that survived its own
+review were both absolutes, `always` and `every`, which the implementation qualifies. Grepping added
+prose for absolute quantifiers and checking each against the code would have caught four of the five.
+
+This is why the prose gate is not enough on its own. The writing gate checks dashes, semicolons and
+voice, all of which are properties of the text. Nothing in it asks whether a sentence is TRUE of the
+code beside it, and the sentences most likely to be false are the confident ones.
+
+**How to apply.** After writing javadoc, a changelog entry, a migration note or an ADR consequence,
+grep the added lines for `always`, `never`, `every`, `all`, `any`, `only` and `must`, and check each hit
+against the implementation rather than against the intent. Prose written from a design describes the
+design; the reader will hold it to the code. Fold this into the writing-gate step rather than treating
+it as a separate review, since it is the same pass over the same added lines.
