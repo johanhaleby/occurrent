@@ -94,6 +94,11 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
+    public boolean evaluatesWriteConditions() {
+        return true;
+    }
+
+    @Override
     public Mono<Long> writeVersion(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return Mono.fromSupplier(() -> versions.get(subscriptionId));

@@ -82,6 +82,23 @@ public interface CheckpointStorage {
     Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition);
 
     /**
+     * Whether this storage evaluates {@link CheckpointWriteCondition#notOlderThan(long)} and
+     * {@link CheckpointWriteCondition#ifAbsent()} for real, rather than refusing them with
+     * {@link UnsupportedOperationException}.
+     * <p>
+     * Answer {@code true} only when {@link #save(String, Checkpoint, CheckpointWriteCondition)} accepts and refuses
+     * both as documented, and {@code any()} carries a stored version forward untouched. The default is {@code false},
+     * so a storage that writes unconditionally needs to say nothing. A caller that depends on a conditional write can
+     * ask before it wires anything up, rather than finding out from an error signal on the first write.
+     *
+     * @return {@code true} if a condition other than {@code any()} is evaluated, {@code false} if every one of them
+     * is refused
+     */
+    default boolean evaluatesWriteConditions() {
+        return false;
+    }
+
+    /**
      * Read the version currently stored for the supplied subscriptionId, the one a {@link CheckpointWriteCondition}
      * is evaluated against.
      * <p>

@@ -117,7 +117,8 @@ class ProjectionAnnotationRegistrar {
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
         this.registeredIds = registeredIds;
-        this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class));
+        this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
+                applicationContext.getBean(OccurrentProperties.class).getSubscription().getCompetingConsumer().isFenceCheckpoints());
     }
 
     // Stop every catch-up this registrar started or created a model for, waiting for any replay still in flight to

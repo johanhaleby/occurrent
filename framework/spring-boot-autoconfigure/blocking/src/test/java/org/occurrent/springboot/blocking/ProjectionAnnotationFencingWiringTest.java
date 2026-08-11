@@ -50,6 +50,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 /**
@@ -84,18 +85,18 @@ class ProjectionAnnotationFencingWiringTest {
     }
 
     @Test
-    void two_strategy_beans_leave_the_catch_up_marker_write_unconditional() {
+    void several_strategy_beans_refuse_to_start_rather_than_writing_the_marker_unconditionally() {
         CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
-        // Stubbed to prove the ambiguity is what suppresses the fence, not this strategy simply having no token.
-        when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(7L));
         CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
 
         runner.withBean("primaryStrategy", CompetingConsumerStrategy.class, () -> strategy)
                 .withBean("rivalStrategy", CompetingConsumerStrategy.class, RivalCompetingConsumerStrategy::new)
                 .withBean(CheckpointStorage.class, () -> checkpointStorage)
                 .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    verify(checkpointStorage).save(eq(SUBSCRIPTION_ID), any(), eq(CheckpointWriteCondition.any()));
+                    assertThat(context).getFailure()
+                            .isInstanceOf(AmbiguousCompetingConsumerStrategyException.class)
+                            .hasMessageContaining("rivalStrategy");
+                    verify(checkpointStorage, never()).save(any(), any(), any());
                 });
     }
 

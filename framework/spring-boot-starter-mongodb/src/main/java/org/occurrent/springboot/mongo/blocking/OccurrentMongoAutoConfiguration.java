@@ -81,6 +81,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.util.List;
 
+import static java.util.Objects.requireNonNull;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
@@ -175,7 +176,20 @@ public class OccurrentMongoAutoConfiguration<E> {
         return new SpringMongoCheckpointStorage(mongoTemplate, occurrentProperties.getSubscription().getCollection());
     }
 
+    /**
+     * The lease-based competing-consumer strategy, which decides both which node delivers a subscription's events and
+     * which lease version fences its checkpoint writes (ADR 116).
+     * <p>
+     * {@code @Fallback} so an application's own {@link CompetingConsumerStrategy} bean of any type replaces this one
+     * rather than competing with it, at every injection point and in the fence's own lookup. The
+     * {@code @ConditionalOnMissingBean} keeps this bean from being built at all when the application declares a lease
+     * strategy of the same type, which is the case a condition can decide. It cannot decide the interface-typed case,
+     * because this configuration is also activated by {@code @EnableOccurrent}'s plain {@code @Import} and the
+     * condition is then evaluated before the application's own bean is registered, the same reason
+     * {@link #occurrentTypeMapper()} is a {@code @Fallback}.
+     */
     @Bean
+    @Fallback
     @ConditionalOnMissingBean(SpringMongoLeaseCompetingConsumerStrategy.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public SpringMongoLeaseCompetingConsumerStrategy occurrentCompetingConsumerStrategy(MongoTemplate mongoTemplate, List<CompetingConsumerListener> competingConsumerListeners) {
@@ -198,9 +212,14 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Primary
     @ConditionalOnMissingBean(value = SubscriptionModel.class, ignored = RegisteringSubscribable.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
-    public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, CheckpointStorage storage,
+    public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, CheckpointStorage storage,
                                                                         OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore,
                                                                         ObjectProvider<CompetingConsumerStrategy> competingConsumerStrategyProvider, Environment environment) {
+        // Resolved through the provider rather than taken as a parameter of its own, so several strategy beans with no
+        // @Primary fail with the message that names the remedy instead of Spring's report of an unsatisfied parameter.
+        // The strategy is forced here either way, since this model holds one for the life of the bean.
+        CompetingConsumerStrategy competingConsumerStrategy = requireNonNull(CompetingConsumerStrategies.resolveUnique(competingConsumerStrategyProvider),
+                "A competing-consumer strategy is required to build " + CompetingConsumerSubscriptionModel.class.getSimpleName());
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         SpringMongoSubscriptionModelConfig mongoSubscriptionModelConfig = withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
                 .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost());
@@ -211,7 +230,8 @@ public class OccurrentMongoAutoConfiguration<E> {
         // Resolved lazily, once per bean, and reused at every write site below (ADR 116). ObjectProvider rather than
         // the strategy bean itself, so a checkpoint-writing model does not force the strategy, and through it every
         // CompetingConsumerListener bean, into existence before this bean is fully constructed.
-        CheckpointWriteVersionSource writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(competingConsumerStrategyProvider);
+        CheckpointWriteVersionSource writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(competingConsumerStrategyProvider,
+                occurrentProperties.getSubscription().getCompetingConsumer().isFenceCheckpoints());
         // Checkpoints after every event by default, see DurableSubscriptionModel javadoc for the EveryN.every(n)
         // throughput tradeoff if checkpoint write volume becomes a bottleneck.
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage, writeVersionSource);

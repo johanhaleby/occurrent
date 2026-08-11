@@ -108,6 +108,11 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
+    public boolean evaluatesWriteConditions() {
+        return true;
+    }
+
+    @Override
     public OptionalLong writeVersion(String subscriptionId) {
         Supplier<OptionalLong> readVersion = () -> {
             Document document = mongoOperations.findOne(query(where(ID).is(subscriptionId)), Document.class, checkpointCollection);

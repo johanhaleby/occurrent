@@ -39,36 +39,56 @@ import java.net.URI;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
  * {@link SagaAnnotationRegistrar#resolveSagaCompetingConsumerStrategy()} gates the saga timer poller on a
- * {@link CompetingConsumerStrategy} bean, resolved with {@link org.springframework.beans.factory.ObjectProvider#getIfUnique()}.
- * Two strategy beans make the bean ambiguous, and {@code getIfUnique()} answers {@code null} for that rather than
- * throwing {@link org.springframework.beans.factory.NoUniqueBeanDefinitionException}, so the application still
- * starts and the poller runs on every instance, unfenced, the same stand-down
- * {@link CompetingConsumerCheckpointWriteVersionSource} already has for the checkpoint-write side of ADR 116. Before
- * this, {@code getIfAvailable()} threw and a {@code @Saga} in such an application failed to start (#684).
+ * {@link CompetingConsumerStrategy} bean. Several of them with no {@code @Primary} refuse to start, because either
+ * answer available without one is worse than a failure: picking a bean would gate the poller on a lease the
+ * application did not choose, and standing the gate down would run a poller on every instance while looking like the
+ * gate is on. A {@code @Primary} bean is the way to say which lease to use.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaAnnotationTimerPollerCompetingConsumerTest {
 
     @Test
-    void two_strategy_beans_start_the_saga_and_leave_its_timer_poller_ungated() {
-        CompetingConsumerStrategy primary = mock(CompetingConsumerStrategy.class);
+    void several_strategy_beans_refuse_to_start_rather_than_leaving_the_timer_poller_ungated() {
+        CompetingConsumerStrategy first = mock(CompetingConsumerStrategy.class);
         CompetingConsumerStrategy rival = mock(CompetingConsumerStrategy.class);
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
                 .withUserConfiguration(TwoStrategySagaConfiguration.class)
-                .withBean("primaryStrategy", CompetingConsumerStrategy.class, () -> primary)
+                .withBean("firstStrategy", CompetingConsumerStrategy.class, () -> first)
+                .withBean("rivalStrategy", CompetingConsumerStrategy.class, () -> rival)
+                .run(context -> {
+                    assertThat(context).getFailure()
+                            .isInstanceOf(AmbiguousCompetingConsumerStrategyException.class)
+                            .hasMessageContaining("firstStrategy")
+                            .hasMessageContaining("rivalStrategy")
+                            .hasMessageContaining("@Primary");
+                    verifyNoInteractions(first);
+                    verifyNoInteractions(rival);
+                });
+    }
+
+    @Test
+    void a_primary_strategy_bean_starts_the_saga_and_gates_its_timer_poller_on_that_lease() {
+        CompetingConsumerStrategy chosen = mock(CompetingConsumerStrategy.class);
+        CompetingConsumerStrategy rival = mock(CompetingConsumerStrategy.class);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TwoStrategySagaConfiguration.class)
+                .withBean("chosenStrategy", CompetingConsumerStrategy.class, () -> chosen, definition -> definition.setPrimary(true))
                 .withBean("rivalStrategy", CompetingConsumerStrategy.class, () -> rival)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    // Neither bean is registered as the timer's lease holder: an ambiguous strategy stands the fence
-                    // down instead of picking one, so the poller runs unconditionally.
-                    verifyNoInteractions(primary);
+                    // The poller registers itself as a competing consumer for the timer key, and asks that same
+                    // strategy whether it holds the lock before each round.
+                    verify(chosen).registerCompetingConsumer(any(), any());
                     verifyNoInteractions(rival);
                 });
     }

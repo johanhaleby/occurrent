@@ -31,31 +31,45 @@ import java.util.OptionalLong;
  * <p>
  * Resolution happens on the first checkpoint write rather than at construction. {@link CompetingConsumerStrategy}
  * depends on {@code List<CompetingConsumerListener>}, an open extension point, and a user listener that injects a
- * subscription model would otherwise close a construction cycle with the model this source is built for.
- * {@link ObjectProvider#getIfUnique()} rather than {@code getIfAvailable()}, so an application with two strategy
- * beans keeps starting, with no fence wired for either.
+ * subscription model would otherwise close a construction cycle with the model this source is built for. Which bean
+ * that resolution picks, and when it refuses to pick one, is decided by {@code CompetingConsumerStrategies}, the same
+ * rule the startup check applies.
  * <p>
  * Once a strategy is found it is kept, and a first attempt that finds none is retried on the next write rather
  * than disabling the fence for the life of the process. The field is {@code volatile} rather than guarded, since
  * resolving twice under a race is harmless (both attempts settle on the same bean). A resolution that throws
  * counts as no version for that write, which keeps a registrar-driven checkpoint write working while the strategy
- * bean is still being built.
+ * bean is still being built. An ambiguous strategy is the exception, since answering no version there would be the
+ * fence quietly switching itself off.
  */
 public final class CompetingConsumerCheckpointWriteVersionSource implements CheckpointWriteVersionSource {
 
     private final ObjectProvider<CompetingConsumerStrategy> strategyProvider;
+    private final boolean fenceCheckpoints;
     private volatile @Nullable CompetingConsumerStrategy strategy;
 
-    public CompetingConsumerCheckpointWriteVersionSource(ObjectProvider<CompetingConsumerStrategy> strategyProvider) {
+    /**
+     * @param strategyProvider Resolves the {@link CompetingConsumerStrategy} bean to read a fencing token from.
+     * @param fenceCheckpoints {@code false} answers no version for every subscription, which writes every checkpoint
+     *                         unconditionally. Pass {@code occurrent.subscription.competing-consumer.fence-checkpoints}
+     *                         when the wiring site is configured by that property.
+     */
+    public CompetingConsumerCheckpointWriteVersionSource(ObjectProvider<CompetingConsumerStrategy> strategyProvider, boolean fenceCheckpoints) {
         this.strategyProvider = strategyProvider;
+        this.fenceCheckpoints = fenceCheckpoints;
     }
 
     @Override
     public OptionalLong writeVersion(String subscriptionId) {
+        if (!fenceCheckpoints) {
+            return OptionalLong.empty();
+        }
         CompetingConsumerStrategy resolved = strategy;
         if (resolved == null) {
             try {
-                resolved = strategyProvider.getIfUnique();
+                resolved = CompetingConsumerStrategies.resolveUnique(strategyProvider);
+            } catch (AmbiguousCompetingConsumerStrategyException e) {
+                throw e;
             } catch (RuntimeException e) {
                 return OptionalLong.empty();
             }
