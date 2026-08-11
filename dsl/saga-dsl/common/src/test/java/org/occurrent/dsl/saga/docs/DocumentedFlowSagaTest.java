@@ -21,6 +21,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaTimeout;
+import org.occurrent.dsl.saga.TimerName;
 import org.occurrent.dsl.saga.flow.Continuation;
 import org.occurrent.dsl.saga.flow.Expectation;
 import org.occurrent.dsl.saga.flow.FlowSaga;
@@ -190,7 +191,7 @@ class DocumentedFlowSagaTest {
 
             // When
             Saga.Step<FlowState<GameEvent>, CloseGame> step =
-                    lobby().step(started.state(), SagaInput.timeout(new SagaTimeout(GAME_ID, "step:awaiting-players")));
+                    lobby().step(started.state(), SagaInput.timeout(new SagaTimeout(GAME_ID, TimerName.parse("step:awaiting-players"))));
 
             // Then
             assertAll(
@@ -206,7 +207,7 @@ class DocumentedFlowSagaTest {
 
             // When
             Saga.Step<FlowState<GameEvent>, CloseGame> step =
-                    lobby().step(started.state(), SagaInput.timeout(new SagaTimeout(GAME_ID, "step:no-such-step")));
+                    lobby().step(started.state(), SagaInput.timeout(new SagaTimeout(GAME_ID, TimerName.parse("step:no-such-step"))));
 
             // Then
             assertAll(
@@ -297,7 +298,7 @@ class DocumentedFlowSagaTest {
 
             // When
             Saga.Step<FlowState<AuctionEvent>, CloseAuction> step =
-                    auction().step(started.state(), SagaInput.timeout(new SagaTimeout(AUCTION_ID, "step:bidding")));
+                    auction().step(started.state(), SagaInput.timeout(new SagaTimeout(AUCTION_ID, TimerName.parse("step:bidding"))));
 
             // Then
             assertAll(
@@ -315,7 +316,7 @@ class DocumentedFlowSagaTest {
 
             // When
             Saga.Step<FlowState<AuctionEvent>, CloseAuction> step =
-                    auction().step(afterBid.state(), SagaInput.timeout(new SagaTimeout(AUCTION_ID, "step:bidding")));
+                    auction().step(afterBid.state(), SagaInput.timeout(new SagaTimeout(AUCTION_ID, TimerName.parse("step:bidding"))));
 
             // Then
             assertThat(step.effects()).containsExactly(SagaEffect.issue(new CloseAuction(AUCTION_ID)));

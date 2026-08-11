@@ -153,7 +153,7 @@ class SagaExecutionSupportTest {
         @Test
         void skips_a_timeout_when_no_instance_exists() {
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
-                    orderFulfillment(), "o1", null, SagaInput.timeout(new SagaTimeout("o1", PAYMENT_TIMER)), EventMeta.NONE, NOW);
+                    orderFulfillment(), "o1", null, SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))), EventMeta.NONE, NOW);
 
             assertThat(outcome.processed()).isFalse();
         }
@@ -177,7 +177,7 @@ class SagaExecutionSupportTest {
         @Test
         void skips_any_timeout_delivered_to_a_completed_instance() {
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
-                    orderFulfillment(), "o1", completed(new Cancelled("o1")), SagaInput.timeout(new SagaTimeout("o1", PAYMENT_TIMER)), EventMeta.NONE, NOW);
+                    orderFulfillment(), "o1", completed(new Cancelled("o1")), SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))), EventMeta.NONE, NOW);
 
             assertThat(outcome.processed()).isFalse();
         }
@@ -373,7 +373,7 @@ class SagaExecutionSupportTest {
                     List.of(new TimerEntry("typo", NOW.plus(Duration.ofMinutes(5)).toEpochMilli())), Map.of(), null);
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
-                    orderFulfillment(), "o1", current, SagaInput.timeout(new SagaTimeout("o1", "typo")), EventMeta.NONE, NOW);
+                    orderFulfillment(), "o1", current, SagaInput.timeout(new SagaTimeout("o1", TimerName.parse("typo"))), EventMeta.NONE, NOW);
 
             assertAll(
                     () -> assertThat(outcome.processed()).isTrue(),
@@ -389,7 +389,7 @@ class SagaExecutionSupportTest {
                     List.of(new TimerEntry("typo", NOW.plus(Duration.ofMinutes(5)).toEpochMilli())), Map.of(), null);
 
             SagaExecutionSupport.process(orderFulfillment(), "o1",
-                    current, SagaInput.timeout(new SagaTimeout("o1", "typo")), EventMeta.NONE, NOW);
+                    current, SagaInput.timeout(new SagaTimeout("o1", TimerName.parse("typo"))), EventMeta.NONE, NOW);
 
             assertThat(appender.list)
                     .filteredOn(event -> event.getLevel() == Level.WARN)
@@ -402,9 +402,82 @@ class SagaExecutionSupportTest {
                     List.of(new TimerEntry(PAYMENT_TIMER, NOW.plus(Duration.ofMinutes(5)).toEpochMilli())), Map.of(), null);
 
             SagaExecutionSupport.process(orderFulfillment(), "o1",
-                    current, SagaInput.timeout(new SagaTimeout("o1", PAYMENT_TIMER)), EventMeta.NONE, NOW);
+                    current, SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))), EventMeta.NONE, NOW);
 
             assertThat(appender.list).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
+        }
+    }
+
+    @Nested
+    class TimerNamesReadBackFromStorage {
+
+        private static final String STORED_NAME = "step:awaiting-players";
+
+        private static Saga<OrderEvent, OrderState, OrderCommand> sagaHandling(TimerName timerName) {
+            return Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
+                    .evolveOnTimeout(timerName, (state, t) -> new Cancelled(t.sagaId()))
+                    .reactOnTimeout(timerName, (state, t) -> List.of(SagaEffect.issue(new CancelOrder(t.sagaId()))))
+                    .build();
+        }
+
+        private static Saga<OrderEvent, OrderState, OrderCommand> sagaHandling(String timerName) {
+            return Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
+                    .evolveOnTimeout(timerName, (state, t) -> new Cancelled(t.sagaId()))
+                    .reactOnTimeout(timerName, (state, t) -> List.of(SagaEffect.issue(new CancelOrder(t.sagaId()))))
+                    .build();
+        }
+
+        private static SagaEnvelope<OrderState> pendingSince_0_32_0() {
+            return activeEnvelope("o1", new AwaitingPayment("o1"), 1,
+                    List.of(new TimerEntry(STORED_NAME, NOW.plus(Duration.ofMinutes(5)).toEpochMilli())), Map.of(), null);
+        }
+
+        @Test
+        void a_timer_stored_under_a_namespaced_name_fires_for_a_handler_registered_with_the_same_string() {
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    sagaHandling(STORED_NAME), "o1", pendingSince_0_32_0(),
+                    SagaInput.timeout("o1", TimerName.parse(STORED_NAME)), EventMeta.NONE, NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.envelope().state()).isEqualTo(new Cancelled("o1")),
+                    () -> assertThat(outcome.commands()).containsExactly(new CancelOrder("o1")),
+                    () -> assertThat(outcome.envelope().timers()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_timer_stored_under_a_namespaced_name_fires_for_a_handler_registered_with_a_namespace_and_a_name() {
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    sagaHandling(TimerName.of("step", "awaiting-players")), "o1", pendingSince_0_32_0(),
+                    SagaInput.timeout("o1", TimerName.parse(STORED_NAME)), EventMeta.NONE, NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.envelope().state()).isEqualTo(new Cancelled("o1")),
+                    () -> assertThat(outcome.commands()).containsExactly(new CancelOrder("o1")),
+                    () -> assertThat(outcome.envelope().timers()).isEmpty()
+            );
+        }
+
+        @Test
+        void a_started_timer_is_stored_under_the_string_its_name_encodes_to() {
+            Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
+                    .react(OrderPlaced.class, (state, e) -> List.of(
+                            SagaEffect.startTimeout(TimerName.of("step", "awaiting-players"), Duration.ofMinutes(5))))
+                    .build();
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    saga, "o1", null, SagaInput.event(new OrderPlaced("o1", 100)), EventMeta.NONE, NOW);
+
+            assertThat(outcome.envelope().timers()).extracting(TimerEntry::name).containsExactly(STORED_NAME);
         }
     }
 

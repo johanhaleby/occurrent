@@ -21,6 +21,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
+import org.occurrent.dsl.saga.TimerName;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
@@ -184,12 +185,12 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         };
     }
 
-    private FlowStateImpl<E> evolveOnTimeout(FlowStateImpl<E> state, String timerName) {
+    private FlowStateImpl<E> evolveOnTimeout(FlowStateImpl<E> state, TimerName timerName) {
         if (state.completed() || state.currentStep() == null) {
             return withClearedBookkeeping(state, state.received());
         }
         String expected = TIMER_PREFIX + state.currentStep();
-        if (!timerName.equals(expected)) {
+        if (!timerName.encode().equals(expected)) {
             return withClearedBookkeeping(state, state.received());
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());

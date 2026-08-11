@@ -62,7 +62,7 @@ public sealed interface SagaEffect<C> permits SagaEffect.IssueCommand, SagaEffec
      * here: building an absolute time inside the pure {@code react} would read the clock and make the same reaction
      * produce different effect values on each call.
      */
-    record StartTimeout<C>(String timerName, Duration after) implements TimerEffect<C> {
+    record StartTimeout<C>(TimerName timerName, Duration after) implements TimerEffect<C> {
         public StartTimeout {
             requireNonNull(timerName, "timerName cannot be null");
             requireNonNull(after, "after cannot be null");
@@ -74,7 +74,7 @@ public sealed interface SagaEffect<C> permits SagaEffect.IssueCommand, SagaEffec
      * derived from data (for example an auction's end time). Compute {@code at} from event data, never from the current
      * clock inside {@code react}.
      */
-    record StartTimeoutAt<C>(String timerName, Instant at) implements TimerEffect<C> {
+    record StartTimeoutAt<C>(TimerName timerName, Instant at) implements TimerEffect<C> {
         public StartTimeoutAt {
             requireNonNull(timerName, "timerName cannot be null");
             requireNonNull(at, "at cannot be null");
@@ -82,7 +82,7 @@ public sealed interface SagaEffect<C> permits SagaEffect.IssueCommand, SagaEffec
     }
 
     /** Cancel the timer named {@code timerName} if it is running, a no-op otherwise. */
-    record CancelTimeout<C>(String timerName) implements TimerEffect<C> {
+    record CancelTimeout<C>(TimerName timerName) implements TimerEffect<C> {
         public CancelTimeout {
             requireNonNull(timerName, "timerName cannot be null");
         }
@@ -98,17 +98,38 @@ public sealed interface SagaEffect<C> permits SagaEffect.IssueCommand, SagaEffec
     // reaction's List<SagaEffect<C>> is the target type the elements are inferred against.
 
     /** Start (or restart) a timer firing once the duration {@code after} has elapsed. */
-    static <C> TimerEffect<C> startTimeout(String timerName, Duration after) {
+    static <C> TimerEffect<C> startTimeout(TimerName timerName, Duration after) {
         return new StartTimeout<>(timerName, after);
     }
 
+    /**
+     * Start (or restart) a timer firing once the duration {@code after} has elapsed, naming it with a string that
+     * {@link TimerName#parse(String)} reads.
+     */
+    static <C> TimerEffect<C> startTimeout(String timerName, Duration after) {
+        return new StartTimeout<>(TimerName.parse(timerName), after);
+    }
+
     /** Start (or restart) a timer firing at {@code at}. */
-    static <C> TimerEffect<C> startTimeoutAt(String timerName, Instant at) {
+    static <C> TimerEffect<C> startTimeoutAt(TimerName timerName, Instant at) {
         return new StartTimeoutAt<>(timerName, at);
     }
 
+    /**
+     * Start (or restart) a timer firing at {@code at}, naming it with a string that {@link TimerName#parse(String)}
+     * reads.
+     */
+    static <C> TimerEffect<C> startTimeoutAt(String timerName, Instant at) {
+        return new StartTimeoutAt<>(TimerName.parse(timerName), at);
+    }
+
     /** Cancel the timer named {@code timerName}. */
-    static <C> TimerEffect<C> cancelTimeout(String timerName) {
+    static <C> TimerEffect<C> cancelTimeout(TimerName timerName) {
         return new CancelTimeout<>(timerName);
+    }
+
+    /** Cancel the timer named by a string that {@link TimerName#parse(String)} reads. */
+    static <C> TimerEffect<C> cancelTimeout(String timerName) {
+        return new CancelTimeout<>(TimerName.parse(timerName));
     }
 }

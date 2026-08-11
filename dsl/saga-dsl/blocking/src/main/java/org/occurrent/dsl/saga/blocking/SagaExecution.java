@@ -115,7 +115,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         .toList();
                 for (String timerName : dueTimerNames) {
                     try {
-                        process(envelope.sagaId(), SagaInput.timeout(new SagaTimeout(envelope.sagaId(), timerName)), EventMeta.NONE, timerName);
+                        process(envelope.sagaId(), SagaInput.timeout(envelope.sagaId(), TimerName.parse(timerName)), EventMeta.NONE, timerName);
                     } catch (RuntimeException e) {
                         // Keep polling other timers/instances. This one stays due and is retried next poll unless consumed.
                         log.warn("Failed to fire saga timer '{}' for instance '{}'", timerName, envelope.sagaId(), e);

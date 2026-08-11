@@ -24,7 +24,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension
 import org.occurrent.dsl.saga.Saga
 import org.occurrent.dsl.saga.SagaEffect
 import org.occurrent.dsl.saga.SagaInput
-import org.occurrent.dsl.saga.SagaTimeout
+import org.occurrent.dsl.saga.TimerName
 import java.time.Duration
 
 /**
@@ -91,7 +91,7 @@ class SagaFlowExtensionsTest {
         fun `the timeout firing closes the game and completes the saga`() {
             val started = start(saga, GameCreated("g1"))
 
-            val step = saga.step(started.state(), SagaInput.timeout(SagaTimeout("g1", "step:awaiting-first-player")))
+            val step = saga.step(started.state(), SagaInput.timeout("g1", TimerName.parse("step:awaiting-first-player")))
 
             assertAll(
                 { assertThat(saga.isTerminal(step.state())).isTrue() },
@@ -234,7 +234,7 @@ class SagaFlowExtensionsTest {
         fun `the timeout firing before the join is fulfilled reminds the players and completes the saga`() {
             val started = start(saga, LobbyOpened("g1"))
 
-            val step = saga.step(started.state(), SagaInput.timeout(SagaTimeout("g1", "step:awaiting-game-start")))
+            val step = saga.step(started.state(), SagaInput.timeout("g1", TimerName.parse("step:awaiting-game-start")))
 
             assertAll(
                 { assertThat(saga.isTerminal(step.state())).isTrue() },
@@ -422,7 +422,7 @@ class SagaFlowExtensionsTest {
         fun `the step timeout firing before any resolution cancels the order and completes the saga`() {
             val started = start(saga, OrderPlaced("o1", 100))
 
-            val step = saga.step(started.state(), SagaInput.timeout(SagaTimeout("o1", "step:awaiting-payment")))
+            val step = saga.step(started.state(), SagaInput.timeout("o1", TimerName.parse("step:awaiting-payment")))
 
             assertAll(
                 { assertThat(saga.isTerminal(step.state())).isTrue() },

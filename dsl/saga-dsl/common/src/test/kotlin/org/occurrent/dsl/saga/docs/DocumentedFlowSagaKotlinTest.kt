@@ -25,7 +25,7 @@ import org.junit.jupiter.api.*
 import org.occurrent.dsl.saga.Saga
 import org.occurrent.dsl.saga.SagaEffect
 import org.occurrent.dsl.saga.SagaInput
-import org.occurrent.dsl.saga.SagaTimeout
+import org.occurrent.dsl.saga.TimerName
 import org.occurrent.dsl.saga.flow.FlowState
 import org.occurrent.dsl.saga.flow.initiating
 import org.occurrent.dsl.saga.flow.none
@@ -79,7 +79,7 @@ class DocumentedFlowSagaKotlinTest {
             val started = start(lobby(), GameCreated(GAME_ID))
 
             // When
-            val step = lobby().step(started.state, SagaInput.timeout(SagaTimeout(GAME_ID, "step:awaiting-players")))
+            val step = lobby().step(started.state, SagaInput.timeout(GAME_ID, TimerName.parse("step:awaiting-players")))
 
             // Then
             assertAll(
@@ -94,7 +94,7 @@ class DocumentedFlowSagaKotlinTest {
             val started = start(lobby(), GameCreated(GAME_ID))
 
             // When
-            val step = lobby().step(started.state, SagaInput.timeout(SagaTimeout(GAME_ID, "step:no-such-step")))
+            val step = lobby().step(started.state, SagaInput.timeout(GAME_ID, TimerName.parse("step:no-such-step")))
 
             // Then
             assertAll(
@@ -181,7 +181,7 @@ class DocumentedFlowSagaKotlinTest {
             val started = start(auction(), AuctionStarted(AUCTION_ID, ENDS_AT))
 
             // When
-            val step = auction().step(started.state, SagaInput.timeout(SagaTimeout(AUCTION_ID, "step:bidding")))
+            val step = auction().step(started.state, SagaInput.timeout(AUCTION_ID, TimerName.parse("step:bidding")))
 
             // Then
             assertAll(
@@ -199,7 +199,7 @@ class DocumentedFlowSagaKotlinTest {
             )
 
             // When
-            val step = auction().step(afterBid.state, SagaInput.timeout(SagaTimeout(AUCTION_ID, "step:bidding")))
+            val step = auction().step(afterBid.state, SagaInput.timeout(AUCTION_ID, TimerName.parse("step:bidding")))
 
             // Then
             assertThat(step.effects).containsExactly(SagaEffect.issue(CloseAuction(AUCTION_ID)))
