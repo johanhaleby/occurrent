@@ -1,0 +1,30 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateSagaTimerName_0_33
+displayName: Migrate a saga timer's name to TimerName (0.32.0 -> 0.33.0)
+description: >-
+  Migrates the saga DSL change that gives a timer's name its own type, TimerName, instead of a String
+  (ADR 121). Rewrites what it can prove: new SagaTimeout(sagaId, name) with a String second argument becomes
+  new SagaTimeout(sagaId, TimerName.parse(name)), which is the value that string already named, and a
+  timerName() read into a declared String gains encode(). Any other read of timerName() gets a review comment
+  instead, since the recipe cannot see what the surrounding code wants the name for, and deconstructing a
+  SagaEffect timer record against a String component is left for a human, because a record pattern's binding
+  type is a judgement about the code that follows it. See doc/migration/upgrading-to-0.33.0.md. Java only, a
+  Kotlin caller needs the manual steps instead.
+recipeList:
+  - org.occurrent.rewrite.MigrateSagaTimerName
