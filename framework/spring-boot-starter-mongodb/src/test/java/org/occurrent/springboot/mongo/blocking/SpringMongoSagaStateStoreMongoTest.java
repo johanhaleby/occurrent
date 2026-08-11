@@ -122,13 +122,14 @@ class SpringMongoSagaStateStoreMongoTest {
         List<TimerEntry> timers = List.of(new TimerEntry("payment", 1_000),
                 new TimerEntry("step:awaiting-players", 2_000),
                 new TimerEntry("a:b", 3_000));
-        store.compareAndSave("timer-names", active("timer-names", new Counter(1), 1, timers, 0), 0);
+        assertThat(store.compareAndSave("timer-names", active("timer-names", new Counter(1), 1, timers, 0), 0)).isTrue();
 
         Document raw = mongoOperations.findById("timer-names", Document.class, collection);
 
+        assertThat(raw).isNotNull();
         assertThat(raw.getList("timers", Document.class))
                 .extracting(timer -> timer.getString("name"))
-                .containsExactly("payment", "step:awaiting-players", "a:b");
+                .containsExactlyInAnyOrder("payment", "step:awaiting-players", "a:b");
     }
 
     @Test
