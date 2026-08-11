@@ -63,6 +63,8 @@ import static java.util.Objects.requireNonNull;
 @NullMarked
 public final class ManualStartSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper, IntrospectableSubscriptions {
 
+    private static final System.Logger log = System.getLogger(ManualStartSubscriptionModel.class.getName());
+
     private final SubscriptionModel delegate;
     private final @Nullable GlobalCheckpointSource<@Nullable Checkpoint> positionSource;
     private final @Nullable CheckpointStorage checkpointStorage;
@@ -115,12 +117,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * <p>
      * A checkpoint that already existed when this subscription registered always wins, whatever position it holds,
      * because that means the subscription has run before, or another node already pinned and started it. A
-     * checkpoint that only appears later can only be another node's own first-run pin, most often minutes apart
-     * during a rolling deploy rather than at the same moment. Starting the losing node's subscription from the
-     * winner's position instead would silently skip the events written between the two registrations, so a lost
-     * race like that is only ever accepted when the stored position matches the one this node captured. A genuinely
-     * different one fails {@link #resumeSubscription(String) starting the subscription} with an
-     * {@link IllegalStateException} instead.
+     * checkpoint that only appears later either belongs to another node's own first-run pin, at the same position
+     * or one captured minutes apart during a rolling deploy, or to a subscription a different node has been running
+     * for a while by the time this one finally starts, which is exactly what starting behind a leader election
+     * allows. This node cannot tell those two apart, since {@link Checkpoint} exposes nothing but
+     * {@link Checkpoint#asString() asString()}, so the stored position always wins either way. A position that
+     * differs from the one this node captured is logged at {@code WARNING} rather than accepted silently, since the
+     * first case can mean events were skipped between the two registrations and is worth an operator's attention.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -192,10 +195,6 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * @throws UnknownSubscriptionException       If neither this model nor the wrapped model has that subscription.
      * @throws SubscriptionAlreadyRunningException If the subscription is already running, including when another
      *                                             thread started this registration first.
-     * @throws IllegalStateException              If this subscription's first-run position was pinned by another node
-     *                                             at a position different from the one this node captured at
-     *                                             registration. The registration is left in place, so a caller may
-     *                                             retry once the conflict is resolved.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -405,11 +404,14 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     //
     // A refusal means this node lost the write, and what that means depends on whether a checkpoint already existed
     // when this node registered. If one did, this subscription has run before, or another node already pinned and
-    // started it, and that stored position wins regardless of what this node captured for itself. If none did,
-    // nothing but a same-generation race could have produced the one now stored, so it is compared against what
-    // this node captured, by asString() since Checkpoint promises nothing else. Equal, proceed, the two nodes read
-    // the same source position. Different, fail loudly instead of silently running from whichever position happened
-    // to win the write.
+    // started it, and that stored position wins regardless of what this node captured for itself, with nothing
+    // logged since that is the ordinary case. If none did, the write that beat this one either read the same
+    // source position, which is harmless, or belongs to a subscription that has been running under a different
+    // node ever since, which this node cannot tell apart from the harmless case: Checkpoint exposes only
+    // asString(), and starting late behind a leader election is exactly this class's purpose, so an arbitrary
+    // amount of real history can sit between this node's registration and its first attempt to start. A stored
+    // position always wins regardless, since guessing wrong risks skipping events either way, but a position that
+    // differs from what this node captured is logged at WARN so the discrepancy is visible instead of silent.
     private void pinStartPosition(String subscriptionId, @Nullable Checkpoint positionToPin, boolean checkpointAlreadyExisted) {
         if (positionToPin == null || checkpointStorage == null) {
             return;
@@ -423,12 +425,11 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             @Nullable Checkpoint stored = checkpointStorage.read(subscriptionId);
             @Nullable String storedAsString = stored == null ? null : stored.asString();
             if (!positionToPin.asString().equals(storedAsString)) {
-                throw new IllegalStateException(
-                        "Refused to pin the start position for subscription " + subscriptionId + " because another node " +
-                        "already stored a different one. This node captured " + positionToPin.asString() + ", storage has " +
-                        storedAsString + ". Starting from either position risks skipping events the other node's " +
-                        "registration should have covered. Reconcile the two registrations before starting this subscription.",
-                        e);
+                log.log(System.Logger.Level.WARNING,
+                        "Starting subscription " + subscriptionId + " from a position another node already pinned. " +
+                        "This node captured " + positionToPin.asString() + ", storage has " + storedAsString + ". " +
+                        "If the other node pinned this only moments ago, its events since this node's registration " +
+                        "may have been skipped. If it has been running since, this is expected.");
             }
         }
     }

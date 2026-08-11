@@ -434,15 +434,17 @@ and is unaffected by which family it runs against.
 > **Amended for 0.33.0.** "Swallows the refusal either way" assumed that whatever a refused write lost to
 > was interchangeable with what this node offered, which held as long as `ifAbsent()` had only one shipped
 > caller racing itself. It stopped holding once that caller is used across nodes that can capture different
-> positions at registration, minutes apart during a rolling deploy rather than at the same moment. Losing
-> a race like that to a genuinely different position and running from it anyway would silently skip the
-> events between the two registrations. `pinStartPosition` now tells the two apart by whether a checkpoint
-> already existed when the losing node registered. One that did wins outright, whatever it holds, since
-> that means the subscription has run before or another node already pinned and started it. One that did
-> not means only a same-generation race could have produced what is now stored, so it is compared against
-> the position this node captured, by `asString()` since `Checkpoint` promises nothing else. Equal,
-> proceed. Different, `IllegalStateException` instead of guessing which position is safe to run from. See
-> `ManualStartSubscriptionModelTest`.
+> positions at registration, minutes apart during a rolling deploy rather than at the same moment. Losing a
+> race like that to a genuinely different position and running from it anyway can silently skip the events
+> between the two registrations. `pinStartPosition` still cannot tell that apart from the other case this
+> class exists for, a node starting behind a leader election long after another node has already been
+> running the subscription for real. Both look identical here. Something is stored that differs from what
+> this node captured, and `Checkpoint` promises nothing beyond `asString()` to compare with. Refusing
+> to start in the second case would be worse than the bug this fixes, so a stored position always wins
+> either way. What changed is that a checkpoint already present when the losing node registered is accepted
+> without comment, since that is the ordinary case of a subscription with real history, while one that
+> appears only after registration and differs from what this node captured is logged at `WARNING` with both
+> positions named, so the discrepancy is visible instead of silent. See `ManualStartSubscriptionModelTest`.
 
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
