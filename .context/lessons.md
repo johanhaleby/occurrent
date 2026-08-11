@@ -1177,3 +1177,27 @@ nothing for an abbreviation; the same query with `git rev-parse` expanding it re
 27 of 27 successful jobs. Always expand the SHA before querying, and treat an empty run list as a
 question rather than an answer, because this API reports "your filter matched nothing" and "the thing
 you asked about does not exist" with the same empty array.
+
+## Checking a docs branch for anchors is not checking it for truth
+
+**What happened.** U13 renamed migration section 10, so I checked every reference to the old anchor in
+both the library repo and the docs site and found zero. I reported the docs site as agreeing with the
+change. Copilot then found that line 6269 of `pages/docs/docs.md` on the held branch ends with
+"`@Saga` and `@Projection` derive their filter the same way", and the `@Projection` half is false:
+projections never expanded sealed types, as `ProjectionFilters` confirms with no `isSealed`, no
+`getPermittedSubclasses` and no `EventTypeExpansion`. My grep could not have found it, because I was
+searching for a link fragment while the defect was a sentence about behaviour.
+
+**Why it matters.** The two checks answer different questions and only one of them was asked. "Does
+anything still point at the old name" is a referential-integrity check and it is cheap and mechanical.
+"Does the page still say something true" needs the same evidence the code change was derived from, and
+it is the one that decides whether a held branch publishes a false claim. Passing the cheap check and
+reporting agreement made the expensive one look done. Note also where the claim came from: it was
+written by the docs unit in the same epic, from the same migration-guide framing that carried the
+overclaim into the changelog, so a single unverified premise had by then reached three surfaces.
+
+**How to apply.** When a change corrects a factual claim rather than a name, the docs sweep is a claim
+sweep. List the claims the change falsifies, grep for each claim's subject rather than for the edited
+string, and check the held branches and the rendered preview, not just the source. Report anchors and
+claims as two separate results, because "the docs agree" that means only the anchors resolved is the
+kind of sentence that stops anyone looking further.
