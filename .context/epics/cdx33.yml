@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 3
-updated_at: 2026-08-11T09:27:41Z
-updated_by: "orchestrator session faee3625 (UADR delivered PR 726, orchestrator-verified, held at the design gate for Johan wording confirm plus one rewrap fix in flight; U7 recovered from a dead background Maven run)"
+revision: 4
+updated_at: 2026-08-11T09:29:12Z
+updated_by: "orchestrator session faee3625 (UADR design gate CLOSED by Johan: merge once the rewrap lands; U8 delivered PR 727, in its pr-fix loop)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -134,16 +134,16 @@ units:
   U8:
     issue: null
     goal: "Filter AND short-circuit (finding 18): restore ordered short-circuit on in-memory query path keeping the reparse win, regression test vs 0.32.0 semantics, check #647 changelog entry"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: "chip task_e3494741"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 opened on branch cdx33/u8-filter-short-circuit, head 6214f566e27a62dbdabe62982232fb21b1604fd3, checks running; worker still in its pr-fix loop, no DELIVERY_RESULT yet"}
     blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    next_action: await DELIVERY_RESULT, then verify checks plus review threads before any merge
+    last_meaningful_progress_at: 2026-08-11T09:29:12Z
     observed: {}
     assessment: "Gating: only true 0.32.0 behavior regression in the set (PR #647)"
   U9:
@@ -186,9 +186,9 @@ units:
     session: "subagent a8343ed82d7f98335"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "726", met: false, evidence: "DELIVERED and orchestrator-verified at head 56f3e4f2eb0e859ddefc17967df1a66d20f25f10: 0 failing checks, 0 pending, one Copilot thread resolved, second Copilot review on that head with no new comments, #638 and #665 confirmed closed, findIn signature confirmed at ReplayAwareSubscriptions.java:61-63. NOT merged: design gate awaits Johan wording confirm, and one introduced 140-char line (file wraps at 120) is being rewrapped by the worker"}
-      - {check: manual_approval, ref: "design gate: Johan wording confirm before merge", met: false, evidence: null}
-    blocking_on: [{what: "Johan wording confirm on the ADR prose (design gate)", since: 2026-08-11T09:27:41Z, recheck_after: "next tick"}]
-    next_action: route the wording confirm to Johan once the rewrap head lands, then CAS merge
+      - {check: manual_approval, ref: "design gate: Johan wording confirm before merge", met: true, evidence: "SATISFIED 2026-08-11T09:29:12Z: Johan answered the structured ask with merge-once-the-rewrap-lands, having read the orchestrator summary of both ADR status corrections. The gate is CLOSED, so no per-PR re-ask"}
+    blocking_on: [{what: "worker rewrap of the 140-char line, then CAS merge", since: 2026-08-11T09:29:12Z, recheck_after: "on worker reply"}]
+    next_action: CAS merge PR 726 pinned to the rewrapped head as soon as the worker reports it
     last_meaningful_progress_at: 2026-08-11T09:27:41Z
     observed: {}
     assessment: "Non-gating; prose, design-gate rule applies"
