@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 19
-updated_at: 2026-08-11T11:28:00Z
-updated_by: "orchestrator session faee3625 (U5 MERGED as cb6f012db, six of thirteen units done, U6 now unblocked; U1 delivered the withdrawal as PR 739)"
+revision: 20
+updated_at: 2026-08-11T11:29:38Z
+updated_by: "orchestrator session faee3625 (U5 swept, U6 dispatched as chip task_4ff34e51 with D5 settled and the corrected changelog wording; 739 carries 5 Copilot threads for its worker)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -90,30 +90,30 @@ units:
     goal: "Migration tooling truth (findings 8, 11, 9-guide-half): recipe stubs delegate any() and reject stronger, empty writeVersion, TimerName effect-record constructor matchers, guide corrections, runtime-behavior test via DurableSubscriptionModel"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_d940740e-389c-4b2e-8c63-7529654a31a6
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: true, evidence: "MERGED as squash cb6f012db2cd225906ea386098d337aa0d66893b, CAS-pinned to 4bd873fbe9489be9d247a3a7537a2ad13a186d26. Matrix verified by RUN LIST as completed/success on that exact head as a PUSH event (the earlier head had no matrix at all and a dispatched run that failed then cancelled, neither visible in the rollup). 0 unresolved threads. Verified on main: the generated stubs now delegate any() to the two-arg save and answer empty writeVersion on both stacks, and DurableSubscriptionModelMigratedCheckpointStorageTest is present. U7 and U10 changelog bullets survived the rebase (checked via git archive after a zsh :c modifier made an earlier grep return a false zero). Branch deleted on merge, no stranded push"}
     blocking_on: []
-    next_action: sweep the worktree, branch and session
+    next_action: none, merged and swept
     last_meaningful_progress_at: 2026-08-11T11:28:00Z
     observed: {}
     assessment: "Gating: official migration converts compile break into runtime failure today. Owns doc/migration/upgrading-to-0.33.0.md exclusively until U6"
   U6:
     issue: null
     goal: "Spring fencing wiring (findings 15, 16): per D5 fail startup on ambiguous strategy beans (back default off any interface-typed bean), starter validates conditional-write capability or explicit unfenced mode; guide caveat lands after U5"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U5]
-    session: null
+    session: "chip task_4ff34e51"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U6 plan gate (capability-discovery mechanism under D1-kept contract), Johan", met: false, evidence: null}
     blocking_on: []
-    next_action: DISPATCHABLE now that U5 has merged, spawn the plan-first chip (Opus/high) with D5 fail-startup as settled and the corrected changelog wording
-    last_meaningful_progress_at: 2026-08-11T11:28:00Z
+    next_action: await its plan gate message (the brief requires the worker to announce being parked), then route the finding-16 mechanism decision to Johan
+    last_meaningful_progress_at: 2026-08-11T11:29:38Z
     observed: {}
     assessment: "Gating. CheckpointStorage has no capability method; mechanism (small API addition to unreleased contract vs explicit config) resolved at its plan gate"
   U7:
