@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 26
-updated_at: 2026-08-11T12:47:35Z
-updated_by: "orchestrator session faee3625 (status pass: U6 corrected from RUNNING to READY, its chip is still pending Johan click and no session exists)"
+revision: 27
+updated_at: 2026-08-11T13:00:24Z
+updated_by: "orchestrator session faee3625 (Johan on mobile, so U6 re-dispatched as a worktree subagent instead of a chip; the chip was dismissed first to avoid a duplicate worker)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -103,19 +103,19 @@ units:
   U6:
     issue: null
     goal: "Spring fencing wiring (findings 15, 16): per D5 fail startup on ambiguous strategy beans (back default off any interface-typed bean), starter validates conditional-write capability or explicit unfenced mode; guide caveat lands after U5"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U5]
-    session: "chip task_4ff34e51"
+    session: "worktree subagent a73c222882b9549d1 (chip task_4ff34e51 dismissed unstarted)"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U6 plan gate (capability-discovery mechanism under D1-kept contract), Johan", met: false, evidence: null}
     blocking_on: []
-    next_action: BLOCKED ON JOHAN clicking chip task_4ff34e51; no session exists yet, so nothing is running
-    last_meaningful_progress_at: 2026-08-11T11:29:38Z
+    next_action: await its BLOCKED plan-gate return, then route the finding-16 mechanism to Johan as a mobile-friendly structured ask
+    last_meaningful_progress_at: 2026-08-11T13:00:24Z
     observed: {}
-    assessment: "Gating. CheckpointStorage has no capability method; mechanism (small API addition to unreleased contract vs explicit config) resolved at its plan gate"
+    assessment: "Dispatch vehicle changed from chip to worktree subagent because Johan went mobile: a chip needs a click and a model pick, which the attendance rule says inverts the default toward subagents. A subagent cannot take an approval mid-flight, so the brief tells it to plan, then return BLOCKED with the plan rather than calling ExitPlanMode, and the orchestrator routes the ruling. D5 (fail startup on ambiguous strategy beans) is settled input, not a gate question; the one open question is the finding-16 mechanism, since CheckpointStorage cannot be asked whether it supports conditional writes and the contract is frozen"
   U7:
     issue: null
     goal: "Redis sentinels (finding 17): non-negative validation in notOlderThan ONLY if no shipped/documented version source can be negative, else adapter-boundary structured result"
