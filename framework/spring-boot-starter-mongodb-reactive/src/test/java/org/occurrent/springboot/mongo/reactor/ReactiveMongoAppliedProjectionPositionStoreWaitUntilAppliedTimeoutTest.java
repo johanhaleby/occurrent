@@ -59,10 +59,12 @@ class ReactiveMongoAppliedProjectionPositionStoreWaitUntilAppliedTimeoutTest {
         // subscription, not by the mock's own invocation count.
         when(mongoOperations.findOne(any(Query.class), eq(Document.class), anyString()))
                 .thenReturn(Mono.<Document>error(new RuntimeException("store outage")).doOnSubscribe(s -> attempts.incrementAndGet()));
-        // This retry's own schedule would not exhaust for the better part of a second, well past the 200 ms wait
-        // below, so the wait's own deadline is what has to cut the read off rather than the retry's own exhaustion.
-        Retry slowRetry = Retry.backoff(5, Duration.ofMillis(50))
-                .maxBackoff(Duration.ofMillis(500))
+        // Zero jitter makes the schedule exact: 30+60+120+240+480 = 930 ms to exhaust, well past the 200 ms wait
+        // below, so the 500 ms assertion margin only fails if the wait's own deadline cuts the read off rather than
+        // the retry running to its own exhaustion. The second attempt still lands at 30 ms, well inside the wait.
+        Retry slowRetry = Retry.backoff(5, Duration.ofMillis(30))
+                .maxBackoff(Duration.ofSeconds(2))
+                .jitter(0)
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
         AppliedProjectionPositionStore storage = new ReactiveMongoAppliedProjectionPositionStore(mongoOperations, "appliedPositions", slowRetry, Backoff.fixed(20));
         Duration timeout = Duration.ofMillis(200);
