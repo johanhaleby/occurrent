@@ -91,6 +91,11 @@ public final class FlowSaga {
          * step's events), so this only bounds the earlier history. The default is {@value FlowSagaImpl#DEFAULT_HISTORY_WINDOW}.
          * Raise it for a guard that counts far across a self-looping step (for example a retry cap higher than the default),
          * and lower it to trim the persisted state of a long-running instance. Must be at least zero.
+         * <p>
+         * What this bounds is the carry-over, and only that. Trimming happens on a transition, and the step being left keeps
+         * all of its own events, so an instance parked in one step while a large number of correlated events arrive grows
+         * however low this is set, {@code 0} included. A flow whose steps turn over stays within the window, and one that can
+         * idle in a noisy step needs a {@code timeout} to move it on.
          */
         public Builder<E, C> historyWindow(int events) {
             if (events < 0) {

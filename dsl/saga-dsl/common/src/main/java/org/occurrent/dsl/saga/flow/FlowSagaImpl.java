@@ -154,14 +154,14 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
             }
             String first = steps.get(0).name();
             // No react on the start event itself: onStart carries the instance-creation effects.
-            return new FlowStateImpl<>(first, List.of(event), 1, 1, false, null, ActionKind.NONE, -1);
+            return new FlowStateImpl<>(first, List.of(event), 1, 1, false, null, -1, ActionKind.NONE, -1);
         }
         if (state.completed() || state.currentStep() == null) {
             return state;
         }
         List<E> received = append(state.received(), event);
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
-        List<E> window = received.subList(windowStart(state), received.size());
+        List<E> window = received.subList(windowStartIndex(state.stepEntryIndex(), state.windowStart(), received.size()), received.size());
         List<Branch<E, C>> branches = step.branches();
         for (int i = 0; i < branches.size(); i++) {
             Branch<E, C> branch = branches.get(i);
@@ -207,13 +207,16 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // events must not be dropped (a window condition counts over them).
     private FlowStateImpl<E> withClearedBookkeeping(FlowStateImpl<E> state, List<E> received) {
         return new FlowStateImpl<>(state.currentStep(), received, state.windowStart(), state.stepEntryIndex(), state.completed(),
-                state.currentStep(), ActionKind.NONE, -1);
+                state.currentStep(), -1, ActionKind.NONE, -1);
     }
 
-    // The relative index into the retained received list where the current step's window begins. received.get(0) is the
-    // pinned initiating event, so absolute position p maps to relative index p - windowStart + 1.
-    private static int windowStart(FlowStateImpl<?> state) {
-        return state.stepEntryIndex() - state.windowStart() + 1;
+    // The relative index into a retained received list where the window of a step entered at entryPosition begins.
+    // received.get(0) is the pinned initiating event, so absolute position p maps to relative index p - windowStart + 1.
+    // Clamped into [1, size], because a store defaults each absent bookkeeping field on its own and can hand back a
+    // combination no evolve ever wrote. Index 0 is the pinned initiating event and belongs to no step's window, and a
+    // start past the end gives an empty window rather than an IndexOutOfBoundsException from inside command dispatch.
+    private static int windowStartIndex(int entryPosition, int windowStart, int size) {
+        return Math.min(Math.max(1, entryPosition - windowStart + 1), size);
     }
 
     // Every transition resets stepEntryIndex to the new step's entry, including a transitionTo back into the current step
@@ -233,16 +236,20 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         int newWindowStart = Math.max(from.windowStart(), from.stepEntryIndex() - historyWindow);
         List<E> retained = retain(received, from.windowStart(), newWindowStart);
         String fromStep = from.currentStep();
+        // Where the fired window begins, carried over for react, since overwriting stepEntryIndex with the entered step's
+        // entry destroys it and it cannot be recovered from the state afterwards. newWindowStart never exceeds it, so the
+        // fired window is always fully inside retained.
+        int previousStepEntry = from.stepEntryIndex();
         return switch (continuation) {
             case Continuation.Next ignored -> {
                 int next = stepIndex.get(fromStep) + 1;
                 if (next < steps.size()) {
-                    yield new FlowStateImpl<>(steps.get(next).name(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
+                    yield new FlowStateImpl<>(steps.get(next).name(), retained, newWindowStart, newStepEntry, false, fromStep, previousStepEntry, kind, branchIndex);
                 }
-                yield new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
+                yield new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, previousStepEntry, kind, branchIndex);
             }
-            case Continuation.TransitionTo transitionTo -> new FlowStateImpl<>(transitionTo.stepName(), retained, newWindowStart, newStepEntry, false, fromStep, kind, branchIndex);
-            case Continuation.End ignored -> new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, kind, branchIndex);
+            case Continuation.TransitionTo transitionTo -> new FlowStateImpl<>(transitionTo.stepName(), retained, newWindowStart, newStepEntry, false, fromStep, previousStepEntry, kind, branchIndex);
+            case Continuation.End ignored -> new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, previousStepEntry, kind, branchIndex);
         };
     }
 
@@ -291,10 +298,22 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         Branch<E, C> branch = from.branches().get(state.matchedBranchIndex());
         SagaInput.Event<E> triggering = (SagaInput.Event<E>) input;
-        ReceivedEvents<E> receivedEvents = ReceivedEvents.of(state.received());
+        ReceivedEvents<E> receivedEvents = reactionWindow(state, branch.trigger());
         List<SagaEffect<C>> effects = issueAll(branch.reaction().react(triggering.metadata(), triggering.event(), receivedEvents));
         retargetTimers(effects, state, false);
         return effects;
+    }
+
+    // What a firing branch's reaction reads. A window condition's reaction gets the events received since the step it fired
+    // from was entered, so a count it takes matches the count that fulfilled the condition. Everything else reads the whole
+    // retained history, and so does a window condition whose previousStepEntryIndex is -1, which is what a state a store
+    // rebuilt without that field reads back as.
+    private ReceivedEvents<E> reactionWindow(FlowStateImpl<E> state, Trigger<E> trigger) {
+        if (!(trigger instanceof WindowCondition<E>) || state.previousStepEntryIndex() < 0) {
+            return ReceivedEvents.of(state.received());
+        }
+        int from = windowStartIndex(state.previousStepEntryIndex(), state.windowStart(), state.received().size());
+        return new ReceivedEventsList<>(state.received(), from);
     }
 
     // Defensive only, since evolve never writes ActionKind.JOIN any more (a lowered join is a WindowCondition branch,
@@ -308,7 +327,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private List<SagaEffect<C>> reactToJoin(FlowStateImpl<E> state) {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         Branch<E, C> branch = from.branches().get(0);
-        ReceivedEvents<E> receivedEvents = ReceivedEvents.of(state.received());
+        ReceivedEvents<E> receivedEvents = reactionWindow(state, branch.trigger());
         // metadata and the triggering event are unreachable placeholders here. The only reaction ActionKind.JOIN can ever
         // have named is a window-condition one (a join lowers to nothing else), and that adapter reads only receivedEvents.
         List<SagaEffect<C>> effects = issueAll(branch.reaction().react(EventMetadata.empty(), null, receivedEvents));

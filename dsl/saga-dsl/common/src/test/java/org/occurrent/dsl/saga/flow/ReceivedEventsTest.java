@@ -25,11 +25,12 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Covers the {@link ReceivedEvents#any(Class)} and {@link ReceivedEvents#none(Class)} default methods. The other
- * members ({@code initiating}, {@code first}, {@code all}, {@code count}) are covered elsewhere, this file is only
- * about the two boolean queries built on top of {@code first}.
+ * Covers the {@link ReceivedEvents#any(Class)} and {@link ReceivedEvents#none(Class)} default methods, plus the windowed
+ * view a window-condition reaction reads. The other members ({@code initiating}, {@code first}, {@code all},
+ * {@code count}) are covered elsewhere over the whole retained list.
  */
 @DisplayName("ReceivedEvents")
 @DisplayNameGeneration(DisplayNameGenerator.ReplaceUnderscores.class)
@@ -93,6 +94,47 @@ class ReceivedEventsTest {
 
             assertThat(received.none(PaymentFailed.class)).isEqualTo(!received.any(PaymentFailed.class));
             assertThat(received.none(PaymentReserved.class)).isEqualTo(!received.any(PaymentReserved.class));
+        }
+    }
+
+    @Nested
+    class WindowedView {
+
+        @Test
+        void answers_every_query_over_the_window_alone_while_initiating_still_reaches_element_zero() {
+            List<OrderEvent> events = List.of(new OrderPlaced("o1"), new PaymentFailed("o1", 1), new PaymentFailed("o1", 2),
+                    new PaymentReserved("o1"));
+
+            ReceivedEvents<OrderEvent> window = new ReceivedEventsList<>(events, 2);
+
+            assertThat(window.count(PaymentFailed.class)).as("only the second attempt is in the window").isEqualTo(1);
+            assertThat(window.first(PaymentFailed.class)).contains(new PaymentFailed("o1", 2));
+            assertThat(window.all(PaymentFailed.class)).containsExactly(new PaymentFailed("o1", 2));
+            assertThat(window.any(OrderPlaced.class)).as("the initiating event is outside the window").isFalse();
+            assertThat(window.asList()).containsExactly(new PaymentFailed("o1", 2), new PaymentReserved("o1"));
+            assertThat(window.initiating(OrderPlaced.class)).as("initiating reaches past the window").isEqualTo(new OrderPlaced("o1"));
+        }
+
+        @Test
+        void a_window_starting_at_the_end_is_empty_rather_than_invalid() {
+            List<OrderEvent> events = List.of(new OrderPlaced("o1"), new PaymentReserved("o1"));
+
+            ReceivedEvents<OrderEvent> window = new ReceivedEventsList<>(events, events.size());
+
+            assertThat(window.asList()).isEmpty();
+            assertThat(window.initiating()).isEqualTo(new OrderPlaced("o1"));
+        }
+
+        @Test
+        void a_window_start_outside_the_received_events_is_refused() {
+            List<OrderEvent> events = List.of(new OrderPlaced("o1"), new PaymentReserved("o1"));
+
+            assertThatThrownBy(() -> new ReceivedEventsList<>(events, 3))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("windowStart");
+            assertThatThrownBy(() -> new ReceivedEventsList<>(events, -1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("windowStart");
         }
     }
 }

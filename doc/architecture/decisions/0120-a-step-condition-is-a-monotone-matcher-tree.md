@@ -133,3 +133,98 @@ conjunctions over matchers, so a reader who already knows one reads the other fo
   event hierarchies, a clean sealed one, where a tree's inferred type is the domain type directly, and one whose
   leaves also share a second, unrelated interface, the shape most likely to push a compiler's inferred least-upper-
   bound somewhere unexpected. Both compile and both bind to `on` without a cast.
+
+## Amendment (2026-08-11): a reaction reads the window that fired, `allOf` refuses a duplicated requirement, and a predicate must be deterministic
+
+A design review of everything since 0.32.0 read this record against the code and found four statements that do not hold.
+All four are corrected here, and the code changed to match where the code was the thing that was wrong. Everything above
+stays decided, meaning monotone conditions only, no negation and no absence, one unified `event` leaf, `allOf`/`anyOf`
+composites, `join` deprecated and lowered to sugar, no new `ActionKind`, and guarded classic branches deliberately not
+lowered.
+
+**A window-condition reaction now reads the window its condition was evaluated over, not the whole retained history.**
+The `Consequences` section above, and `StepCondition`'s javadoc, promised that `whenFulfilled` sees "the window it fired
+on". It received `ReceivedEvents.of(state.received())`, the whole retained log, which is the same set only in a first
+step. From the second step onwards the two diverged, and the divergence was not academic, because the documented
+`review()` example inferred which `anyOf` alternative had fired by asking `received.none(Rejected.class)`, which answers
+about an earlier step's leftovers as readily as about its own window. A saga could take the correct transition and then
+emit the wrong effects.
+
+The reaction is handed a view over the retained list that answers `count`, `all`, `first`, `any`, `none` and `asList`
+over the fired window alone, while `initiating()` still reaches element 0. Concatenating `[initiating] + window` instead
+was considered and rejected, because it reintroduces the same defect for a step whose condition counts the initiating
+event's own type, since the evaluator deliberately never counts the start delivery. A guard and a `timeout`'s `onExpiry` keep
+reading the whole retained history, which is what makes a count spanning several steps possible and is their documented
+contract.
+
+**The documented examples stop inferring the matched alternative, and no API is added for it.** A step that reacts
+differently per outcome writes one `on(...)` branch per outcome, ordered, first satisfied one winning. That is strictly
+more explicit than a single `anyOf` branch that works out afterwards what fired, because the ordering that breaks a tie
+is written in the declaration instead of buried inside the tree. Exposing the matched child would need either identity
+comparison against the instance the caller built, which is fragile (records have value equality, predicated leaves do
+not), or names on conditions, which is a materially larger public API. `anyOf` is for alternatives that share a reaction.
+
+**"No dedupe, duplicates preserved" is reversed for `allOf`, and kept for `anyOf`.** Within one `allOf`, after
+flattening, two children that a single event satisfies at once are refused with `IllegalArgumentException` when the tree
+is built, which for a saga declared in a `@Saga` factory or a `@Bean` means at startup rather than on a delivery. The
+rule is stated on the matcher rather than on exact leaf equality, because exact-duplicate rejection alone leaves
+`allOf(event(A, 2), event(A, 3))` legal, and that expression reads as five and behaves as three, which is the more
+misleading of the two. Equal composite children are refused too, since the matcher rule cannot see inside them. The
+guarantee is partial and says so, because two leaves whose predicates are separately written lambdas never compare equal.
+
+Summing the counts of two same-matcher children was considered and rejected. Silently changing what a declaration means
+is worse than refusing it, and the reading is not even unambiguous, since `allOf(event(A, 2), event(A, 3))` could
+defensibly mean three or five.
+
+`anyOf` stays permissive **and this asymmetry is deliberate**. A repeated `allOf` child reads as an extra required
+occurrence and is satisfied by an existing one, so the declaration is stronger than the behaviour. A repeated `anyOf`
+alternative asks for exactly what it says and is satisfied by exactly that, so nothing reads as stronger than it is, and
+a tree assembled from data can carry a harmless duplicate. Do not make the two symmetric for symmetry's sake.
+
+**The deprecated `join` lowering is exempt.** `join(List.of(expect(A, 2), expect(A, 2)))` is a working declaration in a
+shipped API, and inheriting the rejection would turn it into a context that fails to refresh, on a patch upgrade. The
+lowering therefore collapses same-type expectations to the highest count asked for before building the tree, which is
+what such a join has always meant, since each expectation is checked against the same window independently. So the
+`Consequences` claim that "join keeps working, unchanged in behavior" is still true, deliberately. Released behaviour is
+preserved, and the unreleased API is made strict. The programmatic `allOf(Collection)` overload is not exempt, because
+a caller assembling required types from data who ends up with one matcher twice has exactly the bug the rule exists to
+catch, and is the least likely to see it.
+
+**"The evaluator never needs to re-scan history" was never true, and monotonicity is not what makes it unnecessary.**
+The `Decision` section argued that monotonicity means "the evaluator never needs to re-scan history looking for a
+negative that a later event could undo". It re-derives every leaf's count from the step window on every delivery, and
+always has. What monotonicity actually buys is soundness rather than incrementality. No leaf's truth can be undone by a
+later event, so re-deriving counts from the step window each delivery gives the same answer an incremental evaluator would.
+
+That equivalence needs one thing the record never asked for, so `StepCondition` now requires it. **A leaf's predicate
+must be a deterministic function of the event it is given.** Because the predicate is re-run against the window on every
+delivery, one that consults the clock, a random source, mutable state, or a remote service can answer differently for
+the same event later, which breaks "once true, always true" and makes a replay diverge from the original run. The public
+type cannot enforce purity, so this is a contract statement on the javadoc.
+
+An incremental evaluator with persisted per-step counters is deliberately **not** built here. Given the determinism
+contract it buys performance rather than correctness, its payoff needs a bound on retention that this change does not
+introduce, and the persisted shape has to survive an ordinary redeploy that renames or reorders leaves, which two
+rejected designs did not. It is tracked separately, together with the retention bound, because the two are one change seen
+twice. Counters are what make it possible to stop retaining the active step's events, and the retention bound is what makes
+counters pay for themselves.
+
+**Retention is documented rather than changed.** `historyWindow` bounds the carry-over behind the current step's entry
+and only that. Trimming runs on a transition, and the step being left keeps all of its own events, so `historyWindow(0)`
+still retains every event of the active step and an instance parked in one noisy step grows. `FlowSaga.Builder.historyWindow`,
+`FlowStateImpl`'s "Bounded retention" section and `ReceivedEvents` now say so plainly instead of implying a limit that only
+applies to a flow whose steps turn over.
+
+**The wire format did change, and the self-loop reset rule now really is where this record said it was.** The
+`Consequences` claim that "no wire format changed ... `SpringMongoSagaStateStore` needed no change" is superseded.
+Handing a reaction the fired window needs the entry position of the step being left, and `applyTransition` overwrites
+`stepEntryIndex` with the entered step's entry before `react` runs, so that position is destroyed and is not derivable
+afterwards. `FlowStateImpl` has a `previousStepEntryIndex` component and `SpringMongoSagaStateStore` persists it.
+The field stays what ADR 63's compatibility note already says the bookkeeping is, an implementation detail rather than a
+stable format. Compatibility is kept in both directions. A document written by 0.31.0 or 0.32.0 has no such field, reads back as
+`-1`, and a reaction then falls back to the whole retained history, which is exactly what it saw when that document was
+written. An out-of-repo `SagaStateStore` compiled against the previous eight-component record keeps compiling through a
+secondary constructor that supplies `-1`, and degrades the same way. Two tests cover the two directions, and the
+old-document one seeds the document by hand, since a document this store wrote a moment ago only proves the store agrees
+with itself. Separately, this record claimed the self-loop window-reset rule appears in
+`StepBuilder.on(StepCondition, Continuation)`'s javadoc when it did not. It does now.
