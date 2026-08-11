@@ -1089,3 +1089,34 @@ Smaller catch from the same minute: `git worktree remove ... | tail -1 && echo R
 the removal had FAILED, because a pipeline's exit status is the last command's. The same class as reading
 BUILD SUCCESS from a log rather than trusting an exit code. Do not put `&&` after a pipe when the left side
 is the thing whose success you are reporting.
+
+## OpenRewrite cannot see the sealed modifier behind a class literal (2026-08-11, cdx33 U12)
+
+I instructed U12 to add a recipe review marker flagging a saga that declares a non-concrete event type,
+following the precedent that `UpgradeToOccurrent_0_33` rewrites what it can prove and marks the rest. It
+could not be done, and the reason is a concrete tooling fact worth keeping: OpenRewrite carries
+`Flag.Sealed` in its type model but does not populate it for the type behind a class literal, so the
+marker could not tell a sealed hierarchy (fine, expands) from an open one (refused). It built the marker,
+its own test caught it flagging a correctly sealed hierarchy, and it removed it rather than ship advice
+pointing at correct code. Doing it properly needs a `ScanningRecipe` reading the sealed modifier off class
+declarations across files, which is disproportionate for a review hint.
+
+The behaviour to reinforce is the reporting, not the tooling detail. My brief said that if even a marker
+proved undetectable it should say why and skip it, EXPLICITLY rather than omitting it silently, and that
+is exactly what happened, with the reason written into the ADR and the migration guide so a future reader
+does not re-attempt it. A worker that cannot do what it was told and says so is worth more than one that
+quietly drops the requirement, and an instruction is better when it names the acceptable failure up front.
+
+## Unifying two derivations can widen a check the caller did not mean to widen (2026-08-11, cdx33 U12)
+
+Deduplicating the sealed-type expansion nearly caused a regression nobody had considered, including me
+when I ordered the unification. `SubscriptionAnnotations.getConcreteEventTypes` feeds TWO consumers: the
+derived subscription filter, and a handler assignability check. Widening the returned set to keep the
+declared type was right for the filter and wrong for the check, because a handler whose parameter is
+narrower than a listed sealed parent would newly fail at startup. The worker kept the assignability check
+on the concrete types and widened only the filter.
+
+**How to apply.** Before unifying two implementations, enumerate every CONSUMER of each, not just the
+algorithm they share. A shared helper's return value can be load-bearing in more than one direction, and
+"the two implementations differ" is a smaller question than "the two call sites use the result
+differently". The diff-the-copies rule catches the first; only reading the call sites catches the second.
