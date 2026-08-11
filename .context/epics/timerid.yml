@@ -1,7 +1,7 @@
 schema_version: 1
 epic: timerid
-revision: 8
-updated_at: 2026-08-11T05:59:28Z
+revision: 9
+updated_at: 2026-08-11T06:06:59Z
 updated_by: orchestrator session 496ca320 (design gate satisfied, U2 dispatched)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 design gate SATISFIED 2026-08-11, Johan confirmed both open decisions, take the source break and take the constructor change, on AGENTS.md long-term grounds. Chips are usable again from the same message"
@@ -56,61 +56,61 @@ units:
   U3:
     issue: 716
     goal: "Flow: the lowering uses Qualified(step, ..), FlowSaga.stepTimer exposed, the four FlowSagaImpl concatenation sites removed, and every in-repo test migrated off the step: literal"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U2]
     session: "chip task_51b94414"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "720", met: false, evidence: "PR 720 open at 442c8f8e6. Reviewed clean. The required SagaInput javadoc fix landed and now links the symbol. FlowSagaImpl compares values, TIMER_PREFIX replaced by TIMER_NAMESPACE, and the match site calls FlowSaga.stepTimer so production and tests cannot drift. Three step: literals survive and all three are correct, the best being FlowSagaTest:923 which pins the encoding and is what fails if anyone changes the namespace. Thread gate run, zero unresolved. Matrix filling"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "720", met: true, evidence: "MERGED as squash 1f17d6e0f, CAS-pinned to 442c8f8e6, matrix 27 of 27 and ZERO unresolved threads, the first merge of this epic where the thread gate ran before rather than after. FlowSaga.stepTimer added with a Kotlin top-level twin, TIMER_PREFIX replaced by TIMER_NAMESPACE, and the match site calls stepTimer so production and tests cannot drift. The SagaInput javadoc defect from PR 719 is fixed and now links the symbol. Three step: literals survive on purpose, the important one being FlowSagaTest:923 which pins the encoding"}
     blocking_on: []
-    next_action: "reviewed clean, waiting on the matrix"
+    next_action: none, merged
     last_meaningful_progress_at: 2026-08-11T05:59:28Z
     observed: {}
     assessment: "The store round-trip assertions at SpringMongoSagaStateStoreMongoTest.java:418,486,494 keep their literal. That test pins the on-disk format, so deriving its expected value from the production helper would make it prove nothing."
   U4:
     issue: 716
     goal: "Persistence proof: a 0.32.0-shaped envelope with step:X already stored loads and fires correctly, so no in-flight saga is stranded"
-    phase: BLOCKED
-    health: STALLED
+    phase: READY
+    health: PROGRESSING
     swept: false
     depends_on: [U3]
     session: null
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: ["U3, the flow lowering it proves"]
-    next_action: "hold until U3 merges"
-    last_meaningful_progress_at: 2026-08-10T19:51:25Z
+    blocking_on: []
+    next_action: "chip task_31919938 spawned 2026-08-11T06:06:59Z"
+    last_meaningful_progress_at: 2026-08-11T06:06:59Z
     observed: {}
     assessment: "This is the unit that makes the change safe to ship rather than merely correct in isolation, so it is not optional and not foldable into U3."
   U6:
     issue: 716
     goal: "The migration artefacts AGENTS.md requires for a break to shipped API: an UpgradeToOccurrent_0_33 recipe entry for the SagaTimeout shape change, and a numbered section in doc/migration/upgrading-to-0.33.0.md"
-    phase: BLOCKED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: [U2, U3]
     session: null
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: ["U3, because the guide section shows a flow caller stepTimer and documenting it before it lands is the defect PR 719 shipped"]
-    next_action: "hold until U3 merges, then dispatch"
-    last_meaningful_progress_at: 2026-08-11T05:46:14Z
+    blocking_on: []
+    next_action: "chip task_026a65de spawned 2026-08-11T06:06:59Z"
+    last_meaningful_progress_at: 2026-08-11T06:06:59Z
     observed: {}
     assessment: "MISSED AT REGISTRATION. The approved plan claimed the change would be additive, so no unit owned the migration artefacts. ADR 121 takes a source break instead, and AGENTS.md:75 makes a recipe plus a guide entry mandatory once a feature has shipped in a versioned section, which the saga DSL did in 0.32.0. All three of 0.33.0 other breaks shipped both. Found by the adversarial review of U1, not by the orchestrator. If a mechanical recipe cannot cover a return-type change, the MigrateStreamToList_0_30 precedent applies, rewrite what can be proven and mark the rest."
   U5:
     issue: 716
     goal: "Docs: the testing chapter stops teaching the prefix, on a new held branch in the docs repository, plus a changelog entry and a news bullet"
     phase: BLOCKED
-    health: STALLED
+    health: PROGRESSING
     swept: false
-    depends_on: [U3]
+    depends_on: [U3, U6]
     session: null
     deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: ["U3, the API the documentation describes"]
+    blocking_on: ["U6, so the documentation site and the upgrade guide describe the same migration in the same words"]
     next_action: "hold until U3 merges"
-    last_meaningful_progress_at: 2026-08-10T19:51:25Z
+    last_meaningful_progress_at: 2026-08-11T06:06:59Z
     observed: {}
     assessment: "Held branch, added to the merge order in occurrent-org.github.io#57. Six of the seven held branches already carry hunks in the saga chapter, so trial-merge before declaring it clean."
