@@ -2,12 +2,13 @@
 
 ## Hot restart
 
-- Verified at: `main`, `b8b6d71c4` plus later `[ci skip]` checkpoints, 2026-08-11. **The cdx33 matrix gate passed: 27 of 27 success on `b8b6d71c4`**, which is the merge of the last gating unit and therefore the epic's combined verification. **0.33.0 is NOT tagged. cdx33 no longer holds it.**
+- Verified at: `main`, `b8b6d71c4` plus later `[ci skip]` checkpoints, 2026-08-11. Work-item monitor re-armed as `b9darie1g` under the lifetime rule, since adopted units reopening a closed epic re-arm it. **The cdx33 matrix gate passed: 27 of 27 success on `b8b6d71c4`**, which is the merge of the last gating unit and therefore the epic's combined verification. **0.33.0 is NOT tagged. cdx33 no longer holds it.**
 - Workspace baseline: session worktree `johan/codex-review-plan-0-33-da1f93`, clean, restored to its own branch after unit U6 had it checked out. Never `cd` to the primary checkout from a worktree session (see `lessons.md`).
-- Active epic / definition of done: **none. cdx33 CLOSED 2026-08-11 at state revision 39**, 13 of 13 units DONE and swept, all three monitors retired, tracker scan clean from the registration cursor.
+- Active epic / definition of done: **cdx33 REOPENED 2026-08-11 after its own closeout**, now 15 units at state revision 40. Two adopted post-closeout, both holding the tag again: **U11 (#741)** persisted step-condition counters plus a bound on the active step's retained events, and **U12 (#743)** the saga that silently receives nothing when it declares a supertype event type. Done when both merge, main is green on the last merge, and the docs set is re-checked against whatever they change.
+- **Why U11 exists is worth remembering: the orchestrator routed #741 on the issue as a pre-tag follow-up and then closed the epic without dispatching it.** Johan caught the contradiction between the tracker and the action. The lesson is in `lessons.md`; the rule is that a routing comment promising pre-tag work is a commitment the closeout must check, not prose.
 - Authority: `.context/orchestrator-policy.yml`. No session-scoped deviations outstanding.
 - Active units: none. `.context/epics/cdx33.yml` at revision 39, no pending actions.
-- Next action: **Johan cuts 0.33.0.** Then follow `occurrent-org/occurrent-org.github.io#57`, whose body cdx33 rewrote as the authoritative merge order. Nine docs PRs are held, and PRs 52 and 63 were CLOSED because the feature they documented was withdrawn.
+- Next action: **U11 and U12 plan gates come to Johan through the orchestrator** (he is on mobile, so subagents plan then return BLOCKED rather than prompting). Johan cuts 0.33.0 once both merge. Then follow `occurrent-org/occurrent-org.github.io#57`, whose body cdx33 rewrote as the authoritative merge order. Nine docs PRs are held, and PRs 52 and 63 were CLOSED because the feature they documented was withdrawn.
 - Verification: main 27 of 27 on `b8b6d71c4`; docs preview built clean with zero rendered hits for the withdrawn API across eight patterns.
 
 ## Epic history and standing decisions

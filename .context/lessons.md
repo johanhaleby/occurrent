@@ -950,3 +950,24 @@ log, and the worker was briefly misled by another session's failing Kotlin build
 that directory earlier in this session, though from an exact path the tool had just printed rather
 than by listing, which is the safe form. Never discover "my" log by recency there; capture command
 output per run instead.
+
+## A routing comment promising pre-tag work is a commitment the closeout must check (2026-08-11, cdx33)
+
+I wrote on issue #741, in bold, "Accepted as the designated pre-tag follow-up, not deferred past the
+release", and "still lands before the 0.33.0 tag". Then I closed the epic, declared 0.33.0
+release-ready, and never dispatched it. Johan caught the contradiction by asking whether none of the
+issues I had just created should be adopted before release.
+
+Both halves of the mechanism were mine. The routing comment exists precisely so the tracker shows a
+decision the user can read, which makes it a promise rather than a note, and I treated it as a note.
+And my closeout checked that every issue HAD a routing comment without checking what any of them
+SAID, so an issue whose comment committed the epic to more work passed the check by carrying the
+comment that contradicted the closure.
+
+**How to apply.** At closeout, read the routing decisions, do not just confirm they exist. Any
+comment that accepts work into this epic or promises it before a release is an unmet deliverable, and
+the epic cannot close while one is outstanding: either dispatch it, or change the decision and REWRITE
+the comment so the tracker stops claiming otherwise. The register's job is to make deferrals visible;
+its failure mode is an acceptance hiding among them. Concretely, grep the routed set for accept-shaped
+language (accepted, pre-tag, before the release, adopt) as part of the closeout, the same way the
+delivery gate greps for unresolved threads.

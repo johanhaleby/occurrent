@@ -1,10 +1,10 @@
 schema_version: 1
 epic: cdx33
-revision: 39
-updated_at: 2026-08-11T17:22:49Z
-updated_by: "orchestrator session faee3625 (EPIC CLOSED: 13 of 13 units DONE, main 27 of 27 on b8b6d71c4, tracker scan clean, all three monitors retired)"
+revision: 40
+updated_at: 2026-08-11T17:29:54Z
+updated_by: "orchestrator session faee3625 (EPIC REOPENED by Johan: U11 adopts #741 pre-tag, correcting an orchestrator contradiction, and U12 adopts #743 in full; 0.33.0 is held again)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
-authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
+authority: "REOPENED 2026-08-11 after closeout. The tag is HELD again for U11 and U12. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
   - id: act-001
     type: dispatch-chip
@@ -222,3 +222,35 @@ units:
     last_meaningful_progress_at: 2026-08-11T16:45:31Z
     observed: {}
     assessment: "Inline orchestrator work; issues carry the fleet marker and origin link"
+  U11:
+    issue: 741
+    goal: "Persisted per-step matcher state plus a bound on the active step's retained events, the other half of design-review finding 3, with the false 0.31.0 no-unbounded-growth changelog claim corrected"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "worktree subagent af8b678b3c64ae940"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: manual_approval, ref: "U11 plan gate, Johan via the orchestrator", met: false, evidence: null}
+    blocking_on: []
+    next_action: await its BLOCKED plan-gate return, then route the design to Johan as a mobile-friendly ask
+    last_meaningful_progress_at: 2026-08-11T17:29:54Z
+    observed: {}
+    assessment: "ADOPTED because the orchestrator had already routed #741 as a pre-tag follow-up on the issue itself and then closed the epic without dispatching it, which Johan caught. Johan chose to honour the tracker rather than rewrite it. Engineering reason it belongs pre-tag: the retention bound changes the persisted state shape and what a guard onlyIf and a timeout reaction can read, so doing it after the tag means a second breaking change plus paying in-flight document compatibility twice. Two cache-key designs are already known broken and named in the brief so they are not rediscovered, and recount-on-mismatch is what makes a wrong key harmless rather than silent"
+  U12:
+    issue: 743
+    goal: "A saga declaring a supertype event type subscribes on a CloudEvent type string no concrete event carries, so it silently receives nothing; reproduce first, then fix at the layer the flow DSL, on(Class, ..) and the core builder actually share"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "worktree subagent a80581aec529a818c"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: manual_approval, ref: "U12 plan gate, Johan via the orchestrator", met: false, evidence: null}
+    blocking_on: []
+    next_action: await its BLOCKED plan-gate return; reproduction gates everything, and a credible non-reproduction is a valid outcome
+    last_meaningful_progress_at: 2026-08-11T17:29:54Z
+    observed: {}
+    assessment: "ESCALATED from deferred to adopt-in-full by Johan, on the grounds that a saga silently receiving nothing is the worst available failure mode because it looks like an absence of events rather than a defect. Was marked INFERENCE and never reproduced, so the brief makes reproduction gate the design and states plainly that a credible non-reproduction, with #743 downgraded, is a valid delivery. Concurrency guard: U11 owns FlowSagaImpl, StepCondition, FlowStateImpl and SpringMongoSagaStateStore, so U12 must stop and report rather than edit them"
