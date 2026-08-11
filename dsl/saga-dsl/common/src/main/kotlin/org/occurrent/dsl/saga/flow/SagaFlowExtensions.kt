@@ -239,9 +239,12 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
      *
      * A [StepCondition] first argument cannot bind to the reified `on<T>` overloads above, so there is no resolution
      * collision between a classic branch and a window-condition one.
+     *
+     * [condition] takes `StepCondition<out E>`, matching the Java side's `StepCondition<? extends E>`, so a leaf built
+     * over a narrower event type can be passed to a step declared over a broader one.
      */
     fun on(
-        condition: StepCondition<E>,
+        condition: StepCondition<out E>,
         then: Continuation,
         whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }
     ) {
