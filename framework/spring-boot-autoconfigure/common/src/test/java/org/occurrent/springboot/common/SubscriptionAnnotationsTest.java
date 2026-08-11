@@ -138,6 +138,9 @@ class SubscriptionAnnotationsTest {
 
         void onOpenEvent(OpenEvent event) {
         }
+
+        void onReopenedEvent(ReopenedEvent event) {
+        }
     }
 
     private static Method handler(String name) {
@@ -250,6 +253,12 @@ class SubscriptionAnnotationsTest {
     interface OpenEvent {
     }
 
+    sealed interface ReopenedEvent permits ReopenedBase {
+    }
+
+    static non-sealed class ReopenedBase implements ReopenedEvent {
+    }
+
     private static List<Class<?>> resolveOrderEventTypes(Class<?>... eventTypesInAnnotation) {
         List<Class<OrderEvent>> resolved = SubscriptionAnnotations.resolveDomainEventTypes("order-subscription",
                 new Handlers(), handler("onOrderEvent"), OrderEvent.class, eventTypesInAnnotation, "@Subscription");
@@ -281,13 +290,51 @@ class SubscriptionAnnotationsTest {
                 handler("onOpenEvent"), OpenEvent.class, new Class<?>[0], "@Subscription"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(OpenEvent.class.getName())
-                .hasMessageContaining("non-sealed interface");
+                .hasMessageContaining("open-subscription")
+                .hasMessageContaining("cannot all be enumerated");
     }
 
     @Test
-    void refuses_an_array_event_type() {
+    void refuses_an_array_listed_in_eventTypes_with_a_message_covering_both_remedies() {
+        // An array can never be sealed or final in a way that fixes this, so this shape gets its own message rather
+        // than the "cannot all be enumerated" one, which would tell a reader to do something impossible. The message
+        // cannot tell whether the array came from eventTypes or from the handler's own parameter, so it names both.
         assertThatThrownBy(() -> resolveOrderEventTypes(OrderPlaced[].class))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("non-sealed interface, abstract type, or array");
+                .hasMessageContaining("order-subscription")
+                .hasMessageContaining("does not support an array")
+                .hasMessageContaining("handler method's own event parameter")
+                .hasMessageContaining("eventTypes attribute")
+                .hasMessageNotContaining("cannot all be enumerated")
+                .hasMessageNotContaining("final or sealed");
+    }
+
+    @Test
+    void refuses_an_array_handler_parameter_with_the_same_dual_remedy_message() {
+        // Unlike the case above, no eventTypes is specified at all here, the array is the handler's own declared
+        // parameter type. Listing a concrete type in eventTypes would not fix this: resolveDomainEventTypes checks
+        // eventTypes elements for assignability to the handler's parameter type, and no element type is assignable to
+        // an array of it, so that path throws a different exception (IllegalStateException) rather than helping.
+        assertThatThrownBy(() -> SubscriptionAnnotations.<OrderPlaced[]>resolveDomainEventTypes("array-param-subscription",
+                new Handlers(), handler("onOrderEvent"), OrderPlaced[].class, new Class<?>[0], "@Subscription"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("array-param-subscription")
+                .hasMessageContaining("does not support an array")
+                .hasMessageContaining("handler method's own event parameter")
+                .hasMessageContaining("eventTypes attribute")
+                .hasMessageNotContaining("cannot all be enumerated")
+                .hasMessageNotContaining("final or sealed");
+    }
+
+    @Test
+    void refuses_a_sealed_hierarchy_reopened_below_the_declared_type() {
+        // Unlike the two shapes above, this one is new in 0.33.0. 0.32.0 accepted it and matched only ReopenedBase's own
+        // CloudEvent type, silently missing every concrete subtype of ReopenedBase.
+        assertThatThrownBy(() -> SubscriptionAnnotations.resolveDomainEventTypes("reopened-subscription", new Handlers(),
+                handler("onReopenedEvent"), ReopenedEvent.class, new Class<?>[0], "@Subscription"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(ReopenedEvent.class.getName())
+                .hasMessageContaining("reopened-subscription")
+                .hasMessageContaining("cannot all be enumerated");
     }
 }

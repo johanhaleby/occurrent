@@ -177,6 +177,21 @@ class SupertypeEventSubscriptionTest {
     }
 
     @Test
+    void is_refused_by_the_core_builder_for_an_array_event_type_with_a_message_that_does_not_offer_sealing_it() {
+        // An array can never be sealed or final in a way that fixes this, so it gets its own message rather than the
+        // "cannot all be enumerated" one, which would tell a reader to do something impossible.
+        assertThatThrownBy(() -> Saga.<Object, String, OrderCommand>builder(null)
+                .correlateAll(e -> "id")
+                .startsOn(OrderPlaced[].class)
+                .evolve(OrderPlaced[].class, (state, e) -> state)
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not support an array")
+                .hasMessageNotContaining("cannot all be enumerated")
+                .hasMessageNotContaining("final or sealed");
+    }
+
+    @Test
     void is_refused_by_the_flow_builder_when_a_step_declares_a_supertype_that_is_not_sealed() {
         assertThatThrownBy(() -> FlowSaga.<OpenEvent, OrderCommand>builder()
                 .correlateAll(OpenEvent::orderId)

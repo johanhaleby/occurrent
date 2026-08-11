@@ -371,8 +371,12 @@ public final class SubscriptionAnnotations {
     }
 
     private static IllegalArgumentException cannotSubscribeOn(String subscriptionId, Class<?> eventType) {
-        String msg = "You cannot subscribe to a non-sealed interface, abstract type, or array (problem is with %s for subscription '%s'). A concrete or sealed event type is required, or list the event types explicitly with the annotation's eventTypes attribute (for example eventTypes = {MyEvent1.class, MyEvent2.class}).";
-        return new IllegalArgumentException(msg.formatted(eventType.getName(), subscriptionId));
+        if (eventType.isArray()) {
+            String msg = "%s cannot be a declared event type for subscription '%s', since this expansion does not support an array. If it comes from the handler method's own event parameter, change that parameter to a concrete event type instead. If it comes from the annotation's eventTypes attribute, list concrete event types there instead.";
+            return new IllegalArgumentException(msg.formatted(eventType.getTypeName(), subscriptionId));
+        }
+        String msg = "the concrete event types dispatch would accept for %s cannot all be enumerated, so a filter derived from it for subscription '%s' would miss some of them. Declare the concrete event types with the annotation's eventTypes attribute instead (for example eventTypes = {MyEvent1.class, MyEvent2.class}), or make %s and every level below it final or sealed.";
+        return new IllegalArgumentException(msg.formatted(eventType.getName(), subscriptionId, eventType.getSimpleName()));
     }
 
     /**
