@@ -19,9 +19,10 @@ name: org.occurrent.MigrateCheckpointStorageConditionalWrite_0_33
 displayName: Stub the CheckpointStorage conditional write members (0.32.0 -> 0.33.0)
 description: >-
   Finds a class implementing the blocking or reactor CheckpointStorage that is missing the three-argument save
-  or writeVersion added for a fenced checkpoint write (ADR 116), and inserts a throwing stub for each missing
-  member, marked with a review comment, so the class compiles again. Filling in real behaviour is a manual
-  pass, see doc/migration/upgrading-to-0.33.0.md. Java only, a Kotlin implementer needs the manual steps
-  instead.
+  or writeVersion added for a fenced checkpoint write (ADR 116), and inserts a stub for each missing member,
+  marked with a review comment, so the class compiles again. The stub delegates any() to the class's own
+  two-argument save, refuses a stronger condition, and answers writeVersion empty, the permanent shape for a
+  store that cannot evaluate a condition. Evaluating a condition for real is still a manual pass, see
+  doc/migration/upgrading-to-0.33.0.md. Java only, a Kotlin implementer needs the manual steps instead.
 recipeList:
   - org.occurrent.rewrite.AddCheckpointStorageConditionalWriteStubs

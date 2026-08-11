@@ -226,6 +226,41 @@ class MigrateSagaTimerNameTest implements RewriteTest {
     }
 
     @Test
+    void wrapsTheTimerNameArgumentOfACancelTimeoutConstructedThroughASimpleNameImport() {
+        // The qualified-name tests above (SagaEffect.CancelTimeout<>(...)) hit rawClassTypeOf's J.ParameterizedType
+        // branch with a J.FieldAccess raw type. An import of the nested type directly makes the raw type a plain
+        // J.Identifier instead, a different tree shape the same lookup has to resolve too.
+        rewriteRun(
+                spec -> spec.typeValidationOptions(UNRESOLVED_CONSTRUCTOR),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect.CancelTimeout;
+
+                        class DropTimer {
+                            CancelTimeout<Object> paymentCancelled() {
+                                return new CancelTimeout<>("payment");
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect.CancelTimeout;
+                        import org.occurrent.dsl.saga.TimerName;
+
+                        class DropTimer {
+                            CancelTimeout<Object> paymentCancelled() {
+                                return new CancelTimeout<>(TimerName.parse("payment"));
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void leavesADirectlyConstructedTimerEffectThatAlreadyTakesATimerNameAlone() {
         rewriteRun(
                 java(
@@ -238,6 +273,70 @@ class MigrateSagaTimerNameTest implements RewriteTest {
                         class DropTimer {
                             SagaEffect.CancelTimeout<Object> paymentCancelled() {
                                 return new SagaEffect.CancelTimeout<>(TimerName.of("step", "payment"));
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void encodesATimerEffectAccessorReadIntoADeclaredStringVariable() {
+        // StartTimeout, StartTimeoutAt and CancelTimeout each declare their own timerName(), separate from
+        // SagaTimeout's, so a read off one of them needs the same encode() treatment.
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+
+                        class ReadName {
+                            void handle(SagaEffect.CancelTimeout<Object> cancel) {
+                                String name = cancel.timerName();
+                                System.out.println(name);
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+
+                        class ReadName {
+                            void handle(SagaEffect.CancelTimeout<Object> cancel) {
+                                String name = cancel.timerName().encode();
+                                System.out.println(name);
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void marksATimerEffectAccessorWhoseWantedTypeIsNotWrittenDown() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+
+                        class LogName {
+                            void handle(SagaEffect.CancelTimeout<Object> cancel) {
+                                System.out.println(cancel.timerName());
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+
+                        class LogName {
+                            void handle(SagaEffect.CancelTimeout<Object> cancel) {
+                                System.out.println(/* TODO [Occurrent 0.33 upgrade]: timerName() is a TimerName now, call encode() for the string. See doc/migration/upgrading-to-0.33.0.md. */ cancel.timerName());
                             }
                         }
                         """

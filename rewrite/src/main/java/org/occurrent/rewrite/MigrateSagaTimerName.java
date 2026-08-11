@@ -35,10 +35,11 @@ import java.util.List;
  * rewritten because the recipe can prove what the old code meant. A {@code String} handed to
  * {@code SagaTimeout}'s second argument, or to the timer-name argument of {@code SagaEffect}'s three timer-effect
  * records, {@code StartTimeout}, {@code StartTimeoutAt} and {@code CancelTimeout}, becomes
- * {@code TimerName.parse(name)}, which is the value that string already named. {@code timerName()} read into a
- * declared {@code String} gains {@code .encode()}. Every other read of {@code timerName()} is flagged with a review
- * comment rather than rewritten, since the recipe cannot see what the surrounding code wants the name for, the same
- * best-effort-plus-marker shape as {@link MigrateEventStoreWriteStreamToList}. Deconstructing a {@code SagaEffect}
+ * {@code TimerName.parse(name)}, which is the value that string already named. A {@code timerName()} read off any
+ * of those same four types, into a declared {@code String}, gains {@code .encode()}. Every other read of
+ * {@code timerName()} is flagged with a review comment rather than rewritten, since the recipe cannot see what the
+ * surrounding code wants the name for, the same best-effort-plus-marker shape as
+ * {@link MigrateEventStoreWriteStreamToList}. Deconstructing a {@code SagaEffect}
  * timer record against a {@code String} component is left alone entirely, because a record pattern's binding type
  * is a judgement about the code that follows it and the compiler points at every one. Java only, a Kotlin caller
  * needs the manual steps in doc/migration/upgrading-to-0.33.0.md.
@@ -62,7 +63,13 @@ public class MigrateSagaTimerName extends Recipe {
     private static final String START_TIMEOUT_AT = "org.occurrent.dsl.saga.SagaEffect$StartTimeoutAt";
     private static final String CANCEL_TIMEOUT = "org.occurrent.dsl.saga.SagaEffect$CancelTimeout";
 
-    private static final MethodMatcher TIMER_NAME_ACCESSOR = new MethodMatcher(SAGA_TIMEOUT + " timerName()");
+    // SagaTimeout and the three timer-effect records each declare their own timerName() accessor rather than
+    // sharing one, so a read off any of the four needs the same treatment.
+    private static final List<MethodMatcher> TIMER_NAME_ACCESSORS = List.of(
+            new MethodMatcher(SAGA_TIMEOUT + " timerName()"),
+            new MethodMatcher(START_TIMEOUT + " timerName()"),
+            new MethodMatcher(START_TIMEOUT_AT + " timerName()"),
+            new MethodMatcher(CANCEL_TIMEOUT + " timerName()"));
     private static final MethodMatcher TIMER_NAME_PARSE = new MethodMatcher(TIMER_NAME + " parse(java.lang.String)");
     private static final MethodMatcher TIMER_NAME_ENCODE = new MethodMatcher(TIMER_NAME + " encode()");
 
@@ -158,7 +165,7 @@ public class MigrateSagaTimerName extends Recipe {
             public J.MethodInvocation visitMethodInvocation(J.MethodInvocation method, ExecutionContext ctx) {
                 J.MethodInvocation m = super.visitMethodInvocation(method, ctx);
 
-                if (!isJavaSource() || !TIMER_NAME_ACCESSOR.matches(m)) {
+                if (!isJavaSource() || TIMER_NAME_ACCESSORS.stream().noneMatch(accessor -> accessor.matches(m))) {
                     return m;
                 }
 

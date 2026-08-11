@@ -3,10 +3,11 @@
 `CheckpointStorage` and its reactor twin gain a conditional write. This is a real break, and every implementation of
 either interface, in this repository and outside it, now has two more members to answer. No calling code changes,
 because the two-argument `save` you already call stays exactly as it was, as a default that delegates to the new
-one. `UpgradeToOccurrent_0_33` stubs the two new members for you on a class it finds missing them, a throwing
-placeholder plus a review comment each, so the module compiles again. Filling in real behaviour is still yours, see
-section 2. [ADR 116](../architecture/decisions/0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md)
-has the reasoning.
+one. `UpgradeToOccurrent_0_33` stubs the two new members for you on a class it finds missing them, delegating `any()`
+to your existing write and marking the rest with a review comment, so the module compiles again. Evaluating a
+condition for real is still yours, see section 2.
+[ADR 116](../architecture/decisions/0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) has the
+reasoning.
 
 Five subscription-capability interfaces are also renamed, and two of their static lookup methods go from `of` to
 `findIn`. None of the interfaces extended `SubscriptionModel`, and the old names claimed a relationship they never
@@ -15,8 +16,9 @@ had. `UpgradeToOccurrent_0_33` renames those too, see
 
 A saga timer's name is a `TimerName` rather than a `String`. Most saga code compiles unchanged, because every method
 that took a timer name as a string still takes one. What breaks is building a `SagaTimeout` from two strings,
-reading `timerName()` into a `String`, and matching a timer effect against a `String` component.
-`UpgradeToOccurrent_0_33` does the first two wherever it can prove the result and marks the rest, see
+constructing `StartTimeout`, `StartTimeoutAt` or `CancelTimeout` directly with a string name, reading `timerName()`
+into a `String`, and matching a timer effect against a `String` component. `UpgradeToOccurrent_0_33` rewrites every
+construction it can prove and every `String`-declared read, and marks the rest, see
 [section 7](#7-a-saga-timers-name-is-a-timername).
 
 ## 1. What changed
