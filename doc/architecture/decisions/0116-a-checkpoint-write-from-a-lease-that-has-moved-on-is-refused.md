@@ -449,6 +449,20 @@ and is unaffected by which family it runs against.
 > appears only after registration and differs from what this node captured is logged at `WARNING` with both
 > positions named, so the discrepancy is visible instead of silent. See `ManualStartSubscriptionModelTest`.
 
+> **Amended again, before 0.33.0 shipped.** The amendment above still wrote at start and used a `WARNING` to
+> tell a same-generation race apart from a node starting behind a leader election long after another has
+> been running the subscription for real, since both look identical to `Checkpoint`'s opacity. Johan ruled
+> that a log must not be what settles this. `pinStartPosition` now writes at registration instead of at
+> start, which removes the ambiguity rather than detects it. The winner is whichever node's write reaches
+> storage first, always at or before every node's own captured position, whether that belongs to an earlier
+> registration or to a subscription that has since run for real. Accepting either one costs at most a
+> redelivered event, never a skipped one, so a refusal is accepted outright. A checkpoint already present
+> when a node checks is the ordinary case and stays unlogged. One that lands between that check and the
+> node's own write is worth naming, a genuine same-generation race or, rarer still, a write delayed long
+> enough to arrive after a later registration's, and is logged at `INFO`, since nothing here prevents that
+> window, only makes it visible. Pinning at registration is not simply a safer ordering chosen for its own
+> sake. ADR 86's own amendment records why it is the correct one. See `ManualStartSubscriptionModelTest`.
+
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
 

@@ -111,19 +111,18 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * first time will start from, so that starting it later still delivers the events written since registration
      * instead of skipping them.
      * <p>
-     * The recorded position is pinned with {@link CheckpointWriteCondition#ifAbsent() ifAbsent()}, which only ever
-     * writes a subscription's very first checkpoint against nothing stored. A fence condition has nothing to add to a
-     * write like that, so this factory takes no {@link CheckpointWriteVersionSource} (see ADR 116).
+     * The recorded position is pinned with {@link CheckpointWriteCondition#ifAbsent() ifAbsent()} at registration,
+     * which only ever writes a subscription's very first checkpoint against nothing stored. A fence condition has
+     * nothing to add to a write like that, so this factory takes no {@link CheckpointWriteVersionSource}
+     * (see ADR 116).
      * <p>
-     * A checkpoint that already existed when this subscription registered always wins, whatever position it holds,
-     * because that means the subscription has run before, or another node already pinned and started it. A
-     * checkpoint that only appears later either belongs to another node's own first-run pin, at the same position
-     * or one captured minutes apart during a rolling deploy, or to a subscription a different node has been running
-     * for a while by the time this one finally starts, which is exactly what starting behind a leader election
-     * allows. This node cannot tell those two apart, since {@link Checkpoint} exposes nothing but
-     * {@link Checkpoint#asString() asString()}, so the stored position always wins either way. A position that
-     * differs from the one this node captured is logged at {@code WARNING} rather than accepted silently, since the
-     * first case can mean events were skipped between the two registrations and is worth an operator's attention.
+     * Two nodes registering the same subscription id, minutes apart during a rolling deploy or at the same moment,
+     * both attempt this write, and only the first to reach storage succeeds. That is always safe to accept for
+     * every other node. The position it lost to is either an earlier registration's, at or before its own, or a
+     * checkpoint a running subscription has since advanced past every registration entirely. Starting from either
+     * one costs at most a redelivered event, never a skipped one, so a refusal is accepted without asking which
+     * case it is, which {@link Checkpoint}'s opacity would not let this class answer anyway. A position that
+     * differs from the one this node captured is logged at {@code INFO} so the discrepancy stays visible.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -159,17 +158,15 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
 
         claim(subscriptionId);
         try {
-            // Checked before capturing the position, not after. Capturing the position first would let another
-            // node's write land before this check runs, making a fresh race look like prior history and get
-            // silently accepted instead of compared.
-            boolean checkpointAlreadyExisted = checkpointStorage != null && checkpointStorage.exists(subscriptionId);
-            // Captured before taking the lock, so a slow position source cannot block start(boolean), and captured
-            // whatever the state looks like from here, because a stop() landing in between would otherwise leave this
-            // registration deferred with no position to start from.
-            @Nullable Checkpoint positionToPin = capturePositionToPin();
+            // Pinned before taking the lock, so a slow position source or storage write cannot block start(boolean),
+            // and before the registration becomes visible to it, so a resumeSubscription racing in right after
+            // cannot get there before the pin does and let the wrapped model capture its own, later position
+            // instead. That ordering requirement holds regardless of whether this registration ends up deferred or
+            // live, which is why the pin happens here unconditionally rather than only on the deferred path.
+            pinStartPosition(subscriptionId);
             synchronized (stateLock) {
                 if (state != State.RUNNING) {
-                    registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action, positionToPin, checkpointAlreadyExisted));
+                    registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action));
                     return new DeferredSubscription(subscriptionId);
                 }
             }
@@ -217,7 +214,6 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         }
 
         try {
-            pinStartPosition(subscriptionId, deferred.positionToPin(), deferred.checkpointAlreadyExisted());
             Subscription subscription = delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
             // Subscribing to a stopped model registers a paused subscription rather than a running one, so this is what
             // makes starting work after stop(). Without it the caller is handed a subscription that never delivers.
@@ -392,26 +388,27 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         return positionSource == null ? null : positionSource.globalCheckpoint();
     }
 
-    // Written when the subscription starts rather than when it is registered, so a subscription that is never started
-    // leaves nothing behind.
+    // Pinned when the subscription registers, matching what the wrapped model would have pinned itself at that
+    // moment had this class not deferred handing it the subscription at all. Written with ifAbsent() rather than an
+    // exists() check followed by a save(), because those are two calls with nothing holding them together. Two
+    // nodes registering the same subscription id at the same moment would both see nothing stored and both write,
+    // and whichever wrote second would silently win (see #669). ifAbsent() folds the check and the write into one
+    // call the storage evaluates atomically, so only the first registration's write can succeed.
     //
-    // The write is ifAbsent() rather than an exists() check followed by a save(), because those are two calls with
-    // nothing holding them together. Two nodes racing to start the same subscription would both see nothing stored
-    // and both write, and whichever wrote second would silently win, losing the events between the two positions
-    // (see #669). ifAbsent() folds the check and the write into one call the storage evaluates atomically, so only
-    // the first node's write can succeed.
+    // Because every node pins at registration rather than at start, the winner is always whichever node's write
+    // reached storage first, which is always at or before every node's own captured position. A refusal therefore
+    // never needs to guess. The stored position either belongs to an earlier registration, no later than this
+    // node's own, or to a subscription that has since run for real and moved past every registration entirely.
+    // Accepting it either way costs at most a redelivered event, never a skipped one.
     //
-    // A refusal means this node lost the write, and what that means depends on whether a checkpoint already existed
-    // when this node registered. If one did, this subscription has run before, or another node already pinned and
-    // started it, and that stored position wins regardless of what this node captured for itself, with nothing
-    // logged since that is the ordinary case. If none did, the write that beat this one either read the same
-    // source position, which is harmless, or belongs to a subscription that has been running under a different
-    // node ever since, which this node cannot tell apart from the harmless case: Checkpoint exposes only
-    // asString(), and starting late behind a leader election is exactly this class's purpose, so an arbitrary
-    // amount of real history can sit between this node's registration and its first attempt to start. A stored
-    // position always wins regardless, since guessing wrong risks skipping events either way, but a position that
-    // differs from what this node captured is logged at WARN so the discrepancy is visible instead of silent.
-    private void pinStartPosition(String subscriptionId, @Nullable Checkpoint positionToPin, boolean checkpointAlreadyExisted) {
+    // A checkpoint already there when this node checked is the ordinary case, real history or an earlier
+    // registration that finished first, and not logged. Worth naming is one that lands between the check and this
+    // node's own write, two registrations close enough to race, or, rarer still, a write delayed long enough to
+    // arrive after a later registration's. Existence is checked before the position is captured, the same
+    // reasoning as in subscribe(), so a write in that narrow gap is never mistaken for prior history.
+    private void pinStartPosition(String subscriptionId) {
+        boolean checkpointAlreadyExisted = checkpointStorage != null && checkpointStorage.exists(subscriptionId);
+        @Nullable Checkpoint positionToPin = capturePositionToPin();
         if (positionToPin == null || checkpointStorage == null) {
             return;
         }
@@ -424,11 +421,11 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             @Nullable Checkpoint stored = checkpointStorage.read(subscriptionId);
             @Nullable String storedAsString = stored == null ? null : stored.asString();
             if (!positionToPin.asString().equals(storedAsString)) {
-                log.log(System.Logger.Level.WARNING,
-                        "Starting subscription " + subscriptionId + " from a position another node already pinned. " +
-                        "This node captured " + positionToPin.asString() + ", storage has " + storedAsString + ". " +
-                        "If the other node pinned this only moments ago, its events since this node's registration " +
-                        "may have been skipped. If it has been running since, this is expected.");
+                log.log(System.Logger.Level.INFO,
+                        "Subscription " + subscriptionId + " registered at position " + positionToPin.asString() +
+                        " but another registration landed first with " + storedAsString + ". Starting from the " +
+                        "stored position, which never skips events this registration would have covered, at most " +
+                        "redelivers some of them.");
             }
         }
     }
@@ -436,8 +433,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     private sealed interface Registration {
         Registration STARTING = new Starting();
 
-        record Deferred(@Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action,
-                        @Nullable Checkpoint positionToPin, boolean checkpointAlreadyExisted) implements Registration {
+        record Deferred(@Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) implements Registration {
         }
 
         record Starting() implements Registration {
