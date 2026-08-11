@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 25
-updated_at: 2026-08-11T12:09:39Z
-updated_by: "orchestrator session faee3625 (U1 MERGED as 0f3980c20, the withdrawal is on main; both review blockers now closed; ORCHESTRATOR.md staleness that Copilot routed to the orchestrator is repaired)"
+revision: 26
+updated_at: 2026-08-11T12:47:35Z
+updated_by: "orchestrator session faee3625 (status pass: U6 corrected from RUNNING to READY, its chip is still pending Johan click and no session exists)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -103,7 +103,7 @@ units:
   U6:
     issue: null
     goal: "Spring fencing wiring (findings 15, 16): per D5 fail startup on ambiguous strategy beans (back default off any interface-typed bean), starter validates conditional-write capability or explicit unfenced mode; guide caveat lands after U5"
-    phase: RUNNING
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: [U5]
@@ -112,7 +112,7 @@ units:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U6 plan gate (capability-discovery mechanism under D1-kept contract), Johan", met: false, evidence: null}
     blocking_on: []
-    next_action: await its plan gate message (the brief requires the worker to announce being parked), then route the finding-16 mechanism decision to Johan
+    next_action: BLOCKED ON JOHAN clicking chip task_4ff34e51; no session exists yet, so nothing is running
     last_meaningful_progress_at: 2026-08-11T11:29:38Z
     observed: {}
     assessment: "Gating. CheckpointStorage has no capability method; mechanism (small API addition to unreleased contract vs explicit config) resolved at its plan gate"
