@@ -1,7 +1,7 @@
 schema_version: 1
 epic: timerid
-revision: 4
-updated_at: 2026-08-11T05:09:12Z
+revision: 5
+updated_at: 2026-08-11T05:11:05Z
 updated_by: orchestrator session 496ca320 (design gate satisfied, U2 dispatched)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 design gate SATISFIED 2026-08-11, Johan confirmed both open decisions, take the source break and take the constructor change, on AGENTS.md long-term grounds. Chips are usable again from the same message"
@@ -26,30 +26,30 @@ units:
   U1:
     issue: 716
     goal: "ADR 0121 settling the timer-identity model: the sealed TimerId, the canonical parse/encode round trip and its edge cases, whether the string-shaped API is deprecated now, and whether compose namespacing is answered or merely unblocked"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_24efc36e (worktree sleepy-merkle-0e3f9a)
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "717", met: false, evidence: "PR 717 revised to c605df05f, mergeable, 0 fail, checks DONE. All six must-fix addressed and re-verified by the orchestrator: toString returns encode with the compile-error sentence corrected, SagaEffect records carry the value with the extra break shapes carried into Consequences, the recipe and guide obligation recorded, the boundary inventory corrected, the ADR 63 amendment rewritten to state that the compose collision REMAINS, and the SagaTimeout constructor question marked a plan departure for Johan with both sides and a recommendation. Writing gates re-run independently, all four clean. HELD for Johan wording confirm"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "717", met: true, evidence: "MERGED as squash 7a9a5cf8b, CAS-pinned to 95c2a0b8c. Three heads: 20dcdf569 reviewed, c605df05f fixing all six must-fix from the adversarial REVISE, 95c2a0b8c recording Johan constructor ruling. Orchestrator re-verified each fix and re-ran the four writing gates clean on the final head. Design gate satisfied by Johan 2026-08-11, he took both the source break and the constructor change on AGENTS.md long-term grounds"}
     blocking_on: []
-    next_action: "gate satisfied, one last edit requested so the ADR records the constructor ruling rather than posing it, then merge"
+    next_action: none, merged
     last_meaningful_progress_at: 2026-08-11T05:09:12Z
     observed: {}
     assessment: "Design gate, so it merges only on Johan's wording confirm. ADR number 0121 chosen after a cross-branch audit over every remote branch, which found 0120 as the highest claimed anywhere. That audit is the only view that catches a number claimed on an unmerged branch, a collision this repository has already had once."
   U2:
     issue: 716
     goal: "Core: the sealed TimerId with its parse/encode pair, TimerId overloads on SagaEffect and Saga.Builder, the SagaInput.timeout(String, TimerId) shortcut, SagaTimeout carrying the typed id, and the registration maps re-keyed"
-    phase: BLOCKED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: [U1]
     session: null
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: ["U1, the ADR it implements, merging"]
-    next_action: "chip task_9767607f spawned 2026-08-11T05:09:12Z, told to wait for or rebase onto the merged ADR"
+    blocking_on: []
+    next_action: "unblocked, ADR merged as 7a9a5cf8b. Chip task_9767607f spawned 2026-08-11T05:09:12Z, told to wait for or rebase onto the merged ADR"
     last_meaningful_progress_at: 2026-08-11T05:09:12Z
     observed: {}
     assessment: "Deliberately excludes a timeout(String, String) overload. Core cannot know whether the saga it feeds is a flow saga, so it would parse a step name to Named, fail to match the flow's Qualified, and reintroduce the silent no-op this epic exists to delete."
