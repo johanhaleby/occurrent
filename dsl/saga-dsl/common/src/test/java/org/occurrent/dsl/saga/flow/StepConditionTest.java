@@ -217,6 +217,18 @@ class StepConditionTest {
     }
 
     @Test
+    void allOf_rejects_two_children_over_one_predicate_whatever_names_they_give_it() {
+        // A name says which predicate a leaf holds. It must not let a declaration that reads as five events and is fulfilled
+        // by three through this rule, so two names over one predicate stay one requirement.
+        Predicate<A> sameTest = candidate -> true;
+
+        assertThatThrownBy(() -> allOf(event(A.class, 2, "twoOfThem", sameTest), event(A.class, 3, "threeOfThem", sameTest)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1")
+                .hasMessageContaining("A");
+    }
+
+    @Test
     void allOf_rejects_a_repeated_class_literal() {
         assertThatThrownBy(() -> allOf(A.class, A.class))
                 .isInstanceOf(IllegalArgumentException.class)

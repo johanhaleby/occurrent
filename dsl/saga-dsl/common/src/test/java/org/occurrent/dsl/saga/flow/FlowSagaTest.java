@@ -595,6 +595,73 @@ class FlowSagaTest {
         }
 
         @Test
+        void the_cap_evicts_the_steps_own_oldest_events_rather_than_the_carry_over_ahead_of_them() {
+            // The tail holds carry-over from the first step ahead of the second step's own events. Advancing the tail's start
+            // by the excess alone would drop a carry-over event and leave all three of the step's, capping nothing.
+            List<String> saw = new ArrayList<>();
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(2)
+                    .historyWindow(10)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("first", step -> step.on(Noise.class, Continuation.next()))
+                    .step("second", step -> step.on(StepCondition.event(Approved.class, 9), Continuation.end(),
+                            received -> {
+                                saw.add("unused");
+                                return List.of();
+                            }))
+                    .build();
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+            FlowState<CapEvent> inSecond = saga.evolve(opened, SagaInput.event(new Noise("c1")));
+
+            FlowState<CapEvent> afterTwo = deliver(saga, inSecond, new Approved("c1", 1), new Approved("c1", 2));
+            FlowState<CapEvent> afterThree = saga.evolve(afterTwo, SagaInput.event(new Approved("c1", 3)));
+
+            assertAll(
+                    () -> assertThat(afterTwo.received()).as("the initiating event, the first step's Noise, and both Approved")
+                            .hasSize(4),
+                    () -> assertThat(afterThree.receivedEvents().count(Approved.class))
+                            .as("the third Approved evicts the oldest Approved, not the Noise standing ahead of it")
+                            .isEqualTo(2),
+                    () -> assertThat(afterThree.received()).as("the initiating event plus the two newest Approved").hasSize(3),
+                    () -> assertThat(afterThree.receivedEvents().count(Noise.class))
+                            .as("the carry-over goes only because the step's events had to be reached past it")
+                            .isZero()
+            );
+        }
+
+        @Test
+        void the_peak_retained_count_across_a_multi_step_run_is_the_bound_the_javadoc_states() {
+            // A transition keeps the leaving step's own events for its reaction, on top of the carry-over historyWindow
+            // grants, and the entered step then fills its own cap before anything is evicted. So the peak is one step's cap
+            // more than a single step's worth, which is what the javadoc has to say rather than historyWindow + n + 1.
+            int historyWindow = 4;
+            int stepWindow = 3;
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(stepWindow)
+                    .historyWindow(historyWindow)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("a", step -> step.on(StepCondition.event(Noise.class, 3), Continuation.transitionTo("b")))
+                    .step("b", step -> step.on(StepCondition.event(Noise.class, 3), Continuation.transitionTo("a")))
+                    .build();
+
+            FlowState<CapEvent> state = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+            int peak = state.received().size();
+            for (int i = 0; i < 200; i++) {
+                state = saga.evolve(state, SagaInput.event(new Noise("c1")));
+                peak = Math.max(peak, state.received().size());
+            }
+
+            int finalPeak = peak;
+            assertAll(
+                    () -> assertThat(finalPeak).as("the stated bound holds").isLessThanOrEqualTo(historyWindow + 2 * stepWindow + 1),
+                    () -> assertThat(finalPeak).as("and the narrower bound this once claimed does not")
+                            .isGreaterThan(historyWindow + stepWindow + 1)
+            );
+        }
+
+        @Test
         void an_unset_step_window_keeps_every_event_the_step_receives() {
             List<String> saw = new ArrayList<>();
             Saga<CapEvent, FlowState<CapEvent>, CapCommand> unbounded = FlowSaga.<CapEvent, CapCommand>builder()
@@ -762,7 +829,8 @@ class FlowSagaTest {
         @Test
         void a_raised_count_still_completes_after_the_cap_dropped_events() {
             // The carried counts are raw totals rather than something capped at the count a leaf asks for, so raising that
-            // count on a redeploy leaves them meaning what they meant and the step completes on the higher total.
+            // count on a redeploy leaves them meaning what they meant. The instance stays below its old threshold, since a
+            // completed one is returned unchanged and would exercise nothing.
             Saga<CapEvent, FlowState<CapEvent>, CapCommand> before = waitingForThree(1, new ArrayList<>());
             Saga<CapEvent, FlowState<CapEvent>, CapCommand> after = FlowSaga.<CapEvent, CapCommand>builder()
                     .stepWindow(1)
@@ -771,13 +839,16 @@ class FlowSagaTest {
                     .step("wait", step -> step.on(StepCondition.event(Approved.class, 4), Continuation.end()))
                     .build();
             FlowState<CapEvent> opened = before.evolve(before.initialState(), SagaInput.event(new Opened("c1")));
-            FlowState<CapEvent> parked = deliver(before, opened, new Approved("c1", 1), new Approved("c1", 2), new Approved("c1", 3));
+            FlowState<CapEvent> parked = deliver(before, opened, new Approved("c1", 1), new Approved("c1", 2));
 
-            FlowState<CapEvent> afterFourth = after.evolve(parked, SagaInput.event(new Approved("c1", 4)));
+            FlowState<CapEvent> afterThird = after.evolve(parked, SagaInput.event(new Approved("c1", 3)));
+            FlowState<CapEvent> afterFourth = after.evolve(afterThird, SagaInput.event(new Approved("c1", 4)));
 
             assertAll(
-                    () -> assertThat(before.isTerminal(parked)).as("three was enough for the old declaration, but it fired on the third already").isTrue(),
-                    () -> assertThat(after.isTerminal(afterFourth)).as("the raised count is reached on the fourth, not stuck one short").isTrue()
+                    () -> assertThat(before.isTerminal(parked)).as("two of the three the old declaration asked for, so still running").isFalse(),
+                    () -> assertThat(parked.received()).as("the cap left one event, so nothing could recount the first two").hasSize(2),
+                    () -> assertThat(after.isTerminal(afterThird)).as("three no longer completes it, because the raised count asks for four").isFalse(),
+                    () -> assertThat(after.isTerminal(afterFourth)).as("the fourth reaches the raised count, so the carried total was not capped at three").isTrue()
             );
         }
 
@@ -804,33 +875,111 @@ class FlowSagaTest {
             saga.step(opened, SagaInput.event(new Approved("c1", -5)));
 
             assertAll(
-                    () -> assertThat(fired).as("nothing tells the two leaves apart, so the window is counted and the right branch fires")
+                    () -> assertThat(fired).as("an unnamed predicate counts the window, so the right branch still fires")
                             .containsExactly("negative"),
                     () -> assertThatThrownBy(ambiguous.stepWindow(4)::build)
                             .isInstanceOf(IllegalStateException.class)
                             .hasMessageContaining("step 'decide'")
                             .hasMessageContaining("Approved")
-                            .hasMessageContaining("both have a predicate")
+                            .hasMessageContaining("carries a predicate with no name")
             );
         }
 
         @Test
-        void two_leaves_over_one_type_sharing_a_predicate_instance_are_told_apart_well_enough_to_cap() {
+        void a_named_predicate_keeps_its_count_across_a_redeploy_that_leaves_the_name_alone() {
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> before = highScoreSaga("isBig", 10);
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> after = highScoreSaga("isBig", 10);
+            FlowState<CapEvent> parked = deliver(before, before.evolve(before.initialState(), SagaInput.event(new Opened("c1"))),
+                    new Approved("c1", 50), new Noise("c1"), new Noise("c1"));
+
+            FlowState<CapEvent> afterSecond = after.evolve(parked, SagaInput.event(new Approved("c1", 60)));
+
+            assertAll(
+                    () -> assertThat(parked.received()).as("the cap dropped the first Approved").hasSize(2),
+                    () -> assertThat(before.isTerminal(parked)).isFalse(),
+                    () -> assertThat(after.isTerminal(afterSecond))
+                            .as("the name matched, so the count for the first Approved was still there").isTrue()
+            );
+        }
+
+        @Test
+        void a_changed_predicate_under_a_changed_name_refuses_rather_than_reusing_the_old_count() {
+            // The hole a name closes. Without one, a count for events matching score > 10 would be read as a count of events
+            // matching score > 100 and satisfy a test they were never put to.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> before = highScoreSaga("over10", 10);
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> after = highScoreSaga("over100", 100);
+            FlowState<CapEvent> parked = deliver(before, before.evolve(before.initialState(), SagaInput.event(new Opened("c1"))),
+                    new Approved("c1", 50), new Noise("c1"), new Noise("c1"));
+
+            assertAll(
+                    () -> assertThat(before.isTerminal(parked)).isFalse(),
+                    () -> assertThatThrownBy(() -> after.evolve(parked, SagaInput.event(new Approved("c1", 500))))
+                            .as("the old count cannot be reused and the events it came from are gone")
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("step 'wait'")
+            );
+        }
+
+        @Test
+        void two_leaves_sharing_a_name_and_a_predicate_are_accepted_under_the_cap() {
             Predicate<Approved> approvedHigh = approved -> approved.score() > 10;
             Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
                     .stepWindow(2)
                     .startsOn(Opened.class)
                     .correlateAll(CapEvent::id)
                     .step("wait", step -> step
-                            .on(StepCondition.event(Approved.class, 1, approvedHigh), Continuation.transitionTo("wait"))
-                            .on(StepCondition.event(Approved.class, 1, approvedHigh), Continuation.end()))
+                            .on(StepCondition.event(Approved.class, 2, "isBig", approvedHigh), Continuation.transitionTo("wait"))
+                            .on(StepCondition.event(Approved.class, 1, "isBig", approvedHigh), Continuation.end()))
                     .build();
 
             FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
 
             assertThat(saga.isTerminal(saga.evolve(opened, SagaInput.event(new Approved("c1", 50)))))
-                    .as("two leaves over one matcher count the same events, so crossing their counts changes nothing")
-                    .isFalse();
+                    .as("both leaves count the same events, so the count-1 leaf fires and crossing them would change nothing")
+                    .isTrue();
+        }
+
+        @Test
+        void two_leaves_sharing_a_name_while_holding_different_predicates_are_refused_the_cap() {
+            FlowSaga.Builder<CapEvent, CapCommand> collidingNames = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(2)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("decide", step -> step
+                            .on(StepCondition.event(Approved.class, 1, "big", (Approved a) -> a.score() > 100), Continuation.end())
+                            .on(StepCondition.event(Approved.class, 1, "big", (Approved a) -> a.score() < 0), Continuation.end()));
+
+            assertThatThrownBy(collidingNames::build)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("step 'decide'")
+                    .hasMessageContaining("share the predicate name 'big'");
+        }
+
+        private static Saga<CapEvent, FlowState<CapEvent>, CapCommand> highScoreSaga(String predicateName, int threshold) {
+            return FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(1)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(
+                            StepCondition.event(Approved.class, 2, predicateName, (Approved a) -> a.score() > threshold),
+                            Continuation.end()))
+                    .build();
+        }
+
+        // The counts a real delivery produced, so a test that wants to corrupt them does not have to restate the fingerprint
+        // format and quietly stop describing the step it means.
+        private static StepConditionProgress progressOf(FlowState<CapEvent> state) {
+            FlowStateImpl<CapEvent> impl = (FlowStateImpl<CapEvent>) state;
+            StepConditionProgress progress = impl.stepConditionProgress();
+            assertThat(progress).as("this state should be carrying counts").isNotNull();
+            return progress;
+        }
+
+        private static FlowStateImpl<CapEvent> withCounts(FlowState<CapEvent> state, List<Integer> counts) {
+            FlowStateImpl<CapEvent> impl = (FlowStateImpl<CapEvent>) state;
+            return new FlowStateImpl<>(impl.currentStep(), impl.received(), impl.windowStart(), impl.stepEntryIndex(),
+                    impl.completed(), impl.previousStep(), impl.previousStepEntryIndex(), impl.lastAction(),
+                    impl.matchedBranchIndex(), new StepConditionProgress(progressOf(state).leafFingerprint(), counts));
         }
 
         @Test
@@ -848,38 +997,51 @@ class FlowSagaTest {
                     .step("wait", step -> step.on(StepCondition.allOf(
                             StepCondition.event(Approved.class, 2), StepCondition.event(Noise.class, 1)), Continuation.end()))
                     .build();
-            List<CapEvent> received = List.of(new Opened("c1"), new Approved("c1", 1), new Noise("c1"));
-            FlowStateImpl<CapEvent> negativeCount = new FlowStateImpl<>("wait", received, 1, 1, false, "wait", -1,
-                    ActionKind.NONE, -1, new StepConditionProgress("wait|" + Approved.class.getName(), List.of(-7)));
-            // One count for a step declaring two leaves, which is what reading the second leaf's count off the end would be.
-            FlowStateImpl<CapEvent> tooFewCounts = new FlowStateImpl<>("wait", received, 1, 1, false, "wait", -1,
-                    ActionKind.NONE, -1, new StepConditionProgress(
-                    "wait|" + Approved.class.getName() + "|" + Noise.class.getName(), List.of(1)));
+            FlowState<CapEvent> oneLeafParked = oneLeaf.evolve(
+                    oneLeaf.evolve(oneLeaf.initialState(), SagaInput.event(new Opened("c1"))), SagaInput.event(new Approved("c1", 1)));
+            FlowState<CapEvent> twoLeafParked = twoLeaves.evolve(
+                    twoLeaves.evolve(twoLeaves.initialState(), SagaInput.event(new Opened("c1"))), SagaInput.event(new Noise("c1")));
+            // Both keep the fingerprint a real delivery wrote and corrupt only the counts, one to a value no evolve writes and
+            // one to a length that cannot belong to a two-leaf step, which is what reading a leaf's count off the end would be.
+            FlowStateImpl<CapEvent> negativeCount = withCounts(oneLeafParked, List.of(-7));
+            FlowStateImpl<CapEvent> tooFewCounts = withCounts(twoLeafParked, List.of(1));
 
             FlowState<CapEvent> fromNegative = oneLeaf.evolve(negativeCount, SagaInput.event(new Approved("c1", 2)));
             FlowState<CapEvent> fromTooFew = twoLeaves.evolve(tooFewCounts, SagaInput.event(new Approved("c1", 2)));
+            FlowState<CapEvent> fromTooFewAgain = twoLeaves.evolve(fromTooFew, SagaInput.event(new Approved("c1", 3)));
 
             assertAll(
-                    () -> assertThat(oneLeaf.isTerminal(fromNegative)).as("two Approved are in the window, so the count-2 leaf is satisfied").isTrue(),
-                    () -> assertThat(twoLeaves.isTerminal(fromTooFew)).as("both leaves are satisfied by the window, counted afresh").isTrue()
+                    () -> assertThat(oneLeaf.isTerminal(fromNegative))
+                            .as("two Approved are in the window, so counting it again satisfies the count-2 leaf that -7 would not")
+                            .isTrue(),
+                    () -> assertThat(twoLeaves.isTerminal(fromTooFew)).as("one Approved so far, so the count-2 leaf is short").isFalse(),
+                    () -> assertThat(twoLeaves.isTerminal(fromTooFewAgain)).as("both leaves satisfied once counted afresh").isTrue()
             );
         }
 
         @Test
         void a_count_that_reached_the_integer_limit_stays_there_instead_of_wrapping() {
+            // A second leaf that stays short keeps the step from completing, so the counts are still readable after the
+            // delivery that would have wrapped the first one.
             Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
                     .stepWindow(1)
                     .startsOn(Opened.class)
                     .correlateAll(CapEvent::id)
-                    .step("wait", step -> step.on(StepCondition.event(Approved.class, 2), Continuation.end()))
+                    .step("wait", step -> step.on(StepCondition.allOf(
+                            StepCondition.event(Approved.class, 2), StepCondition.event(Noise.class, 5)), Continuation.end()))
                     .build();
-            FlowStateImpl<CapEvent> atTheLimit = new FlowStateImpl<>("wait", List.of(new Opened("c1")), 1, 1, false, "wait",
-                    -1, ActionKind.NONE, -1,
-                    new StepConditionProgress("wait|" + Approved.class.getName(), List.of(Integer.MAX_VALUE)));
+            FlowState<CapEvent> parked = saga.evolve(
+                    saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1"))), SagaInput.event(new Approved("c1", 1)));
+            FlowStateImpl<CapEvent> atTheLimit = withCounts(parked, List.of(Integer.MAX_VALUE, 0));
 
-            FlowState<CapEvent> afterAnother = saga.evolve(atTheLimit, SagaInput.event(new Approved("c1", 1)));
+            FlowState<CapEvent> afterAnother = saga.evolve(atTheLimit, SagaInput.event(new Approved("c1", 2)));
 
-            assertThat(saga.isTerminal(afterAnother)).as("a wrapped count would go negative and stop satisfying the leaf").isTrue();
+            assertAll(
+                    () -> assertThat(progressOf(afterAnother).matchCounts())
+                            .as("incrementing at the limit would wrap to a negative count")
+                            .containsExactly(Integer.MAX_VALUE, 0),
+                    () -> assertThat(saga.isTerminal(afterAnother)).as("the Noise leaf is still short, so the step waits").isFalse()
+            );
         }
 
         @Test

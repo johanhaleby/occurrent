@@ -22,9 +22,16 @@ droppable, which is what ADR 120's amendment recorded as the reason the two halv
 
 **`stepWindow(int)` limits how many of the current step's own events are kept, and it is applied on every delivery.** It is
 opt-in with no cap by default, at least 1, on `FlowSaga.Builder` and in the Kotlin `saga { }` block. Retention is a
-contiguous tail, so capping the current step at `n` means keeping the last `n` events of all once the step has more than
-`n`, with the initiating event always kept as the first element. Together with `historyWindow` the total kept is at most
-`historyWindow + stepWindow + 1`.
+contiguous tail, so the current step's events sit at the end of it behind whatever carry-over `historyWindow` granted, and
+reaching the step's oldest events to drop them means dropping that whole carry-over first. A step inside its cap therefore
+keeps the carry-over untouched, and one over its cap keeps only its own newest `n` events, with the initiating event always
+kept as the first element.
+
+The most an instance holds at any one moment is `historyWindow + 2 * stepWindow + 1`. The doubled cap is real rather than
+slack, because a transition keeps the events of the step being left so that step's reaction can read them, and the step
+being entered then fills its own cap before anything is dropped. An earlier draft of this record claimed
+`historyWindow + stepWindow + 1`, which the transition case exceeds, and a test now measures the peak across a run rather
+than leaving the bound to reasoning.
 
 The minimum of 1 is a guarantee rather than an arbitrary floor. The arriving event is always the newest, and the drop takes
 from the oldest end, so ADR 120's promise that the event which tipped a condition over is
@@ -44,19 +51,13 @@ it, since a total means the same thing whatever threshold a later declaration co
 because a leaf's truth is never undone by a later event, so a count that high already exceeds every threshold a leaf can
 ask for.
 
-**Counts are only carried for a step whose leaves can be told apart, proved when the saga is built.** A predicate has no
-identity a persisted fingerprint can capture, so a leaf's entry is its event type plus whether it has a predicate, and two
-leaves that agree on both produce the same entry. `FlowSagaImpl.StepLeaves` groups a step's leaves by that entry and
-requires every group's `EventMatcher`s to be equal, which is what makes two leaves sharing an entry interchangeable and a
-crossing of their counts a no-op. A step that fails the check counts its window on every delivery, exactly as it did before
-this change, and `build()` refuses `stepWindow` for a flow containing one, naming the step, the event type and the
-remedies.
+**A predicate is given a name, so a leaf that carries one can be matched back to its count.** `event(type, count,
+predicateId, predicate)` takes a caller-supplied name and the name goes in the fingerprint entry. Nothing else about a
+predicate survives a recompilation, since a lambda is a new object every time the class loads and two lambdas never compare
+equal, so a name is the only thing that can say a leaf still holds the predicate its counts were produced under.
 
-That check is the reason this design differs from the one #741 proposed. That one keyed a leaf on its event type, whether it
-has a predicate, and the count it asks for, and relied on a full recount when the fingerprint did not match. Two leaves that
-agree on all three produce identical entries, so swapping them leaves the fingerprint matching and moves each count onto the
-other's predicate. When the two sit in different branches of one step, that fires the wrong branch and runs the wrong
-reaction with nothing to notice it, which is the same silent failure two earlier designs were rejected for.
+This replaces the shape #741 proposed and the narrower one first built here, both of which recorded only that a leaf *has* a
+predicate. Two problems follow from that, and the second is worse than the first.
 
 ```java
 step("decide", step -> step
@@ -64,7 +65,26 @@ step("decide", step -> step
     .on(event(Payment.class, 1, p -> p.isSuspicious()), transitionTo("review")))
 ```
 
-Swap those two lines on a redeploy and a fingerprint built that way is byte identical.
+Swapping those two lines leaves such a fingerprint byte identical and moves each count onto the other's predicate, which
+fires the wrong branch. And with a single predicated leaf, changing `score > 10` to `score > 100` also leaves it byte
+identical, so an instance keeps counts for events that were never put to the new test and satisfies a condition it was
+never evaluated against. That second one needs no reorder and no cap to go wrong, since counts are kept whenever the
+fingerprint matches, so it was a silent defect in the default path as well.
+
+**A step whose leaves cannot all be matched back keeps no counts at all, and a capped flow refuses to build.**
+`FlowSagaImpl.StepLeaves` decides this once per step. A leaf whose predicate has no name makes the step uncountable, and so
+do two leaves that share a name while holding predicates that accept different events, compared through
+`EventMatcher.matchesTheSameEvents`. Such a step counts its window on every delivery, exactly as every step did before this
+change, which is always correct because nothing has been dropped. `build()` refuses `stepWindow` for a flow containing one,
+naming the step and what to do about it, because dropping that step's events would leave nothing to count.
+
+A name identifies a predicate rather than describing which events it accepts, so it deliberately takes no part in
+`EventMatcher.matchesTheSameEvents`, and `allOf`'s rule against two children one event satisfies at once compares matchers
+through that method. Otherwise `allOf(event(A, 2, "twoOfThem", p), event(A, 3, "threeOfThem", p))` would slip past a rule
+ADR 120's amendment added deliberately, reading as five events while three fulfil it.
+
+Each part of a fingerprint is written with its length in front, so a step name or a predicate name holding the separator
+cannot pass itself off as two parts and make one declaration's fingerprint match another's.
 
 **Carrying counts means giving up tolerance for a mid flight change to a capped step's declaration, and that is stated here
 rather than left to be discovered.** A leaf whose count is reached needs no further events, and a leaf still short needs
@@ -72,17 +92,27 @@ future events rather than past ones, so the only thing past events are needed fo
 declaration changed under a parked instance. Once the cap has dropped them there is nothing to recount from. So the trade is
 exact, and it is the whole of what the cap costs.
 
-Such an instance refuses the delivery with an `IllegalStateException` naming the step, saying that its condition declaration
-changed while the instance was parked in it, that the events its counts would be rebuilt from are gone, and that retrying
-cannot help. The two remedies are to put the previous declaration back until the parked instances have moved on, or to
+**The one thing a name cannot detect is a caller changing what a predicate does while keeping its name**, and an instance
+parked in that step then keeps counting events it matched under the old test. That residual does not disappear, and it is
+categorically different from what it replaces. The library silently treating two different predicates as the same one is a
+guess the caller never made, while a name kept across a change of meaning is a promise the caller made explicitly, the same
+promise a `schemaVersion` carries. So the rule is stated wherever the name is documented, which is to change the name
+whenever the predicate's meaning changes. Changing the count a leaf asks for stays safe and needs no new name, since a count is a raw
+total.
+
+An instance parked in a capped step whose declaration has changed refuses its next delivery with an
+`IllegalStateException` naming the step, saying that the step's condition declaration changed while the instance was parked
+in it, that the events its counts would be rebuilt from are gone, and that retrying cannot help. The two remedies are to put the previous declaration back until the parked instances have moved on, or to
 delete the instance. `IllegalStateException` rather than a new exception type, because an operator's remedy is a deploy or a database
 action rather than a `catch`, and this is the same shape of state refusal ADR 104 and ADR 105 settled on. Resetting the
 counts to zero was rejected for the same reason the capped-counter design was, a step that waits forever with no signal.
 
-**Absent counts always mean "count the window", and a document written before the field existed relies on it.** `null` is
+**Absent counts mean "count the window", which is what a document written before the field existed relies on.** `null` is
 the "not known" value, since `0` is a real count and `-1` keeps meaning only what it means on `previousStepEntryIndex`. A
-count list whose length disagrees with the step's declaration, or which contains a negative, is treated the same way as absent,
-because a store defaults each field on its own and can hand back a combination no `evolve` ever wrote.
+count list whose length disagrees with the step's declaration, or which contains a negative, is treated the same way as
+absent, because a store defaults each field on its own and can hand back a combination no `evolve` ever wrote. The one case
+that cannot fall back on the window is a step whose own events are already gone, which refuses the delivery instead, and no
+document written before this release can be in it, because nothing dropped a step's own events before this release.
 
 **The signal that events were dropped needs the step's entry position, not just the tail's start.** Reading the tail as
 starting past the step's entry is what says the step's own events are gone. The obvious form of that test, comparing the two
@@ -99,11 +129,21 @@ does not relax that. It does change how a violation shows up, since a carried co
 re-asked, and that is a permitted consequence of a contract that ADR 120's amendment already states rather than a new
 hazard. The order the two halves landed in was deliberate for this reason.
 
+**Naming a predicate is a scope increase over what this change set out to do, and it was taken rather than worked around.**
+The alternative on the table was to narrow which steps may be capped until the design survived an unidentifiable predicate,
+which is contorting the feature around the shape of what is already there. `AGENTS.md` says existing structure is not a
+constraint to design around, that a shape which makes the right design awkward is itself a candidate for change, and that an
+easier answer is not acceptable when the gap is correctness. The gap here is correctness. What makes the right shape cheap is
+that step conditions are unreleased, shipping first in 0.33.0, so adding an overload costs no migration, no recipe and no
+break. `event(type, count, predicate)` stays exactly as it was, so a caller who never caps a step pays nothing for any of
+this.
+
 ## What this buys, measured against what it does not
 
 Per delivery a flow saga copies the whole retained list in `append`, counts the window once per leaf, and re-serializes
-every retained event as CloudEvent JSON when the state is saved. Carrying counts removes the second of those and adds a
-fingerprint and a small list of numbers to every save.
+every retained event as CloudEvent JSON when the state is saved. Keeping counts removes the second of those for a step whose
+counts can be kept, and adds a fingerprint and a small list of numbers to every save. A step holding a predicate with no name
+keeps counting its window and so keeps paying that term.
 
 So carrying counts is not a performance change worth making on its own, and it is not presented as one. The list copy and
 the per-save re-serialization both stay, and the re-serialization is the expensive one by a wide margin. What `stepWindow`
@@ -130,10 +170,13 @@ smaller change that changes nothing about the persisted state and leaves nothing
 all classic. It was rejected because a step that idles while a large number of correlated events arrive is usually one
 waiting on a count, so it excludes the case the work exists for.
 
-**Requiring a caller-supplied name on a predicated leaf, so two of them can always be told apart.** This turns the
-build-time refusal above into something with a remedy in every case, and ADR 120's amendment already considered names on
-conditions for a different purpose and judged them a materially larger public API. It stays the way out if the refusal
-proves too restrictive in practice, and it is not needed to ship the cap.
+**Narrowing which steps may be capped until the design survived a predicate with no identity, rather than giving a
+predicate an identity.** This was the shape first built here, and review found it lets a changed predicate keep its old
+counts under an unchanged fingerprint, which is a correctness hole rather than a limitation. Working around it by narrowing
+eligibility further would have left the same hole in the uncapped path, where counts are also kept, so it was rejected in
+favour of naming the predicate. ADR 120's amendment did consider names on conditions and judged them a materially larger
+public API, though for a different purpose, reporting which `anyOf` alternative fired. A name for a predicate is a smaller
+thing than a name for a condition, and it is not exposed to a reaction.
 
 **A caller-declared version on the flow, bumped by hand when a declaration changes, instead of a computed fingerprint.**
 Rejected because forgetting to bump it produces exactly the silently crossed counts the fingerprint exists to prevent, and
@@ -148,6 +191,13 @@ nothing can tell a forgotten bump from an unchanged declaration.
   retry guard counting across a self-looping step needs its threshold to fit inside the cap, the same requirement
   `historyWindow` already has. The migration guide's section 9 states it, and it is not a forced migration, since
   nothing changes unless the cap is set.
+- A leaf in a capped step names its predicate, which is a public API addition to an unreleased surface. Everything already
+  written against `event(type, count, predicate)` keeps compiling and keeps behaving the same way, and a flow with no cap
+  never needs a name. The name also makes a leaf describable, so a future message can say which test a step is waiting on
+  rather than that it is waiting on a predicate, though nothing prints one today.
+- A step whose predicate has no name keeps no counts, which means the counts are not kept for every step and the
+  per-delivery window count survives for those. That is deliberate, since a count that cannot be matched back to its leaf is
+  worse than one derived again.
 - A capped step whose condition declaration changes while instances are parked in it refuses those deliveries loudly. This
   is the first place the flow layer says anything about a declaration changing under a parked instance. A renamed or removed
   step still throws a bare `NullPointerException` from inside `evolve`, which is filed separately as #748 and deliberately

@@ -93,9 +93,9 @@ public final class FlowSaga {
          * example a retry cap higher than the default), and lower it to trim the persisted state of a long-running instance.
          * Must be at least zero.
          * <p>
-         * This is applied when a step is left, and the step being left keeps all of its own events, so an instance parked in
-         * one step while a large number of correlated events arrive grows however low this is set, {@code 0} included. That
-         * is what {@link #stepWindow(int)} caps.
+         * This is applied when a step is left, and it puts no limit at all on the events of the step being left, so an
+         * instance parked in one step while a large number of correlated events arrive grows however low this is set,
+         * {@code 0} included. That is what {@link #stepWindow(int)} caps.
          */
         public Builder<E, C> historyWindow(int events) {
             if (events < 0) {
@@ -115,13 +115,20 @@ public final class FlowSaga {
          * completes on the same event it would have without this set. What shrinks is what a guard, a window-condition
          * reaction and a {@code timeout}'s {@code onExpiry} can read, down to the events still kept. Must be at least 1, so
          * the event that fired a branch is always the last element of {@link ReceivedEvents#asList()}, and
-         * {@link ReceivedEvents#initiating()} reaches the start event as always. Together with
-         * {@link #historyWindow(int)} the total kept is at most {@code historyWindow + stepWindow + 1}.
+         * {@link ReceivedEvents#initiating()} reaches the start event as always.
          * <p>
-         * {@link #build()} refuses a saga with a step whose window conditions declare two leaves that cannot be told apart,
-         * meaning two leaves over one event type that both have a predicate, because carrying counts for those two forward
-         * across a redeploy that swaps them would move each count onto the other's predicate. Give those leaves different
-         * counts, or restructure the step, or leave the flow unbounded.
+         * A step that is inside its cap keeps whatever carry-over {@link #historyWindow(int)} granted, and one that is over
+         * it keeps only its own newest {@code events}, because reaching its oldest events means dropping the carry-over
+         * standing ahead of them. A transition keeps the events of the step it left as well, for that step's reaction, and
+         * the step it enters then fills its own cap before anything is dropped, so the most an instance holds at any one
+         * moment is {@code historyWindow + 2 * stepWindow + 1} rather than one {@code stepWindow}'s worth.
+         * <p>
+         * Keeping a count means being able to match it to a leaf again after a redeploy, so a window-condition leaf in a capped
+         * step names its predicate, {@code event(Payment.class, 2, "isBig", p -> p.isBig())}. {@link #build()} refuses a capped
+         * flow with a leaf whose predicate has no name, and one where two leaves share a name while holding different
+         * predicates, naming the step and what to do in both cases. A guard's {@code onlyIf} needs no name, since it is checked
+         * against the arriving event rather than counted over a window, and a predicate with no name costs nothing on a flow
+         * without a cap.
          */
         public Builder<E, C> stepWindow(int events) {
             if (events < 1) {
@@ -227,28 +234,25 @@ public final class FlowSaga {
             validateTransitionToTargets(stepsByName.keySet());
             Set<Class<? extends E>> eventTypes = collectEventTypes();
             validateCorrelationCoverage(eventTypes);
-            validateStepWindowCanCarryCounts();
+            validateStepWindowCanKeepCounts();
 
             return new FlowSagaImpl<>(startType, onStartCommands, List.copyOf(steps), stepIndex, stepsByName,
                     correlators, correlateAll, Set.of(startType), eventTypes, historyWindow, stepWindow);
         }
 
-        // Dropping a step's older events means its condition counts have to be carried in the instance's state, and a count
-        // can only be carried for a leaf a later declaration can still be matched to. Two leaves over one event type that
-        // both have a predicate are indistinguishable, so refuse the combination here rather than move a count onto the
-        // wrong predicate after a redeploy reorders them.
-        private void validateStepWindowCanCarryCounts() {
+        // Dropping a step's older events means its condition counts have to live in the instance's state, and a count can
+        // only be kept for a leaf a later declaration can still be matched to. A step whose leaves cannot all be matched to
+        // one counts its window instead, which is fine until its events are dropped, so refuse the pair here.
+        private void validateStepWindowCanKeepCounts() {
             if (stepWindow == FlowSagaImpl.UNBOUNDED_STEP_WINDOW) {
                 return;
             }
             for (CompiledStep<E, C> step : steps) {
-                Class<?> indistinguishable = step.leaves().indistinguishableEventType();
-                if (indistinguishable != null) {
-                    throw new IllegalStateException("step '" + step.name() + "' declares two window-condition leaves over "
-                            + indistinguishable.getSimpleName() + " that both have a predicate, and stepWindow(" + stepWindow
-                            + ") cannot keep their counts across a redeploy because nothing tells the two leaves apart. Ask"
-                            + " for different counts on them, or restructure the step so no two leaves over one event type"
-                            + " both have a predicate, or drop stepWindow(...) for this flow");
+                String why = step.leaves().uncountableWhy();
+                if (why != null) {
+                    throw new IllegalStateException("step '" + step.name() + "' cannot keep its condition counts, so it cannot"
+                            + " be used with stepWindow(" + stepWindow + "), which drops the events those counts would"
+                            + " otherwise be derived from. " + why + ", or drop stepWindow(...) for this flow");
                 }
             }
         }

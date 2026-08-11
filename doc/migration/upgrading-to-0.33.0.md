@@ -352,7 +352,7 @@ case of one consumer running, not a rare one, so the pair is refused up front wi
 Nothing here changes unless you ask for it, so you can skip this section if no flow saga of yours idles in one step.
 
 `historyWindow` never limited the whole of a flow saga's retained state. It limits the carry-over behind the current
-step's entry, and it is applied when a step is left, so the step being left keeps every one of its own events. An
+step's entry, and it is applied when a step is left, and it puts no limit at all on the events of the step being left. An
 instance parked in one step while a large number of correlated events arrive therefore kept all of them, whatever
 `historyWindow` was set to, `historyWindow(0)` included. The 0.31.0 entry that introduced `historyWindow` claimed the
 retained state did not grow without bound, and that was only true for a flow whose steps turn over.
@@ -367,11 +367,14 @@ FlowSaga.<OrderEvent, OrderCommand>builder()
         .startsOn(OrderPlaced.class)
 ```
 
-Kotlin has `stepWindow(50)` in the `saga { }` block beside `historyWindow`. Set both and the instance keeps at most
-`historyWindow + stepWindow + 1` events, the last one being the initiating event, which is always kept.
+Kotlin has `stepWindow(50)` in the `saga { }` block beside `historyWindow`.
 
-**What a callback can read shrinks, and that is the whole cost.** A step condition is unaffected, because its counts are
-carried in the instance's state rather than recounted from the events, so a step completes on the same event it would
+An instance holds at most `historyWindow + 2 * stepWindow + 1` events at any one moment. The doubled `stepWindow` is
+real rather than slack. A transition keeps the events of the step being left, so that step's reaction can read them,
+and the step being entered then fills its own cap before anything is dropped.
+
+**What a callback can read shrinks, and that is the whole cost.** A step condition is unaffected, because its counts
+are kept in the instance's state rather than counted from the events, so a step completes on the same event it would
 have without the cap. What reads less is everything that reads the received events directly:
 
 - a guard, `on(Type.class, onlyIf, ...)`, so a retry guard counting `PaymentFailed` needs its threshold to fit inside
@@ -379,20 +382,41 @@ have without the cap. What reads less is everything that reads the received even
 - a `timeout`'s `onExpiry`
 - a window-condition reaction, `on(condition, then, whenFulfilled)`, which reads what is left of its step's window
 
-Two things stay guaranteed at any cap of 1 or more. `received.initiating()` still reaches the start event, and the event
-that fired a branch is still the last element of `received.asList()`.
+Two things stay guaranteed at any cap of 1 or more. `received.initiating()` still reaches the start event, which is
+kept as the first retained event and never counts against the cap, and the event that fired a branch is still the last
+element of `received.asList()`.
 
-**One failure mode comes with the cap.** Once the cap has dropped a step's older events, nothing can rebuild that step's
-counts from scratch, so changing which events a capped step waits on while instances are parked in that step makes those
-instances refuse their next delivery with an `IllegalStateException` naming the step. Retrying does not help. Put the
-previous condition declaration back until the parked instances have moved on, or delete the instance. Changing the count
-a leaf asks for is safe, and so is changing a step no instance is currently parked in.
+### Name the predicate of any leaf in a capped step
 
-**A saga that cannot tell two of its leaves apart is refused at startup.** Two leaves over one event type that both
-have a predicate, in the same step, look identical to the bookkeeping that keeps their counts, so `build()` throws
-`IllegalStateException` naming the step rather than risk moving one leaf's count onto the other's predicate after a
-redeploy reorders them. Ask for different counts on the two leaves, restructure the step, or leave that flow without a
-`stepWindow`. Such a step works exactly as before when you do not set one.
+A step's counts have to be matched back to the leaves that produced them after a restart or a redeploy, and a lambda is
+a different object every time the class loads. So a window-condition leaf that carries a predicate needs a name for it, and
+`build()` refuses a capped flow with a leaf whose predicate has no name, naming the step. A guard's `onlyIf` needs no name,
+since a guard is checked against the arriving event rather than counted over a window.
+
+```java
+.step("review", step -> step
+        .on(event(Payment.class, 2, "isBig", p -> p.amount() > 1000), next()))
+```
+
+Two leaves may share a name only when they hold the same predicate value. Two leaves over one event type sharing a name
+while holding different predicates are refused when the saga is built, because nothing would then tell their counts
+apart.
+
+**Change the name whenever the predicate's meaning changes.** Keeping `"isBig"` while changing the test from
+`amount() > 1000` to `amount() > 5000` is the one thing this cannot detect, and an instance parked in that step then
+keeps counting the events it matched under the old test. Changing the name is what says the old counts no longer apply.
+Changing the count a leaf asks for is always safe and needs no new name.
+
+A flow without a `stepWindow` needs none of this. A predicate with no name costs nothing there, and such a step counts
+its window on every delivery exactly as it always did.
+
+### One failure mode comes with the cap
+
+Once the cap has dropped a step's older events, nothing can rebuild that step's counts from scratch. So changing what a
+capped step waits on, whether that is a leaf's event type or a predicate's name, makes every instance parked in that step
+past its cap refuse its next delivery with an `IllegalStateException` naming the step. Retrying does not help. Put the
+previous condition declaration back until the parked instances have moved on, or delete the instance. An instance still
+inside the cap counts its window again and carries on, since its events are all still there.
 
 [ADR 123](../architecture/decisions/0123-a-step-conditions-counts-are-carried-so-the-steps-events-can-be-dropped.md)
 has the reasoning, including why this is a second setting rather than a new meaning for `historyWindow`.

@@ -250,15 +250,23 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return Math.min(Math.max(1, entryPosition - windowStart + 1), size);
     }
 
-    // Where the retained tail has to start so that at most stepWindow of the current step's own events are kept. Retention
-    // is a contiguous tail, so capping the current step's events at n means keeping the last n events of all once the step
-    // has more than n, with the initiating event pinned on top as always.
+    // Where the retained tail has to start so that at most stepWindow of the current step's own events are kept.
+    // The tail is one run of events, and the current step's events sit at the end of it behind whatever carry-over
+    // historyWindow granted, so dropping the step's oldest events means dropping the whole carry-over ahead of them first.
+    // Advancing the start by the excess alone would drop that many carry-over events and leave every one of the step's,
+    // which caps nothing and takes the history a guard was promised.
     private int boundedWindowStart(int stepEntryIndex, int windowStart, int size) {
         if (stepWindow == UNBOUNDED_STEP_WINDOW) {
             return windowStart;
         }
-        int kept = size - windowStartIndex(stepEntryIndex, windowStart, size);
-        return kept > stepWindow ? windowStart + (kept - stepWindow) : windowStart;
+        int firstStepEvent = windowStartIndex(stepEntryIndex, windowStart, size);
+        int kept = size - firstStepEvent;
+        if (kept <= stepWindow) {
+            // The step is within its cap, so the carry-over is left exactly as historyWindow left it.
+            return windowStart;
+        }
+        int carryOver = firstStepEvent - 1;
+        return windowStart + carryOver + (kept - stepWindow);
     }
 
     // Every transition resets stepEntryIndex to the new step's entry, including a transitionTo back into the current step
@@ -580,23 +588,25 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     /**
      * Every leaf the window conditions of one step declare, flattened across its branches in declaration order, which is
-     * the order a carried count list is read in.
+     * the order a kept count list is read in.
      * <p>
-     * {@code fingerprint} holds the step's name and, per leaf, its event type and whether it has a predicate. What it
-     * deliberately leaves out is the count a leaf asks for, because a carried count is the raw number of events that
+     * {@code fingerprint} holds the step's name and, per leaf, its event type and the name of its predicate if it has one.
+     * What it deliberately leaves out is the count a leaf asks for, because a kept count is the raw number of events that
      * matched the leaf's matcher rather than something capped at a threshold, so raising or lowering a count on a redeploy
-     * still leaves the carried numbers meaning what they meant.
+     * still leaves the kept numbers meaning what they meant. Each part is written with its length in front, so no step name
+     * and no predicate name can forge a boundary between parts.
      * <p>
-     * A predicate has no identity a fingerprint can capture, so two leaves that agree on event type and on having a
-     * predicate produce the same entry, and swapping them in the declaration would move each one's count onto the other's
-     * predicate with nothing to notice it. {@code countable} is false exactly when that is possible, meaning some entry
-     * appears more than once with matchers that are not equal. Such a step counts its window on every delivery instead,
-     * which is always available because {@code stepWindow} refuses to build a saga containing one.
+     * {@code uncountableWhy} says why this step's counts cannot be kept at all, and is null when they can. Two things make
+     * a step uncountable, and both come down to a predicate having no identity of its own. A leaf whose predicate has no
+     * name cannot be told from the same leaf carrying a changed predicate after a redeploy, and two leaves that share a
+     * name while holding different predicates cannot be told from each other. Such a step counts its window on every
+     * delivery instead, which is exactly what every step did before counts were kept, and {@code stepWindow} refuses to
+     * build a saga containing one because dropping that step's events would leave nothing to count.
      */
-    record StepLeaves<E>(List<StepCondition.EventMatcher<E>> matchers, String fingerprint, @Nullable Class<?> indistinguishableEventType) {
+    record StepLeaves<E>(List<StepCondition.EventMatcher<E>> matchers, String fingerprint, @Nullable String uncountableWhy) {
 
         boolean countable() {
-            return indistinguishableEventType == null;
+            return uncountableWhy == null;
         }
 
         static <E, C> StepLeaves<E> of(String stepName, List<Branch<E, C>> branches) {
@@ -606,20 +616,38 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                     StepConditionWalk.forEachLeafMatcher(windowCondition.condition(), matchers::add);
                 }
             }
-            StringBuilder fingerprint = new StringBuilder(stepName);
+            StringBuilder fingerprint = new StringBuilder();
+            appendPart(fingerprint, stepName);
             Map<String, StepCondition.EventMatcher<E>> firstPerEntry = new LinkedHashMap<>();
-            Class<?> indistinguishable = null;
+            String why = null;
             for (StepCondition.EventMatcher<E> matcher : matchers) {
-                String entry = matcher.eventType().getName() + (matcher.predicate() == null ? "" : "?");
-                fingerprint.append('|').append(entry);
-                StepCondition.EventMatcher<E> earlier = firstPerEntry.putIfAbsent(entry, matcher);
-                // Comparing against the first leaf of the entry is enough, since any leaf differing from it means they are
-                // not all the same matcher, which is the only thing that makes crossing two counts harmless.
-                if (earlier != null && !earlier.equals(matcher) && indistinguishable == null) {
-                    indistinguishable = matcher.eventType();
+                String type = matcher.eventType().getName();
+                String predicatePart = matcher.predicate() == null ? ""
+                        : "?" + (matcher.predicateId() == null ? "" : matcher.predicateId());
+                appendPart(fingerprint, type);
+                appendPart(fingerprint, predicatePart);
+                String simple = matcher.eventType().getSimpleName();
+                if (why == null && matcher.predicate() != null && matcher.predicateId() == null) {
+                    why = "its leaf over " + simple + " carries a predicate with no name, and a lambda is a different object"
+                            + " every time the class loads, so a redeploy that changed that predicate cannot be told from one"
+                            + " that did not. Name it with event(" + simple + ".class, count, \"<name>\", predicate)";
+                }
+                StepCondition.EventMatcher<E> earlier = firstPerEntry.putIfAbsent(type + predicatePart, matcher);
+                // Comparing against the first leaf of the entry is enough, since any leaf accepting different events from it
+                // means they do not all count the same events, which is the only thing that makes crossing two counts harmless.
+                if (why == null && earlier != null && !earlier.matchesTheSameEvents(matcher)) {
+                    why = "two of its leaves over " + simple + " share the predicate name '" + matcher.predicateId()
+                            + "' while holding different predicates, so nothing tells their counts apart. Give them different"
+                            + " names, or pass the same predicate to both if they are the same test";
                 }
             }
-            return new StepLeaves<>(List.copyOf(matchers), fingerprint.toString(), indistinguishable);
+            return new StepLeaves<>(List.copyOf(matchers), fingerprint.toString(), why);
+        }
+
+        // Length in front of every part, so a step name or a predicate name holding the separator cannot pass itself off as
+        // two parts and make one declaration's fingerprint match another's.
+        private static void appendPart(StringBuilder fingerprint, String part) {
+            fingerprint.append(part.length()).append(':').append(part).append('|');
         }
     }
 
