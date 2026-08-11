@@ -987,3 +987,34 @@ which named one monitor by id as though that were the complete set.
 gate and the stall detector actually depend on (delivery and CI, thread resolution, worker liveness),
 and re-arm each. Recording the task ids together in `ORCHESTRATOR.md` is what makes the omission
 visible next time, since a single id in that slot reads as complete.
+
+## A warning left in an ADR amendment caught the very next change (2026-08-11, cdx33 U11)
+
+When the step-condition contract half shipped, its ADR 0120 amendment recorded that `windowStartIndex`
+clamps into `[1, size]` because a store defaults absent fields independently, and warned that any later
+change persisting a sibling number would inherit the same exposure. The next change did exactly that,
+and the warning fired: U11's first drop-evidence test compared the tail start against the step entry
+alone, and a PRE-EXISTING test
+(`a_window_start_past_the_step_entry_does_not_pull_the_initiating_event_into_the_window`) failed
+immediately, because a store defaulting the tail start to 1 and the entry to 0 reads as a real drop.
+The check now also requires an entry position of at least 1.
+
+Two things worth keeping. **Comparing two independently-defaulted persisted numbers is not a safe
+signal**, because a store that fills absent fields per field can manufacture the difference you are
+testing for. And the reconstructed-state tests are the tripwire that catches it: they have now earned
+their place twice, so treat a failure there as evidence about the design rather than a test to adjust.
+
+The meta-point is about where warnings go. This one worked because it sat in the ADR that the next
+author had to read anyway, next to the decision it qualifies, rather than in a lessons file or a PR
+comment. When a change leaves a hazard for its successor, write it where the successor will be standing.
+
+## A surviving mutation usually means the test picked the self-healing side of the guard (2026-08-11)
+
+U11 ran ten mutations and one survived: the persisted counts-length check. The reason was not a weak
+guard but a weak test, which supplied a too-LONG count list where the code self-heals by ignoring the
+excess. Reworked to a too-SHORT list, the mutation died immediately with `IndexOutOfBounds`.
+
+**How to apply:** when a mutation survives, before concluding the guard is untested, ask which side of
+it the test exercised. A guard that tolerates one direction and fails the other needs the failing
+direction, and picking the tolerant side produces a green test that proves nothing, which is exactly
+what mutation testing exists to expose.

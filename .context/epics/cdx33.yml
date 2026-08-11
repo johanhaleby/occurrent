@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 42
-updated_at: 2026-08-11T18:16:15Z
-updated_by: "orchestrator session faee3625 (U11 delivered PR 749 and filed #748 first as instructed; #748 routed as deferred)"
+revision: 43
+updated_at: 2026-08-11T18:21:35Z
+updated_by: "orchestrator session faee3625 (U11 DELIVERY_RESULT received, PR 749 awaiting its matrix; ADR 0123 verified uniquely claimed across all remote refs)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "REOPENED 2026-08-11 after closeout. The tag is HELD again for U11 and U12. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -231,11 +231,11 @@ units:
     depends_on: []
     session: "worktree subagent af8b678b3c64ae940"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "749", met: false, evidence: "PR 749 open on cdx33/u11-stepcondition-counters, head 0ace9bc73d0e5bb1f18991795ae6d0717ebaae0f, titled Cap the events a flow saga keeps for the step it is parked in. Checks running, no review yet. Out-of-scope trace #748 filed BEFORE the PR as instructed and routed as deferred"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "749", met: false, evidence: "PR 749, head ab0cf685cf643e7998bc97e2bd37939c809671c6, matrix QUEUED on that exact head, 0 unresolved threads, Copilot requested and confirmed via reviewRequests read-back but no review body posted yet. Shipped: stepWindow(int) on FlowSaga.Builder plus the Kotlin twin, a nullable FlowStateImpl.stepConditionProgress component, raw uncapped saturating counts with the threshold OUT of the fingerprint, and a build-time proof that leaves sharing a fingerprint entry are equal EventMatchers, with build() refusing stepWindow for a flow that fails the check. ADR 0123 records the trade that bounding retention gives up recounting. Verified by the orchestrator: 0123 is claimed on this branch only, across all remote refs. 521 tests in saga-dsl/common green, 20 new tests plus a Kotlin parity test, 3 hand-seeded Mongo documents per the #724 precedent, 10 mutations run"}
       - {check: manual_approval, ref: "U11 plan gate, Johan via the orchestrator", met: true, evidence: "SATISFIED 2026-08-11T17:44:27Z. Johan chose the FULL plan (counters plus the retention bound) over the smaller stepWindow-only escape hatch the worker offered, accepting a persisted-shape change pre-tag because after the tag it becomes a second breaking change, and accepting the fail-loud trade when a bounded step leaf declaration changes mid-flight. Johan also chose the knob name stepWindow. The worker found a THIRD broken design: the per-leaf fingerprint of (type, has-predicate, count) that the orchestrator handed it does NOT close known failure mode 1, because two leaves agreeing on all three produce an identical entry, so swapping them crosses their counters and fires the wrong branch. Its fix, approved: raw uncapped saturating counters with the threshold OUT of the key (removing failure mode 2 as a class), plus build-time eligibility requiring same-entry leaves to be equal EventMatchers. Orchestrator answered the other five questions: threshold out of key approved, stepWindow as a NEW knob not a redefinition of historyWindow, the false 0.31.0 growth claim corrected FORWARD rather than by editing a past changelog section, one Kotlin parity function approved, and IllegalStateException with a precise message rather than a new type per the ADR 104/105 precedent"}
     blocking_on: []
-    next_action: worker implementing; at merge-readiness verify the hand-seeded old-document tests, that recount-on-mismatch limits are stated in the ADR, and that the saturation reasoning is in a code comment
-    last_meaningful_progress_at: 2026-08-11T18:16:15Z
+    next_action: merge on matrix success for ab0cf685c, verified by run list; note the docs project needs a stepWindow page update, which is a UDOCS follow-up rather than part of this PR
+    last_meaningful_progress_at: 2026-08-11T18:21:35Z
     observed: {}
     assessment: "ADOPTED because the orchestrator had already routed #741 as a pre-tag follow-up on the issue itself and then closed the epic without dispatching it, which Johan caught. Johan chose to honour the tracker rather than rewrite it. Engineering reason it belongs pre-tag: the retention bound changes the persisted state shape and what a guard onlyIf and a timeout reaction can read, so doing it after the tag means a second breaking change plus paying in-flight document compatibility twice. Two cache-key designs are already known broken and named in the brief so they are not rediscovered, and recount-on-mismatch is what makes a wrong key harmless rather than silent"
   U12:
