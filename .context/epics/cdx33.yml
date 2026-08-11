@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 37
-updated_at: 2026-08-11T16:43:10Z
-updated_by: "orchestrator session faee3625 (U6 MERGED as b8b6d71c4, the LAST GATING library unit; every code finding from the review is now resolved on main, only UDOCS and UREG remain)"
+revision: 38
+updated_at: 2026-08-11T16:45:31Z
+updated_by: "orchestrator session faee3625 (all eleven library units DONE; UDOCS dispatched as a subagent with scripted-Bash writes; UREG substance already complete)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -105,14 +105,14 @@ units:
     goal: "Spring fencing wiring (findings 15, 16): per D5 fail startup on ambiguous strategy beans (back default off any interface-typed bean), starter validates conditional-write capability or explicit unfenced mode; guide caveat lands after U5"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U5]
     session: "worktree subagent a73c222882b9549d1 (chip task_4ff34e51 dismissed unstarted)"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "745", met: true, evidence: "MERGED as squash b8b6d71c4669f6aa9c5906c9ea13d8f42fec705a, CAS-pinned to 412bd0c86b3ff2995bb7e9fa0d1eea4b6a71ad49. Matrix completed/success on that exact head by RUN LIST, 27 of 27, 0 pending, 0 unresolved threads with all six Copilot findings FIXED rather than declined. Mergeable read UNKNOWN first and was re-read to MERGEABLE CLEAN before pinning. Verified on origin/main: the guard is invoked from OccurrentBlockingAnnotationBeanPostProcessor, evaluatesWriteConditions is on both stacks with the six storages advertising true, and the fence-checkpoints property exists. 35 files, three commits. Branch deleted, no stranded push"}
       - {check: manual_approval, ref: "U6 plan gate (capability-discovery mechanism under D1-kept contract), Johan", met: true, evidence: "SATISFIED 2026-08-11T13:34:39Z via structured ask in the orchestrator session (Johan mobile). OPTION A: add one default method evaluatesWriteConditions() returning false to CheckpointStorage on BOTH stacks, so unable-by-default means startup failure rather than delivery failure. Decisive evidence from the worker: CheckpointStorageFixture.evaluatesWriteConditions() already exists in the TCK and its javadoc states the gap is that nothing on CheckpointStorage reports it back, so this fills a documented contract gap rather than speculating. Consistent with D1, which kept the ADR 116 break and anticipated exactly this small addition. Orchestrator granted the ownership extension (subscription/api both stacks, six shipped storages needing a true override, ~14 mock stubs, and the TCK fixture javadoc sentence that is now false). Also approved: @Fallback as the mechanism, widening occurrentCompetingDurableSubscriptionModel to the interface, a SmartInitializingSingleton validator, two named exceptions, and the fence-checkpoints opt-out property"}
     blocking_on: []
-    next_action: sweep the worktree and branch
+    next_action: none, merged and swept; its branch also had to be released from the orchestrator session worktree, which U6 had checked out
     last_meaningful_progress_at: 2026-08-11T16:43:10Z
     observed: {}
     assessment: "Delivered both findings plus a bug nobody had named: a custom strategy used to leave the starter default acquiring leases BESIDE it, so one subscription had two lease owners, fixed by widening occurrentCompetingDurableSubscriptionModel to the interface. Six Copilot threads all fixed, the important one being that the startup guard was outrunnable by OccurrentBlockingAnnotationBeanPostProcessor; the fix is structural rather than an Order annotation, the check is the first statement of the registering callback, reproduced before fixing and proven by deletion. Two SmartInitializingSingletons have no usable relative order, which is now a recorded rule"
@@ -195,16 +195,16 @@ units:
   UDOCS:
     issue: null
     goal: "Docs repo ripple: sweep held branches (52, 55, 61, 54 news post, others as touched), rebuild docs/0.33.0-preview, update occurrent-org.github.io#57. Trigger: every GATING library unit with a docs surface merged; stalled non-gating units defer their ripple alongside"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U1, U3, U5, U6, U8, U9]
-    session: null
+    session: "subagent afbe9f24d44e68160 (no worktree isolation, it edits a second repository through scripted Bash)"
     deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: SCOPE ADDITION from the U1 withdrawal, held docs PR 52 leaves the 0.33.0 merge order in issue 57 (retarget to a 0.34.0 hold or close), the news post on PR 54 branch loses its AppliedProjectionPositionStore mention, and the preview rebuild greps zero hits for the withdrawn API
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: await DELIVERY_RESULT; verify the preview greps return zero for the withdrawn API and that issue 57 body matches the corrected order
+    last_meaningful_progress_at: 2026-08-11T16:45:31Z
     observed: {}
     assessment: "Held-branch convention, push never merge; trial-merge + exact-once paragraph greps per recorded docs lessons"
   UREG:
@@ -216,9 +216,9 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: manual_approval, ref: "orchestrator inline work verified at closeout", met: false, evidence: null}
+      - {check: manual_approval, ref: "orchestrator inline work verified at closeout", met: true, evidence: "COMPLETE 2026-08-11T16:45:31Z. Filed and routed with confirmed marker comments: #746 (finding 5) and #747 (finding 21). Finding 20 DECLINED and recorded in ORCHESTRATOR.md as do-not-re-raise. #741 accepted as the pre-tag follow-up for finding 3, #743 deferred, and #734 and #735 CLOSED as moot after PR 739 deleted the code they described. Every one of the review 21 findings now has a routed outcome and the tracker carries a visible routing comment for each"}
     blocking_on: []
-    next_action: closeout
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: none, register complete; the epic closes once UDOCS lands and main matrix is verified
+    last_meaningful_progress_at: 2026-08-11T16:45:31Z
     observed: {}
     assessment: "Inline orchestrator work; issues carry the fleet marker and origin link"
