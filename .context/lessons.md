@@ -670,3 +670,26 @@ epic state's open units, not just the PR set. A unit with an unmet deliverable a
 session is BLOCKED on the orchestrator and needs a `send_message` resume naming the exact
 obligation, since a chip session cannot notify you that it gave up. Do not infer liveness from the
 PR being healthy, which is precisely what a delivered-but-unfinished unit looks like.
+
+## "No changelog entry for unreleased surface" is a wrong paraphrase, and it cost three review round trips (2026-08-11, cdx33)
+
+Three unit briefs (U2, U7, U9) told the worker that a fix to unreleased 0.33.0 surface needs "no
+Changes changelog entry, dev-churn on unreleased surface". Copilot then raised the same objection
+on PR 729 and PR 728 independently, and it was right both times: the existing
+`### Changelog next version` entry already DESCRIBES the unreleased capability, so a refinement
+that changes what that entry claims has to be folded into it. Omitting the changelog entirely
+leaves the entry describing behavior that no longer exists.
+
+The governing rule in AGENTS.md distinguishes dev-churn on an unreleased capability, which gets no
+NEW `#### Changes` bullet, from the separate obligation to keep an existing entry truthful. My
+briefs collapsed those into "no changelog entry", which is the same compression failure already
+recorded for the vgpr brief, committed again by the same hand that recorded it. Both workers
+handled it correctly, but each paid a review round trip and a rebase to learn what the brief could
+have told them.
+
+**How to apply:** a brief for a change to unreleased surface says, in this shape rather than in
+paraphrase: no new `#### Changes` bullet, AND check whether an existing `### Changelog next
+version` entry describes the behavior you are changing, folding the refinement into that entry if
+so. Quote the AGENTS.md sentence rather than summarizing it. And when the same reviewer objection
+arrives on two different PRs from two different workers, treat the brief as the defect rather than
+the workers.
