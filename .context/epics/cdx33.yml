@@ -1,10 +1,10 @@
 schema_version: 1
 epic: cdx33
-revision: 22
-updated_at: 2026-08-11T11:41:22Z
-updated_by: "orchestrator session faee3625 (U1 hold condition satisfied: epic issue 740 filed and routed, 361 reopened and cross-linked; six fleet issues routed as deferrals)"
+revision: 23
+updated_at: 2026-08-11T11:43:07Z
+updated_by: "orchestrator session faee3625 (U2 MERGED as 6743d3e6c and swept, both review blockers now resolved, seven of thirteen units done)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
-authority: "PR 728 hold LIFTED 2026-08-11: the Option E rewrite on head 1de6225f6db43ed524510ae82dbe86d300608fa9 is orchestrator-verified and merges on the normal gate (matrix on that exact head by run list, plus resolved threads). Any head at or before 3d6abd2089b626ae96254e711a71f7da24b6c5f1 carries the SUPERSEDED warn-and-proceed shape and must never be merged. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
+authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
   - id: act-001
     type: dispatch-chip
@@ -42,16 +42,16 @@ units:
   U2:
     issue: null
     goal: "Manual-start pin refusal (finding 12, blocker): compare stored vs captured on ifAbsent refusal, fail loud on difference, later-registrant-starts-first test, check manual-start ADR amendment need"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_cff3efc3-ade2-406e-8aac-a3f25e144bce
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: false, evidence: "OPTION E DELIVERED on head 1de6225f6db43ed524510ae82dbe86d300608fa9, 0 unresolved threads, matrix queued on that exact head as a push event. Both orchestrator additions verified by reading the head: the write stays unconditional but is justified by an ordering requirement stronger than the ask (pin before the registration becomes visible, so a resumeSubscription racing in cannot let the wrapped model capture its own later position) and is covered by a new test, a_subscription_registered_on_a_running_model_still_pins_its_registration_position_before_starting_live; the ADR 0086 amendment records that writing at registration is what makes this wrapper a faithful stand-in for the subscribe call it withholds rather than a safer ordering chosen on its own terms. Also present: an_earlier_registrant_always_wins_the_pin_even_when_a_later_registrant_starts_first, the ADR 0116 amendment, the INFO diagnostic, one new Changes bullet. MERGE WHEN THE MATRIX PASSES"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: true, evidence: "MERGED as squash 6743d3e6c3c14a962e85e06e90396acfd684456f, CAS-pinned to 1de6225f6db43ed524510ae82dbe86d300608fa9 with the post-merge head equal to the pin. Matrix verified by RUN LIST as completed/success on that exact head as a push event, 27 of 27, 0 pending, 0 unresolved threads, Copilot reviewed that head with no new findings. Verified on origin/main: the pin call sits inside subscribe at line 166, the diagnostic is Level.INFO not WARNING, and both decisive tests are present (an_earlier_registrant_always_wins_the_pin_even_when_a_later_registrant_starts_first and a_subscription_registered_on_a_running_model_still_pins_its_registration_position_before_starting_live). Branch deleted on merge, no stranded push, worktree clean at the pin and swept"}
     blocking_on: []
-    next_action: merge on matrix success for head 1de6225f6, verified by run list not rollup
-    last_meaningful_progress_at: 2026-08-11T11:37:10Z
+    next_action: none, merged and swept
+    last_meaningful_progress_at: 2026-08-11T11:43:07Z
     observed: {}
     assessment: "OPTION E APPROVED 2026-08-11T11:08:42Z. Pin moves from start to REGISTRATION so the earliest registrant wins and every refusal is safe to accept (worst case a duplicate, never a skip, and at-least-once with dedup by event id is the contract). Reduces the reversal window from routine (capture-to-write spans until someone starts, minutes to hours) to pathological (milliseconds against a registration gap of minutes). Two worker findings reshaped it: the class public javadoc has promised pin-at-registration since 0.32.0 while the code did the opposite (ADR 86 Decision text matched the code), and the reactor twin at ReactorDurableSubscriptionModel:298-299 still carries the same read-then-save race #669 fixed here, filed as #738 leave-for-later. Orchestrator additions: scope or prove the new live-path write (today the live path never pins), and the ADR 86 amendment must record that pinning at registration RESTORES what deferring subscribe displaced from DurableSubscriptionModel, which is the real argument. Costs accepted: a new Changes bullet for 0.32.0-released behavior, no recipe, deliberate reactor divergence, INFO-level diagnostic on a differing accepted position"
   U3:
