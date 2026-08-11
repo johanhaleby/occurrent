@@ -115,6 +115,23 @@ class SpringMongoSagaStateStoreMongoTest {
     }
 
     @Test
+    void stores_a_timer_name_in_the_document_as_the_string_it_was_given() {
+        // The three shapes a pending timer's name can have, checked against the raw document rather than a read back
+        // through the store, which would agree with whatever the store had just written. Changing any of these strings
+        // means an instance that was already waiting on that timer stops firing after the upgrade.
+        List<TimerEntry> timers = List.of(new TimerEntry("payment", 1_000),
+                new TimerEntry("step:awaiting-players", 2_000),
+                new TimerEntry("a:b", 3_000));
+        store.compareAndSave("timer-names", active("timer-names", new Counter(1), 1, timers, 0), 0);
+
+        Document raw = mongoOperations.findById("timer-names", Document.class, collection);
+
+        assertThat(raw.getList("timers", Document.class))
+                .extracting(timer -> timer.getString("name"))
+                .containsExactly("payment", "step:awaiting-players", "a:b");
+    }
+
+    @Test
     void updates_only_when_the_expected_version_matches() {
         store.compareAndSave("s3", active("s3", new Counter(1), 1, List.of(), 0), 0);
 

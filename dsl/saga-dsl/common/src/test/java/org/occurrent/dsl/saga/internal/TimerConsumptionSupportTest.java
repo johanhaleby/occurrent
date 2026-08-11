@@ -18,9 +18,14 @@ package org.occurrent.dsl.saga.internal;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
+import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaInput;
+import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.SagaTimeout;
 import org.occurrent.dsl.saga.TimerName;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
@@ -29,6 +34,7 @@ import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -89,5 +95,28 @@ class TimerConsumptionSupportTest {
 
         assertThat(fired.envelope().timers()).extracting("name").containsExactly("t");
         assertThat(fired.envelope().timers().getFirst().firesAtEpochMilli()).isEqualTo(NOW.plusSeconds(60).plus(Duration.ofMinutes(5)).toEpochMilli());
+    }
+
+    @ParameterizedTest(name = "stored as \"{0}\"")
+    @ValueSource(strings = {"payment", "step:awaiting-players", "a:b"})
+    @DisplayName("and one already in the store when the upgrade happened is removed under the name it was stored under")
+    void aTimerStoredBeforeTimerNameExistedIsConsumed(String storedTimerName) {
+        // Each of these is a name written into a store before TimerName existed, spelled out rather than encoded from a
+        // TimerName, so the key that removes the timer is checked against the stored string and not against itself. A key
+        // that disagrees leaves the timer pending and it fires again on every poll for as long as the instance lives.
+        Saga<Ev, String, Cmd> saga = Saga.<Ev, String, Cmd>builder("new")
+                .correlate(Started.class, Started::id)
+                .startsOn(Started.class)
+                .evolve(Started.class, (state, event) -> "active")
+                .evolveOnTimeout(storedTimerName, (state, timeout) -> "active")
+                .reactOnTimeout(storedTimerName, (state, timeout) -> List.of(SagaEffect.issue(new Ping(timeout.sagaId()))))
+                .build();
+        SagaEnvelope<String> stored = new SagaEnvelope<>("s1", "active", SagaStatus.ACTIVE, 1,
+                List.of(new TimerEntry(storedTimerName, NOW.toEpochMilli())), Map.of(), null, NOW, NOW, null, null);
+
+        Outcome<String, Cmd> fired = SagaExecutionSupport.process(saga, "s1", stored, SagaInput.timeout("s1", TimerName.parse(storedTimerName)), EventMeta.NONE, NOW.plusSeconds(1));
+
+        assertThat(fired.commands()).as("the stored name still matches the registration it was armed under").containsExactly(new Ping("s1"));
+        assertThat(fired.envelope().timers()).as("the fired timer must be consumed so it does not re-fire every poll").isEmpty();
     }
 }
