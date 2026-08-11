@@ -1,7 +1,7 @@
 schema_version: 1
 epic: timerid
-revision: 6
-updated_at: 2026-08-11T05:37:55Z
+revision: 7
+updated_at: 2026-08-11T05:46:14Z
 updated_by: orchestrator session 496ca320 (design gate satisfied, U2 dispatched)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 design gate SATISFIED 2026-08-11, Johan confirmed both open decisions, take the source break and take the constructor change, on AGENTS.md long-term grounds. Chips are usable again from the same message"
@@ -41,31 +41,31 @@ units:
   U2:
     issue: 716
     goal: "Core: the sealed TimerId with its parse/encode pair, TimerId overloads on SagaEffect and Saga.Builder, the SagaInput.timeout(String, TimerId) shortcut, SagaTimeout carrying the typed id, and the registration maps re-keyed"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U1]
     session: "chip task_9767607f"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "719", met: false, evidence: "PR 719 open at 4983ceb6f, mergeable. Orchestrator review found NO defects. parse/of split matches the merged ADR, not the pre-revision one. Both round trips are parameterized over a corpus with unicode, 10k-char names, ISO timestamps and double colons. Both requested tests present, cross-form duplicate registration at SagaTest:678 and parse injectivity at TimerNameTest:242. toString returns encode on both records. FlowSagaImpl adaptation is 3 lines and defers the real work to U3. Writing gates clean, only hit is Apache boilerplate. Matrix running, 27 checks"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "719", met: true, evidence: "MERGED as squash ba2d1f791, CAS-pinned to 4983ceb6f, matrix 27 of 27 green. MERGED WITH AN UNRESOLVED COPILOT THREAD, which is an orchestrator error twice over: the brief omitted the standing pr-fix loop from ORCHESTRATOR.md:344, and the merge gate checked the rollup and mergeStateStatus but never the review threads. The thread was correct, SagaInput.java:82 javadoc cites stepTimer which did not exist. Replied on the thread, and fixing it is a required deliverable of U3"}
     blocking_on: []
-    next_action: "reviewed clean, waiting on the full matrix, 27 checks"
+    next_action: none, merged with the thread defect routed to U3
     last_meaningful_progress_at: 2026-08-11T05:37:55Z
     observed: {}
     assessment: "Deliberately excludes a timeout(String, String) overload. Core cannot know whether the saga it feeds is a flow saga, so it would parse a step name to Named, fail to match the flow's Qualified, and reintroduce the silent no-op this epic exists to delete."
   U3:
     issue: 716
     goal: "Flow: the lowering uses Qualified(step, ..), FlowSaga.stepTimer exposed, the four FlowSagaImpl concatenation sites removed, and every in-repo test migrated off the step: literal"
-    phase: BLOCKED
-    health: STALLED
+    phase: READY
+    health: PROGRESSING
     swept: false
     depends_on: [U2]
     session: null
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: ["U2, the type it consumes"]
-    next_action: "hold until U2 merges"
-    last_meaningful_progress_at: 2026-08-10T19:51:25Z
+    blocking_on: []
+    next_action: "chip task_51b94414 spawned 2026-08-11T05:50Z, carries the SagaInput javadoc fix and an explicit pr-fix loop"
+    last_meaningful_progress_at: 2026-08-11T05:46:14Z
     observed: {}
     assessment: "The store round-trip assertions at SpringMongoSagaStateStoreMongoTest.java:418,486,494 keep their literal. That test pins the on-disk format, so deriving its expected value from the production helper would make it prove nothing."
   U4:
@@ -86,16 +86,16 @@ units:
   U6:
     issue: 716
     goal: "The migration artefacts AGENTS.md requires for a break to shipped API: an UpgradeToOccurrent_0_33 recipe entry for the SagaTimeout shape change, and a numbered section in doc/migration/upgrading-to-0.33.0.md"
-    phase: BLOCKED
-    health: STALLED
+    phase: READY
+    health: PROGRESSING
     swept: false
     depends_on: [U2]
     session: null
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: ["U2, the API shape the recipe rewrites"]
+    blocking_on: []
     next_action: "hold until U2 merges"
-    last_meaningful_progress_at: 2026-08-10T20:41:00Z
+    last_meaningful_progress_at: 2026-08-11T05:46:14Z
     observed: {}
     assessment: "MISSED AT REGISTRATION. The approved plan claimed the change would be additive, so no unit owned the migration artefacts. ADR 121 takes a source break instead, and AGENTS.md:75 makes a recipe plus a guide entry mandatory once a feature has shipped in a versioned section, which the saga DSL did in 0.32.0. All three of 0.33.0 other breaks shipped both. Found by the adversarial review of U1, not by the orchestrator. If a mechanical recipe cannot cover a return-type change, the MigrateStreamToList_0_30 precedent applies, rewrite what can be proven and mark the rest."
   U5:
