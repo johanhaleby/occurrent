@@ -1168,3 +1168,12 @@ event (`DETECTOR-UNHEALTHY` here, on the second consecutive empty probe) and let
 that instead of the condition. Verify a probe against the actual binary before arming it, since
 `find`, `grep`, `stat` and `date` on this machine are not the GNU tools their flags were written for.
 When a monitor fires within a tick or two of arming, suspect the monitor first.
+
+**A second instance, in the dangerous direction, found the same hour.** Verifying main's matrix with
+`gh api "repos/OWNER/REPO/actions/runs?head_sha=743391bc6"` returned an empty `workflow_runs` array.
+Read literally that says no CI ever ran on the last code head, which would have been a release-blocking
+finding. The truth is that `head_sha` matches the full 40 character SHA only and silently returns
+nothing for an abbreviation; the same query with `git rev-parse` expanding it returned 4 workflows and
+27 of 27 successful jobs. Always expand the SHA before querying, and treat an empty run list as a
+question rather than an answer, because this API reports "your filter matched nothing" and "the thing
+you asked about does not exist" with the same empty array.
