@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 10
-updated_at: 2026-08-11T09:53:13Z
-updated_by: "orchestrator session faee3625 (U7 DONE and swept, PR 729 squashed as 6ad6bc084327c405db253a761d3055a61b7a30e3; two of thirteen units complete)"
+revision: 11
+updated_at: 2026-08-11T09:58:07Z
+updated_by: "orchestrator session faee3625 (all seven chip sessions confirmed started and correctly titled; U8 session found STOPPED with an unresolved thread and resumed by message; 731 Central 403 cleared by rerun)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -30,7 +30,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_ba829706"
+    session: local_4640fd9a-5acf-4678-863e-c4b79e9e7460
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: false, evidence: null}
@@ -46,7 +46,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_451aa889"
+    session: local_cff3efc3-ade2-406e-8aac-a3f25e144bce
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: false, evidence: "PR 728 open on cdx33/u2-manual-start-pin, head d0568a8a48cf8b87499dbd91849c70b7d94e3b0b, checks running. Title reports the fail-loud option was taken, which was the brief recommendation; verify the compare-on-refusal shape and the later-registrant-starts-first test at review"}
     blocking_on: []
@@ -61,7 +61,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_da2f0e02"
+    session: local_2e5a90d0-9a6b-4e2e-b73b-192f371e5e97
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U3 plan gate, Johan", met: false, evidence: null}
@@ -92,7 +92,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_2459a4e4"
+    session: local_d940740e-389c-4b2e-8c63-7529654a31a6
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: false, evidence: "PR 731 open, head 7f08d9b97636318a7b800bf52879627995e56fd9. Copilot has reviewed and left unresolved threads; worker owns its pr-fix loop. Not merge-ready"}
     blocking_on: []
@@ -138,12 +138,12 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_e3494741"
+    session: local_2ba1226c-7d6e-4d21-a68a-35987af498f1
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 head 6214f566e27a62dbdabe62982232fb21b1604fd3: checks GREEN after a rerun, so the subscription-mongodb-spring java-25 red was a flake (that shard passes on main run 31104978417). NOT merge-ready: ONE UNRESOLVED Copilot thread on PayloadFilterReadBenchmark.java:67. Copilot is right on the substance: the worker took contiguous-run batching, which restores short-circuit across a preceding metadata operand but still reads every path in a contiguous data-leaf run, so the benchmark comment overstates the restored fail-fast. Merge is BLOCKED until that thread has an explicit outcome, per the gate timerid PR 719 failed"}
-    blocking_on: [{what: "unresolved Copilot thread on the benchmark comment wording, worker-owned", since: 2026-08-11T09:40:08Z, recheck_after: "on DELIVERY_RESULT"}]
-    next_action: await DELIVERY_RESULT; do not merge while the thread is unresolved
-    last_meaningful_progress_at: 2026-08-11T09:40:08Z
+    blocking_on: [{what: "worker session STOPPED at 09:35Z with the thread still unresolved and no DELIVERY_RESULT; resumed by send_message naming the obligation", since: 2026-08-11T09:58:07Z, recheck_after: "next event or list_sessions check"}]
+    next_action: on the worker reply, verify the narrowed wording, then CAS merge if green and threads resolved
+    last_meaningful_progress_at: 2026-08-11T09:58:07Z
     observed: {}
     assessment: "Fix direction chosen: contiguous-run batching rather than a lazy memoized reader. That does fix the reported regression (a preceding type operand short-circuits before any payload read) and keeps #647 reparse win, but it is weaker than per-leaf laziness within one data-leaf run, which is a real semantic difference from 0.32.0 allMatch only when a reader can fail per path. Verify at review that the claim written in code and PR text matches what shipped"
   U9:
@@ -153,7 +153,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_11128297"
+    session: local_62371645-451f-4569-bfbc-6bacbb68d4ca
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "730", met: false, evidence: "PR 730 open, head 534cdd3255b00ce161bea1879686ce9b1df5e8f3. Copilot has reviewed and left unresolved threads; worker owns its pr-fix loop. Not merge-ready"}
     blocking_on: []
@@ -168,7 +168,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_e3b84149"
+    session: local_e22bccfe-56f9-4717-a309-aa2beb8a3e12
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
     blocking_on: []

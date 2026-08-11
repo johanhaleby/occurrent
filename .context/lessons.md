@@ -646,3 +646,27 @@ wait and the merge, and that exiting with `not_run` plus a blocker naming the pe
 CORRECT delivery rather than a failure. Keep the pr-fix loop requirement for review threads, which
 a worker genuinely can finish in its own turn. And when a worker stalls twice, stop repeating the
 prohibition and remove the obligation that is driving it.
+
+## A stopped worker session with an open obligation is invisible to both monitors (2026-08-11, cdx33)
+
+U8's chip session stopped at 09:35 with PR 727 green, one unresolved Copilot thread, and no
+DELIVERY_RESULT ever reaching the orchestrator. Neither monitor could see it: the v7 work-item
+watch reports head, mergeable, review decision and checks, all of which were static and healthy,
+and the companion thread watch only emits when a COUNT CHANGES, so a thread that stays stubbornly
+at one unresolved emits exactly once and then never again. A chip session is a separate top-level
+session, so it sends the orchestrator no task notification when it ends. Three signals, and the
+state fell through all of them.
+
+It was caught by `list_sessions`, which carries `isRunning` per session, while checking something
+else entirely (whether every chip had actually been started). `isRunning: false` beside an open PR
+with an unmet deliverable is the signal, and nothing else in the loop reports it.
+
+This is the unit-not-PR rule from 2026-08-07 in a new disguise. That rule said a unit whose
+deliverable has no PR drops out of PR-keyed monitoring. The same hole exists one step later: a unit
+whose PR exists but whose WORKER has stopped drops out of monitoring that only watches the PR.
+
+**How to apply:** every sweep tick reads `list_sessions` and cross-checks `isRunning` against the
+epic state's open units, not just the PR set. A unit with an unmet deliverable and a stopped
+session is BLOCKED on the orchestrator and needs a `send_message` resume naming the exact
+obligation, since a chip session cannot notify you that it gave up. Do not infer liveness from the
+PR being healthy, which is precisely what a delivered-but-unfinished unit looks like.
