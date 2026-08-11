@@ -133,6 +133,35 @@ class SpringMongoSagaStateStoreMongoTest {
     }
 
     @Test
+    void reads_a_timer_name_back_out_of_a_document_it_did_not_write() {
+        // The other half of the same promise, and the one an upgrade actually depends on. Inserting the document by hand
+        // is what makes this a saga that was already waiting when the upgrade happened, rather than one this store wrote
+        // a moment ago and can agree with itself about.
+        mongoOperations.insert(new Document("_id", "already-waiting")
+                .append("status", SagaStatus.ACTIVE.name())
+                .append("version", 1L)
+                .append("state", new Document("value", 1))
+                .append("timers", List.of(new Document("name", "payment").append("firesAtEpochMilli", 1_000L),
+                        new Document("name", "step:awaiting-players").append("firesAtEpochMilli", 2_000L),
+                        new Document("name", "a:b").append("firesAtEpochMilli", 3_000L)))
+                // The earliest of the three, copied to a top-level field, which is the only one the poll matches on.
+                .append("nextTimerFiresAt", 1_000L)
+                .append("streamWatermarks", new Document())
+                .append("createdAt", 1_000L)
+                .append("updatedAt", 1_000L), collection);
+
+        Optional<SagaEnvelope<Counter>> found = store.find("already-waiting");
+        List<SagaEnvelope<Counter>> due = store.findWithDueTimers(Instant.ofEpochMilli(4_000), 10);
+
+        assertAll(
+                () -> assertThat(found).hasValueSatisfying(e -> assertThat(e.timers()).extracting(TimerEntry::name)
+                        .containsExactlyInAnyOrder("payment", "step:awaiting-players", "a:b")),
+                () -> assertThat(due).singleElement().satisfies(e -> assertThat(e.timers()).extracting(TimerEntry::name)
+                        .containsExactlyInAnyOrder("payment", "step:awaiting-players", "a:b"))
+        );
+    }
+
+    @Test
     void updates_only_when_the_expected_version_matches() {
         store.compareAndSave("s3", active("s3", new Counter(1), 1, List.of(), 0), 0);
 

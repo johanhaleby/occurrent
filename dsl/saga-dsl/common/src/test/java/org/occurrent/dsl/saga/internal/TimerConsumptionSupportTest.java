@@ -116,7 +116,7 @@ class TimerConsumptionSupportTest {
 
         Outcome<String, Cmd> fired = SagaExecutionSupport.process(saga, "s1", stored, SagaInput.timeout("s1", TimerName.parse(storedTimerName)), EventMeta.NONE, NOW.plusSeconds(1));
 
-        assertThat(fired.commands()).as("the stored name still matches the registration it was armed under").containsExactly(new Ping("s1"));
+        assertThat(fired.commands()).containsExactly(new Ping("s1"));
         assertThat(fired.envelope().timers()).as("the fired timer must be consumed so it does not re-fire every poll").isEmpty();
     }
 }
