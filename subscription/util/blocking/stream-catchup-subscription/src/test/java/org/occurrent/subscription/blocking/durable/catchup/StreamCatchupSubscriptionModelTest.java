@@ -196,6 +196,35 @@ class StreamCatchupSubscriptionModelTest {
                 .as("and nothing may be replayed, because delivering the history and then silently never going live is "
                         + "worse than refusing: the read model would look up to date and stop moving")
                 .isEmpty();
+        assertThat(subscription.isCatchingUp("subscription"))
+                .as("a failed catch-up must not stay visible as catching up forever, the same guarantee a completed "
+                        + "or cancelled one already gets")
+                .isFalse();
+        assertThat(subscription.isRunning("subscription"))
+                .as("nothing is running for a replay that failed and was never handed over")
+                .isFalse();
+    }
+
+    /**
+     * Before this class stopped leaking the running-catch-up marker on failure, pausing a subscription whose replay
+     * had already failed still matched the "replay in flight" branch in {@code pauseSubscription}, which only
+     * records the request for {@code applyPendingPauseIfAny} to apply once the replay hands over. A replay that
+     * failed never hands over, so the pause was silently swallowed. It must now take the other branch and reach the
+     * delegate directly, which knows nothing about a subscription whose catch-up never got that far.
+     */
+    @Test
+    void pausing_a_subscription_whose_catchup_already_failed_reaches_the_delegate_instead_of_being_swallowed() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        write(eventStore, nameDefined("event1"));
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        CheckpointAwareSubscriptionModel reportsNoCheckpoint = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, null);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(reportsNoCheckpoint, eventStore, new CatchupSubscriptionModelConfig(100));
+        Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+        assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(5)));
+
+        assertThatThrownBy(() -> subscription.pauseSubscription("subscription"))
+                .as("the delegate never saw this subscription, since the catch-up failed before handing over to it")
+                .isInstanceOf(RuntimeException.class);
     }
 
     @Test
