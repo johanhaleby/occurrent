@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33
-revision: 56
+revision: 57
 updated_at: 2026-08-11T19:56:20Z
 updated_by: "orchestrator session faee3625 (U12 MERGED as 743391bc6, all 15 library units done; UDOCS2 dispatched as the last unit)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -35,12 +35,12 @@ units:
     issue: null
     goal: "Documentation truth for two defects in this epic's own output: #754 (FlowStateImpl.java:52 still states the superseded retention bound historyWindow + stepWindow + 1) and #755 (the reopened-hierarchy startup refusal now applies to subscriptions as well as sagas, which is a breaking change against 0.32.0 that the changelog denies and migration section 10 frames as saga-only)"
     phase: DONE
-    health: PROGRESSING
-    swept: false
+    health: HEALTHY
+    swept: true
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "756", met: true, evidence: "MERGED as squash 9f52fee8a317023b0d23906eb87a9e017e44407c, CAS-pinned to 55b67693981a51238d691c0143069cf162244d8e, which was 27 of 27 green by run list on its own full matrix. Eleven review rounds, every one a confirmed defect. #754, #755 and #757 closed; #758 filed and deferred. Docs held branch 2c4e205 and preview 07f3169 pushed, docs main untouched. Remote branch deleted, agent worktree removed, all three monitors retired. Main matrix on the merge commit still verifying."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "756", met: true, evidence: "MERGED as squash 9f52fee8a317023b0d23906eb87a9e017e44407c, CAS-pinned to 55b67693981a51238d691c0143069cf162244d8e, which was 27 of 27 green by run list on its own full matrix. Eleven review rounds, every one a confirmed defect. #754, #755 and #757 closed; #758 filed and deferred. Docs held branch 2c4e205 and preview 07f3169 pushed, docs main untouched. Remote branch deleted, agent worktree removed, all three monitors retired. Main matrix on the merge commit is 27 of 27 SUCCESS by run list across all four workflows, after one flaked shard (subscription-mongodb-spring java-21, paused-hold TCK test, ChangeStreamHistoryLost) went green on a same-commit rerun."}
   U1:
     issue: null
     goal: "Applied-position ordering (finding 1, blocker): direction decided at its plan gate (document early-return window / refuse recording for async Mongo projections / committed-prefix design), docs-truth floor either way, ADR 0111 amendment"
