@@ -421,14 +421,16 @@ inside the cap counts its window again and carries on, since its events are all 
 [ADR 123](../architecture/decisions/0123-a-step-conditions-counts-are-carried-so-the-steps-events-can-be-dropped.md)
 has the reasoning, including why this is a second setting rather than a new meaning for `historyWindow`.
 
-## 10. A saga declaring a supertype event is refused
+## 10. A saga or subscription declaring a supertype event is refused
 
-A saga declares the event types it handles, and Occurrent turns those into the subscription's type filter by asking the
-`CloudEventTypeMapper` for each one's CloudEvent type. A supertype has a CloudEvent type of its own that no stored event
-ever has, so declaring one asked for a string nothing matches.
+A saga declares the event types it handles, and so does an annotation-based subscription (`@Subscription`,
+`@StreamSubscription`, `@SynchronousSubscription`, `@DcbSubscription`). Both turn those declarations into a type filter
+by asking the `CloudEventTypeMapper` for each one's CloudEvent type. A supertype has a CloudEvent type of its own that no
+stored event ever has, so declaring one asked for a string nothing matches.
 
-0.33.0 expands a declared sealed type into the concrete types it permits, which fixes that case. Where the concrete types
-cannot be found, the saga is refused when it is built:
+0.33.0 expands a declared sealed type into the concrete types it permits, which fixes that case on both sides. Where the
+concrete types cannot be found, a saga is refused when it is built and a subscription is refused when it is registered,
+which for a Spring Boot application is startup. A saga sees this message:
 
 ```
 java.lang.IllegalArgumentException: no event is stored under the type of com.example.OrderEvent and its concrete subtypes
@@ -436,9 +438,27 @@ cannot all be found, so a subscription derived from it would silently miss store
 event types instead, or make every level of the hierarchy below OrderEvent final or sealed.
 ```
 
-**Read this as a report about a saga that never worked, not as a regression.** Under every type mapper Occurrent ships,
-the saga you are being told about was already receiving nothing, or already missing part of its hierarchy, and it looked
-like a process still waiting for events rather than a defect. The exception is the first time anything said so.
+A subscription reports the same shape with a message of its own:
+
+```
+java.lang.IllegalArgumentException: You cannot subscribe to a non-sealed interface, abstract type, or array (problem is
+with com.example.OrderEvent for subscription 'order-subscription'). A concrete or sealed event type is required, or list
+the event types explicitly with the annotation's eventTypes attribute (for example eventTypes = {MyEvent1.class,
+MyEvent2.class}).
+```
+
+**For a saga, read this as a report about a saga that never worked, not as a regression.** Under every type mapper
+Occurrent ships, the saga you are being told about was already receiving nothing, or already missing part of its
+hierarchy, and it looked like a process still waiting for events rather than a defect. The exception is the first time
+anything said so.
+
+**For a subscription, only one of the three shapes below is new.** `SubscriptionAnnotations` already refused a non-sealed
+interface and a non-sealed abstract class with this same message in 0.32.0, so a subscription declaring either shape was
+already refused before this release. The third shape, a sealed hierarchy reopened below the declared type, is what
+changes: 0.32.0 accepted it and built a filter naming only the reopened level, so the concrete events stored beneath that
+level were silently missed rather than delivered. 0.33.0 refuses it instead, the same new refusal a saga gets in this
+shape, so a subscription in this one shape that started fine under 0.32.0 now refuses to start. That is the breaking part
+of this change for a subscription.
 
 You are affected when a declared type is one of these:
 
@@ -450,11 +470,12 @@ You are affected when a declared type is one of these:
 
 The third row applies even when the declared type can be instantiated. A `sealed class` that is not abstract still claims
 its subtypes are knowable, so a reopened level below it is refused just the same, and the events under that level are
-exactly the ones that were going missing.
+exactly the ones that were going missing. For a subscription, the third row is also the only one of the three that is
+new in 0.33.0, the first two were already refused in 0.32.0.
 
-A saga that declares concrete types is unaffected, and so is one that declares a sealed type whose every level is sealed
-or final. Java records and Kotlin data classes are final already, so an ordinary sealed hierarchy of records needs
-nothing.
+A saga or a subscription that declares concrete types is unaffected, and so is one that declares a sealed type whose
+every level is sealed or final. Java records and Kotlin data classes are final already, so an ordinary sealed hierarchy
+of records needs nothing.
 
 ### Seal the hierarchy
 
@@ -478,6 +499,10 @@ sealed interface OrderEvent
 sealed class Base : OrderEvent            // was open class or abstract class
 data class OrderPlaced(val orderId: String) : Base()
 ```
+
+The same fix applies to a subscription's declared event type. Seal the reopened level and its permitted subtypes stay
+findable, whether the declared type comes from an `@Subscription`-family annotation's parameter or its `eventTypes`
+attribute.
 
 ### Or declare the concrete event types
 
@@ -509,19 +534,24 @@ One handler per type is more code than one on the supertype. If that matters, no
 through superclasses and interfaces, so you can register the shared handler under a concrete type and delegate, or keep
 one method and reference it from each registration.
 
+For an annotation-based subscription, list the concrete types with the annotation's `eventTypes` attribute instead of
+the declared supertype, for example `@Subscription(id = "order-subscription", eventTypes = {OrderPlaced.class,
+PaymentReserved.class})`.
+
 ### If you wrote a type mapper that collapses the hierarchy
 
-One case genuinely worked in 0.32.0 and now throws. A `CloudEventTypeMapper` that maps every type in a hierarchy onto one
-CloudEvent type string makes a declared supertype match, because the string the filter asks for is the string every event
-has. Declaring the concrete types keeps that working, since they all map to the same string, so take the second remedy
-above. Occurrent cannot tell your mapper apart from the default one at build time, which is why the refusal does not make
-an exception for it. There is no filter override on a saga yet, and
-[#751](https://github.com/johanhaleby/occurrent/issues/751) tracks adding one.
+One case genuinely worked in 0.32.0 and now throws, for a saga and for a subscription's reopened-hierarchy shape alike. A
+`CloudEventTypeMapper` that maps every type in a hierarchy onto one CloudEvent type string makes a declared supertype
+match, because the string the filter asks for is the string every event has. Declaring the concrete types keeps that
+working, since they all map to the same string, so take the second remedy above. Occurrent cannot tell your mapper apart
+from the default one at build time, which is why the refusal does not make an exception for it. There is no filter
+override on a saga yet, and [#751](https://github.com/johanhaleby/occurrent/issues/751) tracks adding one. A subscription
+already has one. Its `eventTypes` attribute is the explicit list, the same one the second remedy above uses.
 
-The same mapper gets a fix in the other direction, and it needs nothing from you. `@Subscription`, `@Saga` and
-`@Projection` used to derive their filter from the concrete types a sealed type permits and leave the declared type out,
-so an event stored under the declared type's own CloudEvent type never matched and the subscription silently received
-nothing. The filter now names the declared type too. A subscription that worked keeps working, because another type in a
+The same mapper gets a fix in the other direction, and it needs nothing from you. An annotation-based subscription used
+to derive its filter from the concrete types a sealed type permits and leave the declared type out, so an event stored
+under the declared type's own CloudEvent type never matched and the subscription silently received nothing. The filter
+now names the declared type too. A subscription that only hit this gap keeps working, because another type in a
 filter can only widen what matches.
 
 ### Why there is no recipe for this one
@@ -530,10 +560,12 @@ filter can only widen what matches.
 every other breaking change in this release gets recipe help.
 
 Rewriting was never possible, since the concrete subtypes of an open hierarchy cannot be read off the declaration. A
-review marker looked possible and is not. Deciding whether `startsOn(OrderEvent.class)` is refused means knowing whether
-`OrderEvent` is sealed, and the type behind a class literal in another file does not carry that. OpenRewrite has the flag
-in its model but does not populate it there, so a marker would have flagged every sealed hierarchy as well, which is
-exactly the code this release fixes. Pointing you at correct code is worse than pointing at nothing.
+review marker looked possible and is not. Deciding whether `startsOn(OrderEvent.class)` or a subscription's declared
+event type is refused means knowing whether the type is sealed, and the type behind a class literal in another file does
+not carry that. OpenRewrite has the flag in its model but does not populate it there, so a marker would have flagged
+every sealed hierarchy as well, which is exactly the code this release fixes. Pointing you at correct code is worse than
+pointing at nothing.
 
-So this section is the migration path. `build()` throws with the type named the first time the saga is built, which for a
-Spring Boot application is startup, so a test that builds your sagas finds all of them.
+So this section is the migration path. `build()` throws with the type named the first time the saga is built, and a
+subscription throws it the first time the subscription registers, which for a Spring Boot application is startup either
+way, so a test that starts your context or builds your sagas finds all of them.

@@ -49,7 +49,8 @@ import java.util.Objects;
  * {@code historyWindow} limits the carry-over <em>behind</em> the current step's entry and is applied on a transition,
  * while {@code stepWindow} limits how many of the current step's own events are kept and is applied on every delivery. {@code stepWindow} is unbounded by default, so unless it is set, an instance parked in
  * one step while a large number of correlated events arrive keeps every one of them, whatever {@code historyWindow} is.
- * Set both and the total kept is at most {@code historyWindow + stepWindow + 1}.
+ * Set both and the total kept is at most {@code historyWindow + 2 * stepWindow + 1}, since a transition keeps the
+ * step being left at its own cap while the step being entered fills its own cap before anything is evicted.
  * <p>
  * Dropping the current step's events would short-count a window condition if its counts had to be re-derived from them,
  * so {@link #stepConditionProgress()} carries the counts forward instead and a condition completes on the same event it
