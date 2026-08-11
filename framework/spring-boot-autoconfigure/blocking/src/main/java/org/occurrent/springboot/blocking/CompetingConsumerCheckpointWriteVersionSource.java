@@ -24,6 +24,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import java.util.OptionalLong;
 import java.util.function.BooleanSupplier;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Turns a {@link CompetingConsumerStrategy} bean, resolved lazily, into a {@link CheckpointWriteVersionSource} (see
  * ADR 116). One instance is built per wiring site that constructs a checkpoint-writing model, since there is no
@@ -58,8 +60,8 @@ public final class CompetingConsumerCheckpointWriteVersionSource implements Chec
      *                         the properties bean exists.
      */
     public CompetingConsumerCheckpointWriteVersionSource(ObjectProvider<CompetingConsumerStrategy> strategyProvider, BooleanSupplier fenceCheckpoints) {
-        this.strategyProvider = strategyProvider;
-        this.fenceCheckpoints = fenceCheckpoints;
+        this.strategyProvider = requireNonNull(strategyProvider, "strategyProvider cannot be null");
+        this.fenceCheckpoints = requireNonNull(fenceCheckpoints, "fenceCheckpoints cannot be null");
     }
 
     @Override

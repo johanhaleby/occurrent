@@ -249,6 +249,13 @@ class SuiteNeverSkipsTest {
                     // Never reached: every call into the storage throws before the suite consults this.
                     return true;
                 }
+
+                // Claims the capability the storage honours nothing of, which is what keeps all 20 tests running and
+                // failing. Delegating to the storage would let it answer false and pass the refusal tests honestly.
+                @Override
+                public boolean evaluatesWriteConditions() {
+                    return true;
+                }
             };
         }
     }

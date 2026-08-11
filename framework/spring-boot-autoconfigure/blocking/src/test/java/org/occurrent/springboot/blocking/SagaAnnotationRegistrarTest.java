@@ -29,6 +29,7 @@ import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
@@ -99,6 +100,11 @@ class SagaAnnotationRegistrarTest {
         when(applicationContext.getBean("springApplicationAdminRegistrar")).thenThrow(new NoSuchBeanDefinitionException("springApplicationAdminRegistrar"));
         when(applicationContext.getBean(OccurrentProperties.class)).thenReturn(properties);
         when(applicationContext.getBeanProvider(SagaInstancesRegistryImpl.class)).thenReturn(registryProvider);
+        // The registrar builds its checkpoint write version source over this provider, which a real context never
+        // answers null for. Empty, since nothing here fences a checkpoint write.
+        @SuppressWarnings("unchecked")
+        ObjectProvider<CompetingConsumerStrategy> strategyProvider = mock(ObjectProvider.class);
+        when(applicationContext.getBeanProvider(CompetingConsumerStrategy.class)).thenReturn(strategyProvider);
 
         StartPositionSupport startPositionSupport = new StartPositionSupport(applicationContext);
         SagaAnnotationRegistrar registrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport, new HashSet<>());

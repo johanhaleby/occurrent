@@ -78,6 +78,7 @@ class SagaAnnotationFencingWiringTest {
         CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
         when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(42L));
         CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
+        when(checkpointStorage.evaluatesWriteConditions()).thenReturn(true);
 
         runner.withBean(CompetingConsumerStrategy.class, () -> strategy)
                 .withBean(CheckpointStorage.class, () -> checkpointStorage)

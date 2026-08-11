@@ -91,8 +91,8 @@ public interface CheckpointStorage {
      * so a storage that writes unconditionally needs to say nothing. A caller that depends on a conditional write can
      * ask before it wires anything up, rather than finding out from an error signal on the first write.
      *
-     * @return {@code true} if a condition other than {@code any()} is evaluated, {@code false} if every one of them
-     * is refused
+     * @return {@code true} if both {@code notOlderThan} and {@code ifAbsent} are evaluated, {@code false} if either of
+     * them is refused
      */
     default boolean evaluatesWriteConditions() {
         return false;

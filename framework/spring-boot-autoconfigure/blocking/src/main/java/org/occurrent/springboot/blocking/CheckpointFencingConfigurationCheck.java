@@ -30,7 +30,10 @@ import org.springframework.context.ApplicationContext;
  * <p>
  * A {@link SmartInitializingSingleton} because it runs after every singleton exists, so asking for a strategy bean here
  * cannot pull one into existence early and close the construction cycle
- * {@link CompetingConsumerCheckpointWriteVersionSource} resolves lazily to avoid.
+ * {@link CompetingConsumerCheckpointWriteVersionSource} resolves lazily to avoid. That callback is the one for an
+ * application with no annotations to register. {@link OccurrentBlockingAnnotationBeanPostProcessor} calls
+ * {@link #check(ApplicationContext)} itself before it registers anything, since a push projection or saga writes a
+ * checkpoint while catching up and would reach that write first.
  */
 class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton {
 
@@ -43,6 +46,17 @@ class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton 
     static boolean fenceCheckpoints(ObjectProvider<OccurrentProperties> propertiesProvider) {
         OccurrentProperties properties = propertiesProvider.getIfAvailable();
         return properties == null || properties.getSubscription().getCompetingConsumer().isFenceCheckpoints();
+    }
+
+    /**
+     * Runs the same two checks for a caller that holds a context and has to run them at a moment of its own choosing.
+     * <p>
+     * Reads beans rather than creating any, so running it a second time from the callback below costs nothing.
+     */
+    static void check(ApplicationContext applicationContext) {
+        new CheckpointFencingConfigurationCheck(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
+                applicationContext.getBeanProvider(CheckpointStorage.class),
+                applicationContext.getBeanProvider(OccurrentProperties.class)).afterSingletonsInstantiated();
     }
 
     private final ObjectProvider<CompetingConsumerStrategy> strategyProvider;

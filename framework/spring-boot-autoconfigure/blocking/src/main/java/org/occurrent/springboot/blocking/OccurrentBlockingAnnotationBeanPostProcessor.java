@@ -82,6 +82,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // cannot reuse one, then register each projection.
     @Override
     public void afterSingletonsInstantiated() {
+        // Before any registration, because a push projection or saga catches up during registration and writes a
+        // checkpoint while doing it. Spring calls SmartInitializingSingleton callbacks in bean creation order, and this
+        // one is created first, so the check's own callback would otherwise run after that write had already failed.
+        CheckpointFencingConfigurationCheck.check(applicationContext);
         List<Object[]> projectionMethods = new ArrayList<>();
         List<Object[]> snapshotMethods = new ArrayList<>();
         List<Object[]> sagaMethods = new ArrayList<>();
