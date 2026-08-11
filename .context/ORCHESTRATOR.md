@@ -2,13 +2,13 @@
 
 ## Hot restart
 
-- Verified at: `main`, `ba2d1f791`, 2026-08-11T05:55Z, post-merge matrix 26 of 26 green. **0.32.0 IS RELEASED** (tag `occurrent-0.32.0` on `601fc6f10`). **0.33.0 is NOT tagged and is held for the `timerid` epic.**
+- Verified at: `main`, `75fa299e2`, 2026-08-11T07:45Z, post-merge matrix 27 of 27 green. **0.32.0 IS RELEASED** (tag `occurrent-0.32.0` on `601fc6f10`). **0.33.0 is NOT tagged, and nothing holds it any more.**
 - Workspace baseline: session worktree `johan/api-review-verification-c3b0ea`, clean. The primary checkout at `/Users/johan/devtools/java/projects/occurrent` is used by other sessions and is often on someone else's branch, so never `cd` there from a worktree session (see `lessons.md`).
-- Active epic / definition of done: **timerid** (#716), a saga timer's name becomes a value. Done when U1 to U6 are merged, `step:` appears in no user-facing surface, a 0.32.0-shaped envelope is proven to still fire, and the migration recipe plus guide section exist.
-- Authority: `.context/orchestrator-policy.yml`. U1's design gate is satisfied, Johan confirmed the source break and the constructor change on 2026-08-11.
-- Active units: `.context/epics/timerid.yml` (revision 7). U1 and U2 merged, U3 running as chip `task_51b94414`, U6 READY and undispatched, U4 and U5 blocked behind U3. Monitor `bn9yxelys`, the v7 pattern.
-- Next action: review U3 when it delivers, dispatch U6 whenever wanted since it is unblocked, then U4 and U5.
-- Verification: main 26 of 26 green on `ba2d1f791`. A full matrix is owed again before 0.33.0 is declared ready, because this epic changes core saga modelling rather than an isolated feature.
+- Active epic / definition of done: **none.** `timerid` closed 2026-08-11T07:47Z, six of six units DONE and swept, so the next epic registers in a fresh session.
+- Authority: `.context/orchestrator-policy.yml`. No session-scoped deviations outstanding.
+- Active units: none. `.context/epics/timerid.yml` is at revision 13, all six units DONE and swept, no pending actions, no monitors running.
+- Next action: Johan cuts 0.33.0, following the docs merge order in `occurrent-org/occurrent-org.github.io#57` (now eleven held branches).
+- Verification: main 27 of 27 green on `75fa299e2`, which is the full matrix owed for the saga modelling change. 0.33.0 is release ready.
 - **Merged with an unresolved review thread on 2026-08-11 (PR 719).** The merge gate now checks `reviewThreads` as well as checks, see the Orchestrator Operating Notes and `lessons.md`.
 
 ## Epic history and standing decisions
@@ -391,3 +391,8 @@ Docs (#420, #421) follow the release-gated held-branch convention, and **#420 mu
 - **Johan's ruling, 2026-08-11:** take the source break and take the constructor change, on the grounds that it is what is best long term under the AGENTS.md principles. That reverses the approved plan's claim that the change would be additive.
 - **U6 was missed at registration** and added later. The plan assumed an additive change, so no unit owned the OpenRewrite recipe and the migration-guide section that `AGENTS.md:75` makes mandatory once a feature has shipped. Found by the adversarial review, not by the orchestrator.
 - Release-day effect: 0.33.0 is held for this epic, and U5 adds a ninth held docs branch to the merge order in `occurrent-org.github.io#57`.
+- **U3 merged as squash `1f17d6e0f`**, U6 as `19a5825fa`, U4 as `75fa299e2`, each on a green matrix with zero unresolved threads, the thread gate run before the merge rather than after. U3 exposed `FlowSaga.stepTimer` with a Kotlin twin and made the flow match site call it, so production and tests read the same helper. U6 folded `MigrateSagaTimerName` into `UpgradeToOccurrent_0_33` (it rewrites the two provable shapes and marks the rest) plus section 7 of the upgrade guide. U4 is the persistence proof, `StoredTimerNameTest` seeds a store the way 0.32.0 wrote it and runs the real poll over `step:awaiting-players`, `payment` and `a:b`.
+- **U6 depends on U3 as well as U2, corrected during the epic.** Depending on U2 alone would have let the migration guide document `stepTimer` before it existed, which is the same defect PR 719 shipped.
+- **timerid EPIC CLOSED 2026-08-11T07:47Z at state revision 13**, six of six units DONE and swept, main 27 of 27 green on `75fa299e2`, issue 716 closed with the summary comment, monitor `bn9yxelys` retired under the lifetime rule, tracker scan clean from the registration timestamp. U5 delivered docs PR `occurrent-org.github.io#64` (held, last in the merge order after 55, no `addedTags` entry needed, verified after merging with `git grep 'step:'`), the news bullet on PR 54's branch, and the timer name added to that post's source-breaking paragraph. The orchestrator added one clause naming `stepTimer` where the chapter first uses it, since the worker left the symbol standing 15 lines ahead of the sentence that introduces it.
+- **U5's second deliverable was obsolete, not skipped.** It asked for a changelog PR in the library repo, written before U6 existed. U6 folded that entry in, so a second PR would only have duplicated `changelog.md` line 41.
+- **Two issues surfaced during this epic and belong to a later one:** #718 (parallel competing consumers without a subscription-wide lease) and #721 (the name clash between `@Projection` and `Projection`). Neither is claimed.

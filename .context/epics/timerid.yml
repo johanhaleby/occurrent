@@ -1,8 +1,8 @@
 schema_version: 1
 epic: timerid
-revision: 11
-updated_at: 2026-08-11T06:57:28Z
-updated_by: orchestrator session 496ca320 (design gate satisfied, U2 dispatched)
+revision: 13
+updated_at: 2026-08-11T07:47:13Z
+updated_by: orchestrator session 496ca320 (epic CLOSED, six of six units DONE and swept, issue 716 closed, monitor bn9yxelys retired)
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml; U1 design gate SATISFIED 2026-08-11, Johan confirmed both open decisions, take the source break and take the constructor change, on AGENTS.md long-term grounds. Chips are usable again from the same message"
 pending_actions:
@@ -18,7 +18,7 @@ pending_actions:
     type: dispatch-chip
     target: "U1 chip task_3b940167"
     expected: "chip visible to Johan; worker session starts on his click"
-    status: PENDING
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-10T19:51:25Z
@@ -28,7 +28,7 @@ units:
     goal: "ADR 0121 settling the timer-identity model: the sealed TimerId, the canonical parse/encode round trip and its edge cases, whether the string-shaped API is deprecated now, and whether compose namespacing is answered or merely unblocked"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_24efc36e (worktree sleepy-merkle-0e3f9a)
     deliverables:
@@ -43,7 +43,7 @@ units:
     goal: "Core: the sealed TimerId with its parse/encode pair, TimerId overloads on SagaEffect and Saga.Builder, the SagaInput.timeout(String, TimerId) shortcut, SagaTimeout carrying the typed id, and the registration maps re-keyed"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U1]
     session: "chip task_9767607f"
     deliverables:
@@ -58,7 +58,7 @@ units:
     goal: "Flow: the lowering uses Qualified(step, ..), FlowSaga.stepTimer exposed, the four FlowSagaImpl concatenation sites removed, and every in-repo test migrated off the step: literal"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U2]
     session: "chip task_51b94414"
     deliverables:
@@ -73,7 +73,7 @@ units:
     goal: "Persistence proof: a 0.32.0-shaped envelope with step:X already stored loads and fires correctly, so no in-flight saga is stranded"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U3]
     session: "local_1659b37c"
     deliverables:
@@ -88,7 +88,7 @@ units:
     goal: "The migration artefacts AGENTS.md requires for a break to shipped API: an UpgradeToOccurrent_0_33 recipe entry for the SagaTimeout shape change, and a numbered section in doc/migration/upgrading-to-0.33.0.md"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U2, U3]
     session: null
     deliverables:
@@ -101,16 +101,16 @@ units:
   U5:
     issue: 716
     goal: "Docs: the testing chapter stops teaching the prefix, on a new held branch in the docs repository, plus a changelog entry and a news bullet"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U3, U6]
-    session: null
+    session: "chip task_000d7d59"
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "docs/716-timer-name", met: true, evidence: "PR 64 open and held, head 1930b4801 after the orchestrator added one clause naming stepTimer where the chapter first uses it, since the worker left the symbol standing 15 lines ahead of the sentence that introduces it. Six snippets move off the step: literal and the sentence teaching the prefix is gone. The news bullet landed on docs/0.33.0-release-notes at 59284f747, and the source-breaking paragraph there now counts the timer name among the release breaks. Merge order recorded on occurrent-org.github.io#57, last slot after PR 55, with a git grep 'step:' check named as the post-merge verification"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "722", met: true, evidence: "OBSOLETE AS A SEPARATE PR. This deliverable was written before U6 existed, when the changelog was expected to ride with the docs. U6 folded it in instead, changelog.md line 41 on main carries the entry, so a second PR would only have duplicated it"}
     blocking_on: []
-    next_action: "chip task_000d7d59 spawned 2026-08-11T06:37:29Z"
-    last_meaningful_progress_at: 2026-08-11T06:37:29Z
+    next_action: none, delivered and held for release day
+    last_meaningful_progress_at: 2026-08-11T07:45:25Z
     observed: {}
     assessment: "Held branch, added to the merge order in occurrent-org.github.io#57. Six of the seven held branches already carry hunks in the saga chapter, so trial-merge before declaring it clean."
