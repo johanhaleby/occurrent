@@ -892,3 +892,26 @@ fact. Keep the cheap defensive practice regardless, because it costs nothing and
 either cause: when a grep is the EVIDENCE for a gate, print the input line count beside the match
 count, so a suspiciously small denominator is visible rather than invisible. A count with no
 denominator cannot be sanity-checked, which is the actual lesson under both explanations.
+
+## Source-file mtime is not liveness either, build output is (2026-08-11, cdx33)
+
+Second correction to the same detector in one session. After learning that a subagent's task output
+file never grows, I keyed liveness on source and doc writes across the work trees, deliberately
+excluding `target/` as noise. That mislabelled U6 as STALLED while it was perfectly healthy: its
+source files were 32 minutes old because it had been running the verification suite since then, and
+Option A touches six storage modules plus the TCK, so that suite runs long.
+
+What proved it alive was exactly the thing I had excluded, `subscription/api/blocking/target/surefire-reports`
+with files written twelve minutes earlier. For a LIVENESS question, build output is the best evidence
+available: a worker running tests writes nothing else, and that is the longest legitimate silence in
+this repository.
+
+The detector now watches ANY file write under both work trees with only `.git` and `.context`
+excluded. `.context` stays excluded because my own checkpoints would otherwise mask a fleet that had
+gone completely silent, which is the failure it exists to catch.
+
+**How to apply:** when choosing a liveness signal, ask what the worker writes during its LONGEST
+quiet activity, and make sure the signal covers that. Excluding generated output is right for
+reviewing a diff and wrong for detecting a stall. And when a derived health label contradicts
+observable evidence, the label is what to fix, not the worker: I corrected the epic state rather than
+nudging a worker that was doing exactly what it should.
