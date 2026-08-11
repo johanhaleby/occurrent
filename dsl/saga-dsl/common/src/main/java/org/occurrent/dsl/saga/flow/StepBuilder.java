@@ -129,7 +129,7 @@ public final class StepBuilder<E, C> {
         requireNonNull(then, "then cannot be null");
         requireNonNull(whenFulfilled, "whenFulfilled cannot be null");
         requireNoJoin();
-        WindowCondition<E> trigger = new WindowCondition<>((StepCondition<E>) condition);
+        WindowCondition<E> trigger = new WindowCondition<>((StepCondition<E>) condition, false);
         BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
         branches.add(new Branch<>(trigger, reaction, then));
         return this;
@@ -160,7 +160,9 @@ public final class StepBuilder<E, C> {
             throw new IllegalArgumentException("a join step needs at least one expectation");
         }
         joinDeclared = true;
-        WindowCondition<E> trigger = new WindowCondition<>(StepCondition.allOf(toConditions(expecting)));
+        // Marked as lowered from join, so the reaction keeps reading the whole retained history. join shipped in 0.31.0 with
+        // that contract and lowering it to a condition tree must not change what its callback sees.
+        WindowCondition<E> trigger = new WindowCondition<>(StepCondition.allOf(toConditions(expecting)), true);
         BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
         branches.add(new Branch<>(trigger, reaction, then));
         return this;

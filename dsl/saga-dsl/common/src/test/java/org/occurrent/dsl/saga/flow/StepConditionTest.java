@@ -251,8 +251,35 @@ class StepConditionTest {
 
         assertThatThrownBy(() -> allOf(alternative, alternative, event(C.class)))
                 .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1");
+    }
+
+    @Test
+    void allOf_rejects_a_matcher_a_leaf_shares_with_a_composite_child() {
+        // allOf(event(A), anyOf(event(A), event(B))) reads as "an A and either an A or a B" and is fulfilled by one A, so the
+        // matcher has to be looked for inside a composite child too, not only between two leaf siblings.
+        assertThatThrownBy(() -> allOf(event(A.class), anyOf(event(A.class), event(B.class))))
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("allOf children 0 and 1")
-                .hasMessageContaining("equal");
+                .hasMessageContaining("A");
+        assertThatThrownBy(() -> allOf(anyOf(event(A.class), event(B.class)), event(A.class, 2)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1");
+    }
+
+    @Test
+    void allOf_rejects_two_composite_children_that_overlap_on_one_matcher() {
+        assertThatThrownBy(() -> allOf(anyOf(event(A.class), event(B.class)), anyOf(event(C.class), event(A.class))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("allOf children 0 and 1")
+                .hasMessageContaining("A");
+    }
+
+    @Test
+    void allOf_accepts_composite_children_that_share_no_matcher() {
+        StepCondition<TestEvent> condition = allOf(anyOf(event(A.class), event(B.class)), event(C.class));
+
+        assertThat(condition).isInstanceOfSatisfying(AllOf.class, allOf -> assertThat(allOf.conditions()).hasSize(2));
     }
 
     @Test

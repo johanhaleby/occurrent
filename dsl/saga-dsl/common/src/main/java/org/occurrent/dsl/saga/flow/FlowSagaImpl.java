@@ -304,12 +304,15 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return effects;
     }
 
-    // What a firing branch's reaction reads. A window condition's reaction gets the events received since the step it fired
-    // from was entered, so a count it takes matches the count that fulfilled the condition. Everything else reads the whole
-    // retained history, and so does a window condition whose previousStepEntryIndex is -1, which is what a state a store
-    // rebuilt without that field reads back as.
+    // What a firing branch's reaction reads. An on(StepCondition, ...) reaction gets the events received since the step it
+    // fired from was entered, so a count it takes matches the count that fulfilled the condition. Everything else reads the
+    // whole retained history, meaning a classic branch, a lowered join (whose 0.31.0 contract this must not narrow), and a
+    // state whose previousStepEntryIndex is -1, which is what a store rebuilt without that field hands back.
     private ReceivedEvents<E> reactionWindow(FlowStateImpl<E> state, Trigger<E> trigger) {
-        if (!(trigger instanceof WindowCondition<E>) || state.previousStepEntryIndex() < 0) {
+        boolean windowed = trigger instanceof WindowCondition<E> windowCondition
+                && !windowCondition.loweredFromJoin()
+                && state.previousStepEntryIndex() >= 0;
+        if (!windowed) {
             return ReceivedEvents.of(state.received());
         }
         int from = windowStartIndex(state.previousStepEntryIndex(), state.windowStart(), state.received().size());
@@ -438,7 +441,12 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     record ArrivingEvent<E>(Class<? extends E> eventType, @Nullable BiPredicate<E, ReceivedEvents<E>> guard) implements Trigger<E> {
     }
 
-    record WindowCondition<E>(StepCondition<E> condition) implements Trigger<E> {
+    /**
+     * A window condition trigger. {@code loweredFromJoin} marks the ones the deprecated {@code join(...)} produced, whose
+     * reaction keeps reading the whole retained history because {@code join} shipped in 0.31.0 with that contract and
+     * lowering it to a condition tree is not allowed to change what its callback sees.
+     */
+    record WindowCondition<E>(StepCondition<E> condition, boolean loweredFromJoin) implements Trigger<E> {
     }
 
     record Branch<E, C>(Trigger<E> trigger, BranchReaction<E, C> reaction, Continuation then) {

@@ -1062,7 +1062,7 @@ class FlowSagaTest {
     @Nested
     class LoweredJoin {
 
-        sealed interface JoinEvent permits Started, Ready {
+        sealed interface JoinEvent permits Started, Ready, Note, Go {
             String id();
         }
 
@@ -1072,10 +1072,70 @@ class FlowSagaTest {
         record Ready(String id) implements JoinEvent {
         }
 
-        sealed interface JoinCommand permits Noop {
+        record Note(String id) implements JoinEvent {
+        }
+
+        record Go(String id) implements JoinEvent {
+        }
+
+        sealed interface JoinCommand permits Noop, Saw {
         }
 
         record Noop() implements JoinCommand {
+        }
+
+        record Saw(String what) implements JoinCommand {
+        }
+
+        @SuppressWarnings("deprecation")
+        @Test
+        void a_join_reaction_still_reads_the_whole_retained_history_and_not_just_its_own_window() {
+            // join shipped in 0.31.0 reading the whole retained history, and ADR 120 lowers it to a condition tree as sugar,
+            // which means the semantics are preserved exactly. Narrowing an on(StepCondition, ...) reaction to its own window
+            // must therefore not narrow a join's, since a caller's second-step join callback can be counting an event an
+            // earlier step left behind.
+            Saga<JoinEvent, FlowState<JoinEvent>, JoinCommand> saga = FlowSaga.<JoinEvent, JoinCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(JoinEvent::id)
+                    .step("first", step -> step.on(Go.class, Continuation.next()))
+                    .step("second", step -> step.join(List.of(Expectation.of(Ready.class, 1)), Continuation.end(),
+                            received -> List.of(new Saw("notes=" + received.count(Note.class)))))
+                    .build();
+
+            FlowState<JoinEvent> afterStart = start(saga, new Started("j")).state();
+            FlowState<JoinEvent> afterNote = saga.evolve(afterStart, SagaInput.event(new Note("j")));
+            FlowState<JoinEvent> inSecond = saga.evolve(afterNote, SagaInput.event(new Go("j")));
+            Saga.Step<FlowState<JoinEvent>, JoinCommand> fired = saga.step(inSecond, SagaInput.event(new Ready("j")));
+
+            assertAll(
+                    () -> assertThat(fired.state().completed()).isTrue(),
+                    () -> assertThat(fired.effects()).as("the Note from step one is still visible to the join's callback")
+                            .containsExactly(SagaEffect.issue(new Saw("notes=1")))
+            );
+        }
+
+        @SuppressWarnings("deprecation")
+        @Test
+        void a_join_collapses_repeated_types_to_their_highest_count_and_keeps_first_appearance_order() {
+            Saga<JoinEvent, FlowState<JoinEvent>, JoinCommand> saga = FlowSaga.<JoinEvent, JoinCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(JoinEvent::id)
+                    .step("wait", step -> step.join(
+                            List.of(Expectation.of(Ready.class, 1), Expectation.of(Note.class, 1), Expectation.of(Ready.class, 3)),
+                            Continuation.end()))
+                    .build();
+
+            FlowState<JoinEvent> state = start(saga, new Started("j")).state();
+            state = saga.evolve(state, SagaInput.event(new Note("j")));
+            state = saga.evolve(state, SagaInput.event(new Ready("j")));
+            state = saga.evolve(state, SagaInput.event(new Ready("j")));
+            FlowState<JoinEvent> afterTwoReady = state;
+            FlowState<JoinEvent> afterThirdReady = saga.evolve(afterTwoReady, SagaInput.event(new Ready("j")));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(afterTwoReady)).as("two Ready is short of the highest count asked for").isFalse(),
+                    () -> assertThat(saga.isTerminal(afterThirdReady)).isTrue()
+            );
         }
 
         @SuppressWarnings("deprecation")

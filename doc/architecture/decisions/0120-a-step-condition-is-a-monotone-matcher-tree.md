@@ -157,6 +157,16 @@ event's own type, since the evaluator deliberately never counts the start delive
 reading the whole retained history, which is what makes a count spanning several steps possible and is their documented
 contract.
 
+**A lowered `join`'s reaction is exempt, and dropping that exemption breaks a shipped API silently.** `join` shipped in 0.31.0
+with a callback that reads the whole retained history, and lowering it to a condition tree is sugar, which means the
+semantics are preserved exactly. Narrowing every `WindowCondition` reaction would therefore have silently changed what a
+second-step `join` callback can count, with no exception and no changelog entry, for an API a caller can still be using.
+`WindowCondition` has a `loweredFromJoin` flag, set only by `StepBuilder.join`, and `reactionWindow` narrows only when
+it is false. `FlowSagaTest.LoweredJoin.a_join_reaction_still_reads_the_whole_retained_history_and_not_just_its_own_window`
+is what would fail if that flag were dropped. This is the same line the duplicate rule draws below, released behaviour
+preserved and the unreleased surface made strict, and it is why the `Consequences` claim that "join keeps working,
+unchanged in behavior" is still true and why `doc/migration/upgrading-to-0.33.0.md` needs no correction.
+
 **The documented examples stop inferring the matched alternative, and no API is added for it.** A step that reacts
 differently per outcome writes one `on(...)` branch per outcome, ordered, first satisfied one winning. That is strictly
 more explicit than a single `anyOf` branch that works out afterwards what fired, because the ordering that breaks a tie
@@ -165,12 +175,31 @@ comparison against the instance the caller built, which is fragile (records have
 not), or names on conditions, which is a materially larger public API. `anyOf` is for alternatives that share a reaction.
 
 **"No dedupe, duplicates preserved" is reversed for `allOf`, and kept for `anyOf`.** Within one `allOf`, after
-flattening, two children that a single event satisfies at once are refused with `IllegalArgumentException` when the tree
-is built, which for a saga declared in a `@Saga` factory or a `@Bean` means at startup rather than on a delivery. The
-rule is stated on the matcher rather than on exact leaf equality, because exact-duplicate rejection alone leaves
+flattening, two children are refused with `IllegalArgumentException` when some `EventMatcher` is reachable from both,
+comparing matchers by equality, which for a saga declared in a `@Saga` factory or a `@Bean` means at startup rather than
+on a delivery.
+
+The rule is stated on the matcher rather than on exact leaf equality, because exact-duplicate rejection alone leaves
 `allOf(event(A, 2), event(A, 3))` legal, and that expression reads as five and behaves as three, which is the more
-misleading of the two. Equal composite children are refused too, since the matcher rule cannot see inside them. The
-guarantee is partial and says so, because two leaves whose predicates are separately written lambdas never compare equal.
+misleading of the two. It searches through composite children rather than comparing only leaf siblings, because an
+`allOf` child can be a whole `anyOf` subtree and one event reaching a leaf inside it satisfies that child too, so
+`allOf(event(A), anyOf(event(A), event(B)))` reads as two events and is fulfilled by one `A`. Searching through
+composites also subsumes the equal-children case, since two equal children reach the same matchers.
+
+**The stated guarantee is exactly what the check does, and no wider.** A guarantee written wider than the check is worse
+than the gap it papers over, so both the javadoc and this record name what gets through. Two matchers that are unequal
+but can still be satisfied by one event are allowed through. A supertype and a subtype of it stay legal, because refusing
+`allOf(event(BaseEvent.class), event(A.class))` would refuse a legitimate "one event of any kind plus one `A`
+specifically". Two leaves over one type whose predicates are separately written lambdas stay legal too, because distinct
+lambdas never compare equal and nothing can tell a duplicate from two genuinely different tests. Both are accepted
+deliberately and both have a test saying so.
+
+Refusing on a shared matcher does refuse some trees that are only sometimes satisfiable by one event, such as
+`allOf(anyOf(event(A), event(B)), anyOf(event(C), event(A)))`, where `A` alone satisfies both children but `B` and `C`
+together also do. That cost is accepted. This DSL has no way to say "two distinct events" (nothing consumes an event, by
+design), so a declaration whose meaning depends on which of two readings the caller had in mind cannot be expressed
+correctly here anyway, and a message naming the shared type at startup is better than a step that completes early in
+production.
 
 Summing the counts of two same-matcher children was considered and rejected. Silently changing what a declaration means
 is worse than refusing it, and the reading is not even unambiguous, since `allOf(event(A, 2), event(A, 3))` could
@@ -181,12 +210,13 @@ occurrence and is satisfied by an existing one, so the declaration is stronger t
 alternative asks for exactly what it says and is satisfied by exactly that, so nothing reads as stronger than it is, and
 a tree assembled from data can carry a harmless duplicate. Do not make the two symmetric for symmetry's sake.
 
-**The deprecated `join` lowering is exempt.** `join(List.of(expect(A, 2), expect(A, 2)))` is a working declaration in a
-shipped API, and inheriting the rejection would turn it into a context that fails to refresh, on a patch upgrade. The
-lowering therefore collapses same-type expectations to the highest count asked for before building the tree, which is
-what such a join has always meant, since each expectation is checked against the same window independently. So the
-`Consequences` claim that "join keeps working, unchanged in behavior" is still true, deliberately. Released behaviour is
-preserved, and the unreleased API is made strict. The programmatic `allOf(Collection)` overload is not exempt, because
+**The deprecated `join` lowering is exempt from the rejection too.** `join(List.of(expect(A, 2), expect(A, 2)))` is a
+working declaration in a shipped API, and inheriting the rejection would turn it into a context that fails to refresh, on
+a patch upgrade. The lowering therefore collapses same-type expectations to the highest count asked for before building
+the tree, which is what such a join has always meant, since each expectation is checked against the same window
+independently. Together with the reaction-window exemption above, that is why the `Consequences` claim that "join keeps
+working, unchanged in behavior" is still true, deliberately. Released behaviour is preserved, and the unreleased API is
+made strict. The programmatic `allOf(Collection)` overload is not exempt, because
 a caller assembling required types from data who ends up with one matcher twice has exactly the bug the rule exists to
 catch, and is the least likely to see it.
 
