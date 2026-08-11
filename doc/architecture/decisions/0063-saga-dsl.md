@@ -205,3 +205,10 @@ every step" wildcard matching. A process that needs any of those drops down to t
 > unchanged. `join`'s per-type counting described above is still exactly what it does, it just now lowers to a
 > `StepCondition` tree rather than being its own body kind. No wire format changed. `FlowStateImpl`'s bookkeeping
 > fields keep the same meanings this section states, and `ActionKind.JOIN` stays declared but is no longer written.
+
+> **Amended on 2026-08-10 by [ADR 121](0121-a-saga-timers-name-carries-its-namespace.md).** A timer's name is now the
+> value `TimerName`, either a plain name or a name inside a namespace, instead of a string. That gives timer
+> namespacing a way to be written down and nothing more. It does not remove the collision described above, since two
+> composed flow children still arm the same `Qualified("step", ..)` name for a step they both have, and nobody assigns
+> a child a namespace of its own. All three of the things `compose` is deferred over here are still deferred. The flow
+> layer has taken `step` for its own step timers, so whatever assigns namespaces to children has to keep away from it.
