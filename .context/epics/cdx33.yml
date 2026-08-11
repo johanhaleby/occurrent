@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 18
-updated_at: 2026-08-11T11:21:13Z
-updated_by: "orchestrator session faee3625 (first session-liveness sweep under the new skill rule: U8 U9 U10 swept including a stray U8 worktree inside the primary repo; U3 STALLED at its plan gate, 105 min, re-surfacing to Johan)"
+revision: 19
+updated_at: 2026-08-11T11:28:00Z
+updated_by: "orchestrator session faee3625 (U5 MERGED as cb6f012db, six of thirteen units done, U6 now unblocked; U1 delivered the withdrawal as PR 739)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -32,11 +32,11 @@ units:
     depends_on: []
     session: local_4640fd9a-5acf-4678-863e-c4b79e9e7460
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "739", met: false, evidence: "PR 739 open, head 262ad953cabb7b0b0cef9fcb76805de17fecf4e3: 14 files removed, 11 unwired, ADR 0122 added (number confirmed free by a cross-branch ls-tree over every origin ref, claimed only on this branch). No residual references to the withdrawn API outside ADRs, the changelog and my own .context files. OWED: the 0.34.0 epic issue is a required plan deliverable and is NOT filed yet, the PR body references only #361; verify at merge-readiness per the PR-body bookkeeping rule"}
       - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: true, evidence: "SATISFIED 2026-08-11T10:38:40Z: Johan approved /Users/johan/.claude/plans/whimsical-cooking-hopper.md after four planning rounds plus a requested second opinion. Direction: WITHDRAW the applied-position feature from 0.33.0 (13 files deleted, 10 unwired), new ADR with the completed-prefix refutation and verified Axon/Marten/Emmett prior art, ADR 0111 withdrawn via amendment blockquotes, and an epic-grade 0.34.0 issue for the append-identity design with its three named open points. D3 resolved as none-of-the-above: withdraw-then-redesign"}
     blocking_on: []
-    next_action: worker implementing the withdrawal; must rebase over merged 730/727/729/733; DELIVERY_RESULT must list invalidated docs surfaces and the 0.34.0 issue number
-    last_meaningful_progress_at: 2026-08-11T10:38:40Z
+    next_action: await DELIVERY_RESULT; do not merge until the 0.34.0 epic issue exists and #361 linkage is stated
+    last_meaningful_progress_at: 2026-08-11T11:28:00Z
     observed: {}
     assessment: "Bigger than the meta-plan contingency and cleaner, nothing unsound ships at all. Grounds: no shipped configuration was sound (change streams and push feeds violate the position-order precondition, the in-memory store publishes outside its lock), WriteResult carries no position so the documented scenario was unreachable from the stream API, and AGENTS.md rules against docs-only for a correctness gap and against unsettled public abstractions. Finding 19 becomes moot, U9 work knowingly erased. #361 linkage and docs PR 52 retargeting via worker DELIVERY_RESULT plus UDOCS"
   U2:
@@ -88,22 +88,22 @@ units:
   U5:
     issue: null
     goal: "Migration tooling truth (findings 8, 11, 9-guide-half): recipe stubs delegate any() and reject stronger, empty writeVersion, TimerName effect-record constructor matchers, guide corrections, runtime-behavior test via DurableSubscriptionModel"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_d940740e-389c-4b2e-8c63-7529654a31a6
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: false, evidence: "**NEARLY MERGED ON A FALSE GREEN.** Head 2a0a93ab240dbf78d4b2e5611400ead4a0200d35 reported failing=0 pending=0 with 3 successful checks and 0 unresolved threads, but NO maven.yml matrix run existed for that SHA: that workflow triggers on push with cancel-in-progress concurrency, while the 3 passing checks are pull_request-triggered siblings. The delta from the last matrix-green head 7f08d9b97 includes MigrateSagaTimerName.java plus 99 new test lines, so this was unvalidated recipe code. Forced a run via workflow_dispatch, run 31481912947. Do not merge until a matrix run for the exact head concludes successfully. The required runtime-behavior test DOES exist: DurableSubscriptionModelMigratedCheckpointStorageTest.java, 202 lines"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: true, evidence: "MERGED as squash cb6f012db2cd225906ea386098d337aa0d66893b, CAS-pinned to 4bd873fbe9489be9d247a3a7537a2ad13a186d26. Matrix verified by RUN LIST as completed/success on that exact head as a PUSH event (the earlier head had no matrix at all and a dispatched run that failed then cancelled, neither visible in the rollup). 0 unresolved threads. Verified on main: the generated stubs now delegate any() to the two-arg save and answer empty writeVersion on both stacks, and DurableSubscriptionModelMigratedCheckpointStorageTest is present. U7 and U10 changelog bullets survived the rebase (checked via git archive after a zsh :c modifier made an earlier grep return a false zero). Branch deleted on merge, no stranded push"}
     blocking_on: []
-    next_action: wait for the dispatched matrix on the exact head, then merge and dispatch U6
-    last_meaningful_progress_at: 2026-08-11T10:23:26Z
+    next_action: sweep the worktree, branch and session
+    last_meaningful_progress_at: 2026-08-11T11:28:00Z
     observed: {}
     assessment: "Gating: official migration converts compile break into runtime failure today. Owns doc/migration/upgrading-to-0.33.0.md exclusively until U6"
   U6:
     issue: null
     goal: "Spring fencing wiring (findings 15, 16): per D5 fail startup on ambiguous strategy beans (back default off any interface-typed bean), starter validates conditional-write capability or explicit unfenced mode; guide caveat lands after U5"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: [U5]
@@ -112,8 +112,8 @@ units:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U6 plan gate (capability-discovery mechanism under D1-kept contract), Johan", met: false, evidence: null}
     blocking_on: []
-    next_action: spawn chip after U5 merges (plan-first, Opus/high)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: DISPATCHABLE now that U5 has merged, spawn the plan-first chip (Opus/high) with D5 fail-startup as settled and the corrected changelog wording
+    last_meaningful_progress_at: 2026-08-11T11:28:00Z
     observed: {}
     assessment: "Gating. CheckpointStorage has no capability method; mechanism (small API addition to unreleased contract vs explicit config) resolved at its plan gate"
   U7:
