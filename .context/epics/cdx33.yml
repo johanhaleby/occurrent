@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33
-revision: 57
+revision: 59
 updated_at: 2026-08-11T19:56:20Z
 updated_by: "orchestrator session faee3625 (U12 MERGED as 743391bc6, all 15 library units done; UDOCS2 dispatched as the last unit)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -35,7 +35,7 @@ units:
     issue: null
     goal: "Documentation truth for two defects in this epic's own output: #754 (FlowStateImpl.java:52 still states the superseded retention bound historyWindow + stepWindow + 1) and #755 (the reopened-hierarchy startup refusal now applies to subscriptions as well as sagas, which is a breaking change against 0.32.0 that the changelog denies and migration section 10 frames as saga-only)"
     phase: DONE
-    health: HEALTHY
+    health: PROGRESSING
     swept: true
     depends_on: []
     session: null
@@ -275,13 +275,13 @@ units:
   UDOCS2:
     issue: null
     goal: "Second docs pass for the work adopted after the first closeout: stepWindow and predicateId from U11, and the supertype expansion plus the widened subscription filter from U12. UDOCS ran before either unit existed, so the held docs set documents neither"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U11, U12]
     session: "subagent a5e8b17545ab295c1 (edits a second repository through scripted Bash)"
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "docs/743-sealed-event-types", met: true, evidence: "All four held branches verified pushed against their remotes on 2026-08-12: docs/743-sealed-event-types 2c4e205 (carries the U13 correction dropping the false @Projection claim), docs/0.33.0-preview 07f3169, docs/707-step-conditions 1d0438a, docs/saga-chapter-readability dcbd142. Docs main untouched at 7c64016. Held-branch convention respected, nothing merged, merges are Johan's. Note the local checkout of docs/707-step-conditions sits at ancestor 0d35f3a, behind the remote, which is a checkout artefact and not missing work."}
     blocking_on: []
     next_action: await DELIVERY_RESULT; at merge-readiness verify the preview greps show all four topics present and the withdrawn API still at zero
     last_meaningful_progress_at: 2026-08-11T19:56:20Z
