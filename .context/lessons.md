@@ -779,3 +779,36 @@ genuinely active) and the warning not to read "running" as "progressing"; and a 
 must now require the worker to MESSAGE the orchestrator when it reaches its gate, so the
 orchestrator can route it as one structured ask carrying register knowledge the worker lacks, which
 is also what spares the user a session switch. This entry stays as the history of how it was learned.
+
+## I pushed conflict markers into the epic state file, and `2>/dev/null` is why (2026-08-11, cdx33)
+
+Recording this against myself because the mechanism is general and the damage was real: for a few
+minutes `origin/main` carried a `.context/epics/cdx33.yml` that did not parse, with
+`<<<<<<< HEAD` on line 3.
+
+The sequence. A checkpoint ran as one compound command that combined `git add`, a `git commit -q -m
+"..." --amend --no-edit`, a `|| git commit` fallback, a `git rebase`, and a `git push`, with stderr
+sent to `/dev/null` on the amend. Two things were wrong at once. `-m` together with `--amend
+--no-edit` is a conflicting-options error, so the amend always failed, and `2>/dev/null` hid it.
+More importantly the working tree was ALREADY in an unmerged `UU` state from a previous rebase whose
+conflict I had never seen, because that rebase's output had been suppressed by `>/dev/null 2>&1` in
+an earlier compound command. `git add` on a `UU` file marks a conflict resolved without resolving
+anything, so the markers were staged as content and committed as content.
+
+Three things caught it, in this order, and none of them was the command's own output: the remote
+read-back showed `hold LIFTED` absent when the local file had it; `git status --short` then showed
+`UU`; and the schema validator refused to parse the pushed file. The read-back rule earned its place
+for the third time today, and this time it was protecting durable state rather than a claim.
+
+**How to apply.** Never suppress stderr on a git command that can conflict, and never chain
+`rebase`/`commit`/`push` behind `&&` or `||` in one line, because the failure of a middle step reads
+as the success of the last. Run the checkpoint as separate calls, and if `git status` is not clean of
+`U` states, stop and resolve before anything else. Never `git add` a path reported `UU` without
+reading the file first. And after any push that touches a schema-validated file, validate the copy
+fetched FROM THE REMOTE rather than the local one, since only the remote copy is what another
+session or a restart will read.
+
+Recovery that worked, for reuse: `git rebase --abort`, `git reset --hard origin/main`,
+`git archive <last-good-commit> <path> | tar -x` to restore the last parsing revision, re-apply the
+intended edits with asserted string replacements, validate, then one plain commit and push followed
+by a remote read-back and a second validate.
