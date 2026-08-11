@@ -452,10 +452,11 @@ Occurrent ships, the saga you are being told about was already receiving nothing
 hierarchy, and it looked like a process still waiting for events rather than a defect. The exception is the first time
 anything said so.
 
-**For a subscription, only one of the three shapes below is new.** `SubscriptionAnnotations` already refused a non-sealed
-interface and a non-sealed abstract class with an `IllegalArgumentException` in 0.32.0, so a subscription declaring
-either shape was already refused before this release, under an older message this release also rewords. The third shape,
-a sealed hierarchy reopened below the declared type, is what changes in substance. 0.32.0 accepted it and built a filter
+**For a subscription, only one of the four shapes below is new.** `SubscriptionAnnotations` already refused a non-sealed
+interface, a non-sealed abstract class and an array with an `IllegalArgumentException` in 0.32.0, so a subscription
+declaring any of those three shapes was already refused before this release, under an older message this release also
+rewords. The third shape, a sealed hierarchy reopened below the declared type, is what changes in substance. 0.32.0
+accepted it and built a filter
 naming only the reopened level, so the concrete events stored beneath that level were silently missed rather than
 delivered. 0.33.0 refuses it instead, the same new refusal a saga gets in this shape, so a subscription in this one shape
 that started fine under 0.32.0 now refuses to start. That is the breaking part of this change for a subscription.
@@ -467,11 +468,16 @@ You are affected when a declared type is one of these:
 | An interface that is not sealed | `interface OrderEvent` | `interface OrderEvent` |
 | An abstract class that is not sealed | `abstract class OrderEvent` | `abstract class OrderEvent` |
 | A sealed hierarchy reopened below the declared type | `non-sealed class Base implements OrderEvent` | `open class Base : OrderEvent` or `abstract class Base : OrderEvent` |
+| An array type | `OrderEvent[]` | `Array<OrderEvent>` |
 
 The third row applies even when the declared type can be instantiated. A `sealed class` that is not abstract still claims
 its subtypes are knowable, so a reopened level below it is refused just the same, and the events under that level are
-exactly the ones that were going missing. For a subscription, the third row is also the only one of the three that is
-new in 0.33.0, the first two were already refused in 0.32.0.
+exactly the ones that were going missing. For a subscription, the third row is the only one of the four that is new in
+0.33.0, the first, second and fourth were already refused in 0.32.0.
+
+The fourth row is refused for a different reason than the first three. No event is ever stored as an array at all, not
+because its concrete subtypes cannot be enumerated. Sealing or finalizing an array is not a real option, so its message
+skips that remedy and only points at declaring the concrete event types.
 
 A saga or a subscription that declares concrete types is unaffected, and so is one that declares a sealed type whose
 every level is sealed or final. Java records and Kotlin data classes are final already, so an ordinary sealed hierarchy

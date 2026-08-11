@@ -371,6 +371,10 @@ public final class SubscriptionAnnotations {
     }
 
     private static IllegalArgumentException cannotSubscribeOn(String subscriptionId, Class<?> eventType) {
+        if (eventType.isArray()) {
+            String msg = "no event is ever stored as an array, so %s can never be a declared event type for subscription '%s'. Declare the concrete event types with the annotation's eventTypes attribute instead (for example eventTypes = {MyEvent1.class, MyEvent2.class}).";
+            return new IllegalArgumentException(msg.formatted(eventType.getName(), subscriptionId));
+        }
         String msg = "the concrete event types dispatch would accept for %s cannot all be enumerated, so a filter derived from it for subscription '%s' would miss some of them. Declare the concrete event types with the annotation's eventTypes attribute instead (for example eventTypes = {MyEvent1.class, MyEvent2.class}), or make %s and every level below it final or sealed.";
         return new IllegalArgumentException(msg.formatted(eventType.getName(), subscriptionId, eventType.getSimpleName()));
     }

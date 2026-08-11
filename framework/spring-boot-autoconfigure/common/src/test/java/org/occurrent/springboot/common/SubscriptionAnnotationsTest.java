@@ -295,11 +295,15 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void refuses_an_array_event_type() {
+    void refuses_an_array_event_type_with_a_message_that_does_not_offer_sealing_it() {
+        // An array can never be sealed or final in a way that fixes this, so this shape gets its own message rather
+        // than the "cannot all be enumerated" one, which would tell a reader to do something impossible.
         assertThatThrownBy(() -> resolveOrderEventTypes(OrderPlaced[].class))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("order-subscription")
-                .hasMessageContaining("cannot all be enumerated");
+                .hasMessageContaining("no event is ever stored as an array")
+                .hasMessageNotContaining("cannot all be enumerated")
+                .hasMessageNotContaining("final or sealed");
     }
 
     @Test

@@ -142,8 +142,8 @@ declared one did.
 
 This expansion already existed. `SubscriptionAnnotations.getConcreteEventTypes` in
 `framework/spring-boot-autoconfigure/common` recursed permitted subclasses and refused a non-sealed interface or abstract
-type for `@Subscription`, `@Saga` and `@Projection`, and the first version of this change wrote the same algorithm a
-second time in the saga DSL without finding it. `git grep getPermittedSubclasses` finds it in one command, and the
+type for `@Subscription`, `@StreamSubscription`, `@SynchronousSubscription` and `@DcbSubscription`, and the first version
+of this change wrote the same algorithm a second time in the saga DSL without finding it. `git grep getPermittedSubclasses` finds it in one command, and the
 convention that says to run that grep is now in AGENTS.md.
 
 **Comparing the two copies is what found the next defect, which is why they are diffed rather than one being deleted.**

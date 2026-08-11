@@ -129,6 +129,10 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * {@link #create} and {@code FlowSaga.Builder} so all three say the same thing.
      */
     static IllegalArgumentException cannotSubscribeOn(Class<?> eventType) {
+        if (eventType.isArray()) {
+            return new IllegalArgumentException("no event is ever stored as an array, so " + eventType.getName()
+                    + " can never be a declared event type. Declare the concrete event types instead.");
+        }
         return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
                 + " cannot all be enumerated, so a filter derived from it would miss some of them. Declare the concrete "
                 + "event types instead, or make " + eventType.getSimpleName() + " and every level below it final or sealed.");
