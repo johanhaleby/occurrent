@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 52
-updated_at: 2026-08-11T19:29:26Z
-updated_by: "orchestrator session faee3625 (third silent-miss variant on 752 from Copilot re-review; ruled fix plus state the invariant positively and test it as a property)"
+revision: 53
+updated_at: 2026-08-11T19:56:20Z
+updated_by: "orchestrator session faee3625 (U12 MERGED as 743391bc6, all 15 library units done; UDOCS2 dispatched as the last unit)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "REOPENED 2026-08-11 after closeout. The tag is HELD again for U11 and U12. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -241,31 +241,31 @@ units:
   U12:
     issue: 743
     goal: "A saga declaring a supertype event type subscribes on a CloudEvent type string no concrete event carries, so it silently receives nothing; reproduce first, then fix at the layer the flow DSL, on(Class, ..) and the core builder actually share"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "worktree subagent a80581aec529a818c"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "752", met: false, evidence: "PR 752 open on cdx33/u12-supertype-event-subscription, head 83c5c47558f1acedb45d1961f7622463cc2a74fa, two Copilot threads now open. Orchestrator verified two required things: it re-audited and took ADR 0124 rather than the 0123 in its plan, which U11 had claimed meanwhile, and its ADR NAMES the deliberate divergence from the projection DSL with #750 recorded, which was the required addition. Both out-of-scope traces filed before the PR referenced them: #750 the projection DSL identical defect, #751 Saga#filter parity"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "752", met: true, evidence: "MERGED as squash 743391bc6045e8350caca3e63b3bad39046af8ad, CAS-pinned to 37b4fa990ef58cd54675e083cf931b0b9a3909fc. Matrix completed/success on that exact head by RUN LIST, 27 of 27, MERGEABLE/CLEAN, 0 unresolved threads with all THREE carrying a reply (verified). Verified on origin/main: the shared EventTypeExpansion lives in common/filter internal and states the invariant, SubscriptionAnnotations consumes it (3 references), the ONLY remaining getPermittedSubclasses walk in main sources is the shared helper so the duplicate is gone, the AGENTS.md bullet is present, ADR 0124 merged, and migration sections 9 and 10 each appear once. Branch deleted, no stranded push, worktree clean at the pin and swept"}
       - {check: manual_approval, ref: "U12 plan gate, Johan via the orchestrator", met: true, evidence: "SATISFIED 2026-08-11T17:44:27Z by the orchestrator, since the remaining question (whether to add Saga#filter parity) was a decline-to-widen rather than a scope grant. REPRODUCED on all three routes with controls in the same harness proving the empty results are the defect: core, flow and window-condition sagas all issue nothing, and the core case is worst because startsOn(supertype) never creates an instance at all. The shared layer is the saga eventTypes() rather than the type mapper, so blast radius stays in dsl/saga-dsl. Decisive argument: every layer BELOW the filter is already supertype aware deliberately (TypeDispatch documents it, isInstance in the execution support, the flow impl and ReceivedEvents), and only the filter compares type strings for equality, so this is an internal inconsistency rather than a caller error. Second finding: the projection DSL knew about the constraint and mitigated it with a javadoc note plus a filter() hatch, and the saga DSL copied the derivation without either. Approved fix: expand sealed hierarchies transitively, keep the declared type so a collapsing custom mapper still works, refuse at build() what cannot be expanded, one shared helper for both builders. Saga#filter() deliberately NOT in this PR"}
     blocking_on: [{what: "third variant of the same defect, from Copilot re-review: foundAll == false is suppressed when the declared root is instantiable, so for an instantiable sealed root with a reopened branch the descendants below it are missing from the filter while dispatch still accepts them by assignability. Ruled fix plus a standing instruction to state the invariant positively (the derived filter must name every event type dispatch would accept) and test it as a table over hierarchy shapes rather than adding a case per bug", since: 2026-08-11T19:29:26Z, recheck_after: "on worker push"}]
-    next_action: await the invariant-based fix; at merge-readiness verify the property test covers all six hierarchy shapes and the ADR names the non-final-concrete residual
-    last_meaningful_progress_at: 2026-08-11T19:29:26Z
+    next_action: none, merged and swept
+    last_meaningful_progress_at: 2026-08-11T19:56:20Z
     observed: {}
     assessment: "Delivered with two things worth recording. It could NOT deliver the recipe review marker and said so explicitly rather than omitting it: OpenRewrite carries Flag.Sealed but does not populate it for the type behind a class literal, so the marker flagged correctly sealed hierarchies, its own test caught that, and it removed it rather than ship advice pointing at correct code, writing the reason into ADR 0124 and the guide. And its independent local review found a hole the orchestrator reasoning had missed: a non-sealed CONCRETE class in a sealed hierarchy was collected and its branch called complete, so its own subclasses vanished from the filter silently, which means expansion could MISS types rather than only add disjuncts. The walk now requires each level to be sealed or final. It also caught that getConcreteEventTypes feeds a handler assignability check as well as the filter, so it widened only the filter, avoiding a startup regression for a handler with a narrower parameter than a listed sealed parent"
   UDOCS2:
     issue: null
     goal: "Second docs pass for the work adopted after the first closeout: stepWindow and predicateId from U11, and the supertype expansion plus the widened subscription filter from U12. UDOCS ran before either unit existed, so the held docs set documents neither"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U11, U12]
-    session: null
+    session: "subagent a5e8b17545ab295c1 (edits a second repository through scripted Bash)"
     deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: dispatch as a subagent once U12 merges; scope confirmed by grep, the step-conditions branch mentions neither stepWindow nor predicateId
-    last_meaningful_progress_at: 2026-08-11T19:17:43Z
+    next_action: await DELIVERY_RESULT; at merge-readiness verify the preview greps show all four topics present and the withdrawn API still at zero
+    last_meaningful_progress_at: 2026-08-11T19:56:20Z
     observed: {}
     assessment: "EXISTS BECAUSE THE EPIC REOPENED. UDOCS delivered against the 13-unit scope and is DONE for that, but U11 and U12 landed public behaviour afterwards, so the held docs set is stale again: the saga chapter needs stepWindow and predicateId, and the supertype expansion plus the subscription-filter widening need documenting where sagas and subscriptions are described. Recording it as its own unit rather than reopening UDOCS keeps the first pass honest about what it covered. This is the #741 class of obligation, an epic cannot close while a deliverable it created is outstanding, so the closeout must check this unit rather than trusting that docs were done once"
