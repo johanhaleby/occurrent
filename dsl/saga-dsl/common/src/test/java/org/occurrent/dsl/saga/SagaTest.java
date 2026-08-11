@@ -675,6 +675,28 @@ class SagaTest {
         }
 
         @Test
+        void throws_IllegalStateException_on_duplicate_evolveOnTimeout_registered_as_a_string_and_as_a_TimerName() {
+            Saga.Builder<OrderEvent, OrderState, OrderCommand> builder = Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .evolveOnTimeout("a:b", (state, t) -> state);
+
+            assertThatThrownBy(() -> builder.evolveOnTimeout(TimerName.of("a", "b"), (state, t) -> state))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("evolveOnTimeout")
+                    .hasMessageContaining("a:b");
+        }
+
+        @Test
+        void throws_IllegalStateException_on_duplicate_reactOnTimeout_registered_as_a_string_and_as_a_TimerName() {
+            Saga.Builder<OrderEvent, OrderState, OrderCommand> builder = Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+                    .reactOnTimeout("a:b", (state, t) -> List.of());
+
+            assertThatThrownBy(() -> builder.reactOnTimeout(TimerName.of("a", "b"), (state, t) -> List.of()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("reactOnTimeout")
+                    .hasMessageContaining("a:b");
+        }
+
+        @Test
         void throws_IllegalStateException_when_correlateAll_is_set_twice() {
             Saga.Builder<OrderEvent, OrderState, OrderCommand> builder = Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
                     .correlateAll(OrderEvent::orderId);
@@ -751,7 +773,7 @@ class SagaTest {
             Saga<OrderEvent, OrderState, OrderCommand> saga = orderFulfillment();
 
             Saga.Step<OrderState, OrderCommand> step = saga.step(new AwaitingPayment("order-1"),
-                    SagaInput.timeout(new SagaTimeout("order-1", PAYMENT_TIMER)));
+                    SagaInput.timeout(new SagaTimeout("order-1", TimerName.parse(PAYMENT_TIMER))));
 
             assertAll(
                     () -> assertThat(step.state()).isEqualTo(new Cancelled("order-1")),
@@ -764,7 +786,7 @@ class SagaTest {
             Saga<OrderEvent, OrderState, OrderCommand> saga = orderFulfillment();
             OrderState state = new AwaitingPayment("order-1");
 
-            Saga.Step<OrderState, OrderCommand> step = saga.step(state, SagaInput.timeout(new SagaTimeout("order-1", "unknown-timer")));
+            Saga.Step<OrderState, OrderCommand> step = saga.step(state, SagaInput.timeout(new SagaTimeout("order-1", TimerName.parse("unknown-timer"))));
 
             assertAll(
                     () -> assertThat(step.state()).isEqualTo(state),
@@ -819,7 +841,7 @@ class SagaTest {
             Saga<Object, OrderState, Object> saga = widened();
 
             Saga.Step<OrderState, Object> step = saga.step(new AwaitingPayment("order-1"),
-                    SagaInput.timeout(new SagaTimeout("order-1", PAYMENT_TIMER)));
+                    SagaInput.timeout(new SagaTimeout("order-1", TimerName.parse(PAYMENT_TIMER))));
 
             assertAll(
                     () -> assertThat(step.state()).isEqualTo(new Cancelled("order-1")),
@@ -837,7 +859,7 @@ class SagaTest {
 
             Saga.Step<OrderState, Object> fromEvent = saga.step(null, SagaInput.event(new OrderPlaced("order-1", 100)));
             Saga.Step<OrderState, Object> fromTimeout = saga.step(new AwaitingPayment("order-1"),
-                    SagaInput.timeout(new SagaTimeout("order-1", PAYMENT_TIMER)));
+                    SagaInput.timeout(new SagaTimeout("order-1", TimerName.parse(PAYMENT_TIMER))));
 
             assertAll(
                     () -> assertThat(fromEvent.issuedCommands()).containsExactly(new ReservePayment("order-1", 100)),
@@ -948,7 +970,7 @@ class SagaTest {
 
         @Test
         void throws_NullPointerException_when_StartTimeout_duration_is_null() {
-            assertThatThrownBy(() -> new SagaEffect.StartTimeout<OrderCommand>(PAYMENT_TIMER, null))
+            assertThatThrownBy(() -> new SagaEffect.StartTimeout<OrderCommand>(TimerName.parse(PAYMENT_TIMER), null))
                     .isInstanceOf(NullPointerException.class);
         }
 
@@ -968,7 +990,7 @@ class SagaTest {
 
         @Test
         void throws_NullPointerException_when_StartTimeoutAt_instant_is_null() {
-            assertThatThrownBy(() -> new SagaEffect.StartTimeoutAt<OrderCommand>(PAYMENT_TIMER, null))
+            assertThatThrownBy(() -> new SagaEffect.StartTimeoutAt<OrderCommand>(TimerName.parse(PAYMENT_TIMER), null))
                     .isInstanceOf(NullPointerException.class);
         }
 
@@ -986,7 +1008,7 @@ class SagaTest {
 
         @Test
         void throws_NullPointerException_when_SagaTimeout_sagaId_is_null() {
-            assertThatThrownBy(() -> new SagaTimeout(null, PAYMENT_TIMER))
+            assertThatThrownBy(() -> new SagaTimeout(null, TimerName.parse(PAYMENT_TIMER)))
                     .isInstanceOf(NullPointerException.class);
         }
 

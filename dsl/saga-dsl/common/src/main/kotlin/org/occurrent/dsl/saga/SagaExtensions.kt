@@ -95,11 +95,27 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
     }
 
     /** Registers the fold for the timer named [timerName]. */
+    fun evolveOnTimeout(timerName: TimerName, fold: (S, SagaTimeout) -> S) {
+        delegate.evolveOnTimeout(timerName, BiFunction { s, t -> fold(s, t) })
+    }
+
+    /**
+     * Registers the fold for the timer named by a string that [TimerName.parse] reads, so `"a:b"` registers the same
+     * timer as `TimerName.of("a", "b")`.
+     */
     fun evolveOnTimeout(timerName: String, fold: (S, SagaTimeout) -> S) {
         delegate.evolveOnTimeout(timerName, BiFunction { s, t -> fold(s, t) })
     }
 
     /** Registers the reaction for the timer named [timerName], given the post-evolve state. */
+    fun reactOnTimeout(timerName: TimerName, react: SagaEffects<C>.(S, SagaTimeout) -> SagaEffects<C>) {
+        delegate.reactOnTimeout(timerName, BiFunction { s, t -> SagaEffects<C>().react(s, t).build() })
+    }
+
+    /**
+     * Registers the reaction for the timer named by a string that [TimerName.parse] reads, given the post-evolve state,
+     * so `"a:b"` registers the same timer as `TimerName.of("a", "b")`.
+     */
     fun reactOnTimeout(timerName: String, react: SagaEffects<C>.(S, SagaTimeout) -> SagaEffects<C>) {
         delegate.reactOnTimeout(timerName, BiFunction { s, t -> SagaEffects<C>().react(s, t).build() })
     }
@@ -137,12 +153,21 @@ class SagaEffects<C : Any> @PublishedApi internal constructor() {
     fun issue(command: C): SagaEffects<C> = apply { effects += SagaEffect.issue(command) }
 
     /** Start (or restart) the timer named [timerName] to fire once [after] has elapsed. */
+    fun startTimeout(timerName: TimerName, after: Duration): SagaEffects<C> = apply { effects += SagaEffect.startTimeout(timerName, after) }
+
+    /** Start (or restart) the timer named by a string that [TimerName.parse] reads, to fire once [after] has elapsed. */
     fun startTimeout(timerName: String, after: Duration): SagaEffects<C> = apply { effects += SagaEffect.startTimeout(timerName, after) }
 
     /** Start (or restart) the timer named [timerName] to fire at [at]. */
+    fun startTimeoutAt(timerName: TimerName, at: Instant): SagaEffects<C> = apply { effects += SagaEffect.startTimeoutAt(timerName, at) }
+
+    /** Start (or restart) the timer named by a string that [TimerName.parse] reads, to fire at [at]. */
     fun startTimeoutAt(timerName: String, at: Instant): SagaEffects<C> = apply { effects += SagaEffect.startTimeoutAt(timerName, at) }
 
     /** Cancel the timer named [timerName]. */
+    fun cancelTimeout(timerName: TimerName): SagaEffects<C> = apply { effects += SagaEffect.cancelTimeout(timerName) }
+
+    /** Cancel the timer named by a string that [TimerName.parse] reads. */
     fun cancelTimeout(timerName: String): SagaEffects<C> = apply { effects += SagaEffect.cancelTimeout(timerName) }
 
     /** Closes a reaction that does not end on an effect call, such as one finishing on an `if` without an `else`. */

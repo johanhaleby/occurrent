@@ -21,6 +21,7 @@ import org.junit.jupiter.api.*
 import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.cloudevents.OccurrentCloudEventExtension
 import java.time.Duration
+import java.time.Instant
 
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class SagaExtensionsTest {
@@ -158,7 +159,7 @@ class SagaExtensionsTest {
         fun `dispatches by the registered timer name`() {
             val saga = gameSaga()
 
-            val step = saga.step(InProgress("game-1"), SagaInput.timeout(SagaTimeout("game-1", TURN_TIMER)))
+            val step = saga.step(InProgress("game-1"), SagaInput.timeout("game-1", TimerName.parse(TURN_TIMER)))
 
             assertThat(step.effects()).containsExactly(SagaEffect.issue(ArchiveGame("game-1")))
         }
@@ -167,11 +168,67 @@ class SagaExtensionsTest {
         fun `an unregistered timer name produces no effects`() {
             val saga = gameSaga()
 
-            val step = saga.step(InProgress("game-1"), SagaInput.timeout(SagaTimeout("game-1", "unknown")))
+            val step = saga.step(InProgress("game-1"), SagaInput.timeout("game-1", TimerName.parse("unknown")))
 
             assertAll(
                 { assertThat(step.state()).isEqualTo(InProgress("game-1")) },
                 { assertThat(step.effects()).isEmpty() }
+            )
+        }
+    }
+
+    @Nested
+    inner class TimerNameOverloads {
+
+        private val stepTurn = TimerName.of("step", "turn")
+
+        private fun namespacedSaga(): Saga<GameEvent, GameState?, GameCommand> =
+            saga(initialState = null) {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+                evolve<GameStarted> { _, e -> InProgress(e.gameId) }
+                react<GameStarted> { _, _ -> startTimeout(stepTurn, Duration.ofMinutes(5)) }
+                evolve<GameWon> { state, e -> Finished((state as InProgress).gameId, e.winner) }
+                react<GameWon> { _, _ -> cancelTimeout(stepTurn) }
+                evolveOnTimeout(stepTurn) { _, t -> Finished(t.sagaId, "nobody") }
+                reactOnTimeout(stepTurn) { _, t -> issue(ArchiveGame(t.sagaId)) }
+            }
+
+        @Test
+        fun `startTimeout takes a TimerName`() {
+            val effects = namespacedSaga().react(InProgress("game-1"), SagaInput.event(GameStarted("game-1")))
+
+            assertThat(effects).containsExactly(SagaEffect.startTimeout<GameCommand>(stepTurn, Duration.ofMinutes(5)))
+        }
+
+        @Test
+        fun `cancelTimeout takes a TimerName`() {
+            val effects = namespacedSaga().react(Finished("game-1", "alice"), SagaInput.event(GameWon("game-1", "alice")))
+
+            assertThat(effects).containsExactly(SagaEffect.cancelTimeout<GameCommand>(stepTurn))
+        }
+
+        @Test
+        fun `startTimeoutAt takes a TimerName`() {
+            val at = Instant.parse("2026-01-01T00:00:00Z")
+            val saga = saga<GameEvent, GameState?, GameCommand>(initialState = null) {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+                react<GameStarted> { _, _ -> startTimeoutAt(stepTurn, at) }
+            }
+
+            val effects = saga.react(null, SagaInput.event(GameStarted("game-1")))
+
+            assertThat(effects).containsExactly(SagaEffect.startTimeoutAt<GameCommand>(stepTurn, at))
+        }
+
+        @Test
+        fun `a timer registered with a TimerName fires for the same name read out of its stored string`() {
+            val step = namespacedSaga().step(InProgress("game-1"), SagaInput.timeout("game-1", TimerName.parse("step:turn")))
+
+            assertAll(
+                { assertThat(step.state()).isEqualTo(Finished("game-1", "nobody")) },
+                { assertThat(step.effects()).containsExactly(SagaEffect.issue(ArchiveGame("game-1"))) }
             )
         }
     }

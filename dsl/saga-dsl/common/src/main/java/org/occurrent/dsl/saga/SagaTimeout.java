@@ -25,11 +25,13 @@ import static java.util.Objects.requireNonNull;
  * timer fires.
  * <p>
  * The instance id is a {@code String} so it round-trips losslessly through whatever the executor persists timers in.
+ * The timer name is a {@link TimerName}, and {@link TimerName#encode()} gives the string it is stored under when you
+ * need one.
  *
  * @param sagaId    the id of the saga instance the timer belongs to
- * @param timerName the name of the timer that fired, as given to {@link SagaEffect#startTimeout(String, java.time.Duration)}
+ * @param timerName the name of the timer that fired, as given to {@link SagaEffect#startTimeout(TimerName, java.time.Duration)}
  */
-public record SagaTimeout(String sagaId, String timerName) {
+public record SagaTimeout(String sagaId, TimerName timerName) {
     public SagaTimeout {
         requireNonNull(sagaId, "sagaId cannot be null");
         requireNonNull(timerName, "timerName cannot be null");

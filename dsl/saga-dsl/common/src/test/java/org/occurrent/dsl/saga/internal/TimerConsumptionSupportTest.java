@@ -22,6 +22,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaTimeout;
+import org.occurrent.dsl.saga.TimerName;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
 
@@ -63,7 +64,7 @@ class TimerConsumptionSupportTest {
         Outcome<String, Cmd> start = SagaExecutionSupport.process(saga, "s1", null, SagaInput.event(new Started("s1")), new EventMeta("s1", 1L, null), NOW);
         assertThat(start.envelope().timers()).extracting("name").containsExactly("t");
 
-        Outcome<String, Cmd> fired = SagaExecutionSupport.process(saga, "s1", start.envelope(), SagaInput.timeout(new SagaTimeout("s1", "t")), EventMeta.NONE, NOW.plusSeconds(1));
+        Outcome<String, Cmd> fired = SagaExecutionSupport.process(saga, "s1", start.envelope(), SagaInput.timeout(new SagaTimeout("s1", TimerName.parse("t"))), EventMeta.NONE, NOW.plusSeconds(1));
 
         assertThat(fired.processed()).isTrue();
         assertThat(fired.commands()).containsExactly(new Ping("s1"));
@@ -84,7 +85,7 @@ class TimerConsumptionSupportTest {
                 .build();
 
         Outcome<String, Cmd> start = SagaExecutionSupport.process(saga, "s1", null, SagaInput.event(new Started("s1")), new EventMeta("s1", 1L, null), NOW);
-        Outcome<String, Cmd> fired = SagaExecutionSupport.process(saga, "s1", start.envelope(), SagaInput.timeout(new SagaTimeout("s1", "t")), EventMeta.NONE, NOW.plusSeconds(60));
+        Outcome<String, Cmd> fired = SagaExecutionSupport.process(saga, "s1", start.envelope(), SagaInput.timeout(new SagaTimeout("s1", TimerName.parse("t"))), EventMeta.NONE, NOW.plusSeconds(60));
 
         assertThat(fired.envelope().timers()).extracting("name").containsExactly("t");
         assertThat(fired.envelope().timers().getFirst().firesAtEpochMilli()).isEqualTo(NOW.plusSeconds(60).plus(Duration.ofMinutes(5)).toEpochMilli());

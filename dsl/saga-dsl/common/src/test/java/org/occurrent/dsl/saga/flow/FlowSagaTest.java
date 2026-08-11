@@ -23,6 +23,7 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaTimeout;
+import org.occurrent.dsl.saga.TimerName;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -249,7 +250,7 @@ class FlowSagaTest {
 
             Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
             Saga.Step<FlowState<OrderEvent>, OrderCommand> step =
-                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", PAYMENT_TIMER)));
+                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))));
 
             assertAll(
                     () -> assertThat(saga.isTerminal(step.state())).isTrue(),
@@ -272,7 +273,7 @@ class FlowSagaTest {
 
             Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
             Saga.Step<FlowState<OrderEvent>, OrderCommand> step =
-                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", PAYMENT_TIMER)));
+                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))));
 
             assertAll(
                     () -> assertThat(saga.isTerminal(step.state())).isTrue(),
@@ -369,7 +370,7 @@ class FlowSagaTest {
             Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
 
             Saga.Step<FlowState<OrderEvent>, OrderCommand> step =
-                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", PAYMENT_TIMER)));
+                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))));
 
             assertAll(
                     () -> assertThat(saga.isTerminal(step.state())).isTrue(),

@@ -136,7 +136,7 @@ public final class SagaExecutionSupport {
         // A timer is one-shot: firing it consumes it, so a timeout that neither cancels its timer nor completes the
         // instance does not re-fire every poll. Recurrence is explicit, via a StartTimeout effect below (which re-adds it).
         if (input instanceof SagaInput.Timeout<E> firedTimer) {
-            timers.remove(firedTimer.timeout().timerName());
+            timers.remove(firedTimer.timeout().timerName().encode());
         }
         applyEffects(effects, commands, timers, now);
 
@@ -201,10 +201,10 @@ public final class SagaExecutionSupport {
             switch (effect) {
                 case SagaEffect.IssueCommand<C> issue -> commands.add(issue.command());
                 case SagaEffect.StartTimeout<C> start ->
-                        timers.put(start.timerName(), new TimerEntry(start.timerName(), now.plus(start.after()).toEpochMilli()));
+                        timers.put(start.timerName().encode(), new TimerEntry(start.timerName().encode(), now.plus(start.after()).toEpochMilli()));
                 case SagaEffect.StartTimeoutAt<C> startAt ->
-                        timers.put(startAt.timerName(), new TimerEntry(startAt.timerName(), startAt.at().toEpochMilli()));
-                case SagaEffect.CancelTimeout<C> cancel -> timers.remove(cancel.timerName());
+                        timers.put(startAt.timerName().encode(), new TimerEntry(startAt.timerName().encode(), startAt.at().toEpochMilli()));
+                case SagaEffect.CancelTimeout<C> cancel -> timers.remove(cancel.timerName().encode());
             }
         }
     }

@@ -376,8 +376,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
         private final S initialState;
         private final Map<Class<?>, EventEvolver<S, E>> eventEvolvers = new LinkedHashMap<>();
         private final Map<Class<?>, EventReactor<S, E, C>> eventReactors = new LinkedHashMap<>();
-        private final Map<String, BiFunction<S, SagaTimeout, S>> timeoutEvolvers = new LinkedHashMap<>();
-        private final Map<String, BiFunction<S, SagaTimeout, List<SagaEffect<C>>>> timeoutReactors = new LinkedHashMap<>();
+        private final Map<TimerName, BiFunction<S, SagaTimeout, S>> timeoutEvolvers = new LinkedHashMap<>();
+        private final Map<TimerName, BiFunction<S, SagaTimeout, List<SagaEffect<C>>>> timeoutReactors = new LinkedHashMap<>();
         private final Map<Class<?>, Function<E, @Nullable String>> correlators = new LinkedHashMap<>();
         private final Set<Class<? extends E>> startTypes = new LinkedHashSet<>();
         private @Nullable Function<E, @Nullable String> correlateAll;
@@ -471,7 +471,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
         }
 
         /** Registers the fold for one named timer firing. Registering the same name twice throws. */
-        public Builder<E, S, C> evolveOnTimeout(String timerName, BiFunction<S, SagaTimeout, S> handler) {
+        public Builder<E, S, C> evolveOnTimeout(TimerName timerName, BiFunction<S, SagaTimeout, S> handler) {
             requireNonNull(timerName, "timerName cannot be null");
             requireNonNull(handler, "handler cannot be null");
             if (timeoutEvolvers.containsKey(timerName)) {
@@ -482,11 +482,21 @@ public interface Saga<E, S extends @Nullable Object, C> {
         }
 
         /**
+         * Registers the fold for one named timer firing, naming it with a string that {@link TimerName#parse(String)}
+         * reads. Registering the same name twice throws, and {@code "a:b"} is the same name as
+         * {@code TimerName.of("a", "b")}.
+         */
+        public Builder<E, S, C> evolveOnTimeout(String timerName, BiFunction<S, SagaTimeout, S> handler) {
+            requireNonNull(timerName, "timerName cannot be null");
+            return evolveOnTimeout(TimerName.parse(timerName), handler);
+        }
+
+        /**
          * Registers the reaction for one named timer firing, given the post-evolve state. Registering the same name twice
          * throws. A fired timer with no reaction registered here (and no {@link #evolveOnTimeout}) is consumed without
          * changing state or issuing a command, so every {@link SagaEffect#startTimeout} you arm needs a matching handler.
          */
-        public Builder<E, S, C> reactOnTimeout(String timerName, BiFunction<S, SagaTimeout, List<SagaEffect<C>>> handler) {
+        public Builder<E, S, C> reactOnTimeout(TimerName timerName, BiFunction<S, SagaTimeout, List<SagaEffect<C>>> handler) {
             requireNonNull(timerName, "timerName cannot be null");
             requireNonNull(handler, "handler cannot be null");
             if (timeoutReactors.containsKey(timerName)) {
@@ -494,6 +504,16 @@ public interface Saga<E, S extends @Nullable Object, C> {
             }
             timeoutReactors.put(timerName, handler);
             return this;
+        }
+
+        /**
+         * Registers the reaction for one named timer firing, naming it with a string that
+         * {@link TimerName#parse(String)} reads. Registering the same name twice throws, and {@code "a:b"} is the same
+         * name as {@code TimerName.of("a", "b")}.
+         */
+        public Builder<E, S, C> reactOnTimeout(String timerName, BiFunction<S, SagaTimeout, List<SagaEffect<C>>> handler) {
+            requireNonNull(timerName, "timerName cannot be null");
+            return reactOnTimeout(TimerName.parse(timerName), handler);
         }
 
         /** Effects to run once when a start event creates the instance. Optional, can be set only once. */
@@ -563,8 +583,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
             TypeDispatch<EventEvolver<S, E>> evolveDispatch = new TypeDispatch<>(eventEvolvers);
             TypeDispatch<EventReactor<S, E, C>> reactDispatch = new TypeDispatch<>(eventReactors);
             TypeDispatch<Function<E, @Nullable String>> correlateDispatch = new TypeDispatch<>(correlators);
-            Map<String, BiFunction<S, SagaTimeout, S>> timeoutEvolveByName = new LinkedHashMap<>(timeoutEvolvers);
-            Map<String, BiFunction<S, SagaTimeout, List<SagaEffect<C>>>> timeoutReactByName = new LinkedHashMap<>(timeoutReactors);
+            Map<TimerName, BiFunction<S, SagaTimeout, S>> timeoutEvolveByName = new LinkedHashMap<>(timeoutEvolvers);
+            Map<TimerName, BiFunction<S, SagaTimeout, List<SagaEffect<C>>>> timeoutReactByName = new LinkedHashMap<>(timeoutReactors);
             Function<E, @Nullable String> allCorrelator = this.correlateAll;
             EventReactor<S, E, C> onStartFn = this.onStart;
             Predicate<S> terminalFn = this.isTerminal;
