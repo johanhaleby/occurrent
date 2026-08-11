@@ -56,8 +56,24 @@ import java.util.concurrent.TimeUnit;
  * Follows the protocol #623 asks for: 1, 5 and 20 leaves, 1 KB and 256 KB payloads, the needle fields placed early
  * or late in the payload, against both a byte-backed event (streaming re-parse per leaf) and a Map-backed event
  * (already-decoded, as {@code DocumentCloudEventReader} hands it to the reader). Every condition is built to match,
- * so {@code FilterMatcher}'s AND does not short-circuit and every leaf is actually read; a filter that fails fast on
- * its first leaf costs one read regardless of leafCount, which is not the case this benchmark is measuring.
+ * so {@code FilterMatcher}'s AND does not short-circuit and every leaf is actually read. A filter that fails on a
+ * non-data operand ahead of these leaves costs zero payload reads instead, and a filter that fails on the first
+ * leaf of a multi-leaf data run still costs every path in that run, since
+ * {@link org.occurrent.filtermatching.DataFieldReader#readAll} resolves the whole run before any leaf in it is
+ * evaluated. Neither case is what this benchmark measures.
+ * <p>
+ * {@code FilterMatcher.matchesAndFilter} briefly regressed the fail-fast claim above. Between PR #647 and its fix,
+ * every data path in an AND was resolved through {@code readAll} before any operand was evaluated, so a leading
+ * metadata leaf that already decided the result no longer saved a payload read, and a store with no
+ * {@link org.occurrent.filtermatching.DataFieldReader} (which answers a read with {@code UnsupportedOperationException})
+ * could throw on a filter that 0.32.0 evaluated to {@code false} without ever touching the payload. The fix restores
+ * short-circuiting across a preceding non-data operand, not per-leaf laziness inside a data run. A run's paths are
+ * still all resolved together before any of them is evaluated, the same as #623's original batching, so a run's
+ * first leaf failing still costs the whole run's reads. This suite still does not prove the restored property,
+ * because a throughput benchmark cannot distinguish "zero reads" from "one very cheap read" at these leaf counts.
+ * {@code FilterMatcherTest} asserts the call counts directly instead, once for the no-throw outcome with a refusing
+ * reader and once for the zero-{@code read}/zero-{@code readAll} count with a counting reader, both on a type
+ * mismatch ahead of two data leaves.
  * <p>
  * Run with, for example:
  * <pre>{@code

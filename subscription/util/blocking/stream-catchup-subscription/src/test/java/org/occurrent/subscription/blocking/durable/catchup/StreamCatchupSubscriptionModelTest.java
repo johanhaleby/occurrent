@@ -196,6 +196,58 @@ class StreamCatchupSubscriptionModelTest {
                 .as("and nothing may be replayed, because delivering the history and then silently never going live is "
                         + "worse than refusing: the read model would look up to date and stop moving")
                 .isEmpty();
+        assertThat(subscription.isCatchingUp("subscription"))
+                .as("a failed catch-up must not stay visible as catching up forever, the same guarantee a completed "
+                        + "or cancelled one already gets")
+                .isFalse();
+        assertThat(subscription.isRunning("subscription"))
+                .as("nothing is running for a replay that failed and was never handed over")
+                .isFalse();
+    }
+
+    /**
+     * Before this class stopped leaking the running-catch-up marker on failure, pausing a subscription whose replay
+     * had already failed still matched the "replay in flight" branch in {@code pauseSubscription}, which only
+     * records the request for {@code applyPendingPauseIfAny} to apply once the replay hands over. A replay that
+     * failed never hands over, so the pause was silently swallowed. It must now take the other branch and reach the
+     * delegate directly, which knows nothing about a subscription whose catch-up never got that far.
+     */
+    @Test
+    void pausing_a_subscription_whose_catchup_already_failed_reaches_the_delegate_instead_of_being_swallowed() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        write(eventStore, nameDefined("event1"));
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        CheckpointAwareSubscriptionModel reportsNoCheckpoint = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, null);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(reportsNoCheckpoint, eventStore, new CatchupSubscriptionModelConfig(100));
+        Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+        assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(5)));
+
+        assertThatThrownBy(() -> subscription.pauseSubscription("subscription"))
+                .as("the delegate never saw this subscription, since the catch-up failed before handing over to it")
+                .isInstanceOf(UnknownSubscriptionException.class);
+    }
+
+    /**
+     * A pause requested while the replay is still in flight only records itself in
+     * {@code pauseRequestedDuringCatchup}, for {@code applyPendingPauseIfAny} to apply once the replay hands over
+     * to the delegate. A replay that fails instead of handing over must still clear that record, or the pause
+     * outlives the catch-up it was requested for and {@code isPaused} keeps answering {@code true} forever.
+     */
+    @Test
+    void a_pause_requested_while_the_replay_is_in_flight_does_not_survive_the_replay_then_failing() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        CheckpointAwareSubscriptionModel reportsNoCheckpoint = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, null);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(reportsNoCheckpoint, eventStore, new CatchupSubscriptionModelConfig(100));
+        String subscriptionId = "subscription";
+
+        Subscription started = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> subscription.pauseSubscription(subscriptionId));
+
+        assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(5))).isInstanceOf(IllegalStateException.class);
+        assertThat(subscription.isPaused(subscriptionId))
+                .as("the pause was requested for a replay that never handed over to apply it, and must not survive "
+                        + "the replay failing")
+                .isFalse();
     }
 
     @Test

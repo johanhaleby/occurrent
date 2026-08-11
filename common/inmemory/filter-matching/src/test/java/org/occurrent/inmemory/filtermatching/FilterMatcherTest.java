@@ -182,6 +182,28 @@ class FilterMatcherTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
+    // 0.32.0 regression guard. A leading metadata operand that already decides the AND stops the walk before
+    // either data leaf behind it is touched, the same way 0.32.0's allMatch did. The store-query path reaches
+    // here with DataFieldReader.refusing() and no subscribe-time gate, so batching ahead of "type" would turn
+    // this into an UnsupportedOperationException instead of the false a mismatched type has always produced.
+    @Test
+    void a_leading_metadata_mismatch_short_circuits_an_and_before_any_data_leaf_is_read_even_with_a_refusing_reader() {
+        Filter filter = Filter.type("other").and(Filter.data("a", eq(1))).and(Filter.data("b", eq(2)));
+
+        assertThat(FilterMatcher.matchesFilter(EVENT, filter, DataFieldReader.refusing())).isFalse();
+    }
+
+    @Test
+    void a_leading_metadata_mismatch_short_circuits_an_and_without_calling_read_or_readAll() {
+        CountingReader reader = new CountingReader(Map.of("a", 1, "b", 2));
+        Filter filter = Filter.type("other").and(Filter.data("a", eq(1))).and(Filter.data("b", eq(2)));
+
+        assertThat(FilterMatcher.matchesFilter(EVENT, filter, reader)).isFalse();
+
+        assertThat(reader.readCalls).hasValue(0);
+        assertThat(reader.readAllCalls).hasValue(0);
+    }
+
     @RepeatedTest(300)
     void batching_an_and_filter_answers_exactly_what_the_unbatched_evaluation_answers(RepetitionInfo repetitionInfo) {
         Random random = new Random(repetitionInfo.getCurrentRepetition());

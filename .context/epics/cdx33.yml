@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 12
-updated_at: 2026-08-11T10:16:46Z
-updated_by: "orchestrator session faee3625 (PR 728 HELD by Johan ruling despite being green with threads resolved; U8 U9 U10 delivered with threads resolved or closing; U5 still in review)"
+revision: 17
+updated_at: 2026-08-11T11:08:42Z
+updated_by: "orchestrator session faee3625 (U2 Option E APPROVED by Johan with two orchestrator additions; U2 filed #738 for the reactor twin race)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -33,27 +33,27 @@ units:
     session: local_4640fd9a-5acf-4678-863e-c4b79e9e7460
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: false, evidence: null}
+      - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: true, evidence: "SATISFIED 2026-08-11T10:38:40Z: Johan approved /Users/johan/.claude/plans/whimsical-cooking-hopper.md after four planning rounds plus a requested second opinion. Direction: WITHDRAW the applied-position feature from 0.33.0 (13 files deleted, 10 unwired), new ADR with the completed-prefix refutation and verified Axon/Marten/Emmett prior art, ADR 0111 withdrawn via amendment blockquotes, and an epic-grade 0.34.0 issue for the append-identity design with its three named open points. D3 resolved as none-of-the-above: withdraw-then-redesign"}
     blocking_on: []
-    next_action: awaiting its plan gate (D3 direction ask); session confirmed running
-    last_meaningful_progress_at: 2026-08-11T09:56:12Z
+    next_action: worker implementing the withdrawal; must rebase over merged 730/727/729/733; DELIVERY_RESULT must list invalidated docs surfaces and the 0.34.0 issue number
+    last_meaningful_progress_at: 2026-08-11T10:38:40Z
     observed: {}
-    assessment: "Blocker; broken-as-documented (javadoc+ADR 0111 vs ADR 0084). Gate floor: docs truth. U9 boundary: must not alter the wait-deadline contract or U9 rebases after this gate"
+    assessment: "Bigger than the meta-plan contingency and cleaner, nothing unsound ships at all. Grounds: no shipped configuration was sound (change streams and push feeds violate the position-order precondition, the in-memory store publishes outside its lock), WriteResult carries no position so the documented scenario was unreachable from the stream API, and AGENTS.md rules against docs-only for a correctness gap and against unsettled public abstractions. Finding 19 becomes moot, U9 work knowingly erased. #361 linkage and docs PR 52 retargeting via worker DELIVERY_RESULT plus UDOCS"
   U2:
     issue: null
     goal: "Manual-start pin refusal (finding 12, blocker): compare stored vs captured on ifAbsent refusal, fail loud on difference, later-registrant-starts-first test, check manual-start ADR amendment need"
-    phase: BLOCKED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_cff3efc3-ade2-406e-8aac-a3f25e144bce
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: false, evidence: "**HELD, DO NOT MERGE.** PR 728 head 9370abb6f8fa15119da611341410365092d59f87 is fully green (27 of 27, 0 pending) with 0 unresolved threads, so it LOOKS merge-ready and is not. Johan ruled 2026-08-11 that the shipped shape is wrong: the worker changed from fail-loud to warn-and-proceed after review, which leaves the blocker event loss visible rather than prevented, against the AGENTS.md hard isolation rule. Required shape: record enough beside the pin to tell another node FIRST-RUN pin from an ADVANCED checkpoint, fail loud only on a differing first-run pin, accept an advanced checkpoint silently. Worker messaged, running /johan-plan on the mechanism, presenting to Johan before implementing"}
-    blocking_on: [{what: "redesign per Johan ruling, mechanism plan gate pending; CheckpointStorage contract is frozen so a derived-key scheme must prove it cannot collide with a real subscription id", since: 2026-08-11T10:16:46Z, recheck_after: "on worker plan"}]
-    next_action: await the worker mechanism plan; NEVER merge 728 in its current shape
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: false, evidence: "HELD no longer for a decision, now for the Option E rewrite. Pre-Option-E head 883f53b8922fae50fd38c9bdac0e858fd23d12f1 is green with threads resolved, and that shape (WARN-and-proceed) is SUPERSEDED and must never be merged. Await the Option E head"}
+    blocking_on: []
+    next_action: worker implementing Option E; on delivery verify the live-path scoping choice and the ADR 86 amendment argument
+    last_meaningful_progress_at: 2026-08-11T11:08:42Z
     observed: {}
-    assessment: "Worker analysis was correct and prompted the escalation: a stored position differing from the captured one is genuinely ambiguous between a sibling first-run pin (harmful skip) and a subscription another node has advanced (legitimate leader-election late start), and Checkpoint exposes only asString() so there is no ordering to compare. Its reordering of checkpointAlreadyExisted to before capturePositionToPin is a real catch and stays. What Johan rejected is settling that ambiguity with a log line"
+    assessment: "OPTION E APPROVED 2026-08-11T11:08:42Z. Pin moves from start to REGISTRATION so the earliest registrant wins and every refusal is safe to accept (worst case a duplicate, never a skip, and at-least-once with dedup by event id is the contract). Reduces the reversal window from routine (capture-to-write spans until someone starts, minutes to hours) to pathological (milliseconds against a registration gap of minutes). Two worker findings reshaped it: the class public javadoc has promised pin-at-registration since 0.32.0 while the code did the opposite (ADR 86 Decision text matched the code), and the reactor twin at ReactorDurableSubscriptionModel:298-299 still carries the same read-then-save race #669 fixed here, filed as #738 leave-for-later. Orchestrator additions: scope or prove the new live-path write (today the live path never pins), and the ADR 86 amendment must record that pinning at registration RESTORES what deferring subscribe displaced from DurableSubscriptionModel, which is the real argument. Costs accepted: a new Changes bullet for 0.32.0-released behavior, no recipe, deliberate reactor divergence, INFO-level diagnostic on a differing accepted position"
   U3:
     issue: null
     goal: "StepCondition semantics AND evaluation (findings 2, 3 in full per D4, 4, ADR 0120 drift): fired-window reactions with initiating() reachable, compiled per-step matcher state, determinism contract, duplicate-children rule. Hard constraint: reads 0.32.0-written saga documents (seed-by-hand proof)"
@@ -94,10 +94,10 @@ units:
     depends_on: []
     session: local_d940740e-389c-4b2e-8c63-7529654a31a6
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: false, evidence: "PR 731 open, head 01eed5e74d63fe4c650308eeaf9be7cc4dad744a, threads THREE unresolved, 20 checks pending as of this revision. Not merged"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: false, evidence: "**NEARLY MERGED ON A FALSE GREEN.** Head 2a0a93ab240dbf78d4b2e5611400ead4a0200d35 reported failing=0 pending=0 with 3 successful checks and 0 unresolved threads, but NO maven.yml matrix run existed for that SHA: that workflow triggers on push with cancel-in-progress concurrency, while the 3 passing checks are pull_request-triggered siblings. The delta from the last matrix-green head 7f08d9b97 includes MigrateSagaTimerName.java plus 99 new test lines, so this was unvalidated recipe code. Forced a run via workflow_dispatch, run 31481912947. Do not merge until a matrix run for the exact head concludes successfully. The required runtime-behavior test DOES exist: DurableSubscriptionModelMigratedCheckpointStorageTest.java, 202 lines"}
     blocking_on: []
-    next_action: await thread resolution and DELIVERY_RESULT
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+    next_action: wait for the dispatched matrix on the exact head, then merge and dispatch U6
+    last_meaningful_progress_at: 2026-08-11T10:23:26Z
     observed: {}
     assessment: "Gating: official migration converts compile break into runtime failure today. Owns doc/migration/upgrading-to-0.33.0.md exclusively until U6"
   U6:
@@ -134,46 +134,46 @@ units:
   U8:
     issue: null
     goal: "Filter AND short-circuit (finding 18): restore ordered short-circuit on in-memory query path keeping the reparse win, regression test vs 0.32.0 semantics, check #647 changelog entry"
-    phase: BLOCKED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_2ba1226c-7d6e-4d21-a68a-35987af498f1
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 open, head 2cc667b0393179934a70eee9b2a88dfe32bb8ba2, threads resolved, 10 checks pending as of this revision. Not merged"}
-    blocking_on: [{what: "worker session STOPPED at 09:35Z with the thread still unresolved and no DELIVERY_RESULT; resumed by send_message naming the obligation", since: 2026-08-11T09:58:07Z, recheck_after: "next event or list_sessions check"}]
-    next_action: on the worker reply, verify the narrowed wording, then CAS merge if green and threads resolved
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: true, evidence: "MERGED as squash 4a3cee367f0ee8f7cff311f9ef187fe7a962e4ad, CAS-pinned and post-merge verified. Matrix 26 of 26 on the exact merged head, 0 unresolved threads. Orchestrator verified the corrected benchmark text states plainly that per-leaf laziness INSIDE a data run was not restored and that FilterMatcherTest asserts the call counts directly, since a throughput benchmark cannot prove zero reads"}
+    blocking_on: []
+    next_action: sweep the worktree, branch and session
+    last_meaningful_progress_at: 2026-08-11T10:23:26Z
     observed: {}
     assessment: "Fix direction chosen: contiguous-run batching rather than a lazy memoized reader. That does fix the reported regression (a preceding type operand short-circuits before any payload read) and keeps #647 reparse win, but it is weaker than per-leaf laziness within one data-leaf run, which is a real semantic difference from 0.32.0 allMatch only when a reader can fail per path. Verify at review that the claim written in code and PR text matches what shipped"
   U9:
     issue: null
     goal: "Reactive wait deadline (finding 19): mirror blocking twin's wait-local deadline in ReactiveMongoAppliedProjectionPositionStore, outage test for returns-false-never-throws within deadline"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_62371645-451f-4569-bfbc-6bacbb68d4ca
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "730", met: false, evidence: "PR 730 open, head eb55793fd56729557f692d6816ae341488ecfe45, threads resolved, 10 checks pending as of this revision. Not merged"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "730", met: true, evidence: "MERGED as squash 33dc5a940469c4043116e05f4345ded7d1e434c8, CAS-pinned and post-merge verified. Matrix completed successfully on the exact head eb55793fd (verified via run list, not just the rollup), 0 unresolved threads. Wait-local deadline confirmed present on origin/main: reads retry on the same Retry but bounded to the wait deadline, answering empty rather than throwing"}
     blocking_on: []
-    next_action: await thread resolution and DELIVERY_RESULT
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+    next_action: sweep the worktree, branch and session
+    last_meaningful_progress_at: 2026-08-11T10:23:26Z
     observed: {}
     assessment: "Gating. Boundary: rebases after U1's plan gate if waitUntilApplied semantics move"
   U10:
     issue: null
     goal: "Lifecycle cleanup (findings 13, 14): opt-out marker only after delegate subscribe succeeds; terminal cleanup for failed catch-up respecting removal-as-cancellation semantics. 14 is the scope-cut line"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_e22bccfe-56f9-4717-a309-aa2beb8a3e12
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "733", met: false, evidence: "PR 733 open, head bbe4270aa95e30a72f2b8c0d7e93bf6f2b1e55ea, threads ONE unresolved, checks green 26 of 26 as of this revision. Not merged"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "733", met: true, evidence: "MERGED as squash 1e4dfbeb5c8944c0c4745963e3dcf3e8fa3bb770, CAS-pinned to 38629623afbeda8b1a6464abc2f2713af8941cb3. Matrix completed success on the exact head (run-list verified, not rollup-only). ONE thread left open as a reasoned decline per policy: Copilot correctly noted the failure-cleanup removal is keyed by subscriptionId with no per-attempt identity, and the worker showed the identical shape exists at four pre-existing sites (both catch-up models success paths and the DCB model), so fixing only the new site would not close the race; recorded as item 4 on #737. Both halves shipped: finding 13 marker-after-subscribe, finding 14 terminal cleanup, with the released-behavior changelog bullet present"}
     blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+    next_action: sweep session and branch; route #737 at the dispatch-time tracker scan
+    last_meaningful_progress_at: 2026-08-11T10:34:23Z
     observed: {}
     assessment: "Non-gating but ships with release unless stalled; finding 14 fix needs a Changes changelog entry (released behavior)"
   UADR:
@@ -203,7 +203,7 @@ units:
     deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: wait for gating units
+    next_action: SCOPE ADDITION from the U1 withdrawal, held docs PR 52 leaves the 0.33.0 merge order in issue 57 (retarget to a 0.34.0 hold or close), the news post on PR 54 branch loses its AppliedProjectionPositionStore mention, and the preview rebuild greps zero hits for the withdrawn API
     last_meaningful_progress_at: 2026-08-11T09:05:38Z
     observed: {}
     assessment: "Held-branch convention, push never merge; trial-merge + exact-once paragraph greps per recorded docs lessons"

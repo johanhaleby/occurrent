@@ -693,3 +693,34 @@ version` entry describes the behavior you are changing, folding the refinement i
 so. Quote the AGENTS.md sentence rather than summarizing it. And when the same reviewer objection
 arrives on two different PRs from two different workers, treat the brief as the defect rather than
 the workers.
+
+## A green rollup is not proof the matrix ran, and on one PR it had not (2026-08-11, cdx33)
+
+PR 731 (a gating unit, the migration recipes) reported `failing=0 pending=0 total=3` and every
+recorded merge gate passed: checks not failing, nothing pending, zero unresolved review threads.
+It was one command away from being merged. The matrix had never run on that head.
+
+`.github/workflows/maven.yml` triggers on **push**, not `pull_request`, and carries
+`concurrency: ci-${{ github.ref }}` with `cancel-in-progress: true`. Three other workflows
+(ADR numbering, CI-runnable tests, MongoDB test containers) DO trigger on `pull_request`. So a head
+can carry three genuinely successful `pull_request` checks and no matrix at all, and the rollup
+cannot tell the difference between "27 jobs passed" and "the 27 jobs do not exist". Checking the
+sibling branches showed every other PR had a matrix on its exact head, and one had a `cancelled`
+run from a superseded push, so this was specific to that head rather than a repo-wide outage.
+
+The delta between 731's last matrix-green head and its current head included
+`MigrateSagaTimerName.java` and 99 new test lines, so this was unvalidated recipe code reading as
+green on a unit whose entire purpose is migration correctness.
+
+**How to apply:** the merge gate asks whether a maven.yml run EXISTS for the exact head SHA and
+concluded successfully, via
+`gh run list -R <repo> --branch <branch> --workflow maven.yml --json headSha,status,conclusion`,
+never by reading the PR rollup alone. Three outcomes: present and green, merge; present and
+running, wait; ABSENT, decide why before doing anything else. Absent is legitimate only when the
+push since the last validated head touched nothing outside `**/*.md` (prove it with the compare
+API, as the earlier `paths-ignore` lesson describes). Otherwise force one with
+`gh workflow run maven.yml --ref <branch>`, which works because that workflow also declares
+`workflow_dispatch`. Note this is the mirror image of the earlier lesson: that one warned against
+mistaking a legitimately skipped matrix for a pending one, and this one warns against mistaking a
+MISSING matrix for a passing one. Both come from the same root, that the rollup describes only the
+checks that happen to exist.
