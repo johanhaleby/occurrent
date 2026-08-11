@@ -50,9 +50,10 @@ for that subscription id, whatever version it would carry, and refuses the same 
 ## 2. If you implement `CheckpointStorage` yourself, this one does not compile
 
 Run `UpgradeToOccurrent_0_33` first. On every implementation it finds missing them, it adds the `save` overload and
-`writeVersion` as a throwing stub, each marked with a `TODO [Occurrent 0.33 upgrade]` comment, so the module
-compiles again without a manual pass. Filling in the stub is still yours. A store that only ever wrote
-unconditionally can keep doing exactly that and refuse the rest:
+`writeVersion`, each marked with a `TODO [Occurrent 0.33 upgrade]` comment, so the module compiles again without a
+manual pass. What it generates is exactly the snippet below. `save` delegates `any()` to your existing two-argument
+override and refuses anything stronger, and `writeVersion` answers empty. A store that only ever wrote
+unconditionally can leave that exactly as generated:
 
 ```java
 @Override
@@ -145,9 +146,11 @@ The static lookup on `ReplayAwareSubscriptions` and `IntrospectableSubscriptions
 `of` is the convention Java uses for constructing a value, and `Optional.of` in particular never returns empty, but
 this method searches a `SubscriptionModelWrapper` chain and can come back empty, so `findIn` says what it actually
 does. Every `Subscribable`, `SubscriptionModelLifeCycle`, `SubscriptionModel` and `SubscriptionModelWrapper` now
-extends `SubscriptionModelCapability`, so every existing caller's argument still satisfies the narrowed parameter
-without change. Only relevant if you call the old `of` yourself, or pass something that is none of those, which did
-not do anything useful before either, since the lookup would only ever return empty for it.
+extends `SubscriptionModelCapability`, so a caller whose argument is statically typed as one of those four keeps
+compiling without change. A caller holding the same value through a broader static type, an `Object` variable being
+the case that comes up, does not compile against the narrowed parameter even though the value underneath is a
+genuine subscription model, and has to declare it as one of the four instead. That is the trade-off this rename
+makes, not a gap in it. `findIn` keeps taking the marker rather than gaining a second `Object`-typed overload.
 [ADR 118](../architecture/decisions/0118-a-subscription-model-capability-marker-replaces-object-in-the-of-lookups.md)
 has the reasoning. `RepositionableSubscriptions.findIn` never shipped under the `of` name, so it is not in this table.
 
@@ -223,13 +226,15 @@ TimerName.of("step", "awaiting-players");  // the same qualified name, built fro
 `encode()` writes a name back out as that string. `toString()` returns the same thing as `encode()` on both shapes,
 so anything that puts a timer name into a log prints exactly what it printed before.
 
-Three shapes stop compiling.
+Four shapes stop compiling.
 
 1. **Building a `SagaTimeout` from two strings.** It is `record SagaTimeout(String sagaId, TimerName timerName)`, and
    there is no two-string constructor beside it.
-2. **Reading `timerName()` into a `String`.** The accessor keeps its name and changes its type.
-3. **Matching a timer effect against a `String` component.** `StartTimeout`, `StartTimeoutAt` and `CancelTimeout`
-   carry a `TimerName`, so a record pattern has to bind one.
+2. **Constructing `StartTimeout`, `StartTimeoutAt` or `CancelTimeout` directly with a string timer name.** These are
+   public records, so `new StartTimeout<>("payment", duration)` is as much a 0.32.0 call as the string-taking
+   `SagaEffect.startTimeout` factory, and it breaks the same way `SagaTimeout`'s constructor does.
+3. **Reading `timerName()` into a `String`.** The accessor keeps its name and changes its type.
+4. **Matching a timer effect against a `String` component.** A record pattern has to bind a `TimerName` instead.
 
 Two more reads keep compiling and quietly answer differently. `timeout.timerName().equals("payment")` is now always
 false, and an assertion written as `assertThat(timeout.timerName()).isEqualTo("payment")` fails for the same reason.
@@ -239,11 +244,13 @@ Compare `timeout.timerName().encode()` against the string, or compare the name a
 
 ### Run the recipe
 
-`UpgradeToOccurrent_0_33` rewrites the two shapes it can prove.
+`UpgradeToOccurrent_0_33` rewrites the shapes it can prove.
 
 `new SagaTimeout(sagaId, name)` with a string second argument becomes `new SagaTimeout(sagaId,
-TimerName.parse(name))`. That one is exact rather than best effort, because `parse` gives back the value the old
-string already named, `"step:awaiting-players"` from a flow saga test included.
+TimerName.parse(name))`, and the same wrapping happens to the string timer-name argument of a direct
+`new StartTimeout<>(name, after)`, `new StartTimeoutAt<>(name, at)` or `new CancelTimeout<>(name)`. Every one of
+these is exact rather than best effort, because `parse` gives back the value the old string already named,
+`"step:awaiting-players"` from a flow saga test included.
 
 A `timerName()` read into a declared `String` gains `encode()`, so `String name = timeout.timerName()` becomes
 `String name = timeout.timerName().encode()`. The recipe does this in the three places where the wanted type is

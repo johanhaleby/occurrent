@@ -33,13 +33,23 @@ final class CheckpointStorageStubs {
 
     static final String CHECKPOINT_WRITE_CONDITION = """
             package org.occurrent.subscription;
-            public interface CheckpointWriteCondition {}
+            public interface CheckpointWriteCondition {
+                record Any() implements CheckpointWriteCondition {}
+            }
             """;
 
     static final String MONO = """
             package reactor.core.publisher;
             public abstract class Mono<T> {
                 public static <T> Mono<T> error(Throwable error) {
+                    return null;
+                }
+
+                public static <T> Mono<T> empty() {
+                    return null;
+                }
+
+                public static <T> Mono<T> just(T value) {
                     return null;
                 }
             }

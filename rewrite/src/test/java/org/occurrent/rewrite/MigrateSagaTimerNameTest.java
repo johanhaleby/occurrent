@@ -122,6 +122,130 @@ class MigrateSagaTimerNameTest implements RewriteTest {
     }
 
     @Test
+    void wrapsTheTimerNameArgumentOfADirectlyConstructedStartTimeout() {
+        rewriteRun(
+                spec -> spec.typeValidationOptions(UNRESOLVED_CONSTRUCTOR),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+
+                        import java.time.Duration;
+
+                        class ArmTimer {
+                            SagaEffect.StartTimeout<Object> paymentTimeout() {
+                                return new SagaEffect.StartTimeout<>("payment", Duration.ofMinutes(30));
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+                        import org.occurrent.dsl.saga.TimerName;
+
+                        import java.time.Duration;
+
+                        class ArmTimer {
+                            SagaEffect.StartTimeout<Object> paymentTimeout() {
+                                return new SagaEffect.StartTimeout<>(TimerName.parse("payment"), Duration.ofMinutes(30));
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void wrapsTheTimerNameArgumentOfADirectlyConstructedStartTimeoutAt() {
+        rewriteRun(
+                spec -> spec.typeValidationOptions(UNRESOLVED_CONSTRUCTOR),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+
+                        import java.time.Instant;
+
+                        class ArmTimer {
+                            SagaEffect.StartTimeoutAt<Object> auctionEndTimeout(Instant endsAt) {
+                                return new SagaEffect.StartTimeoutAt<>("auction-end", endsAt);
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+                        import org.occurrent.dsl.saga.TimerName;
+
+                        import java.time.Instant;
+
+                        class ArmTimer {
+                            SagaEffect.StartTimeoutAt<Object> auctionEndTimeout(Instant endsAt) {
+                                return new SagaEffect.StartTimeoutAt<>(TimerName.parse("auction-end"), endsAt);
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void wrapsTheTimerNameArgumentOfADirectlyConstructedCancelTimeout() {
+        rewriteRun(
+                spec -> spec.typeValidationOptions(UNRESOLVED_CONSTRUCTOR),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+
+                        class DropTimer {
+                            SagaEffect.CancelTimeout<Object> paymentCancelled() {
+                                return new SagaEffect.CancelTimeout<>("payment");
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+                        import org.occurrent.dsl.saga.TimerName;
+
+                        class DropTimer {
+                            SagaEffect.CancelTimeout<Object> paymentCancelled() {
+                                return new SagaEffect.CancelTimeout<>(TimerName.parse("payment"));
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void leavesADirectlyConstructedTimerEffectThatAlreadyTakesATimerNameAlone() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaEffect;
+                        import org.occurrent.dsl.saga.TimerName;
+
+                        class DropTimer {
+                            SagaEffect.CancelTimeout<Object> paymentCancelled() {
+                                return new SagaEffect.CancelTimeout<>(TimerName.of("step", "payment"));
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void leavesAConstructorThatAlreadyTakesATimerNameAlone() {
         rewriteRun(
                 java(

@@ -346,10 +346,12 @@ trip to storage.
   implementation is untouched, and an instance with a pending timer keeps firing across the upgrade.
 - This is a source-breaking release for saga code, and it owes an `UpgradeToOccurrent_0_33` recipe and a section in
   `doc/migration/upgrading-to-0.33.0.md` like 0.33.0's three other breaks. The recipe rewrites the `SagaTimeout`
-  constructor completely, does what it can prove for the accessor, and leaves a `TODO` comment on the rest.
-- Four kinds of call site have to change. Reading `timerName()` into a `String`, building a `SagaTimeout` from two
-  strings, deconstructing a `SagaEffect` timer record against a `String` component, and implementing a `Saga` by hand
-  against the registration maps. A saga that only builds timer effects and registrations by calling the string-taking
+  constructor and the three timer-effect record constructors completely, does what it can prove for the accessor,
+  and leaves a `TODO` comment on the rest.
+- Five kinds of call site have to change. Reading `timerName()` into a `String`, building a `SagaTimeout` from two
+  strings, constructing `StartTimeout`, `StartTimeoutAt` or `CancelTimeout` directly with a string timer name,
+  deconstructing a `SagaEffect` timer record against a `String` component, and implementing a `Saga` by hand against
+  the registration maps. A saga that only builds timer effects and registrations by calling the string-taking
   methods compiles unchanged.
 - Anything that logs a timer name keeps compiling and keeps printing the same text, because `toString` returns
   `encode()`. This is the reason `toString` is a decision here rather than an implementation detail.

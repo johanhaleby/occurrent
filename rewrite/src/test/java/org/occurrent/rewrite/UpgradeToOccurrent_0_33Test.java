@@ -61,6 +61,11 @@ class UpgradeToOccurrent_0_33Test implements RewriteTest {
                             }
 
                             @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
+                            }
+
+                            @Override
                             public void delete(String subscriptionId) {
                             }
 
@@ -86,6 +91,11 @@ class UpgradeToOccurrent_0_33Test implements RewriteTest {
                             }
 
                             @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
+                            }
+
+                            @Override
                             public void delete(String subscriptionId) {
                             }
 
@@ -94,16 +104,19 @@ class UpgradeToOccurrent_0_33Test implements RewriteTest {
                                 return false;
                             }
 
-                            /* TODO [Occurrent 0.33 upgrade]: this always refuses a conditional write. Evaluate `condition` for real, or keep refusing every condition but `any()` if this storage cannot evaluate one. See doc/migration/upgrading-to-0.33.0.md. */
+                            /* TODO [Occurrent 0.33 upgrade]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */
                             @Override
                             public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                                throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+                                if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                                    throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+                                }
+                                return save(subscriptionId, checkpoint);
                             }
 
-                            /* TODO [Occurrent 0.33 upgrade]: this never reports a stored version. Return the version a condition is judged against, or OptionalLong.empty() if this storage cannot evaluate one. See doc/migration/upgrading-to-0.33.0.md. */
+                            /* TODO [Occurrent 0.33 upgrade]: this always answers empty, correct if this storage cannot evaluate a condition. Return the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
                             @Override
                             public OptionalLong writeVersion(String subscriptionId) {
-                                throw new UnsupportedOperationException("This storage does not track a write version.");
+                                return OptionalLong.empty();
                             }
                         }
                         """

@@ -32,6 +32,10 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
 
     @Test
     void stubsBothMissingMembersOnABlockingImplementer() {
+        // A class that already implements CheckpointStorage was necessarily written against the 0.32.0 interface,
+        // which had no three-argument save at all, so its two-argument save override is real pre-existing behaviour,
+        // not something this fixture invents. The generated three-argument stub calls it for any(), which is what
+        // proves the delegation binds to the class's own method rather than recursing into the interface default.
         rewriteRun(
                 java(CHECKPOINT),
                 java(CHECKPOINT_WRITE_CONDITION),
@@ -47,6 +51,11 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                             @Override
                             public Checkpoint read(String subscriptionId) {
                                 return null;
+                            }
+
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
                             }
 
                             @Override
@@ -75,6 +84,11 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                             }
 
                             @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
+                            }
+
+                            @Override
                             public void delete(String subscriptionId) {
                             }
 
@@ -83,16 +97,19 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                                 return false;
                             }
 
-                            /* TODO [Occurrent 0.33 upgrade]: this always refuses a conditional write. Evaluate `condition` for real, or keep refusing every condition but `any()` if this storage cannot evaluate one. See doc/migration/upgrading-to-0.33.0.md. */
+                            /* TODO [Occurrent 0.33 upgrade]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */
                             @Override
                             public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                                throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+                                if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                                    throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+                                }
+                                return save(subscriptionId, checkpoint);
                             }
 
-                            /* TODO [Occurrent 0.33 upgrade]: this never reports a stored version. Return the version a condition is judged against, or OptionalLong.empty() if this storage cannot evaluate one. See doc/migration/upgrading-to-0.33.0.md. */
+                            /* TODO [Occurrent 0.33 upgrade]: this always answers empty, correct if this storage cannot evaluate a condition. Return the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
                             @Override
                             public OptionalLong writeVersion(String subscriptionId) {
-                                throw new UnsupportedOperationException("This storage does not track a write version.");
+                                return OptionalLong.empty();
                             }
                         }
                         """
@@ -102,6 +119,8 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
 
     @Test
     void stubsBothMissingMembersOnAReactorImplementer() {
+        // Same reasoning as the blocking case: the two-argument save is pre-existing 0.32.0 behaviour, and the
+        // generated three-argument stub's any() branch calls it rather than the interface default.
         rewriteRun(
                 java(CHECKPOINT),
                 java(CHECKPOINT_WRITE_CONDITION),
@@ -119,6 +138,11 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                             @Override
                             public Mono<Checkpoint> read(String subscriptionId) {
                                 return null;
+                            }
+
+                            @Override
+                            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                                return Mono.just(checkpoint);
                             }
 
                             @Override
@@ -142,20 +166,28 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                             }
 
                             @Override
+                            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                                return Mono.just(checkpoint);
+                            }
+
+                            @Override
                             public Mono<Void> delete(String subscriptionId) {
                                 return null;
                             }
 
-                            /* TODO [Occurrent 0.33 upgrade]: this always refuses a conditional write. Evaluate `condition` for real, or keep refusing every condition but `any()` if this storage cannot evaluate one. See doc/migration/upgrading-to-0.33.0.md. */
+                            /* TODO [Occurrent 0.33 upgrade]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */
                             @Override
                             public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                                return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported."));
+                                if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                                    return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported."));
+                                }
+                                return save(subscriptionId, checkpoint);
                             }
 
-                            /* TODO [Occurrent 0.33 upgrade]: this never reports a stored version. Signal the version a condition is judged against, or an empty Mono if this storage cannot evaluate one. See doc/migration/upgrading-to-0.33.0.md. */
+                            /* TODO [Occurrent 0.33 upgrade]: this always answers an empty Mono, correct if this storage cannot evaluate a condition. Signal the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
                             @Override
                             public Mono<Long> writeVersion(String subscriptionId) {
-                                return Mono.error(new UnsupportedOperationException("This storage does not track a write version."));
+                                return Mono.empty();
                             }
                         }
                         """

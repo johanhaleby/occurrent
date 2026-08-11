@@ -72,4 +72,39 @@ class MigrateSagaTimerNameKotlinTest implements RewriteTest {
                 )
         );
     }
+
+    @Test
+    void leavesAKotlinCallerOfTheDirectTimerEffectConstructorsUntouched() {
+        rewriteRun(
+                kotlin(
+                        """
+                        package org.occurrent.dsl.saga
+
+                        interface TimerName {
+                            fun encode(): String
+                        }
+                        """
+                ),
+                kotlin(
+                        """
+                        package org.occurrent.dsl.saga
+
+                        sealed interface SagaEffect<C> {
+                            data class CancelTimeout<C>(val timerName: TimerName) : SagaEffect<C>
+                        }
+                        """
+                ),
+                kotlin(
+                        """
+                        package com.example
+
+                        import org.occurrent.dsl.saga.SagaEffect
+
+                        fun paymentCancelled(): SagaEffect.CancelTimeout<Any> {
+                            return SagaEffect.CancelTimeout("payment")
+                        }
+                        """
+                )
+        );
+    }
 }
