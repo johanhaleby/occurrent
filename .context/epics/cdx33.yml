@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33
-revision: 54
+revision: 55
 updated_at: 2026-08-11T19:56:20Z
 updated_by: "orchestrator session faee3625 (U12 MERGED as 743391bc6, all 15 library units done; UDOCS2 dispatched as the last unit)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -40,7 +40,7 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "756", met: false, evidence: "Open at head 0664659b4, NOT merged. Nine review rounds, every round a confirmed defect, none of them drift. #754 fixed and #755 fixed across changelog, migration section 10, both refusal messages and ADR 124; #757 folded in after its deferral rationale evaporated. Docs repo held branch 2c4e205 and preview 07f3169 both pushed, docs main untouched. Round 9 abandoned point fixes and derived the shape enumeration from concreteTypesOf's predicate instead, which immediately found a gap eight rounds of findings had missed: an array declaration was getting a message telling it to seal itself, and section 10 had no array row at all. Both messages now branch for arrays and both sides have array tests. Verification pending: Java CI running on this head."}
   U1:
     issue: null
     goal: "Applied-position ordering (finding 1, blocker): direction decided at its plan gate (document early-return window / refuse recording for async Mongo projections / committed-prefix design), docs-truth floor either way, ADR 0111 amendment"
