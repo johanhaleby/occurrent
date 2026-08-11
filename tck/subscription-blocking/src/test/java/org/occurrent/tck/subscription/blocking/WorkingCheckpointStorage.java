@@ -68,6 +68,11 @@ class WorkingCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
+    public boolean evaluatesWriteConditions() {
+        return true;
+    }
+
+    @Override
     public OptionalLong writeVersion(String subscriptionId) {
         Long stored = versions.get(subscriptionId);
         return stored == null ? OptionalLong.empty() : OptionalLong.of(stored);

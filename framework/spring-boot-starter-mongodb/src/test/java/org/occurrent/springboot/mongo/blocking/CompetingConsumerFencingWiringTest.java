@@ -22,6 +22,9 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
+import org.occurrent.springboot.blocking.AmbiguousCompetingConsumerStrategyException;
+import org.occurrent.springboot.blocking.CheckpointStorageCannotFenceException;
+import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
@@ -99,17 +102,54 @@ class CompetingConsumerFencingWiringTest {
     }
 
     @Test
-    void two_strategy_beans_still_start_the_context_with_no_fence_wired() {
-        SpringMongoLeaseCompetingConsumerStrategy strategy = mock(SpringMongoLeaseCompetingConsumerStrategy.class);
-        // Stubbed to prove the ambiguity is what suppresses the fence, not this strategy simply having no token.
-        when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(7L));
+    void an_application_supplied_strategy_replaces_the_default_and_is_the_one_the_fence_reads() {
+        CompetingConsumerStrategy applicationStrategy = mock(CompetingConsumerStrategy.class);
+        when(applicationStrategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(7L));
 
         contextRunner
-                // The concrete-typed occurrentCompetingDurableSubscriptionModel parameter still resolves this one
-                // bean uniquely, while a second CompetingConsumerStrategy of a different type makes the
-                // ObjectProvider<CompetingConsumerStrategy> lookup ambiguous, which is what the fence reacts to.
-                .withBean(SpringMongoLeaseCompetingConsumerStrategy.class, () -> strategy)
-                .withBean(CompetingConsumerStrategy.class, RivalCompetingConsumerStrategy::new)
+                // No lease strategy of the starter's own concrete type here, so the starter's default is the only other
+                // candidate, and it is a @Fallback. Both the model's own strategy parameter and the fence's lookup have
+                // to pick this bean rather than the default.
+                .withBean(CompetingConsumerStrategy.class, () -> applicationStrategy)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    SubscriptionModel competingConsumerSubscriptionModel = context.getBean("occurrentCompetingDurableSubscriptionModel", SubscriptionModel.class);
+                    CatchupSubscriptionModel catchupSubscriptionModel = findDelegate(competingConsumerSubscriptionModel, CatchupSubscriptionModel.class);
+                    DurableSubscriptionModel durableSubscriptionModel = findDelegate(catchupSubscriptionModel, DurableSubscriptionModel.class);
+
+                    CheckpointWriteVersionSource durableModelSource = getField(durableSubscriptionModel, "writeVersionSource", CheckpointWriteVersionSource.class);
+                    assertThat(durableModelSource.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(7L));
+
+                    CompetingConsumerSubscriptionModel competingConsumerModel = findDelegate(competingConsumerSubscriptionModel, CompetingConsumerSubscriptionModel.class);
+                    assertThat(getField(competingConsumerModel, "competingConsumerStrategy", CompetingConsumerStrategy.class)).isSameAs(applicationStrategy);
+                });
+    }
+
+    @Test
+    void several_application_supplied_strategies_refuse_to_start_rather_than_wiring_no_fence() {
+        contextRunner
+                .withBean("firstStrategy", CompetingConsumerStrategy.class, RivalCompetingConsumerStrategy::new)
+                .withBean("rivalStrategy", CompetingConsumerStrategy.class, RivalCompetingConsumerStrategy::new)
+                .run(context -> assertThat(context).getFailure().rootCause()
+                        .isInstanceOf(AmbiguousCompetingConsumerStrategyException.class)
+                        .hasMessageContaining("firstStrategy")
+                        .hasMessageContaining("rivalStrategy"));
+    }
+
+    @Test
+    void a_checkpoint_storage_that_cannot_evaluate_write_conditions_refuses_to_start() {
+        contextRunner
+                .withBean(CheckpointStorage.class, () -> mock(CheckpointStorage.class))
+                .run(context -> assertThat(context).getFailure()
+                        .isInstanceOf(CheckpointStorageCannotFenceException.class)
+                        .hasMessageContaining("fence-checkpoints=false"));
+    }
+
+    @Test
+    void turning_the_fence_off_accepts_a_checkpoint_storage_that_only_writes_unconditionally() {
+        contextRunner
+                .withBean(CheckpointStorage.class, () -> mock(CheckpointStorage.class))
+                .withPropertyValues("occurrent.subscription.competing-consumer.fence-checkpoints=false")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     SubscriptionModel competingConsumerSubscriptionModel = context.getBean("occurrentCompetingDurableSubscriptionModel", SubscriptionModel.class);
@@ -124,6 +164,9 @@ class CompetingConsumerFencingWiringTest {
     @Test
     void a_user_declared_checkpoint_storage_bean_is_not_wrapped() {
         CheckpointStorage userStorage = mock(CheckpointStorage.class);
+        // A storage wired next to a strategy has to evaluate write conditions, or the context refuses to start, so this
+        // mock answers the way a real conditional store does.
+        when(userStorage.evaluatesWriteConditions()).thenReturn(true);
         SpringMongoLeaseCompetingConsumerStrategy strategy = mock(SpringMongoLeaseCompetingConsumerStrategy.class);
         when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(1L));
 

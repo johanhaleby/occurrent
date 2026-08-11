@@ -27,6 +27,7 @@ import org.occurrent.dsl.saga.blocking.RedeliveryDetection;
 import org.occurrent.dsl.saga.blocking.SagaRunner;
 import org.occurrent.dsl.saga.blocking.SagaRunnerConfig;
 import org.occurrent.dsl.saga.blocking.SagaSubscription;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.springboot.common.AsynchronousSubscribables;
@@ -94,7 +95,8 @@ class SagaAnnotationRegistrar {
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
         this.registeredIds = registeredIds;
-        this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class));
+        this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
+                () -> CheckpointFencingConfigurationCheck.fenceCheckpoints(applicationContext.getBeanProvider(OccurrentProperties.class)));
     }
 
     // A @Saga factory returns a Saga descriptor: subscribe to its events, materialize per-instance state into a
@@ -390,15 +392,13 @@ class SagaAnnotationRegistrar {
 
     // Gate the saga timer poller on the shared competing-consumer lease so only one instance polls, mirroring the
     // subscription model. On by default, opt out with occurrent.saga.competing-consumer.enabled=false. When disabled,
-    // when no strategy bean exists (for example subscriptions disabled), or when two strategy beans exist and neither
-    // is @Primary, the poller runs on every instance as before, mirroring how CompetingConsumerCheckpointWriteVersionSource
-    // stands down rather than failing startup. getIfUnique() rather than getIfAvailable(), so a @Saga in an application
-    // with two strategy beans still starts.
-    private CompetingConsumerStrategy resolveSagaCompetingConsumerStrategy() {
+    // or when no strategy bean exists (for example subscriptions disabled), the poller runs on every instance instead.
+    // Several strategy beans with no @Primary refuse to start rather than picking one or leaving the poller ungated.
+    private @Nullable CompetingConsumerStrategy resolveSagaCompetingConsumerStrategy() {
         if (!occurrentProperties().getSaga().getCompetingConsumer().isEnabled()) {
             return null;
         }
-        return applicationContext.getBeanProvider(CompetingConsumerStrategy.class).getIfUnique();
+        return CompetingConsumerStrategies.resolveUnique(applicationContext.getBeanProvider(CompetingConsumerStrategy.class));
     }
 
     private OccurrentProperties occurrentProperties() {

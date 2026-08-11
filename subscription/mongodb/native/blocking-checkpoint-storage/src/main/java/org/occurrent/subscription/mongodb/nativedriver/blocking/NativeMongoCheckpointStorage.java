@@ -126,6 +126,11 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
+    public boolean evaluatesWriteConditions() {
+        return true;
+    }
+
+    @Override
     public OptionalLong writeVersion(String subscriptionId) {
         Supplier<OptionalLong> readVersion = () -> {
             Document document = checkpointCollection.find(eq(ID, subscriptionId), Document.class).first();

@@ -233,6 +233,14 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return requireNonNull(executeWithRetry(save, retryUnlessShutdownOrRefused, retryStrategy).get());
     }
 
+    // True because the comparison is real on a standalone or replicated server, which is where this storage is
+    // supported. On Cluster the script is refused for crossing slots, and nothing here can tell the two deployments
+    // apart without a round trip to the server.
+    @Override
+    public boolean evaluatesWriteConditions() {
+        return true;
+    }
+
     @Override
     public OptionalLong writeVersion(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");

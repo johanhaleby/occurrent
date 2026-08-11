@@ -20,12 +20,15 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.springframework.beans.factory.BeanCurrentlyInCreationException;
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
 
+import java.util.List;
 import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -33,7 +36,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * The three ADR 116 rules for the lazy resolution every wiring site relies on, isolated from Spring context wiring
+ * The rules for the lazy resolution every wiring site relies on, isolated from Spring context wiring
  * (which {@code ProjectionAnnotationFencingWiringTest}, {@code SagaAnnotationFencingWiringTest} and
  * {@code CompetingConsumerFencingWiringTest} in the starter module each characterize for their own site).
  */
@@ -50,7 +53,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
         when(provider.getIfUnique()).thenReturn(strategy);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(5L));
     }
@@ -60,25 +63,31 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
     void no_strategy_bean_answers_empty() {
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
         when(provider.getIfUnique()).thenReturn(null);
+        when(provider.getIfAvailable()).thenReturn(null);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEmpty();
     }
 
     @Test
     @SuppressWarnings("unchecked")
-    void two_strategy_beans_answer_empty_rather_than_picking_either() {
-        // getIfUnique(), unlike getIfAvailable(), answers null on an ambiguous match rather than throwing, which is
-        // what lets the application keep starting with no fence wired (ADR 116). Modeled here as the provider
-        // reproducing that exact contract, so this test is about this class reading null correctly rather than
-        // re-testing Spring's own resolution.
+    void several_strategy_beans_refuse_the_write_rather_than_answering_empty() {
+        // getIfUnique() answers null for an ambiguous match and getIfAvailable() throws for it, which is how this class
+        // tells "no strategy at all" apart from "several and no @Primary". Modeled here as the provider reproducing
+        // that contract, so the test is about reading the two answers correctly rather than re-testing Spring's own
+        // resolution. The startup check refuses the same configuration before a write can reach this.
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
         when(provider.getIfUnique()).thenReturn(null);
+        when(provider.getIfAvailable()).thenThrow(new NoUniqueBeanDefinitionException(CompetingConsumerStrategy.class,
+                List.of("occurrentCompetingConsumerStrategy", "myOwnStrategy")));
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
-        assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEmpty();
+        assertThatThrownBy(() -> source.writeVersion(SUBSCRIPTION_ID))
+                .isInstanceOf(AmbiguousCompetingConsumerStrategyException.class)
+                .hasMessageContaining("myOwnStrategy")
+                .hasMessageContaining("@Primary");
     }
 
     @Test
@@ -90,10 +99,10 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
         // The strategy bean is still being built (see the class javadoc, a listener depending on a subscription
         // model would otherwise close a construction cycle), so the first resolution throws.
         when(provider.getIfUnique())
-                .thenThrow(new NoUniqueBeanDefinitionException(CompetingConsumerStrategy.class, "still under construction"))
+                .thenThrow(new BeanCurrentlyInCreationException("occurrentCompetingConsumerStrategy"))
                 .thenReturn(strategy);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEmpty();
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(9L));
@@ -107,8 +116,9 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
         when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(3L));
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
         when(provider.getIfUnique()).thenReturn(null, strategy);
+        when(provider.getIfAvailable()).thenReturn(null);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEmpty();
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(3L));
@@ -122,7 +132,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
         when(provider.getIfUnique()).thenReturn(strategy);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(1L));
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(2L));
@@ -136,8 +146,20 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
     void never_asks_the_strategy_before_the_first_write() {
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
 
-        new CompetingConsumerCheckpointWriteVersionSource(provider);
+        new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         verify(provider, never()).getIfUnique();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void fencing_turned_off_answers_empty_without_asking_for_a_strategy() {
+        ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
+
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> false);
+
+        assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEmpty();
+        verify(provider, never()).getIfUnique();
+        verify(provider, never()).getIfAvailable();
     }
 }

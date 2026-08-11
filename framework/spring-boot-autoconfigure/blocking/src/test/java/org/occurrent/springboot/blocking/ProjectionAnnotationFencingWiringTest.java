@@ -50,6 +50,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 /**
@@ -74,6 +75,7 @@ class ProjectionAnnotationFencingWiringTest {
         CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
         when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(42L));
         CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
+        when(checkpointStorage.evaluatesWriteConditions()).thenReturn(true);
 
         runner.withBean(CompetingConsumerStrategy.class, () -> strategy)
                 .withBean(CheckpointStorage.class, () -> checkpointStorage)
@@ -84,18 +86,42 @@ class ProjectionAnnotationFencingWiringTest {
     }
 
     @Test
-    void two_strategy_beans_leave_the_catch_up_marker_write_unconditional() {
+    void a_storage_that_only_writes_unconditionally_is_refused_before_the_catch_up_marker_write() {
         CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
-        // Stubbed to prove the ambiguity is what suppresses the fence, not this strategy simply having no token.
-        when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(7L));
+        when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(42L));
+        // Behaves exactly as the upgrade guide's recipe does, answering false and refusing anything but any(), so a
+        // check that ran after registration would lose the race to the marker write's UnsupportedOperationException.
+        CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
+        when(checkpointStorage.save(any(), any(), any())).thenAnswer(invocation -> {
+            if (!(invocation.getArgument(2) instanceof CheckpointWriteCondition.Any)) {
+                throw new UnsupportedOperationException("This storage cannot evaluate " + invocation.getArgument(2) + ", only any() is supported.");
+            }
+            return invocation.getArgument(1);
+        });
+
+        runner.withBean(CompetingConsumerStrategy.class, () -> strategy)
+                .withBean(CheckpointStorage.class, () -> checkpointStorage)
+                .run(context -> {
+                    assertThat(context).getFailure()
+                            .isInstanceOf(CheckpointStorageCannotFenceException.class)
+                            .hasMessageContaining("fence-checkpoints=false");
+                    verify(checkpointStorage, never()).save(any(), any(), any());
+                });
+    }
+
+    @Test
+    void several_strategy_beans_refuse_to_start_rather_than_writing_the_marker_unconditionally() {
+        CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
         CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
 
         runner.withBean("primaryStrategy", CompetingConsumerStrategy.class, () -> strategy)
                 .withBean("rivalStrategy", CompetingConsumerStrategy.class, RivalCompetingConsumerStrategy::new)
                 .withBean(CheckpointStorage.class, () -> checkpointStorage)
                 .run(context -> {
-                    assertThat(context).hasNotFailed();
-                    verify(checkpointStorage).save(eq(SUBSCRIPTION_ID), any(), eq(CheckpointWriteCondition.any()));
+                    assertThat(context).getFailure()
+                            .isInstanceOf(AmbiguousCompetingConsumerStrategyException.class)
+                            .hasMessageContaining("rivalStrategy");
+                    verify(checkpointStorage, never()).save(any(), any(), any());
                 });
     }
 

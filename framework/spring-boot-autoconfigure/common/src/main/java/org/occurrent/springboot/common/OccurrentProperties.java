@@ -264,6 +264,11 @@ public class OccurrentProperties {
          */
         private CatchupThenLiveProperties catchupThenLive = new CatchupThenLiveProperties();
 
+        /**
+         * Competing-consumer (leader-election) configuration for subscriptions.
+         */
+        private SubscriptionCompetingConsumerProperties competingConsumer = new SubscriptionCompetingConsumerProperties();
+
         public String getCollection() {
             return collection;
         }
@@ -316,6 +321,41 @@ public class OccurrentProperties {
 
         public void setCatchupThenLive(CatchupThenLiveProperties catchupThenLive) {
             this.catchupThenLive = catchupThenLive;
+        }
+
+        public SubscriptionCompetingConsumerProperties getCompetingConsumer() {
+            return competingConsumer;
+        }
+
+        public void setCompetingConsumer(SubscriptionCompetingConsumerProperties competingConsumer) {
+            this.competingConsumer = competingConsumer;
+        }
+
+        /**
+         * Competing-consumer (leader-election) configuration for subscriptions.
+         */
+        public static class SubscriptionCompetingConsumerProperties {
+
+            /**
+             * Whether a checkpoint write carries the competing-consumer lease version, so a write from a node that has
+             * already lost its lease is refused instead of moving the checkpoint backwards. Enabled by default, and it
+             * applies only where a competing-consumer strategy exists at all.
+             * <p>
+             * This requires a {@code CheckpointStorage} that evaluates write conditions, and the application refuses to
+             * start when the one it wires does not. Set this to {@code false} to write every checkpoint
+             * unconditionally, which is what a storage that only supports {@code any()} can do. A node that has lost
+             * its lease can then still move a checkpoint backwards, and the events between the two positions are
+             * delivered again.
+             */
+            private boolean fenceCheckpoints = true;
+
+            public boolean isFenceCheckpoints() {
+                return fenceCheckpoints;
+            }
+
+            public void setFenceCheckpoints(boolean fenceCheckpoints) {
+                this.fenceCheckpoints = fenceCheckpoints;
+            }
         }
 
         /**

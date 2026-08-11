@@ -90,6 +90,11 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
+    public boolean evaluatesWriteConditions() {
+        return true;
+    }
+
+    @Override
     public Mono<Long> writeVersion(String subscriptionId) {
         return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, checkpointCollection)
                 .retryWhen(retry)

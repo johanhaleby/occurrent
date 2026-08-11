@@ -21,7 +21,11 @@ import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.springboot.common.PushCatchupStatus;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.OnSubscriptionsNotDisabledCondition;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
@@ -40,6 +44,19 @@ public class OccurrentBlockingAnnotationConfiguration {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     static OccurrentBlockingAnnotationBeanPostProcessor occurrentBlockingAnnotationBeanPostProcessor() {
         return new OccurrentBlockingAnnotationBeanPostProcessor();
+    }
+
+    /**
+     * Checks at startup that the competing-consumer fence can do what the configuration implies, see
+     * {@link AmbiguousCompetingConsumerStrategyException} and {@link CheckpointStorageCannotFenceException} for the two
+     * ways it cannot. Declared here rather than in a store starter so every blocking starter gets the same check.
+     */
+    @Bean
+    @Conditional(OnSubscriptionsNotDisabledCondition.class)
+    public CheckpointFencingConfigurationCheck occurrentCheckpointFencingConfigurationCheck(ObjectProvider<CompetingConsumerStrategy> competingConsumerStrategyProvider,
+                                                                                           ObjectProvider<CheckpointStorage> checkpointStorageProvider,
+                                                                                           ObjectProvider<OccurrentProperties> occurrentPropertiesProvider) {
+        return new CheckpointFencingConfigurationCheck(competingConsumerStrategyProvider, checkpointStorageProvider, occurrentPropertiesProvider);
     }
 
     /**

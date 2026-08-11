@@ -72,12 +72,13 @@ public interface CheckpointStorageFixture {
      * with {@link UnsupportedOperationException}, which is the interim answer some of Occurrent's own storages give
      * until a sibling change teaches them the real comparison.
      * <p>
-     * This is a declaration rather than a question put to the storage, the same reason
-     * {@link #preservesCheckpointType(Checkpoint)} is one: it is a property of what the storage was built to do, and
-     * nothing on {@code CheckpointStorage} reports it back.
+     * Answered by the storage itself, through {@link CheckpointStorage#evaluatesWriteConditions()}, so the capability a
+     * storage advertises is the one the suite holds it to. A storage that advertises {@code true} and then refuses a
+     * condition fails the acceptance tests, and one that advertises {@code false} while evaluating conditions fails the
+     * refusal tests. Override only to test a storage against the opposite of what it claims.
      */
     default boolean evaluatesWriteConditions() {
-        return true;
+        return checkpointStorage().evaluatesWriteConditions();
     }
 
     /**

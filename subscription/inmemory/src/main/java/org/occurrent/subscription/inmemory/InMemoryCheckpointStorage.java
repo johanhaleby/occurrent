@@ -84,6 +84,11 @@ public class InMemoryCheckpointStorage implements CheckpointStorage {
     }
 
     @Override
+    public boolean evaluatesWriteConditions() {
+        return true;
+    }
+
+    @Override
     public OptionalLong writeVersion(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Long stored = versions.get(subscriptionId);
