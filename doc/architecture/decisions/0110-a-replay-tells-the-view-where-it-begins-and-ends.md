@@ -53,9 +53,9 @@ the event rather than which phase it belongs to. `deliver` then reads it exactly
 because that is what picks the `MaterializedView` overload (`:193-204`). The replay/live distinction does exist
 elsewhere. `ReplayAwareSubscriptions.isCatchingUp`
 (`ReplayAwareSubscriptions.java:48`) answers it, reached through
-`static Optional<ReplayAwareSubscriptions> findIn(SubscriptionModelCapability)` (`:61-63`). But its only consumers are the Spring registrars
-and the saga timer check (`SagaAnnotationRegistrar.java:226-227`). Nothing in the projection DSL, in `MaterializedView`,
-or in `ViewStateRepository` consults it, and the DSL does not hold the subscription model to ask.
+`static Optional<ReplayAwareSubscriptions> findIn(SubscriptionModelCapability)` (`:61-63`). But its only consumers are
+the Spring registrars and the saga timer check (`SagaAnnotationRegistrar.java:226-227`). Nothing in the projection DSL,
+in `MaterializedView`, or in `ViewStateRepository` consults it, and the DSL does not hold the subscription model to ask.
 
 **The completion marker is ordered last on purpose.** `BlockingHandover.catchUp` drains the live buffer and only then
 calls `source.markCaughtUp()` (`:218-219`). The class javadoc (`:52-57`) says why. A blocking `accept` returns before its
