@@ -148,7 +148,6 @@ class StoredTimerNameTest {
                 .correlate(GameCreated.class, GameCreated::gameId)
                 .startsOn(GameCreated.class)
                 .evolve(GameCreated.class, (state, event) -> "waiting")
-                .react(GameCreated.class, (state, event) -> List.of(SagaEffect.startTimeout(timerName, Duration.ofMinutes(30))))
                 .evolveOnTimeout(timerName, (state, timeout) -> "cancelled")
                 .reactOnTimeout(timerName, (state, timeout) -> List.of(SagaEffect.issue(new CancelGame(timeout.sagaId()))))
                 .build();
