@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 17
-updated_at: 2026-08-11T11:08:42Z
-updated_by: "orchestrator session faee3625 (U2 Option E APPROVED by Johan with two orchestrator additions; U2 filed #738 for the reactor twin race)"
+revision: 18
+updated_at: 2026-08-11T11:21:13Z
+updated_by: "orchestrator session faee3625 (first session-liveness sweep under the new skill rule: U8 U9 U10 swept including a stray U8 worktree inside the primary repo; U3 STALLED at its plan gate, 105 min, re-surfacing to Johan)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -58,7 +58,7 @@ units:
     issue: null
     goal: "StepCondition semantics AND evaluation (findings 2, 3 in full per D4, 4, ADR 0120 drift): fired-window reactions with initiating() reachable, compiled per-step matcher state, determinism contract, duplicate-children rule. Hard constraint: reads 0.32.0-written saga documents (seed-by-hand proof)"
     phase: BLOCKED
-    health: PROGRESSING
+    health: STALLED
     swept: false
     depends_on: []
     session: local_2e5a90d0-9a6b-4e2e-b73b-192f371e5e97
@@ -66,7 +66,7 @@ units:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U3 plan gate, Johan", met: false, evidence: null}
     blocking_on: [{what: "own plan gate, three decisions pending with Johan in session local_2e5a90d0: finding 3 shape (worker recommends defer-and-pair against D4 as written), allOf duplicate rule, and permission to edit SpringMongoSagaStateStore which finding 2 cannot ship without", since: 2026-08-11T09:35:44Z, recheck_after: "on Johan answer"}]
-    next_action: Johan answers the three questions in U3 session; orchestrator already gave its recommendation on each (defer-and-pair, reject-shared-matcher, yes-edit-the-store)
+    next_action: RE-SURFACE the three plan-gate questions to Johan, parked since 09:35Z; orchestrator recommendations already formed (defer-and-pair, reject-shared-matcher, yes-edit-the-store)
     last_meaningful_progress_at: 2026-08-11T09:35:44Z
     observed: {}
     assessment: "Reached its plan gate having run an adversarial review that broke its own first counter design (cache key mis-associated counts across a redeploy, two ways). Pushes back on D4 as literally written with a real argument: with the determinism contract stated, rescanning and incremental evaluation are equivalent for conforming predicates, so the correctness case for counters is weak, and the performance case needs a retention bound to pay off at all. Orchestrator agrees and it matches the meta-plan own named contingency"
@@ -136,13 +136,13 @@ units:
     goal: "Filter AND short-circuit (finding 18): restore ordered short-circuit on in-memory query path keeping the reparse win, regression test vs 0.32.0 semantics, check #647 changelog entry"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_2ba1226c-7d6e-4d21-a68a-35987af498f1
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: true, evidence: "MERGED as squash 4a3cee367f0ee8f7cff311f9ef187fe7a962e4ad, CAS-pinned and post-merge verified. Matrix 26 of 26 on the exact merged head, 0 unresolved threads. Orchestrator verified the corrected benchmark text states plainly that per-leaf laziness INSIDE a data run was not restored and that FilterMatcherTest asserts the call counts directly, since a throughput benchmark cannot prove zero reads"}
     blocking_on: []
-    next_action: sweep the worktree, branch and session
+    next_action: none, merged and swept
     last_meaningful_progress_at: 2026-08-11T10:23:26Z
     observed: {}
     assessment: "Fix direction chosen: contiguous-run batching rather than a lazy memoized reader. That does fix the reported regression (a preceding type operand short-circuits before any payload read) and keeps #647 reparse win, but it is weaker than per-leaf laziness within one data-leaf run, which is a real semantic difference from 0.32.0 allMatch only when a reader can fail per path. Verify at review that the claim written in code and PR text matches what shipped"
@@ -151,13 +151,13 @@ units:
     goal: "Reactive wait deadline (finding 19): mirror blocking twin's wait-local deadline in ReactiveMongoAppliedProjectionPositionStore, outage test for returns-false-never-throws within deadline"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_62371645-451f-4569-bfbc-6bacbb68d4ca
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "730", met: true, evidence: "MERGED as squash 33dc5a940469c4043116e05f4345ded7d1e434c8, CAS-pinned and post-merge verified. Matrix completed successfully on the exact head eb55793fd (verified via run list, not just the rollup), 0 unresolved threads. Wait-local deadline confirmed present on origin/main: reads retry on the same Retry but bounded to the wait deadline, answering empty rather than throwing"}
     blocking_on: []
-    next_action: sweep the worktree, branch and session
+    next_action: none, merged and swept
     last_meaningful_progress_at: 2026-08-11T10:23:26Z
     observed: {}
     assessment: "Gating. Boundary: rebases after U1's plan gate if waitUntilApplied semantics move"
@@ -166,13 +166,13 @@ units:
     goal: "Lifecycle cleanup (findings 13, 14): opt-out marker only after delegate subscribe succeeds; terminal cleanup for failed catch-up respecting removal-as-cancellation semantics. 14 is the scope-cut line"
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_e22bccfe-56f9-4717-a309-aa2beb8a3e12
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "733", met: true, evidence: "MERGED as squash 1e4dfbeb5c8944c0c4745963e3dcf3e8fa3bb770, CAS-pinned to 38629623afbeda8b1a6464abc2f2713af8941cb3. Matrix completed success on the exact head (run-list verified, not rollup-only). ONE thread left open as a reasoned decline per policy: Copilot correctly noted the failure-cleanup removal is keyed by subscriptionId with no per-attempt identity, and the worker showed the identical shape exists at four pre-existing sites (both catch-up models success paths and the DCB model), so fixing only the new site would not close the race; recorded as item 4 on #737. Both halves shipped: finding 13 marker-after-subscribe, finding 14 terminal cleanup, with the released-behavior changelog bullet present"}
     blocking_on: []
-    next_action: sweep session and branch; route #737 at the dispatch-time tracker scan
+    next_action: none, merged and swept
     last_meaningful_progress_at: 2026-08-11T10:34:23Z
     observed: {}
     assessment: "Non-gating but ships with release unless stalled; finding 14 fix needs a Changes changelog entry (released behavior)"
