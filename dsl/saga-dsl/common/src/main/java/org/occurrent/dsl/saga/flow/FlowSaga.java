@@ -24,6 +24,7 @@ import org.occurrent.dsl.saga.flow.FlowSagaImpl.ArrivingEvent;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.Branch;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.CompiledStep;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.WindowCondition;
+import org.occurrent.dsl.saga.internal.EventTypeExpansion;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
 
 import java.util.*;
@@ -199,7 +200,9 @@ public final class FlowSaga {
             }
 
             validateTransitionToTargets(stepsByName.keySet());
-            Set<Class<? extends E>> eventTypes = collectEventTypes();
+            // Expand before checking correlation, so a concrete type a step only receives through a declared sealed
+            // supertype needs a correlation too.
+            Set<Class<? extends E>> eventTypes = EventTypeExpansion.expand(collectEventTypes());
             validateCorrelationCoverage(eventTypes);
 
             return new FlowSagaImpl<>(startType, onStartCommands, List.copyOf(steps), stepIndex, stepsByName,
@@ -246,7 +249,7 @@ public final class FlowSaga {
                     }
                 }
             }
-            return Set.copyOf(types);
+            return Collections.unmodifiableSet(types);
         }
 
         private void validateCorrelationCoverage(Set<Class<? extends E>> eventTypes) {
