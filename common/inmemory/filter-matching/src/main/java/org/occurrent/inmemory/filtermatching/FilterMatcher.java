@@ -62,59 +62,74 @@ public class FilterMatcher {
      * An {@code AND} composition built by chaining {@link Filter#and(Filter, Filter...)} nests left-deep rather than
      * holding every operand in one flat list ({@code a.and(b).and(c)} is {@code AND(AND(a,b),c)}, not
      * {@code AND(a,b,c)}), so a filter with several data-field leaves ANDed together is several nested
-     * {@link CompositionFilter}s, one leaf apart. This flattens through all of them to collect every data-field
-     * path the whole AND subtree needs and resolves them with one {@link DataFieldReader#readAll} call, so the
-     * payload behind a byte-backed event is parsed once for the batch instead of once per leaf. A batched leaf is
-     * then evaluated straight from that result, skipping {@link DataFieldReader#read} and the field-name branch in
-     * {@link ConditionMatcher} entirely, since a {@code DataFieldReader} round trip for a value already in hand
-     * costs more than it saves once the value is already known, which is what kept a Map-backed event (already
-     * cheap to read, the production MongoDB path) from paying for the batch it did not need.
+     * {@link CompositionFilter}s, one leaf apart. This flattens through all of them into one operand list and walks
+     * it strictly left to right, stopping at the first mismatch the same way {@code allMatch} does, so a cheap
+     * metadata operand ahead of a data leaf still short-circuits the whole AND before any payload is touched. That
+     * matters beyond speed: {@link DataFieldReader#refusing()} throws on a read, and the store-query path (unlike a
+     * subscription, which refuses an unreadable filter before the first event) reaches {@code matchesFilter} with
+     * that reader and no earlier gate, so a data leaf that short-circuiting would never have reached must not be
+     * read.
      * <p>
-     * The batch read is eager, every data path is resolved through {@code readAll} up front, unlike evaluating each
-     * operand's boolean, which still stops at the first mismatch the same way {@code allMatch} would. Reading a path
-     * a stopped-early operand would never have needed does not change which paths any operand looks up, and the
-     * payload reader used in production never fails a read for an existing filter (only a store built with no
-     * reader at all refuses, and that is decided before any event is evaluated, not per leaf), so the eagerness costs
-     * a few extra lookups at worst, never a different match outcome.
+     * Only a contiguous run of two or more data-field leaves, the ones the left-to-right walk actually reaches
+     * together, is resolved with one {@link DataFieldReader#readAll} call, so the payload behind a byte-backed event
+     * is still parsed once for that run instead of once per leaf. A batched leaf is then evaluated straight from
+     * that result, skipping {@link DataFieldReader#read} and the field-name branch in {@link ConditionMatcher}
+     * entirely, since a {@code DataFieldReader} round trip for a value already in hand costs more than it saves,
+     * which is what keeps a Map-backed event (already cheap to read, the production MongoDB path) from paying for a
+     * batch it did not need. A run ends at the first non-data operand or the end of the operand list. A lone data
+     * leaf, or one separated from its neighbours by a non-data operand, reads its own path the way it always did,
+     * since batching one path with nothing to share a parse with would only add a {@code Map} allocation around the
+     * read it was always going to be.
      */
     private static boolean matchesAndFilter(CloudEvent cloudEvent, CompositionFilter cf, DataFieldReader dataFieldReader) {
         List<Filter> operands = new ArrayList<>();
         flattenAnd(cf, operands);
 
-        // Each operand's data path is worked out once here and reused below, rather than re-testing the same
-        // instanceof and startsWith a second time per operand while evaluating.
         int size = operands.size();
-        String[] dataPathPerOperand = new String[size];
-        List<String> dataPaths = null;
-        for (int i = 0; i < size; i++) {
-            if (operands.get(i) instanceof SingleConditionFilter scf && scf.fieldName().startsWith(Filter.DATA + ".")) {
-                String path = scf.fieldName().substring((Filter.DATA + ".").length());
-                dataPathPerOperand[i] = path;
-                if (dataPaths == null) {
-                    dataPaths = new ArrayList<>();
-                }
-                dataPaths.add(path);
-            }
-        }
-
-        // A single data leaf has nothing to batch with, so reading it through readAll would only add a Map
-        // allocation around the one read it was always going to be, which is why this only kicks in once there
-        // are leaves to actually share a parse across.
-        Map<String, Object> precomputed = dataPaths == null || dataPaths.size() < 2
-                ? null
-                : dataFieldReader.readAll(cloudEvent, dataPaths);
-
-        for (int i = 0; i < size; i++) {
+        int i = 0;
+        while (i < size) {
             Filter operand = operands.get(i);
-            String path = precomputed == null ? null : dataPathPerOperand[i];
-            boolean matches = path == null
-                    ? matchesFilter(cloudEvent, operand, dataFieldReader)
-                    : ConditionMatcher.matchesCondition(precomputed.getOrDefault(path, ConditionMatcher.ABSENT), ((SingleConditionFilter) operand).condition());
-            if (!matches) {
-                return false;
+            String path = dataPath(operand);
+            if (path == null) {
+                if (!matchesFilter(cloudEvent, operand, dataFieldReader)) {
+                    return false;
+                }
+                i++;
+                continue;
+            }
+
+            int runStart = i;
+            List<String> runPaths = new ArrayList<>();
+            for (; i < size; i++) {
+                String candidatePath = dataPath(operands.get(i));
+                if (candidatePath == null) {
+                    break;
+                }
+                runPaths.add(candidatePath);
+            }
+
+            Map<String, Object> resolved = runPaths.size() < 2 ? null : dataFieldReader.readAll(cloudEvent, runPaths);
+            for (int j = runStart; j < i; j++) {
+                SingleConditionFilter scf = (SingleConditionFilter) operands.get(j);
+                boolean matches = resolved == null
+                        ? ConditionMatcher.matchesCondition(cloudEvent, scf.fieldName(), scf.condition(), dataFieldReader)
+                        : ConditionMatcher.matchesCondition(resolved.getOrDefault(runPaths.get(j - runStart), ConditionMatcher.ABSENT), scf.condition());
+                if (!matches) {
+                    return false;
+                }
             }
         }
         return true;
+    }
+
+    // The path a data-field leaf reads, without the leading "data.", or null for anything else, an attribute or
+    // extension leaf, a capability filter, or a nested composition. Used both to decide whether an operand joins
+    // the batch run being collected and, once it does, as the key readAll's result is looked up by.
+    private static String dataPath(Filter operand) {
+        if (operand instanceof SingleConditionFilter scf && scf.fieldName().startsWith(Filter.DATA + ".")) {
+            return scf.fieldName().substring((Filter.DATA + ".").length());
+        }
+        return null;
     }
 
     private static void flattenAnd(Filter filter, List<Filter> operands) {
