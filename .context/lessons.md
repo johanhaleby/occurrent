@@ -1064,3 +1064,28 @@ grep the added lines for `always`, `never`, `every`, `all`, `any`, `only` and `m
 against the implementation rather than against the intent. Prose written from a design describes the
 design; the reader will hold it to the code. Fold this into the writing-gate step rather than treating
 it as a separate review, since it is the same pass over the same added lines.
+
+## Telling a plan-first subagent to touch a file so its worktree survives leaves a dirty worktree at sweep time (2026-08-11, cdx33 U11)
+
+I told U11 to create a scratch file before its first turn ended, so the harness would not auto-remove its
+isolation worktree at the plan gate. That worked. It also meant the worktree was permanently untracked-dirty,
+so the closeout `git worktree remove` refused, and the recorded rule that a dirty worktree is surfaced rather
+than force-removed fired on a directory containing nothing but 47 working files.
+
+Two things to carry.
+
+The workaround has a cost at the other end, so pay it deliberately: name the scratch directory in the brief
+and say it is disposable, or better, have the worker put scratch OUTSIDE the worktree entirely so the tree
+stays clean and the auto-removal problem is solved a different way. Either beats discovering it during a
+sweep and having to enumerate 47 files to decide whether any of them is real work.
+
+And the enumeration is the point rather than a chore. The rule is not "never remove a dirty worktree", it is
+"do not destroy work you have not looked at". Looking took one command and showed reply drafts already posted,
+helper scripts, backup copies used for mutation-restore, and a 303-line plan whose decisions are the merged
+215-line ADR. I preserved the three narrative files into the session scratchpad and then removed with
+`--force`, which is the honest form of the rule: verify, preserve what is unique, then clean.
+
+Smaller catch from the same minute: `git worktree remove ... | tail -1 && echo REMOVED` printed REMOVED while
+the removal had FAILED, because a pipeline's exit status is the last command's. The same class as reading
+BUILD SUCCESS from a log rather than trusting an exit code. Do not put `&&` after a pipe when the left side
+is the thing whose success you are reporting.
