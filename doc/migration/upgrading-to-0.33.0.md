@@ -548,11 +548,12 @@ from the default one at build time, which is why the refusal does not make an ex
 override on a saga yet, and [#751](https://github.com/johanhaleby/occurrent/issues/751) tracks adding one. A subscription
 already has one. Its `eventTypes` attribute is the explicit list, the same one the second remedy above uses.
 
-The same mapper gets a fix in the other direction, and it needs nothing from you. An annotation-based subscription used
-to derive its filter from the concrete types a sealed type permits and leave the declared type out, so an event stored
-under the declared type's own CloudEvent type never matched and the subscription silently received nothing. The filter
-now names the declared type too. A subscription that only hit this gap keeps working, because another type in a
-filter can only widen what matches.
+An annotation-based subscription's filter changes too, but not from the same mapper, and it needs nothing from you. It
+used to derive its filter from the concrete types a sealed type permits and leave the declared type out. The collapsing
+mapper above never had a gap from that, since its concrete types already mapped to the one string every event has. The
+filter now names the declared type too regardless, closing a gap that only a `CloudEventTypeMapper` mapping the declared
+type to a string none of its concrete types share could hit, and no mapper Occurrent ships works that way. A subscription
+that only hit this gap keeps working, because another type in a filter can only widen what matches.
 
 ### Why there is no recipe for this one
 
