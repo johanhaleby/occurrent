@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 4
-updated_at: 2026-08-11T09:29:12Z
-updated_by: "orchestrator session faee3625 (UADR design gate CLOSED by Johan: merge once the rewrap lands; U8 delivered PR 727, in its pr-fix loop)"
+revision: 6
+updated_at: 2026-08-11T09:32:57Z
+updated_by: "orchestrator session faee3625 (derived labels reconciled against facts; PR 727 head carries one failing check, worker owns its pr-fix loop)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -26,8 +26,8 @@ units:
   U1:
     issue: null
     goal: "Applied-position ordering (finding 1, blocker): direction decided at its plan gate (document early-return window / refuse recording for async Mongo projections / committed-prefix design), docs-truth floor either way, ADR 0111 amendment"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: "chip task_ba829706"
@@ -42,8 +42,8 @@ units:
   U2:
     issue: null
     goal: "Manual-start pin refusal (finding 12, blocker): compare stored vs captured on ifAbsent refusal, fail loud on difference, later-registrant-starts-first test, check manual-start ADR amendment need"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: "chip task_451aa889"
@@ -57,8 +57,8 @@ units:
   U3:
     issue: null
     goal: "StepCondition semantics AND evaluation (findings 2, 3 in full per D4, 4, ADR 0120 drift): fired-window reactions with initiating() reachable, compiled per-step matcher state, determinism contract, duplicate-children rule. Hard constraint: reads 0.32.0-written saga documents (seed-by-hand proof)"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: "chip task_da2f0e02"
@@ -74,7 +74,7 @@ units:
     issue: null
     goal: "Kotlin StepCondition variance (finding 10): on(condition) takes out E, compile test"
     phase: PLANNED
-    health: UNKNOWN
+    health: PROGRESSING
     swept: false
     depends_on: [U3]
     session: null
@@ -88,8 +88,8 @@ units:
   U5:
     issue: null
     goal: "Migration tooling truth (findings 8, 11, 9-guide-half): recipe stubs delegate any() and reject stronger, empty writeVersion, TimerName effect-record constructor matchers, guide corrections, runtime-behavior test via DurableSubscriptionModel"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: "chip task_2459a4e4"
@@ -104,7 +104,7 @@ units:
     issue: null
     goal: "Spring fencing wiring (findings 15, 16): per D5 fail startup on ambiguous strategy beans (back default off any interface-typed bean), starter validates conditional-write capability or explicit unfenced mode; guide caveat lands after U5"
     phase: PLANNED
-    health: UNKNOWN
+    health: PROGRESSING
     swept: false
     depends_on: [U5]
     session: null
@@ -140,17 +140,17 @@ units:
     depends_on: []
     session: "chip task_e3494741"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 opened on branch cdx33/u8-filter-short-circuit, head 6214f566e27a62dbdabe62982232fb21b1604fd3, checks running; worker still in its pr-fix loop, no DELIVERY_RESULT yet"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 open on cdx33/u8-filter-short-circuit, head 6214f566e27a62dbdabe62982232fb21b1604fd3 carries ONE FAILING check as of this revision. The worker owns its pr-fix loop and has not reported DELIVERY_RESULT, so this is worker-wait, not an orchestrator action; a red check on a worker-owned head is what pr-fix exists to resolve"}
     blocking_on: []
-    next_action: await DELIVERY_RESULT, then verify checks plus review threads before any merge
+    next_action: await DELIVERY_RESULT; if pr-fix exits non-done, read the tail and the failing job log before deciding
     last_meaningful_progress_at: 2026-08-11T09:29:12Z
     observed: {}
     assessment: "Gating: only true 0.32.0 behavior regression in the set (PR #647)"
   U9:
     issue: null
     goal: "Reactive wait deadline (finding 19): mirror blocking twin's wait-local deadline in ReactiveMongoAppliedProjectionPositionStore, outage test for returns-false-never-throws within deadline"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: "chip task_11128297"
@@ -164,8 +164,8 @@ units:
   U10:
     issue: null
     goal: "Lifecycle cleanup (findings 13, 14): opt-out marker only after delegate subscribe succeeds; terminal cleanup for failed catch-up respecting removal-as-cancellation semantics. 14 is the scope-cut line"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: "chip task_e3b84149"
@@ -179,24 +179,24 @@ units:
   UADR:
     issue: null
     goal: "ADR status drift (finding 6 residue: 0110, 0116 status lines and stale claims)"
-    phase: BLOCKED
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "subagent a8343ed82d7f98335"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "726", met: false, evidence: "DELIVERED and orchestrator-verified at head 56f3e4f2eb0e859ddefc17967df1a66d20f25f10: 0 failing checks, 0 pending, one Copilot thread resolved, second Copilot review on that head with no new comments, #638 and #665 confirmed closed, findIn signature confirmed at ReplayAwareSubscriptions.java:61-63. NOT merged: design gate awaits Johan wording confirm, and one introduced 140-char line (file wraps at 120) is being rewrapped by the worker"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "726", met: true, evidence: "MERGED as squash 985c362df65e331c2610386f638a28588e6b58fe at 2026-08-11T09:31:01Z, CAS-pinned to c868a625f8d7044e4f940cc9591012088b0646d7 and the post-merge head equals that pin. Gate at merge time: 0 failing checks, 0 pending, 0 unresolved threads, two Copilot reviews with the second on the merged head reporting no new comments. Corrected text verified present on origin/main. Two heads: 56f3e4f2e content-complete, c868a625f rewrapping one 140-char line the orchestrator caught in review"}
       - {check: manual_approval, ref: "design gate: Johan wording confirm before merge", met: true, evidence: "SATISFIED 2026-08-11T09:29:12Z: Johan answered the structured ask with merge-once-the-rewrap-lands, having read the orchestrator summary of both ADR status corrections. The gate is CLOSED, so no per-PR re-ask"}
-    blocking_on: [{what: "worker rewrap of the 140-char line, then CAS merge", since: 2026-08-11T09:29:12Z, recheck_after: "on worker reply"}]
-    next_action: CAS merge PR 726 pinned to the rewrapped head as soon as the worker reports it
-    last_meaningful_progress_at: 2026-08-11T09:27:41Z
+    blocking_on: []
+    next_action: none, merged and swept
+    last_meaningful_progress_at: 2026-08-11T09:32:18Z
     observed: {}
-    assessment: "Non-gating; prose, design-gate rule applies"
+    assessment: "Two false ADR status lines corrected: 0110 claimed nothing under Decision existed in code (implemented by #638) and cited the removed of(Object) lookup, 0116 claimed #665 stayed open for implementation (the fence shipped whole into 0.33.0). Worker self-caught a type error Copilot flagged, applying a findIn signature to ReplayAware, which is a view-dsl interface and no SubscriptionModelCapability. Orchestrator caught the introduced 140-char line; the file wraps at 120. Worktree, branches and stale refs swept, no stranded commit"
   UDOCS:
     issue: null
     goal: "Docs repo ripple: sweep held branches (52, 55, 61, 54 news post, others as touched), rebuild docs/0.33.0-preview, update occurrent-org.github.io#57. Trigger: every GATING library unit with a docs surface merged; stalled non-gating units defer their ripple alongside"
     phase: PLANNED
-    health: UNKNOWN
+    health: PROGRESSING
     swept: false
     depends_on: [U1, U3, U5, U6, U8, U9]
     session: null
@@ -210,8 +210,8 @@ units:
   UREG:
     issue: null
     goal: "Deferred/declined register at closeout: issues for finding 21 (measurement), finding 5 (wrapper contract); decline record for finding 20; ORCHESTRATOR.md register update"
-    phase: PLANNED
-    health: UNKNOWN
+    phase: READY
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: null
