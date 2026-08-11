@@ -47,9 +47,15 @@ public sealed interface CheckpointWriteCondition {
      * <p>
      * Nothing stored is accepted rather than refused, because it means a checkpoint written before this condition
      * existed, and every checkpoint written by an earlier release of Occurrent has to stay readable.
+     * <p>
+     * {@code writeVersion} must be non-negative. Every source of a version Occurrent ships hands out a fencing token
+     * that starts at zero and only ever climbs, and a storage is entitled to rely on that. {@code SpringRedisCheckpointStorage}
+     * already reserves negative numbers as its own internal result codes, and would misread a negative version it
+     * was offered as one of those instead.
      *
-     * @param writeVersion The version this write represents, assigned by the caller.
+     * @param writeVersion The version this write represents, assigned by the caller. Must be non-negative.
      * @return A {@link CheckpointWriteCondition} with the behavior described above.
+     * @throws IllegalArgumentException if {@code writeVersion} is negative.
      */
     static CheckpointWriteCondition notOlderThan(long writeVersion) {
         return new NotOlderThan(writeVersion);
@@ -81,9 +87,14 @@ public sealed interface CheckpointWriteCondition {
     /**
      * See {@link #notOlderThan(long)}.
      *
-     * @param writeVersion The version this write represents.
+     * @param writeVersion The version this write represents. Must be non-negative.
      */
     record NotOlderThan(long writeVersion) implements CheckpointWriteCondition {
+        public NotOlderThan {
+            if (writeVersion < 0) {
+                throw new IllegalArgumentException("writeVersion must be non-negative but was " + writeVersion);
+            }
+        }
     }
 
     /**

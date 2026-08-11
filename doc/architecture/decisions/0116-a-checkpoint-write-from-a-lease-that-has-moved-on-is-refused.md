@@ -4,7 +4,10 @@ Date: 2026-08-09
 
 ## Status
 
-Accepted. Designs the fix for #665, which stays open for the implementation.
+Accepted. Designs the fix for #665, and the fence shipped whole into 0.33.0, covering the strategy's
+token, the `CheckpointWriteCondition` break on `CheckpointStorage` and its reactor twin, the conditional
+Mongo and Redis writes, the four models' write-version stamping, and the Spring Boot starter's wiring at
+every site that builds a checkpoint-writing model.
 [ADR 115](0115-a-lease-fencing-token-is-computed-but-not-yet-checked.md) corrected the javadoc that
 promised this and deferred the design here. Builds on
 [ADR 113](0113-a-competing-consumers-status-and-its-lease-call-are-one-step.md) and

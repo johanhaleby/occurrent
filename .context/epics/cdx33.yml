@@ -1,10 +1,10 @@
 schema_version: 1
 epic: cdx33
-revision: 2
-updated_at: 2026-08-11T09:13:22Z
-updated_by: "orchestrator session faee3625 (Wave A dispatched: chips U1 task_ba829706, U2 task_451aa889, U3 task_da2f0e02, U5 task_2459a4e4, U8 task_e3494741, U9 task_11128297, U10 task_e3b84149; worktree subagents U7 a32867d69034d2062, UADR a8343ed82d7f98335; monitor bkps4vt2j armed pre-dispatch)"
+revision: 12
+updated_at: 2026-08-11T10:16:46Z
+updated_by: "orchestrator session faee3625 (PR 728 HELD by Johan ruling despite being green with threads resolved; U8 U9 U10 delivered with threads resolved or closing; U5 still in review)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
-authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
+authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
   - id: act-001
     type: dispatch-chip
@@ -26,55 +26,55 @@ units:
   U1:
     issue: null
     goal: "Applied-position ordering (finding 1, blocker): direction decided at its plan gate (document early-return window / refuse recording for async Mongo projections / committed-prefix design), docs-truth floor either way, ADR 0111 amendment"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_ba829706"
+    session: local_4640fd9a-5acf-4678-863e-c4b79e9e7460
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: false, evidence: null}
     blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    next_action: awaiting its plan gate (D3 direction ask); session confirmed running
+    last_meaningful_progress_at: 2026-08-11T09:56:12Z
     observed: {}
     assessment: "Blocker; broken-as-documented (javadoc+ADR 0111 vs ADR 0084). Gate floor: docs truth. U9 boundary: must not alter the wait-deadline contract or U9 rebases after this gate"
   U2:
     issue: null
     goal: "Manual-start pin refusal (finding 12, blocker): compare stored vs captured on ifAbsent refusal, fail loud on difference, later-registrant-starts-first test, check manual-start ADR amendment need"
-    phase: READY
-    health: UNKNOWN
+    phase: BLOCKED
+    health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_451aa889"
+    session: local_cff3efc3-ade2-406e-8aac-a3f25e144bce
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: false, evidence: "**HELD, DO NOT MERGE.** PR 728 head 9370abb6f8fa15119da611341410365092d59f87 is fully green (27 of 27, 0 pending) with 0 unresolved threads, so it LOOKS merge-ready and is not. Johan ruled 2026-08-11 that the shipped shape is wrong: the worker changed from fail-loud to warn-and-proceed after review, which leaves the blocker event loss visible rather than prevented, against the AGENTS.md hard isolation rule. Required shape: record enough beside the pin to tell another node FIRST-RUN pin from an ADVANCED checkpoint, fail loud only on a differing first-run pin, accept an advanced checkpoint silently. Worker messaged, running /johan-plan on the mechanism, presenting to Johan before implementing"}
+    blocking_on: [{what: "redesign per Johan ruling, mechanism plan gate pending; CheckpointStorage contract is frozen so a derived-key scheme must prove it cannot collide with a real subscription id", since: 2026-08-11T10:16:46Z, recheck_after: "on worker plan"}]
+    next_action: await the worker mechanism plan; NEVER merge 728 in its current shape
+    last_meaningful_progress_at: 2026-08-11T10:16:46Z
     observed: {}
-    assessment: "Silent event loss in opt-in MANUAL mode, first run, adverse ordering. NOT the #681 edge (verified)"
+    assessment: "Worker analysis was correct and prompted the escalation: a stored position differing from the captured one is genuinely ambiguous between a sibling first-run pin (harmful skip) and a subscription another node has advanced (legitimate leader-election late start), and Checkpoint exposes only asString() so there is no ordering to compare. Its reordering of checkpointAlreadyExisted to before capturePositionToPin is a real catch and stays. What Johan rejected is settling that ambiguity with a log line"
   U3:
     issue: null
     goal: "StepCondition semantics AND evaluation (findings 2, 3 in full per D4, 4, ADR 0120 drift): fired-window reactions with initiating() reachable, compiled per-step matcher state, determinism contract, duplicate-children rule. Hard constraint: reads 0.32.0-written saga documents (seed-by-hand proof)"
-    phase: READY
-    health: UNKNOWN
+    phase: BLOCKED
+    health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_da2f0e02"
+    session: local_2e5a90d0-9a6b-4e2e-b73b-192f371e5e97
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U3 plan gate, Johan", met: false, evidence: null}
-    blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    blocking_on: [{what: "own plan gate, three decisions pending with Johan in session local_2e5a90d0: finding 3 shape (worker recommends defer-and-pair against D4 as written), allOf duplicate rule, and permission to edit SpringMongoSagaStateStore which finding 2 cannot ship without", since: 2026-08-11T09:35:44Z, recheck_after: "on Johan answer"}]
+    next_action: Johan answers the three questions in U3 session; orchestrator already gave its recommendation on each (defer-and-pair, reject-shared-matcher, yes-edit-the-store)
+    last_meaningful_progress_at: 2026-08-11T09:35:44Z
     observed: {}
-    assessment: "Epic's largest unit and schedule risk; fallback at its plan gate is splitting finding 3's evaluation work into a pre-tag follow-up, Johan's call"
+    assessment: "Reached its plan gate having run an adversarial review that broke its own first counter design (cache key mis-associated counts across a redeploy, two ways). Pushes back on D4 as literally written with a real argument: with the determinism contract stated, rescanning and incremental evaluation are equivalent for conforming predicates, so the correctness case for counters is weak, and the performance case needs a retention bound to pay off at all. Orchestrator agrees and it matches the meta-plan own named contingency"
   U4:
     issue: null
     goal: "Kotlin StepCondition variance (finding 10): on(condition) takes out E, compile test"
     phase: PLANNED
-    health: UNKNOWN
+    health: PROGRESSING
     swept: false
     depends_on: [U3]
     session: null
@@ -88,23 +88,23 @@ units:
   U5:
     issue: null
     goal: "Migration tooling truth (findings 8, 11, 9-guide-half): recipe stubs delegate any() and reject stronger, empty writeVersion, TimerName effect-record constructor matchers, guide corrections, runtime-behavior test via DurableSubscriptionModel"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_2459a4e4"
+    session: local_d940740e-389c-4b2e-8c63-7529654a31a6
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: false, evidence: "PR 731 open, head 01eed5e74d63fe4c650308eeaf9be7cc4dad744a, threads THREE unresolved, 20 checks pending as of this revision. Not merged"}
     blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    next_action: await thread resolution and DELIVERY_RESULT
+    last_meaningful_progress_at: 2026-08-11T10:16:46Z
     observed: {}
     assessment: "Gating: official migration converts compile break into runtime failure today. Owns doc/migration/upgrading-to-0.33.0.md exclusively until U6"
   U6:
     issue: null
     goal: "Spring fencing wiring (findings 15, 16): per D5 fail startup on ambiguous strategy beans (back default off any interface-typed bean), starter validates conditional-write capability or explicit unfenced mode; guide caveat lands after U5"
     phase: PLANNED
-    health: UNKNOWN
+    health: PROGRESSING
     swept: false
     depends_on: [U5]
     session: null
@@ -119,84 +119,84 @@ units:
   U7:
     issue: null
     goal: "Redis sentinels (finding 17): non-negative validation in notOlderThan ONLY if no shipped/documented version source can be negative, else adapter-boundary structured result"
+    phase: DONE
+    health: PROGRESSING
+    swept: true
+    depends_on: []
+    session: "subagent a32867d69034d2062"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "729", met: true, evidence: "MERGED as squash 6ad6bc084327c405db253a761d3055a61b7a30e3, CAS-pinned to 68213aa4bbead38473ef4e70538af0adf30dbeea and the post-merge head equals that pin. Gate on a fresh read at merge time: 0 failing, 0 pending, 0 unresolved threads. The code head 411cb7dce ran the full matrix 27 of 27; the merged head differed by one changelog line only. Non-negative validation confirmed present on origin/main at CheckpointWriteCondition.java:51-60. Branch already deleted on merge, no stranded commit, worktree clean at the merged pin and swept"}
+    blocking_on: []
+    next_action: none, merged and swept
+    last_meaningful_progress_at: 2026-08-11T09:53:13Z
+    observed: {}
+    assessment: "Took the PREFERRED non-negative validation in CheckpointWriteCondition, and the conditional evidence holds: the only production version source is CompetingConsumerCheckpointWriteVersionSource, reaching only the two Mongo lease strategies, whose version comes from MongoListenerLockService seeding 0 and incrementing by 1, with the default fencingToken returning empty; no ADR or migration text permits a negative, no other call sites exist, and the Redis adapter comment already asserted the invariant. Copilot then correctly required the refinement be folded into the existing unreleased changelog bullet rather than omitted, which reverses this unit brief no-changelog instruction; the convention (AGENTS.md unreleased-capability rule) is what governs and the orchestrator confirmed the fold is minimal"
+  U8:
+    issue: null
+    goal: "Filter AND short-circuit (finding 18): restore ordered short-circuit on in-memory query path keeping the reparse win, regression test vs 0.32.0 semantics, check #647 changelog entry"
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_2ba1226c-7d6e-4d21-a68a-35987af498f1
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 open, head 2cc667b0393179934a70eee9b2a88dfe32bb8ba2, threads resolved, 10 checks pending as of this revision. Not merged"}
+    blocking_on: [{what: "worker session STOPPED at 09:35Z with the thread still unresolved and no DELIVERY_RESULT; resumed by send_message naming the obligation", since: 2026-08-11T09:58:07Z, recheck_after: "next event or list_sessions check"}]
+    next_action: on the worker reply, verify the narrowed wording, then CAS merge if green and threads resolved
+    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+    observed: {}
+    assessment: "Fix direction chosen: contiguous-run batching rather than a lazy memoized reader. That does fix the reported regression (a preceding type operand short-circuits before any payload read) and keeps #647 reparse win, but it is weaker than per-leaf laziness within one data-leaf run, which is a real semantic difference from 0.32.0 allMatch only when a reader can fail per path. Verify at review that the claim written in code and PR text matches what shipped"
+  U9:
+    issue: null
+    goal: "Reactive wait deadline (finding 19): mirror blocking twin's wait-local deadline in ReactiveMongoAppliedProjectionPositionStore, outage test for returns-false-never-throws within deadline"
     phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "subagent a32867d69034d2062"
+    session: local_62371645-451f-4569-bfbc-6bacbb68d4ca
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "730", met: false, evidence: "PR 730 open, head eb55793fd56729557f692d6816ae341488ecfe45, threads resolved, 10 checks pending as of this revision. Not merged"}
     blocking_on: []
-    next_action: awaiting DELIVERY_RESULT notification
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
-    observed: {}
-    assessment: "Non-gating; must not touch CompetingConsumerCheckpointWriteVersionSource.java (U6's file)"
-  U8:
-    issue: null
-    goal: "Filter AND short-circuit (finding 18): restore ordered short-circuit on in-memory query path keeping the reparse win, regression test vs 0.32.0 semantics, check #647 changelog entry"
-    phase: READY
-    health: UNKNOWN
-    swept: false
-    depends_on: []
-    session: "chip task_e3494741"
-    deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
-    observed: {}
-    assessment: "Gating: only true 0.32.0 behavior regression in the set (PR #647)"
-  U9:
-    issue: null
-    goal: "Reactive wait deadline (finding 19): mirror blocking twin's wait-local deadline in ReactiveMongoAppliedProjectionPositionStore, outage test for returns-false-never-throws within deadline"
-    phase: READY
-    health: UNKNOWN
-    swept: false
-    depends_on: []
-    session: "chip task_11128297"
-    deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-    blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    next_action: await thread resolution and DELIVERY_RESULT
+    last_meaningful_progress_at: 2026-08-11T10:16:46Z
     observed: {}
     assessment: "Gating. Boundary: rebases after U1's plan gate if waitUntilApplied semantics move"
   U10:
     issue: null
     goal: "Lifecycle cleanup (findings 13, 14): opt-out marker only after delegate subscribe succeeds; terminal cleanup for failed catch-up respecting removal-as-cancellation semantics. 14 is the scope-cut line"
-    phase: READY
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_e3b84149"
+    session: local_e22bccfe-56f9-4717-a309-aa2beb8a3e12
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "733", met: false, evidence: "PR 733 open, head bbe4270aa95e30a72f2b8c0d7e93bf6f2b1e55ea, threads ONE unresolved, checks green 26 of 26 as of this revision. Not merged"}
     blocking_on: []
     next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    last_meaningful_progress_at: 2026-08-11T10:16:46Z
     observed: {}
     assessment: "Non-gating but ships with release unless stalled; finding 14 fix needs a Changes changelog entry (released behavior)"
   UADR:
     issue: null
     goal: "ADR status drift (finding 6 residue: 0110, 0116 status lines and stale claims)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "subagent a8343ed82d7f98335"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: manual_approval, ref: "design gate: Johan wording confirm before merge", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "726", met: true, evidence: "MERGED as squash 985c362df65e331c2610386f638a28588e6b58fe at 2026-08-11T09:31:01Z, CAS-pinned to c868a625f8d7044e4f940cc9591012088b0646d7 and the post-merge head equals that pin. Gate at merge time: 0 failing checks, 0 pending, 0 unresolved threads, two Copilot reviews with the second on the merged head reporting no new comments. Corrected text verified present on origin/main. Two heads: 56f3e4f2e content-complete, c868a625f rewrapping one 140-char line the orchestrator caught in review"}
+      - {check: manual_approval, ref: "design gate: Johan wording confirm before merge", met: true, evidence: "SATISFIED 2026-08-11T09:29:12Z: Johan answered the structured ask with merge-once-the-rewrap-lands, having read the orchestrator summary of both ADR status corrections. The gate is CLOSED, so no per-PR re-ask"}
     blocking_on: []
-    next_action: awaiting DELIVERY_RESULT notification
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    next_action: none, merged and swept
+    last_meaningful_progress_at: 2026-08-11T09:32:18Z
     observed: {}
-    assessment: "Non-gating; prose, design-gate rule applies"
+    assessment: "Two false ADR status lines corrected: 0110 claimed nothing under Decision existed in code (implemented by #638) and cited the removed of(Object) lookup, 0116 claimed #665 stayed open for implementation (the fence shipped whole into 0.33.0). Worker self-caught a type error Copilot flagged, applying a findIn signature to ReplayAware, which is a view-dsl interface and no SubscriptionModelCapability. Orchestrator caught the introduced 140-char line; the file wraps at 120. Worktree, branches and stale refs swept, no stranded commit"
   UDOCS:
     issue: null
     goal: "Docs repo ripple: sweep held branches (52, 55, 61, 54 news post, others as touched), rebuild docs/0.33.0-preview, update occurrent-org.github.io#57. Trigger: every GATING library unit with a docs surface merged; stalled non-gating units defer their ripple alongside"
     phase: PLANNED
-    health: UNKNOWN
+    health: PROGRESSING
     swept: false
     depends_on: [U1, U3, U5, U6, U8, U9]
     session: null
@@ -210,8 +210,8 @@ units:
   UREG:
     issue: null
     goal: "Deferred/declined register at closeout: issues for finding 21 (measurement), finding 5 (wrapper contract); decline record for finding 20; ORCHESTRATOR.md register update"
-    phase: PLANNED
-    health: UNKNOWN
+    phase: READY
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: null

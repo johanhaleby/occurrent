@@ -595,3 +595,101 @@ against the merged heads recorded in the epic state answers it for the whole epi
 branch that reappeared after a delete-on-merge is the loudest form of the signal. Then adopt whatever
 is there as a unit rather than deleting it, which is also why worktree removal belongs at the end of
 the sweep and not at the merge.
+
+## The v7 monitor cannot see a thread being resolved (2026-08-11, cdx33)
+
+The v7 fleet-monitor pattern keys its delta on PR number, head SHA, mergeable, `reviewDecision`,
+a failing-check count and a DONE/running flag. A Copilot review arrives as `COMMENTED`, which
+leaves `reviewDecision` an EMPTY STRING, and resolving a thread changes no other field. So a
+worker that answers a reviewer and resolves the thread without pushing a commit takes its PR
+from blocked to merge-ready and the monitor emits nothing at all.
+
+This was caught before it cost anything, by asking what signal would tell me that U2's and U8's
+unresolved Copilot threads had been dealt with. The answer was none: U8's fix happened to need a
+commit, so its head would move, but U2's might not have.
+
+It is the same defect family as the already-recorded hand-rolled monitor that only reported
+arrival and departure, and the same rule applies, wire the missing signal rather than shorten the
+heartbeat. The v7 pattern is not wrong, it simply watches delivery and CI rather than review
+completion, and the merge gate needs all three.
+
+**How to apply:** when the merge gate includes review threads, and it always does here, arm a
+companion watch that polls unresolved-thread counts per open PR and emits on change
+(`THREADS-ALL-RESOLVED` is the merge-gate candidate, `THREADS-OPEN` means still blocked). Keep it
+separate from v7 rather than widening v7's delta key, so a truncated or unhealthy poll in one
+cannot silence the other, and retire both together under the monitor lifetime rule. Recorded in
+`ORCHESTRATOR.md` with the task ids. Worth folding into `references/fleet-monitor.md` as a v8
+addendum at the next edit of that file, since the gap is generic and not specific to this epic.
+
+## Telling a worker not to background a wait does not stop it; removing the wait does (2026-08-11, cdx33)
+
+Three stalls in one session on the same trap, and the second and third came AFTER the worker had
+been corrected. U-ADR backgrounded a Copilot-review poll, was told the result would never arrive,
+recovered, and finished. U7 then backgrounded a Maven run, got the same correction with the
+foreground chunking recipe, ran the tests correctly, and immediately backgrounded a CI poll
+instead, burning about 244k tokens across the unit.
+
+The existing lesson says to budget one recovery round trip per unit whose verification runs long.
+That is not enough, because the correction only names the mechanism the worker just used, and
+waiting itself is what the worker believes it is required to do. Its brief said to run pr-fix
+until CI is green, so with 17 checks pending it had an instruction it could not satisfy in a
+single turn and no legal way to wait. Backgrounding is the only thing that looks like progress.
+
+The fix that worked was structural rather than another prohibition: tell the worker it does not
+need to wait for CI at all, because the orchestrator holds monitors and owns the merge, then give
+it a short list of foreground edits and an explicit instruction to exit with pr-fix outcome
+`not_run` and the blocker naming the orchestrator as the owner of the wait. A non-done exit that
+is expected and accurate beats a worker looping on a wait it cannot perform.
+
+**How to apply:** in any brief where CI is slow, say up front that the orchestrator owns the CI
+wait and the merge, and that exiting with `not_run` plus a blocker naming the pending checks is a
+CORRECT delivery rather than a failure. Keep the pr-fix loop requirement for review threads, which
+a worker genuinely can finish in its own turn. And when a worker stalls twice, stop repeating the
+prohibition and remove the obligation that is driving it.
+
+## A stopped worker session with an open obligation is invisible to both monitors (2026-08-11, cdx33)
+
+U8's chip session stopped at 09:35 with PR 727 green, one unresolved Copilot thread, and no
+DELIVERY_RESULT ever reaching the orchestrator. Neither monitor could see it: the v7 work-item
+watch reports head, mergeable, review decision and checks, all of which were static and healthy,
+and the companion thread watch only emits when a COUNT CHANGES, so a thread that stays stubbornly
+at one unresolved emits exactly once and then never again. A chip session is a separate top-level
+session, so it sends the orchestrator no task notification when it ends. Three signals, and the
+state fell through all of them.
+
+It was caught by `list_sessions`, which carries `isRunning` per session, while checking something
+else entirely (whether every chip had actually been started). `isRunning: false` beside an open PR
+with an unmet deliverable is the signal, and nothing else in the loop reports it.
+
+This is the unit-not-PR rule from 2026-08-07 in a new disguise. That rule said a unit whose
+deliverable has no PR drops out of PR-keyed monitoring. The same hole exists one step later: a unit
+whose PR exists but whose WORKER has stopped drops out of monitoring that only watches the PR.
+
+**How to apply:** every sweep tick reads `list_sessions` and cross-checks `isRunning` against the
+epic state's open units, not just the PR set. A unit with an unmet deliverable and a stopped
+session is BLOCKED on the orchestrator and needs a `send_message` resume naming the exact
+obligation, since a chip session cannot notify you that it gave up. Do not infer liveness from the
+PR being healthy, which is precisely what a delivered-but-unfinished unit looks like.
+
+## "No changelog entry for unreleased surface" is a wrong paraphrase, and it cost three review round trips (2026-08-11, cdx33)
+
+Three unit briefs (U2, U7, U9) told the worker that a fix to unreleased 0.33.0 surface needs "no
+Changes changelog entry, dev-churn on unreleased surface". Copilot then raised the same objection
+on PR 729 and PR 728 independently, and it was right both times: the existing
+`### Changelog next version` entry already DESCRIBES the unreleased capability, so a refinement
+that changes what that entry claims has to be folded into it. Omitting the changelog entirely
+leaves the entry describing behavior that no longer exists.
+
+The governing rule in AGENTS.md distinguishes dev-churn on an unreleased capability, which gets no
+NEW `#### Changes` bullet, from the separate obligation to keep an existing entry truthful. My
+briefs collapsed those into "no changelog entry", which is the same compression failure already
+recorded for the vgpr brief, committed again by the same hand that recorded it. Both workers
+handled it correctly, but each paid a review round trip and a rebase to learn what the brief could
+have told them.
+
+**How to apply:** a brief for a change to unreleased surface says, in this shape rather than in
+paraphrase: no new `#### Changes` bullet, AND check whether an existing `### Changelog next
+version` entry describes the behavior you are changing, folding the refinement into that entry if
+so. Quote the AGENTS.md sentence rather than summarizing it. And when the same reviewer objection
+arrives on two different PRs from two different workers, treat the brief as the defect rather than
+the workers.
