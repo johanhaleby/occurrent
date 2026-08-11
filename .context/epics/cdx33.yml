@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 32
-updated_at: 2026-08-11T15:25:12Z
-updated_by: "orchestrator session faee3625 (U4 dispatched as a subagent, its dependency cleared by verifying PR 742 does not touch SagaFlowExtensions.kt)"
+revision: 33
+updated_at: 2026-08-11T15:33:45Z
+updated_by: "orchestrator session faee3625 (U3 MERGED as dc6faa6a7 and swept, nine of thirteen units done; U4 delivered PR 744)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -57,17 +57,17 @@ units:
   U3:
     issue: null
     goal: "StepCondition semantics AND evaluation (findings 2, 3 in full per D4, 4, ADR 0120 drift): fired-window reactions with initiating() reachable, compiled per-step matcher state, determinism contract, duplicate-children rule. Hard constraint: reads 0.32.0-written saga documents (seed-by-hand proof)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "subagent a83373d1dceeb9f7a on branch cdx33/u3b-stepcondition (chip session local_2e5a90d0 ABANDONED, prompt-blocked)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "742", met: false, evidence: "PR 742 open on cdx33/u3b-stepcondition, head 9f9def500b2c5cc8bf46e57de0034c8ebf1012be, checks running, no DELIVERY_RESULT yet. Title and body cover both shipped halves: the reaction now reads the fulfilling window, and a duplicated allOf requirement is refused, plus four corrected ADR 0120 statements. Worker verified active by file writes (ADR 0120, SpringMongoSagaStateStore, a new SpringMongoSagaStateStoreFlowConditionRoundTripTest and ReceivedEventsTest) rather than by its task output file, which is a 183-byte stub whose mtime tracks nothing"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "742", met: true, evidence: "MERGED as squash dc6faa6a7be9d459570d8a3215cbb36b400feb0a, CAS-pinned to 4f25ba6226a0ab6b71e1dfbc65932eac23c4fab4. Matrix completed/success on that exact head by RUN LIST, 26 of 27 checks green with the last shard (mongodb-native java-21) still running and its java-25 sibling passed, merged under the recorded pending_matrix_jobs allow_one_equivalent_sibling grant. 0 unresolved threads, both Copilot findings fixed rather than declined. Verified on origin/main with absolute grep: loweredFromJoin present (3 hits), the join regression test present, previousStepEntryIndex persisted (6 hits), and the 195-line SpringMongoSagaStateStoreFlowConditionRoundTripTest present. Branch deleted on merge, no stranded push, worktree clean at the pin and swept"}
       - {check: manual_approval, ref: "U3 plan gate, Johan", met: true, evidence: "SATISFIED 2026-08-11T12:06:55Z via structured ask in the orchestrator session rather than in U3 own session, since the gate had been parked over two hours. Three rulings: (1) finding 3 counters DEFERRED and paired with the retention bound as a pre-tag follow-up, accepting the worker argument against D4 as literally written, so this PR lands findings 2 and 4 plus the determinism contract, the ADR 0120 corrections and the retention documentation; (2) finding 4 rejects a shared EventMatcher or equal child in allOf, which also catches allOf(event(A,2), event(A,3)), with anyOf left permissive and that asymmetry recorded in the ADR; (3) the orchestrator granted the SpringMongoSagaStateStore edit, which is a file-ownership call rather than Johan, with the hand-seeded pre-0.33.0 document test required per the #724 precedent"}
-    blocking_on: [{what: "two Copilot findings the orchestrator confirmed and ruled on: the join callback narrowing (a RELEASED 0.31.0 behaviour change the PR wrongly claims not to make, must be preserved via a discriminator since ADR 0120 lowered join to sugar meaning semantics preserved) and the duplicate rule catching only leaf-vs-leaf overlap while advertising a wider invariant", since: 2026-08-11T15:09:36Z, recheck_after: "on worker push"}]
-    next_action: await the fixes; at merge-readiness verify the join regression test exists, the PR compatibility paragraph is corrected, and the documented invariant matches exactly what the check enforces
-    last_meaningful_progress_at: 2026-08-11T15:09:36Z
+    blocking_on: []
+    next_action: none, merged and swept; #741 carries the deferred counters-plus-retention follow-up
+    last_meaningful_progress_at: 2026-08-11T15:33:45Z
     observed: {}
     assessment: "REPLACED 2026-08-11. The original chip session parked on its own AskUserQuestion and could never receive the answers: a session blocked on an interactive prompt has an in-flight turn only a human in that session can finish, so the relayed ruling queued behind it forever, and the tool result had said queued rather than sent. Salvage: its revision-2 plan survived on disk at the session scratchpad (PLAN-u3.md, written after a fresh-context review that broke its own counter design), so the replacement subagent got the plan path plus the three rulings instead of a fresh investigation. Deliberately on branch u3b so the abandoned session cannot collide if anyone later answers its prompt. Scope per the rulings: findings 2 and 4 plus the determinism contract and ADR 0120 corrections; counters deferred"
   U4:
@@ -79,10 +79,10 @@ units:
     depends_on: [U3]
     session: "worktree subagent ae3fe6d4ee9905efe"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "744", met: false, evidence: "PR 744 open on cdx33/u4-kotlin-variance, head af9e1506834f49f2bc6680ecdf098c0df5cf09d9, checks running, no review threads yet"}
     blocking_on: []
-    next_action: await DELIVERY_RESULT; if PR 742 merges first the worker rebases, and reconcile any changelog clause it deliberately skipped to avoid colliding with 742
-    last_meaningful_progress_at: 2026-08-11T15:25:12Z
+    next_action: await DELIVERY_RESULT; verify the compile-time test is real (must not compile without the out projection) and reconcile any changelog clause it skipped to avoid colliding with 742, now merged
+    last_meaningful_progress_at: 2026-08-11T15:33:45Z
     observed: {}
     assessment: "Dependency cleared by evidence rather than by waiting: PR 742 touches 15 files in dsl/saga-dsl and NONE of them is SagaFlowExtensions.kt, so U4 can run in parallel. Two collision guards in the brief: its compile test goes in a NEW Kotlin test file because 742 is editing DocumentedFlowSagaKotlinTest.kt, and it adds no changelog clause if that would collide with 742 edit of the same unreleased entry, leaving the orchestrator to reconcile after both merge. Adding out to a type parameter position is source-compatible, so no migration machinery is owed"
   U5:
