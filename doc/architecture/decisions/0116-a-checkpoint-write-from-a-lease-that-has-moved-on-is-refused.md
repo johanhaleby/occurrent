@@ -431,6 +431,19 @@ a first write and is reported as success rather than refused, though nothing is 
 The one shipped caller, `ManualStartSubscriptionModel.pinStartPosition`, swallows the refusal either way
 and is unaffected by which family it runs against.
 
+> **Amended for 0.33.0.** "Swallows the refusal either way" assumed that whatever a refused write lost to
+> was interchangeable with what this node offered, which held as long as `ifAbsent()` had only one shipped
+> caller racing itself. It stopped holding once that caller is used across nodes that can capture different
+> positions at registration, minutes apart during a rolling deploy rather than at the same moment. Losing
+> a race like that to a genuinely different position and running from it anyway would silently skip the
+> events between the two registrations. `pinStartPosition` now tells the two apart by whether a checkpoint
+> already existed when the losing node registered. One that did wins outright, whatever it holds, since
+> that means the subscription has run before or another node already pinned and started it. One that did
+> not means only a same-generation race could have produced what is now stored, so it is compared against
+> the position this node captured, by `asString()` since `Checkpoint` promises nothing else. Equal,
+> proceed. Different, `IllegalStateException` instead of guessing which position is safe to run from. See
+> `ManualStartSubscriptionModelTest`.
+
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
 

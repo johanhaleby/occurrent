@@ -586,7 +586,7 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void two_nodes_racing_to_pin_the_same_subscription_id_do_not_lose_events_between_the_two_positions() {
+    void two_nodes_racing_to_pin_the_same_subscription_id_at_different_positions_fails_the_second_node_instead_of_silently_losing_events() {
         // Two separate model instances stand for two nodes. Their own bookkeeping is independent, but they share the
         // one resource that matters here: the checkpoint storage both are about to pin the same subscription id in.
         // The storage's exists() always answers false (see RaceSimulatingCheckpointStorage), standing in for the
@@ -603,31 +603,89 @@ class ManualStartSubscriptionModelTest {
         secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
         });
 
-        // Whichever pins first wins, and the second call must not throw even though its write is refused.
+        // Whichever pins first wins. The second node captured a different position, so running from the winner's
+        // position instead would skip events, and the second call must fail loudly rather than do that silently.
         assertThatCode(() -> firstNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
-        assertThatCode(() -> secondNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> secondNode.resumeSubscription(SUBSCRIPTION_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("first-nodes-position")
+                .hasMessageContaining("second-nodes-position");
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("first-nodes-position");
     }
 
     @Test
-    void a_pin_refused_because_another_node_already_pinned_first_does_not_stop_the_subscription_from_starting() {
+    void a_later_registrant_that_starts_first_does_not_silently_win_over_an_earlier_registration() {
+        // Stands for a rolling deploy where one node registers, the source position moves on, and a second node
+        // registers the same subscription id minutes later. A duplicate id on the same model would throw, so a
+        // second model instance stands for the second node, sharing the storage the way the racing test above does.
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        RecordingSubscriptionModel earlierDelegate = new RecordingSubscriptionModel();
+        GlobalCheckpointSource<@Nullable Checkpoint> earlierPositionSource = () -> new StringCheckpoint("earlier-registration-position");
+        ManualStartSubscriptionModel earlierNode = ManualStartSubscriptionModel.stoppedByDefault(earlierDelegate, earlierPositionSource, storage);
+        earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        RecordingSubscriptionModel laterDelegate = new RecordingSubscriptionModel();
+        GlobalCheckpointSource<@Nullable Checkpoint> laterPositionSource = () -> new StringCheckpoint("later-registration-position");
+        ManualStartSubscriptionModel laterNode = ManualStartSubscriptionModel.stoppedByDefault(laterDelegate, laterPositionSource, storage);
+        laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        // The later registrant starts first, so its write wins the pin.
+        assertThatCode(() -> laterNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("later-registration-position");
+
+        // The earlier registrant starting after that must not silently run from the later position, since doing so
+        // skips the events written between the two registrations.
+        assertThatThrownBy(() -> earlierNode.resumeSubscription(SUBSCRIPTION_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("earlier-registration-position")
+                .hasMessageContaining("later-registration-position");
+    }
+
+    @Test
+    void a_pin_refused_because_another_node_already_pinned_a_different_position_fails_to_start() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
-        // Stands for the other node's write having already landed before this node's start reaches the pin.
-        storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("pinned-by-another-node"));
         GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("this-nodes-own-position");
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
         });
+        // Stands for another node's registration landing after this one, at a different source position, and
+        // pinning first.
+        storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("pinned-by-another-node"));
+
+        assertThatThrownBy(() -> model.start(true))
+                .as("starting from either position risks skipping events the other node's registration should have covered")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("this-nodes-own-position")
+                .hasMessageContaining("pinned-by-another-node");
+
+        assertThat(delegate.subscribeCalls).isEmpty();
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).isFalse();
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("pinned-by-another-node");
+    }
+
+    @Test
+    void a_pin_refused_because_another_node_already_pinned_the_same_position_does_not_stop_the_subscription_from_starting() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("shared-position");
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+        // Stands for another node's registration landing after this one, at the same source position, and pinning
+        // first.
+        storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("shared-position"));
 
         assertThatCode(() -> model.start(true))
-                .as("the ifAbsent() refusal means another node's pin won, not that this node failed to start")
+                .as("the ifAbsent() refusal against the position this node captured itself is its own write arriving second")
                 .doesNotThrowAnyException();
 
         assertThat(delegate.subscribeCalls).extracting(SubscribeCall::subscriptionId).containsExactly(SUBSCRIPTION_ID);
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
-        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("pinned-by-another-node");
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("shared-position");
     }
 
     private static CloudEvent cloudEvent(String id) {

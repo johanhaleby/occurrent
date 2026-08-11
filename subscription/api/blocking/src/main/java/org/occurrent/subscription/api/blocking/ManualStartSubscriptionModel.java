@@ -112,6 +112,15 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * The recorded position is pinned with {@link CheckpointWriteCondition#ifAbsent() ifAbsent()}, which only ever
      * writes a subscription's very first checkpoint against nothing stored. A fence condition has nothing to add to a
      * write like that, so this factory takes no {@link CheckpointWriteVersionSource} (see ADR 116).
+     * <p>
+     * A checkpoint that already existed when this subscription registered always wins, whatever position it holds,
+     * because that means the subscription has run before, or another node already pinned and started it. A
+     * checkpoint that only appears later can only be another node's own first-run pin, most often minutes apart
+     * during a rolling deploy rather than at the same moment. Starting the losing node's subscription from the
+     * winner's position instead would silently skip the events written between the two registrations, so a lost
+     * race like that is only ever accepted when the stored position matches the one this node captured. A genuinely
+     * different one fails {@link #resumeSubscription(String) starting the subscription} with an
+     * {@link IllegalStateException} instead.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -151,9 +160,14 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             // whatever the state looks like from here, because a stop() landing in between would otherwise leave this
             // registration deferred with no position to start from.
             @Nullable Checkpoint positionToPin = capturePositionToPin();
+            // Told apart from a checkpoint that only appears later, because only the latter can be another node's
+            // first-run pin. One already here means this subscription has run before, or another node already
+            // pinned and started it, and either way that stored position is authoritative regardless of what this
+            // node captures for itself.
+            boolean checkpointAlreadyExisted = checkpointStorage != null && checkpointStorage.exists(subscriptionId);
             synchronized (stateLock) {
                 if (state != State.RUNNING) {
-                    registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action, positionToPin));
+                    registrations.put(subscriptionId, new Registration.Deferred(filter, startAt, action, positionToPin, checkpointAlreadyExisted));
                     return new DeferredSubscription(subscriptionId);
                 }
             }
@@ -178,6 +192,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * @throws UnknownSubscriptionException       If neither this model nor the wrapped model has that subscription.
      * @throws SubscriptionAlreadyRunningException If the subscription is already running, including when another
      *                                             thread started this registration first.
+     * @throws IllegalStateException              If this subscription's first-run position was pinned by another node
+     *                                             at a position different from the one this node captured at
+     *                                             registration. The registration is left in place, so a caller may
+     *                                             retry once the conflict is resolved.
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
@@ -201,7 +219,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         }
 
         try {
-            pinStartPosition(subscriptionId, deferred.positionToPin());
+            pinStartPosition(subscriptionId, deferred.positionToPin(), deferred.checkpointAlreadyExisted());
             Subscription subscription = delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
             // Subscribing to a stopped model registers a paused subscription rather than a running one, so this is what
             // makes starting work after stop(). Without it the caller is handed a subscription that never delivers.
@@ -377,25 +395,41 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     }
 
     // Written when the subscription starts rather than when it is registered, so a subscription that is never started
-    // leaves nothing behind. An existing checkpoint always wins, since that subscription has run before and this one
-    // was only ever a stand-in for a first run.
+    // leaves nothing behind.
     //
     // The write is ifAbsent() rather than an exists() check followed by a save(), because those are two calls with
     // nothing holding them together. Two nodes racing to start the same subscription would both see nothing stored
     // and both write, and whichever wrote second would silently win, losing the events between the two positions
     // (see #669). ifAbsent() folds the check and the write into one call the storage evaluates atomically, so only
-    // the first node's write can succeed. The second gets CheckpointWriteConditionNotFulfilledException, which is
-    // swallowed here rather than surfaced, because the stored pin is exactly what this node would have written too:
-    // both nodes read the same position source before either of them raced to store it.
-    private void pinStartPosition(String subscriptionId, @Nullable Checkpoint positionToPin) {
+    // the first node's write can succeed.
+    //
+    // A refusal means this node lost the write, and what that means depends on whether a checkpoint already existed
+    // when this node registered. If one did, this subscription has run before, or another node already pinned and
+    // started it, and that stored position wins regardless of what this node captured for itself. If none did,
+    // nothing but a same-generation race could have produced the one now stored, so it is compared against what
+    // this node captured, by asString() since Checkpoint promises nothing else. Equal, proceed, the two nodes read
+    // the same source position. Different, fail loudly instead of silently running from whichever position happened
+    // to win the write.
+    private void pinStartPosition(String subscriptionId, @Nullable Checkpoint positionToPin, boolean checkpointAlreadyExisted) {
         if (positionToPin == null || checkpointStorage == null) {
             return;
         }
         try {
             checkpointStorage.save(subscriptionId, positionToPin, CheckpointWriteCondition.ifAbsent());
         } catch (CheckpointWriteConditionNotFulfilledException e) {
-            // Another node already pinned this subscription's start position first. Its write wins and this node has
-            // nothing left to do.
+            if (checkpointAlreadyExisted) {
+                return;
+            }
+            @Nullable Checkpoint stored = checkpointStorage.read(subscriptionId);
+            @Nullable String storedAsString = stored == null ? null : stored.asString();
+            if (!positionToPin.asString().equals(storedAsString)) {
+                throw new IllegalStateException(
+                        "Refused to pin the start position for subscription " + subscriptionId + " because another node " +
+                        "already stored a different one. This node captured " + positionToPin.asString() + ", storage has " +
+                        storedAsString + ". Starting from either position risks skipping events the other node's " +
+                        "registration should have covered. Reconcile the two registrations before starting this subscription.",
+                        e);
+            }
         }
     }
 
@@ -403,7 +437,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         Registration STARTING = new Starting();
 
         record Deferred(@Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action,
-                        @Nullable Checkpoint positionToPin) implements Registration {
+                        @Nullable Checkpoint positionToPin, boolean checkpointAlreadyExisted) implements Registration {
         }
 
         record Starting() implements Registration {
