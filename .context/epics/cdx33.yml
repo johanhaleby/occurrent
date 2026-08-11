@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 23
-updated_at: 2026-08-11T11:43:07Z
-updated_by: "orchestrator session faee3625 (U2 MERGED as 6743d3e6c and swept, both review blockers now resolved, seven of thirteen units done)"
+revision: 24
+updated_at: 2026-08-11T12:06:55Z
+updated_by: "orchestrator session faee3625 (U3 plan gate CLOSED, Johan ruled through the orchestrator: defer counters and pair with retention, reject shared matcher in allOf, Mongo store edit granted)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -57,17 +57,17 @@ units:
   U3:
     issue: null
     goal: "StepCondition semantics AND evaluation (findings 2, 3 in full per D4, 4, ADR 0120 drift): fired-window reactions with initiating() reachable, compiled per-step matcher state, determinism contract, duplicate-children rule. Hard constraint: reads 0.32.0-written saga documents (seed-by-hand proof)"
-    phase: BLOCKED
-    health: STALLED
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
     session: local_2e5a90d0-9a6b-4e2e-b73b-192f371e5e97
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: manual_approval, ref: "U3 plan gate, Johan", met: false, evidence: null}
-    blocking_on: [{what: "own plan gate, three decisions pending with Johan in session local_2e5a90d0: finding 3 shape (worker recommends defer-and-pair against D4 as written), allOf duplicate rule, and permission to edit SpringMongoSagaStateStore which finding 2 cannot ship without", since: 2026-08-11T09:35:44Z, recheck_after: "on Johan answer"}]
-    next_action: RE-SURFACE the three plan-gate questions to Johan, parked since 09:35Z; orchestrator recommendations already formed (defer-and-pair, reject-shared-matcher, yes-edit-the-store)
-    last_meaningful_progress_at: 2026-08-11T09:35:44Z
+      - {check: manual_approval, ref: "U3 plan gate, Johan", met: true, evidence: "SATISFIED 2026-08-11T12:06:55Z via structured ask in the orchestrator session rather than in U3 own session, since the gate had been parked over two hours. Three rulings: (1) finding 3 counters DEFERRED and paired with the retention bound as a pre-tag follow-up, accepting the worker argument against D4 as literally written, so this PR lands findings 2 and 4 plus the determinism contract, the ADR 0120 corrections and the retention documentation; (2) finding 4 rejects a shared EventMatcher or equal child in allOf, which also catches allOf(event(A,2), event(A,3)), with anyOf left permissive and that asymmetry recorded in the ADR; (3) the orchestrator granted the SpringMongoSagaStateStore edit, which is a file-ownership call rather than Johan, with the hand-seeded pre-0.33.0 document test required per the #724 precedent"}
+    blocking_on: []
+    next_action: worker implementing; DELIVERY_RESULT must state what the deferred counters-plus-retention follow-up needs to carry
+    last_meaningful_progress_at: 2026-08-11T12:06:55Z
     observed: {}
     assessment: "Reached its plan gate having run an adversarial review that broke its own first counter design (cache key mis-associated counts across a redeploy, two ways). Pushes back on D4 as literally written with a real argument: with the determinism contract stated, rescanning and incremental evaluation are equivalent for conforming predicates, so the correctness case for counters is weak, and the performance case needs a retention bound to pay off at all. Orchestrator agrees and it matches the meta-plan own named contingency"
   U4:
