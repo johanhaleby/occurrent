@@ -371,7 +371,7 @@ public final class SubscriptionAnnotations {
     }
 
     private static IllegalArgumentException cannotSubscribeOn(String subscriptionId, Class<?> eventType) {
-        String msg = "no event is stored under the type of %s and its concrete subtypes cannot all be found, so subscription '%s' would silently miss stored event types. Declare the concrete event types with the annotation's eventTypes attribute instead (for example eventTypes = {MyEvent1.class, MyEvent2.class}), or make every level of the hierarchy below %s final or sealed.";
+        String msg = "the concrete event types dispatch would accept for %s cannot all be enumerated, so a filter derived from it for subscription '%s' would miss some of them. Declare the concrete event types with the annotation's eventTypes attribute instead (for example eventTypes = {MyEvent1.class, MyEvent2.class}), or make %s and every level below it final or sealed.";
         return new IllegalArgumentException(msg.formatted(eventType.getName(), subscriptionId, eventType.getSimpleName()));
     }
 

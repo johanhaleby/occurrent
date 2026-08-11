@@ -425,26 +425,26 @@ has the reasoning, including why this is a second setting rather than a new mean
 
 A saga declares the event types it handles, and so does an annotation-based subscription (`@Subscription`,
 `@StreamSubscription`, `@SynchronousSubscription`, `@DcbSubscription`). Both turn those declarations into a type filter
-by asking the `CloudEventTypeMapper` for each one's CloudEvent type. A supertype has a CloudEvent type of its own that no
-stored event ever has, so declaring one asked for a string nothing matches.
+by asking the `CloudEventTypeMapper` for each one's CloudEvent type. A filter built from only the declared type missed
+every concrete type it permits, so a sealed supertype could ask for fewer types than dispatch would actually accept.
 
 0.33.0 expands a declared sealed type into the concrete types it permits, which fixes that case on both sides. Where the
 concrete types cannot be found, a saga is refused when it is built and a subscription is refused when it is registered,
 which for a Spring Boot application is startup. A saga sees this message:
 
 ```
-java.lang.IllegalArgumentException: no event is stored under the type of com.example.OrderEvent and its concrete subtypes
-cannot all be found, so a subscription derived from it would silently miss stored event types. Declare the concrete
-event types instead, or make every level of the hierarchy below OrderEvent final or sealed.
+java.lang.IllegalArgumentException: the concrete event types dispatch would accept for com.example.OrderEvent cannot all
+be enumerated, so a filter derived from it would miss some of them. Declare the concrete event types instead, or make
+OrderEvent and every level below it final or sealed.
 ```
 
 A subscription reports the same shape with a message of its own, naming the subscription id alongside the type:
 
 ```
-java.lang.IllegalArgumentException: no event is stored under the type of com.example.OrderEvent and its concrete subtypes
-cannot all be found, so subscription 'order-subscription' would silently miss stored event types. Declare the concrete
-event types with the annotation's eventTypes attribute instead (for example eventTypes = {MyEvent1.class,
-MyEvent2.class}), or make every level of the hierarchy below OrderEvent final or sealed.
+java.lang.IllegalArgumentException: the concrete event types dispatch would accept for com.example.OrderEvent cannot all
+be enumerated, so a filter derived from it for subscription 'order-subscription' would miss some of them. Declare the
+concrete event types with the annotation's eventTypes attribute instead (for example eventTypes = {MyEvent1.class,
+MyEvent2.class}), or make OrderEvent and every level below it final or sealed.
 ```
 
 **For a saga, read this as a report about a saga that never worked, not as a regression.** Under every type mapper

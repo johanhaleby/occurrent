@@ -240,7 +240,8 @@ the day of the tag. Anyone who reads the difference should find #750 before conc
 
 A subscription's derived filter now also names the declared sealed type. That matters whenever the declared type is
 itself concrete and an event is stored as an instance of it directly, under the mappers Occurrent ships or any other,
-where such a subscription received nothing before, so it gets its own changelog entry as a change to released behaviour.
+since such a subscription missed exactly those events before, even while every concrete type it named kept arriving, so
+it gets its own changelog entry as a change to released behaviour.
 
 **No OpenRewrite recipe helps with the refusal, and a review marker was tried and abandoned rather than skipped on
 principle.** Rewriting was never possible, since the concrete subtypes of an open hierarchy cannot be read off the

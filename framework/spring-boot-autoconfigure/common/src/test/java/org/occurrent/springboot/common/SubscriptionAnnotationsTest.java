@@ -291,7 +291,7 @@ class SubscriptionAnnotationsTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(OpenEvent.class.getName())
                 .hasMessageContaining("open-subscription")
-                .hasMessageContaining("cannot all be found");
+                .hasMessageContaining("cannot all be enumerated");
     }
 
     @Test
@@ -299,7 +299,7 @@ class SubscriptionAnnotationsTest {
         assertThatThrownBy(() -> resolveOrderEventTypes(OrderPlaced[].class))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("order-subscription")
-                .hasMessageContaining("cannot all be found");
+                .hasMessageContaining("cannot all be enumerated");
     }
 
     @Test
@@ -311,6 +311,6 @@ class SubscriptionAnnotationsTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(ReopenedEvent.class.getName())
                 .hasMessageContaining("reopened-subscription")
-                .hasMessageContaining("cannot all be found");
+                .hasMessageContaining("cannot all be enumerated");
     }
 }
