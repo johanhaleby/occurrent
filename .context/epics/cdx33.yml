@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 40
-updated_at: 2026-08-11T17:29:54Z
-updated_by: "orchestrator session faee3625 (EPIC REOPENED by Johan: U11 adopts #741 pre-tag, correcting an orchestrator contradiction, and U12 adopts #743 in full; 0.33.0 is held again)"
+revision: 41
+updated_at: 2026-08-11T17:44:27Z
+updated_by: "orchestrator session faee3625 (both reopened units passed their plan gates: U11 with stepWindow and Johan choosing the full counters plan, U12 having REPRODUCED the defect on all three routes)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "REOPENED 2026-08-11 after closeout. The tag is HELD again for U11 and U12. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -232,10 +232,10 @@ units:
     session: "worktree subagent af8b678b3c64ae940"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: manual_approval, ref: "U11 plan gate, Johan via the orchestrator", met: false, evidence: null}
+      - {check: manual_approval, ref: "U11 plan gate, Johan via the orchestrator", met: true, evidence: "SATISFIED 2026-08-11T17:44:27Z. Johan chose the FULL plan (counters plus the retention bound) over the smaller stepWindow-only escape hatch the worker offered, accepting a persisted-shape change pre-tag because after the tag it becomes a second breaking change, and accepting the fail-loud trade when a bounded step leaf declaration changes mid-flight. Johan also chose the knob name stepWindow. The worker found a THIRD broken design: the per-leaf fingerprint of (type, has-predicate, count) that the orchestrator handed it does NOT close known failure mode 1, because two leaves agreeing on all three produce an identical entry, so swapping them crosses their counters and fires the wrong branch. Its fix, approved: raw uncapped saturating counters with the threshold OUT of the key (removing failure mode 2 as a class), plus build-time eligibility requiring same-entry leaves to be equal EventMatchers. Orchestrator answered the other five questions: threshold out of key approved, stepWindow as a NEW knob not a redefinition of historyWindow, the false 0.31.0 growth claim corrected FORWARD rather than by editing a past changelog section, one Kotlin parity function approved, and IllegalStateException with a precise message rather than a new type per the ADR 104/105 precedent"}
     blocking_on: []
-    next_action: await its BLOCKED plan-gate return, then route the design to Johan as a mobile-friendly ask
-    last_meaningful_progress_at: 2026-08-11T17:29:54Z
+    next_action: worker implementing; at merge-readiness verify the hand-seeded old-document tests, that recount-on-mismatch limits are stated in the ADR, and that the saturation reasoning is in a code comment
+    last_meaningful_progress_at: 2026-08-11T17:44:27Z
     observed: {}
     assessment: "ADOPTED because the orchestrator had already routed #741 as a pre-tag follow-up on the issue itself and then closed the epic without dispatching it, which Johan caught. Johan chose to honour the tracker rather than rewrite it. Engineering reason it belongs pre-tag: the retention bound changes the persisted state shape and what a guard onlyIf and a timeout reaction can read, so doing it after the tag means a second breaking change plus paying in-flight document compatibility twice. Two cache-key designs are already known broken and named in the brief so they are not rediscovered, and recount-on-mismatch is what makes a wrong key harmless rather than silent"
   U12:
@@ -248,9 +248,9 @@ units:
     session: "worktree subagent a80581aec529a818c"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: manual_approval, ref: "U12 plan gate, Johan via the orchestrator", met: false, evidence: null}
+      - {check: manual_approval, ref: "U12 plan gate, Johan via the orchestrator", met: true, evidence: "SATISFIED 2026-08-11T17:44:27Z by the orchestrator, since the remaining question (whether to add Saga#filter parity) was a decline-to-widen rather than a scope grant. REPRODUCED on all three routes with controls in the same harness proving the empty results are the defect: core, flow and window-condition sagas all issue nothing, and the core case is worst because startsOn(supertype) never creates an instance at all. The shared layer is the saga eventTypes() rather than the type mapper, so blast radius stays in dsl/saga-dsl. Decisive argument: every layer BELOW the filter is already supertype aware deliberately (TypeDispatch documents it, isInstance in the execution support, the flow impl and ReceivedEvents), and only the filter compares type strings for equality, so this is an internal inconsistency rather than a caller error. Second finding: the projection DSL knew about the constraint and mitigated it with a javadoc note plus a filter() hatch, and the saga DSL copied the derivation without either. Approved fix: expand sealed hierarchies transitively, keep the declared type so a collapsing custom mapper still works, refuse at build() what cannot be expanded, one shared helper for both builders. Saga#filter() deliberately NOT in this PR"}
     blocking_on: []
-    next_action: await its BLOCKED plan-gate return; reproduction gates everything, and a credible non-reproduction is a valid outcome
-    last_meaningful_progress_at: 2026-08-11T17:29:54Z
+    next_action: worker implementing; REQUIRED at merge-readiness, the ADR must name the deliberate divergence from the projection DSL with a link to the issue filed for it, plus a test for a sealed interface permitting a plain abstract class
+    last_meaningful_progress_at: 2026-08-11T17:44:27Z
     observed: {}
     assessment: "ESCALATED from deferred to adopt-in-full by Johan, on the grounds that a saga silently receiving nothing is the worst available failure mode because it looks like an absence of events rather than a defect. Was marked INFERENCE and never reproduced, so the brief makes reproduction gate the design and states plainly that a credible non-reproduction, with #743 downgraded, is a valid delivery. Concurrency guard: U11 owns FlowSagaImpl, StepCondition, FlowStateImpl and SpringMongoSagaStateStore, so U12 must stop and report rather than edit them"
