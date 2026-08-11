@@ -1225,3 +1225,29 @@ it answers "are the anchored conversations closed", never "did the reviewer say 
 the watch to notice a new review body on the current head is the missing signal here, and the standing
 rule applies: when the user or the orchestrator sees something before the monitor does, wire the
 signal rather than shortening the heartbeat.
+
+## Correcting a sentence three times is a sign the premise under it is wrong
+
+**What happened.** One changelog sentence explained which `CloudEventTypeMapper` was needed for a
+subscription to hit the filter-widening gap. It was rewritten three times. I corrected it once,
+Copilot corrected it once, and the unit corrected it once more, and each pass refined the description
+of the mapper: from "a mapper of your own that maps a hierarchy onto the declared type's string" to
+"not the collapsing mapper, an asymmetric one" to "one whose declared type resolves to a string none of
+its concrete types share". All three were wrong the same way, because no mapper is required at all.
+0.32.0's `getConcreteEventTypes` takes the `isSealed()` branch before the concrete-class check ever
+runs, so a CONCRETE sealed declared type was never added to its own filter, and
+`ReflectionCloudEventTypeMapper` is purely class keyed, so an instance of that root stored directly
+had a CloudEvent type nothing in the filter named. The shipped mapper, no custom anything.
+
+**Why it matters.** Three independent reviewers each accepted the framing "which mapper causes this"
+and argued inside it. That framing came from the ADR the code was written against, so it had authority,
+and correcting a sentence feels like verifying it. It is not the same act: each round produced a more
+precise statement of a false premise, and precision made it more convincing rather than more true. The
+same premise had by then reached the changelog, the migration guide and three passages of ADR 124.
+
+**How to apply.** Count the rewrites. A second correction to one sentence is ordinary; a third means
+stop editing and ask what the sentence presupposes, then test the presupposition directly against the
+code rather than the sentence against the code. Here the test was one question, "is a custom mapper
+required for this gap", answered by reading two methods. Also treat an ADR as a source of the premise
+under review, not as evidence for it: when the prose being corrected was written from an ADR, the ADR
+is a suspect too, which is why the fix had to land in three of its passages.
