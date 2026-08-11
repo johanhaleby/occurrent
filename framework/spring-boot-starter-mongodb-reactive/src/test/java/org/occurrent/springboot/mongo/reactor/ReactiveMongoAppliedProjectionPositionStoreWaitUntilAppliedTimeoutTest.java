@@ -33,7 +33,6 @@ import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -42,26 +41,26 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link ReactiveMongoAppliedProjectionPositionStore#waitUntilApplied(String, long, Duration)} promises to return
- * {@code false} once {@code timeout} elapses. Left unbounded, a single read's {@link Retry} sequence can run well
- * past a short wait's own deadline before it gives up and throws, which is exactly the failure this test forces: a
- * {@link Retry} whose backoff schedule outlives the wait's timeout, so the wait must cut the read off at its own
- * deadline rather than let the retry run to its own exhaustion. No Testcontainers needed, a mocked
- * {@link ReactiveMongoOperations} whose read always errors is enough to force the sustained-outage path.
+ * {@code false} once {@code timeout} elapses and never to throw, the same contract every
+ * {@link AppliedProjectionPositionStore#waitUntilApplied(String, long, Duration, Backoff)} implementation makes. A
+ * failing read can miss that contract two different ways: its {@link Retry} sequence can still be running when the
+ * wait's own deadline arrives, or it can exhaust on its own well before that deadline. Both are forced here with a
+ * mocked {@link ReactiveMongoOperations} whose read always errors, no Testcontainers needed.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(10)
 class ReactiveMongoAppliedProjectionPositionStoreWaitUntilAppliedTimeoutTest {
 
     @Test
-    void returns_false_within_its_timeout_against_a_store_whose_reads_keep_failing() {
+    void returns_false_when_the_deadline_arrives_while_a_read_is_still_retrying() {
         ReactiveMongoOperations mongoOperations = mock(ReactiveMongoOperations.class);
         AtomicInteger attempts = new AtomicInteger();
         // retryWhen resubscribes to this same Mono rather than calling findOne(..) again, so attempts are counted by
         // subscription, not by the mock's own invocation count.
         when(mongoOperations.findOne(any(Query.class), eq(Document.class), anyString()))
                 .thenReturn(Mono.<Document>error(new RuntimeException("store outage")).doOnSubscribe(s -> attempts.incrementAndGet()));
-        // Retries alone would not exhaust for the better part of a second, well past the 200 ms wait below, so the
-        // wait's own deadline is what has to cut the read off rather than the retry's own exhaustion.
+        // This retry's own schedule would not exhaust for the better part of a second, well past the 200 ms wait
+        // below, so the wait's own deadline is what has to cut the read off rather than the retry's own exhaustion.
         Retry slowRetry = Retry.backoff(5, Duration.ofMillis(50))
                 .maxBackoff(Duration.ofMillis(500))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
@@ -73,25 +72,45 @@ class ReactiveMongoAppliedProjectionPositionStoreWaitUntilAppliedTimeoutTest {
         Duration elapsed = Duration.between(start, Instant.now());
 
         assertThat(caughtUp).isFalse();
-        // The deadline is only checked between retry attempts, so the last in-flight attempt can overrun it by up
-        // to one retry interval. This slack stays well short of whole extra retry cycles.
-        assertThat(elapsed).isLessThan(timeout.plusSeconds(2));
+        // Bounded by the deadline itself, not by however long the retry's own backoff would otherwise run.
+        assertThat(elapsed).isLessThan(timeout.plusMillis(500));
         assertThat(attempts.get()).isGreaterThanOrEqualTo(2);
     }
 
     @Test
-    void propagates_exception_when_finite_retry_attempts_exhausted() {
+    void keeps_polling_until_its_own_deadline_when_a_finite_retry_exhausts_well_before_it() {
         ReactiveMongoOperations mongoOperations = mock(ReactiveMongoOperations.class);
-        RuntimeException storeFailure = new RuntimeException("persistent store error");
         when(mongoOperations.findOne(any(Query.class), eq(Document.class), anyString()))
-                .thenReturn(Mono.error(storeFailure));
-        Retry finiteRetry = Retry.fixedDelay(2, Duration.ofMillis(10))
+                .thenReturn(Mono.error(new RuntimeException("persistent store error")));
+        // Exhausts in roughly 20 ms, far short of the 300 ms wait below, so a poll's own retry exhaustion must not
+        // end the wait early, only the wait's own deadline may.
+        Retry fastExhaustingRetry = Retry.fixedDelay(2, Duration.ofMillis(10))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
-        AppliedProjectionPositionStore storage = new ReactiveMongoAppliedProjectionPositionStore(mongoOperations, "appliedPositions", finiteRetry, Backoff.fixed(100));
-        Duration generousTimeout = Duration.ofSeconds(10);
+        AppliedProjectionPositionStore storage = new ReactiveMongoAppliedProjectionPositionStore(mongoOperations, "appliedPositions", fastExhaustingRetry, Backoff.fixed(20));
+        Duration timeout = Duration.ofMillis(300);
 
-        assertThatThrownBy(() ->
-                storage.waitUntilApplied("orders", 1, generousTimeout)
-        ).isEqualTo(storeFailure);
+        Instant start = Instant.now();
+        boolean caughtUp = storage.waitUntilApplied("orders", 1, timeout);
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(caughtUp).isFalse();
+        assertThat(elapsed).isGreaterThanOrEqualTo(timeout.minusMillis(50));
+        assertThat(elapsed).isLessThan(timeout.plusMillis(500));
+    }
+
+    @Test
+    void returns_true_when_a_read_recovers_within_the_deadline() {
+        ReactiveMongoOperations mongoOperations = mock(ReactiveMongoOperations.class);
+        Document applied = new Document("_id", "orders").append("position", 42L);
+        when(mongoOperations.findOne(any(Query.class), eq(Document.class), anyString()))
+                .thenReturn(Mono.error(new RuntimeException("transient store error")))
+                .thenReturn(Mono.just(applied));
+        Retry retry = Retry.fixedDelay(3, Duration.ofMillis(10))
+                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+        AppliedProjectionPositionStore storage = new ReactiveMongoAppliedProjectionPositionStore(mongoOperations, "appliedPositions", retry, Backoff.fixed(20));
+
+        boolean caughtUp = storage.waitUntilApplied("orders", 1, Duration.ofSeconds(5));
+
+        assertThat(caughtUp).isTrue();
     }
 }

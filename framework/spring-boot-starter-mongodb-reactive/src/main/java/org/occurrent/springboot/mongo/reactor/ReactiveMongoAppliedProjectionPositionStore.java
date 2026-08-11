@@ -46,11 +46,12 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * Two different mechanisms pace two different things here, and they do not overlap. The {@link Retry} retries a read
  * or a write that failed, so a transient store error neither fails the projection's delivery on the fold path nor a
  * plain {@link #appliedPosition(String)} call. {@link #waitUntilApplied(String, long, Duration)} is the one
- * exception. Its own reads retry on the same {@link Retry}, but bounded to the wait's deadline, so a sustained store
- * outage still surfaces as a timeout rather than an unbounded block. The {@link Backoff} decides how long a wait
- * sleeps between polls that succeeded and simply found the projection still behind. {@link Retry} rather than the
- * blocking {@code RetryStrategy} because this is the reactive stack, matching how the reactive starter retries
- * elsewhere.
+ * exception. Its own reads retry on the same {@link Retry}, but bounded to the wait's deadline, and a read that is
+ * still failing once the deadline arrives, or once {@link #retry} itself gives up, answers empty rather than
+ * throwing, so a sustained store outage always surfaces as a timeout, never as an exception. The {@link Backoff}
+ * decides how long a wait sleeps between polls that succeeded and simply found the projection still behind.
+ * {@link Retry} rather than the blocking {@code RetryStrategy} because this is the reactive stack, matching how the
+ * reactive starter retries elsewhere.
  * <p>
  * {@link #defaultRetry()} gives up after a fixed number of attempts rather than retrying forever, a deliberate
  * divergence from the blocking store's default, which keeps {@link #appliedPosition(String)} and
@@ -70,11 +71,12 @@ class ReactiveMongoAppliedProjectionPositionStore implements AppliedProjectionPo
 
     /**
      * Retries a failing read or write with backoff from 100 ms up to 2 seconds, giving up after 5 retries (6
-     * attempts total) and surfacing the last failure. The blocking store does not give up this way.
-     * {@code MongoAppliedProjectionPositionStore} retries the same backoff forever, since it keeps {@code advance(..)} durable
-     * under an outage and bounds only {@code waitUntilApplied(..)}'s own reads to the wait's deadline instead. This
-     * store has no such wait-local bound, so its default retries a fixed number of times rather than forever, and
-     * polls a wait at {@link AppliedProjectionPositionStore#DEFAULT_POLL_BACKOFF}.
+     * attempts total) and surfacing the last failure. The blocking store does not give up this way, it retries the
+     * same backoff forever, since it keeps {@code advance(..)} durable under an outage. This store's default gives
+     * up so a direct call to {@link #appliedPosition(String)} or {@link #advance(String, long)} does not block a
+     * caller indefinitely. {@link #waitUntilApplied(String, long, Duration)} never inherits that exhaustion though,
+     * its own reads answer empty rather than surfacing the failure, so a wait against this default still resolves
+     * by its own deadline. Polls a wait at {@link AppliedProjectionPositionStore#DEFAULT_POLL_BACKOFF}.
      */
     ReactiveMongoAppliedProjectionPositionStore(ReactiveMongoOperations mongoOperations, String collection) {
         this(mongoOperations, collection, defaultRetry(), DEFAULT_POLL_BACKOFF);
@@ -97,11 +99,13 @@ class ReactiveMongoAppliedProjectionPositionStore implements AppliedProjectionPo
     }
 
     /**
-     * A read for {@link #waitUntilApplied(String, long, Duration, Backoff)} whose retries stop once {@code deadlineNanos}
-     * ({@link System#nanoTime()} scale) passes, rather than continuing on {@link #retry}'s own schedule. Blocking on
-     * the retried {@link Document} read with the remaining duration as the block timeout is what bounds the retries
-     * themselves, not just the wait loop around them. A store that is still failing once the deadline arrives answers
-     * empty instead of throwing, so the wait's own deadline check is what ends the wait.
+     * A read for {@link #waitUntilApplied(String, long, Duration, Backoff)} whose retries stop once
+     * {@code deadlineNanos} ({@link System#nanoTime()} scale) passes, rather than continuing on {@link #retry}'s own
+     * schedule. Blocking on the retried {@link Document} read with the remaining duration as the block timeout is
+     * what bounds the retries themselves, not just the wait loop around them. {@link #retry}'s default is finite, so
+     * a sustained outage can also exhaust the retry itself well before the deadline. Either way the read answers
+     * empty rather than throwing, since a wait polls for "not caught up yet" and leaves ending the wait to its own
+     * deadline check, never to the read's failure.
      */
     private OptionalLong readOnceBoundedBy(String projectionId, long deadlineNanos) {
         long remainingNanos = deadlineNanos - System.nanoTime();
@@ -113,11 +117,8 @@ class ReactiveMongoAppliedProjectionPositionStore implements AppliedProjectionPo
                     .retryWhen(retry)
                     .block(Duration.ofNanos(remainingNanos));
             return toPosition(document);
-        } catch (RuntimeException e) {
-            if (System.nanoTime() >= deadlineNanos) {
-                return OptionalLong.empty();
-            }
-            throw e;
+        } catch (RuntimeException ignored) {
+            return OptionalLong.empty();
         }
     }
 
