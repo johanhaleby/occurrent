@@ -620,3 +620,29 @@ separate from v7 rather than widening v7's delta key, so a truncated or unhealth
 cannot silence the other, and retire both together under the monitor lifetime rule. Recorded in
 `ORCHESTRATOR.md` with the task ids. Worth folding into `references/fleet-monitor.md` as a v8
 addendum at the next edit of that file, since the gap is generic and not specific to this epic.
+
+## Telling a worker not to background a wait does not stop it; removing the wait does (2026-08-11, cdx33)
+
+Three stalls in one session on the same trap, and the second and third came AFTER the worker had
+been corrected. U-ADR backgrounded a Copilot-review poll, was told the result would never arrive,
+recovered, and finished. U7 then backgrounded a Maven run, got the same correction with the
+foreground chunking recipe, ran the tests correctly, and immediately backgrounded a CI poll
+instead, burning about 244k tokens across the unit.
+
+The existing lesson says to budget one recovery round trip per unit whose verification runs long.
+That is not enough, because the correction only names the mechanism the worker just used, and
+waiting itself is what the worker believes it is required to do. Its brief said to run pr-fix
+until CI is green, so with 17 checks pending it had an instruction it could not satisfy in a
+single turn and no legal way to wait. Backgrounding is the only thing that looks like progress.
+
+The fix that worked was structural rather than another prohibition: tell the worker it does not
+need to wait for CI at all, because the orchestrator holds monitors and owns the merge, then give
+it a short list of foreground edits and an explicit instruction to exit with pr-fix outcome
+`not_run` and the blocker naming the orchestrator as the owner of the wait. A non-done exit that
+is expected and accurate beats a worker looping on a wait it cannot perform.
+
+**How to apply:** in any brief where CI is slow, say up front that the orchestrator owns the CI
+wait and the merge, and that exiting with `not_run` plus a blocker naming the pending checks is a
+CORRECT delivery rather than a failure. Keep the pr-fix loop requirement for review threads, which
+a worker genuinely can finish in its own turn. And when a worker stalls twice, stop repeating the
+prohibition and remove the obligation that is driving it.
