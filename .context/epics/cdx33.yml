@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 6
-updated_at: 2026-08-11T09:32:57Z
-updated_by: "orchestrator session faee3625 (derived labels reconciled against facts; PR 727 head carries one failing check, worker owns its pr-fix loop)"
+revision: 7
+updated_at: 2026-08-11T09:35:12Z
+updated_by: "orchestrator session faee3625 (U2 delivered PR 728 taking the fail-loud option; U8 rerunning after a red subscription-mongodb-spring java-25 shard that is GREEN on main, so real signal rather than a known-red shard)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -48,10 +48,10 @@ units:
     depends_on: []
     session: "chip task_451aa889"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "728", met: false, evidence: "PR 728 open on cdx33/u2-manual-start-pin, head d0568a8a48cf8b87499dbd91849c70b7d94e3b0b, checks running. Title reports the fail-loud option was taken, which was the brief recommendation; verify the compare-on-refusal shape and the later-registrant-starts-first test at review"}
     blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    next_action: await DELIVERY_RESULT, then verify checks plus review threads before any merge
+    last_meaningful_progress_at: 2026-08-11T09:35:12Z
     observed: {}
     assessment: "Silent event loss in opt-in MANUAL mode, first run, adverse ordering. NOT the #681 edge (verified)"
   U3:
@@ -140,10 +140,10 @@ units:
     depends_on: []
     session: "chip task_e3494741"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 open on cdx33/u8-filter-short-circuit, head 6214f566e27a62dbdabe62982232fb21b1604fd3 carries ONE FAILING check as of this revision. The worker owns its pr-fix loop and has not reported DELIVERY_RESULT, so this is worker-wait, not an orchestrator action; a red check on a worker-owned head is what pr-fix exists to resolve"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 open on cdx33/u8-filter-short-circuit, head 6214f566e27a62dbdabe62982232fb21b1604fd3. One shard failed, test (subscription-mongodb-spring, java-25); orchestrator checked main run 31104978417 where that shard and its java-21 sibling both pass, so the failure is NOT a known-red shard and is either a real regression from the short-circuit change or a container flake. Worker triggered a rerun and owns the loop"}
     blocking_on: []
     next_action: await DELIVERY_RESULT; if pr-fix exits non-done, read the tail and the failing job log before deciding
-    last_meaningful_progress_at: 2026-08-11T09:29:12Z
+    last_meaningful_progress_at: 2026-08-11T09:35:12Z
     observed: {}
     assessment: "Gating: only true 0.32.0 behavior regression in the set (PR #647)"
   U9:
