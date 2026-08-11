@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 7
-updated_at: 2026-08-11T09:35:12Z
-updated_by: "orchestrator session faee3625 (U2 delivered PR 728 taking the fail-loud option; U8 rerunning after a red subscription-mongodb-spring java-25 shard that is GREEN on main, so real signal rather than a known-red shard)"
+revision: 8
+updated_at: 2026-08-11T09:40:08Z
+updated_by: "orchestrator session faee3625 (U8 rerun green so the shard was a flake, but ONE unresolved Copilot thread blocks the merge; worker owns it)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -140,12 +140,12 @@ units:
     depends_on: []
     session: "chip task_e3494741"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 open on cdx33/u8-filter-short-circuit, head 6214f566e27a62dbdabe62982232fb21b1604fd3. One shard failed, test (subscription-mongodb-spring, java-25); orchestrator checked main run 31104978417 where that shard and its java-21 sibling both pass, so the failure is NOT a known-red shard and is either a real regression from the short-circuit change or a container flake. Worker triggered a rerun and owns the loop"}
-    blocking_on: []
-    next_action: await DELIVERY_RESULT; if pr-fix exits non-done, read the tail and the failing job log before deciding
-    last_meaningful_progress_at: 2026-08-11T09:35:12Z
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 head 6214f566e27a62dbdabe62982232fb21b1604fd3: checks GREEN after a rerun, so the subscription-mongodb-spring java-25 red was a flake (that shard passes on main run 31104978417). NOT merge-ready: ONE UNRESOLVED Copilot thread on PayloadFilterReadBenchmark.java:67. Copilot is right on the substance: the worker took contiguous-run batching, which restores short-circuit across a preceding metadata operand but still reads every path in a contiguous data-leaf run, so the benchmark comment overstates the restored fail-fast. Merge is BLOCKED until that thread has an explicit outcome, per the gate timerid PR 719 failed"}
+    blocking_on: [{what: "unresolved Copilot thread on the benchmark comment wording, worker-owned", since: 2026-08-11T09:40:08Z, recheck_after: "on DELIVERY_RESULT"}]
+    next_action: await DELIVERY_RESULT; do not merge while the thread is unresolved
+    last_meaningful_progress_at: 2026-08-11T09:40:08Z
     observed: {}
-    assessment: "Gating: only true 0.32.0 behavior regression in the set (PR #647)"
+    assessment: "Fix direction chosen: contiguous-run batching rather than a lazy memoized reader. That does fix the reported regression (a preceding type operand short-circuits before any payload read) and keeps #647 reparse win, but it is weaker than per-leaf laziness within one data-leaf run, which is a real semantic difference from 0.32.0 allMatch only when a reader can fail per path. Verify at review that the claim written in code and PR text matches what shipped"
   U9:
     issue: null
     goal: "Reactive wait deadline (finding 19): mirror blocking twin's wait-local deadline in ReactiveMongoAppliedProjectionPositionStore, outage test for returns-false-never-throws within deadline"
