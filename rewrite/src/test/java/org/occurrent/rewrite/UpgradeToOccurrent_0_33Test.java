@@ -17,16 +17,19 @@ package org.occurrent.rewrite;
 
 import org.junit.jupiter.api.Test;
 import org.openrewrite.config.Environment;
+import org.openrewrite.java.JavaParser;
 import org.openrewrite.test.RecipeSpec;
 import org.openrewrite.test.RewriteTest;
+import org.openrewrite.test.TypeValidation;
 
 import static org.occurrent.rewrite.CheckpointStorageStubs.*;
 import static org.openrewrite.java.Assertions.java;
 
 /**
- * Verifies the umbrella {@code UpgradeToOccurrent_0_33} recipe resolves its one sub-recipe through a
- * classpath-scanning Environment, which is what proves the cross-file recipe reference actually links. The stub
- * insertion itself is covered in {@link CheckpointStorageConditionalWriteStubsTest}, so one case is enough here.
+ * Verifies the umbrella {@code UpgradeToOccurrent_0_33} recipe resolves its sub-recipes through a classpath-scanning
+ * Environment, which is what proves the cross-file recipe references actually link. What each sub-recipe does is
+ * covered in {@link CheckpointStorageConditionalWriteStubsTest} and {@link MigrateSagaTimerNameTest}, so one case
+ * apiece is enough here.
  */
 class UpgradeToOccurrent_0_33Test implements RewriteTest {
 
@@ -101,6 +104,42 @@ class UpgradeToOccurrent_0_33Test implements RewriteTest {
                             @Override
                             public OptionalLong writeVersion(String subscriptionId) {
                                 throw new UnsupportedOperationException("This storage does not track a write version.");
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void readsTheStringHandedToTheSagaTimeoutConstructorThroughParse() {
+        rewriteRun(
+                // A 0.32.0 constructor call does not resolve against the 0.33.0 constructor, which is the whole
+                // reason it needs migrating, so the parsed call carries no constructor type.
+                spec -> spec.parser(JavaParser.fromJavaVersion()
+                                .dependsOn(SagaTimerNameStubs.TIMER_NAME, SagaTimerNameStubs.SAGA_TIMEOUT))
+                        .typeValidationOptions(TypeValidation.builder().constructorInvocations(false).build()),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaTimeout;
+
+                        class FireTimer {
+                            SagaTimeout paymentTimedOut() {
+                                return new SagaTimeout("order-1", "payment");
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.SagaTimeout;
+                        import org.occurrent.dsl.saga.TimerName;
+
+                        class FireTimer {
+                            SagaTimeout paymentTimedOut() {
+                                return new SagaTimeout("order-1", TimerName.parse("payment"));
                             }
                         }
                         """

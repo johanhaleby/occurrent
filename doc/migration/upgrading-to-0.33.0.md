@@ -13,6 +13,12 @@ Five subscription-capability interfaces are also renamed, and two of their stati
 had. `UpgradeToOccurrent_0_33` renames those too, see
 [section 5](#5-five-subscription-capability-interfaces-are-renamed).
 
+A saga timer's name is a `TimerName` rather than a `String`. Most saga code compiles unchanged, because every method
+that took a timer name as a string still takes one. What breaks is building a `SagaTimeout` from two strings,
+reading `timerName()` into a `String`, and matching a timer effect against a `String` component.
+`UpgradeToOccurrent_0_33` does the first two wherever it can prove the result and marks the rest, see
+[section 7](#7-a-saga-timers-name-is-a-timername).
+
 ## 1. What changed
 
 `CheckpointStorage.save` gained a third parameter, `CheckpointWriteCondition condition`, stating what must be true
@@ -194,3 +200,94 @@ against `ReceivedEvents` can drop that guard for a tree instead. [ADR 120](../ar
 has the full design, including the normalization laws `allOf`/`anyOf` apply and the window-reset rule a mixed step
 makes visible. No `UpgradeToOccurrent_0_33` recipe rewrites `join` calls. The API still works, and a recipe belongs
 with whichever future release removes it.
+
+## 7. A saga timer's name is a `TimerName`
+
+Most saga code compiles unchanged, and that is worth saying first, because it covers the majority of callers.
+`SagaEffect.startTimeout`, `startTimeoutAt` and `cancelTimeout` keep the forms that take a string, and so do
+`evolveOnTimeout` and `reactOnTimeout` on the builder. Each of them reads its argument with `TimerName.parse`, so
+`startTimeout("payment", ofMinutes(30))` arms the same timer it always did and `reactOnTimeout("payment", ..)` still
+matches it. Nothing on disk changes either. A timer is stored under the string it has been stored under since
+0.32.0, so a saga instance with a pending timer keeps firing across the upgrade.
+
+A timer's name is now a value with two shapes. `Simple` is a name on its own, `Qualified` is a name inside a
+namespace, and a qualified name writes itself out with a colon between the two:
+
+```java
+TimerName.parse("payment");                // Simple("payment")
+TimerName.parse("step:awaiting-players");  // Qualified("step", "awaiting-players")
+TimerName.of("step", "awaiting-players");  // the same qualified name, built from its parts
+```
+
+`parse` splits at the first colon and accepts every string, so it gives back the name a stored string already meant.
+`encode()` writes a name back out as that string. `toString()` returns the same thing as `encode()` on both shapes,
+so anything that puts a timer name into a log prints exactly what it printed before.
+
+Three shapes stop compiling.
+
+1. **Building a `SagaTimeout` from two strings.** It is `record SagaTimeout(String sagaId, TimerName timerName)`, and
+   there is no two-string constructor beside it.
+2. **Reading `timerName()` into a `String`.** The accessor keeps its name and changes its type.
+3. **Matching a timer effect against a `String` component.** `StartTimeout`, `StartTimeoutAt` and `CancelTimeout`
+   carry a `TimerName`, so a record pattern has to bind one.
+
+Two more reads keep compiling and quietly answer differently. `timeout.timerName().equals("payment")` is now always
+false, and an assertion written as `assertThat(timeout.timerName()).isEqualTo("payment")` fails for the same reason.
+Compare `timeout.timerName().encode()` against the string, or compare the name against
+`TimerName.parse("payment")`.
+[ADR 121](../architecture/decisions/0121-a-saga-timers-name-carries-its-namespace.md) has the reasoning.
+
+### Run the recipe
+
+`UpgradeToOccurrent_0_33` rewrites the two shapes it can prove.
+
+`new SagaTimeout(sagaId, name)` with a string second argument becomes `new SagaTimeout(sagaId,
+TimerName.parse(name))`. That one is exact rather than best effort, because `parse` gives back the value the old
+string already named, `"step:awaiting-players"` from a flow saga test included.
+
+A `timerName()` read into a declared `String` gains `encode()`, so `String name = timeout.timerName()` becomes
+`String name = timeout.timerName().encode()`. The recipe does this in the three places where the wanted type is
+written down in the source, a variable declared `String`, an assignment to a `String`, and a return from a method
+declared to return `String`.
+
+Every other read of `timerName()` gets a `TODO [Occurrent 0.33 upgrade]` comment instead, because the recipe cannot
+see what the surrounding code wants the name for and the two answers are far apart. A read handed to something that
+takes an `Object`, a logging call above all, prints the same text as before and needs no change, so the comment can
+just go. A read that wanted a string needs `encode()`. The `equals` and `assertThat` cases above are in this group,
+which is why they are marked rather than left silent.
+
+The recipe leaves a record pattern alone. What a pattern binds is a judgement about what the code inside the case
+then does with the name, and every one of them is a compile error anyway, so the compiler points at the ones you
+have.
+
+The recipe is Java only. A Kotlin caller does all of it by hand, the same limitation the `StartAt.subscriptionPosition`
+rename ran into in [0.30.0](upgrading-to-0.30.0.md).
+
+### By hand
+
+Wrap the string handed to the `SagaTimeout` constructor in `TimerName.parse`, and call `encode()` on a `timerName()`
+read that wanted a string. In a record pattern, bind a `TimerName` and call `encode()` on it where the code below
+needs the string:
+
+```java
+// Before
+case SagaEffect.CancelTimeout<C>(String timerName) -> cancel(timerName);
+
+// After
+case SagaEffect.CancelTimeout<C>(TimerName timerName) -> cancel(timerName.encode());
+```
+
+A test that fires a flow step's timer has a shorter answer than `parse`. `FlowSaga.stepTimer("awaiting-players")`
+gives the name that step arms, so the test never writes the `step:` namespace itself, and
+`SagaInput.timeout(sagaId, timerName)` fires it without building a `SagaTimeout` first:
+
+```java
+// Before
+lobby.step(state, SagaInput.timeout(new SagaTimeout("game-1", "step:awaiting-players")));
+
+// After
+lobby.step(state, SagaInput.timeout("game-1", stepTimer("awaiting-players")));
+```
+
+Kotlin has both of those. There is a top-level `stepTimer` next to `saga { }`, and `startTimeout`, `startTimeoutAt`,
+`cancelTimeout`, `evolveOnTimeout` and `reactOnTimeout` each take a `TimerName` as well as a string.

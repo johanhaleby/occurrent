@@ -26,7 +26,11 @@ description: >-
   doc/migration/upgrading-to-0.33.0.md. Also renames ReplayAwareSubscriptionModel and
   IntrospectableSubscriptionModel to ReplayAwareSubscriptions and IntrospectableSubscriptions on both the
   blocking and reactor stacks, and DelegatingSubscriptionModel to SubscriptionModelWrapper, correcting names
-  that claimed a SubscriptionModel relationship none of these capability interfaces ever had.
+  that claimed a SubscriptionModel relationship none of these capability interfaces ever had. A saga timer's
+  name is a TimerName rather than a String (ADR 121), so this recipe also wraps the string handed to the
+  SagaTimeout constructor in TimerName.parse and appends encode() to a timerName() read into a declared
+  String, marking the reads it cannot type for a manual pass.
 recipeList:
   - org.occurrent.MigrateCheckpointStorageConditionalWrite_0_33
   - org.occurrent.MigrateOccurrentRenames_0_33
+  - org.occurrent.MigrateSagaTimerName_0_33
