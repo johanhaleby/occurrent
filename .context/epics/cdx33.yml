@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 12
-updated_at: 2026-08-11T10:16:46Z
-updated_by: "orchestrator session faee3625 (PR 728 HELD by Johan ruling despite being green with threads resolved; U8 U9 U10 delivered with threads resolved or closing; U5 still in review)"
+revision: 13
+updated_at: 2026-08-11T10:23:26Z
+updated_by: "orchestrator session faee3625 (U8 PR 727 and U9 PR 730 merged; U5 PR 731 caught with NO matrix run on its head and a dispatch forced)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -94,10 +94,10 @@ units:
     depends_on: []
     session: local_d940740e-389c-4b2e-8c63-7529654a31a6
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: false, evidence: "PR 731 open, head 01eed5e74d63fe4c650308eeaf9be7cc4dad744a, threads THREE unresolved, 20 checks pending as of this revision. Not merged"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: false, evidence: "**NEARLY MERGED ON A FALSE GREEN.** Head 2a0a93ab240dbf78d4b2e5611400ead4a0200d35 reported failing=0 pending=0 with 3 successful checks and 0 unresolved threads, but NO maven.yml matrix run existed for that SHA: that workflow triggers on push with cancel-in-progress concurrency, while the 3 passing checks are pull_request-triggered siblings. The delta from the last matrix-green head 7f08d9b97 includes MigrateSagaTimerName.java plus 99 new test lines, so this was unvalidated recipe code. Forced a run via workflow_dispatch, run 31481912947. Do not merge until a matrix run for the exact head concludes successfully. The required runtime-behavior test DOES exist: DurableSubscriptionModelMigratedCheckpointStorageTest.java, 202 lines"}
     blocking_on: []
-    next_action: await thread resolution and DELIVERY_RESULT
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+    next_action: wait for the dispatched matrix on the exact head, then merge and dispatch U6
+    last_meaningful_progress_at: 2026-08-11T10:23:26Z
     observed: {}
     assessment: "Gating: official migration converts compile break into runtime failure today. Owns doc/migration/upgrading-to-0.33.0.md exclusively until U6"
   U6:
@@ -134,31 +134,31 @@ units:
   U8:
     issue: null
     goal: "Filter AND short-circuit (finding 18): restore ordered short-circuit on in-memory query path keeping the reparse win, regression test vs 0.32.0 semantics, check #647 changelog entry"
-    phase: BLOCKED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_2ba1226c-7d6e-4d21-a68a-35987af498f1
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: false, evidence: "PR 727 open, head 2cc667b0393179934a70eee9b2a88dfe32bb8ba2, threads resolved, 10 checks pending as of this revision. Not merged"}
-    blocking_on: [{what: "worker session STOPPED at 09:35Z with the thread still unresolved and no DELIVERY_RESULT; resumed by send_message naming the obligation", since: 2026-08-11T09:58:07Z, recheck_after: "next event or list_sessions check"}]
-    next_action: on the worker reply, verify the narrowed wording, then CAS merge if green and threads resolved
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "727", met: true, evidence: "MERGED as squash 4a3cee367f0ee8f7cff311f9ef187fe7a962e4ad, CAS-pinned and post-merge verified. Matrix 26 of 26 on the exact merged head, 0 unresolved threads. Orchestrator verified the corrected benchmark text states plainly that per-leaf laziness INSIDE a data run was not restored and that FilterMatcherTest asserts the call counts directly, since a throughput benchmark cannot prove zero reads"}
+    blocking_on: []
+    next_action: sweep the worktree, branch and session
+    last_meaningful_progress_at: 2026-08-11T10:23:26Z
     observed: {}
     assessment: "Fix direction chosen: contiguous-run batching rather than a lazy memoized reader. That does fix the reported regression (a preceding type operand short-circuits before any payload read) and keeps #647 reparse win, but it is weaker than per-leaf laziness within one data-leaf run, which is a real semantic difference from 0.32.0 allMatch only when a reader can fail per path. Verify at review that the claim written in code and PR text matches what shipped"
   U9:
     issue: null
     goal: "Reactive wait deadline (finding 19): mirror blocking twin's wait-local deadline in ReactiveMongoAppliedProjectionPositionStore, outage test for returns-false-never-throws within deadline"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_62371645-451f-4569-bfbc-6bacbb68d4ca
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "730", met: false, evidence: "PR 730 open, head eb55793fd56729557f692d6816ae341488ecfe45, threads resolved, 10 checks pending as of this revision. Not merged"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "730", met: true, evidence: "MERGED as squash 33dc5a940469c4043116e05f4345ded7d1e434c8, CAS-pinned and post-merge verified. Matrix completed successfully on the exact head eb55793fd (verified via run list, not just the rollup), 0 unresolved threads. Wait-local deadline confirmed present on origin/main: reads retry on the same Retry but bounded to the wait deadline, answering empty rather than throwing"}
     blocking_on: []
-    next_action: await thread resolution and DELIVERY_RESULT
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+    next_action: sweep the worktree, branch and session
+    last_meaningful_progress_at: 2026-08-11T10:23:26Z
     observed: {}
     assessment: "Gating. Boundary: rebases after U1's plan gate if waitUntilApplied semantics move"
   U10:
