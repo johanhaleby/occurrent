@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 15
-updated_at: 2026-08-11T10:34:23Z
-updated_by: "orchestrator session faee3625 (U10 merged as 1e4dfbeb5 with one reasoned-decline thread open per policy; #737 filed by the worker with the fleet marker, routed at the next sweep)"
+revision: 16
+updated_at: 2026-08-11T10:38:40Z
+updated_by: "orchestrator session faee3625 (U1 plan gate CLOSED by Johan: applied-position WITHDRAWN from 0.33.0, append-identity design to a 0.34.0 epic issue; ripples on U9 and UDOCS)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -33,12 +33,12 @@ units:
     session: local_4640fd9a-5acf-4678-863e-c4b79e9e7460
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: false, evidence: null}
+      - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: true, evidence: "SATISFIED 2026-08-11T10:38:40Z: Johan approved /Users/johan/.claude/plans/whimsical-cooking-hopper.md after four planning rounds plus a requested second opinion. Direction: WITHDRAW the applied-position feature from 0.33.0 (13 files deleted, 10 unwired), new ADR with the completed-prefix refutation and verified Axon/Marten/Emmett prior art, ADR 0111 withdrawn via amendment blockquotes, and an epic-grade 0.34.0 issue for the append-identity design with its three named open points. D3 resolved as none-of-the-above: withdraw-then-redesign"}
     blocking_on: []
-    next_action: awaiting its plan gate (D3 direction ask); session confirmed running
-    last_meaningful_progress_at: 2026-08-11T09:56:12Z
+    next_action: worker implementing the withdrawal; must rebase over merged 730/727/729/733; DELIVERY_RESULT must list invalidated docs surfaces and the 0.34.0 issue number
+    last_meaningful_progress_at: 2026-08-11T10:38:40Z
     observed: {}
-    assessment: "Blocker; broken-as-documented (javadoc+ADR 0111 vs ADR 0084). Gate floor: docs truth. U9 boundary: must not alter the wait-deadline contract or U9 rebases after this gate"
+    assessment: "Bigger than the meta-plan contingency and cleaner, nothing unsound ships at all. Grounds: no shipped configuration was sound (change streams and push feeds violate the position-order precondition, the in-memory store publishes outside its lock), WriteResult carries no position so the documented scenario was unreachable from the stream API, and AGENTS.md rules against docs-only for a correctness gap and against unsettled public abstractions. Finding 19 becomes moot, U9 work knowingly erased. #361 linkage and docs PR 52 retargeting via worker DELIVERY_RESULT plus UDOCS"
   U2:
     issue: null
     goal: "Manual-start pin refusal (finding 12, blocker): compare stored vs captured on ifAbsent refusal, fail loud on difference, later-registrant-starts-first test, check manual-start ADR amendment need"
@@ -203,7 +203,7 @@ units:
     deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: wait for gating units
+    next_action: SCOPE ADDITION from the U1 withdrawal, held docs PR 52 leaves the 0.33.0 merge order in issue 57 (retarget to a 0.34.0 hold or close), the news post on PR 54 branch loses its AppliedProjectionPositionStore mention, and the preview rebuild greps zero hits for the withdrawn API
     last_meaningful_progress_at: 2026-08-11T09:05:38Z
     observed: {}
     assessment: "Held-branch convention, push never merge; trial-merge + exact-once paragraph greps per recorded docs lessons"
