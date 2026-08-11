@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.saga.internal
+package org.occurrent.filter.internal
 
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -42,7 +42,7 @@ class EventTypeExpansionKotlinTest {
 
     @Test
     fun `a Kotlin sealed interface expands into its data classes`() {
-        val expanded = EventTypeExpansion.expand<KotlinOrderEvent>(setOf(KotlinOrderEvent::class.java))
+        val expanded = EventTypeExpansion.expand<KotlinOrderEvent>(setOf(KotlinOrderEvent::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
 
         assertThat(expanded).containsExactlyInAnyOrder(
             KotlinOrderEvent::class.java,
@@ -53,15 +53,15 @@ class EventTypeExpansionKotlinTest {
 
     @Test
     fun `a Kotlin sealed interface permitting a plain abstract class is refused`() {
-        assertThatThrownBy { EventTypeExpansion.expand<KotlinPartlyOpenEvent>(setOf(KotlinPartlyOpenEvent::class.java)) }
-            .isInstanceOf(IllegalStateException::class.java)
+        assertThatThrownBy { EventTypeExpansion.expand<KotlinPartlyOpenEvent>(setOf(KotlinPartlyOpenEvent::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") } }
+            .isInstanceOf(IllegalArgumentException::class.java)
             .hasMessageContaining(KotlinPartlyOpenEvent::class.java.name)
-            .hasMessageContaining("Declare the concrete event types instead")
+            .hasMessageContaining("cannot be expanded")
     }
 
     @Test
     fun `a Kotlin data class expands to itself`() {
-        val expanded = EventTypeExpansion.expand<KotlinOrderEvent>(setOf(KotlinOrderPlaced::class.java))
+        val expanded = EventTypeExpansion.expand<KotlinOrderEvent>(setOf(KotlinOrderPlaced::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
 
         assertThat(expanded).containsExactly(KotlinOrderPlaced::class.java)
     }

@@ -132,6 +132,12 @@ class SubscriptionAnnotationsTest {
 
         void bothOnOneParameter(TestEvent event, @StreamId @StreamVersion String streamId) {
         }
+
+        void onOrderEvent(OrderEvent event) {
+        }
+
+        void onOpenEvent(OpenEvent event) {
+        }
     }
 
     private static Method handler(String name) {
@@ -230,5 +236,58 @@ class SubscriptionAnnotationsTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("@StreamId")
                 .hasMessageContaining("only supported on");
+    }
+
+    sealed interface OrderEvent permits OrderPlaced, PaymentReserved {
+    }
+
+    record OrderPlaced(String orderId) implements OrderEvent {
+    }
+
+    record PaymentReserved(String orderId) implements OrderEvent {
+    }
+
+    interface OpenEvent {
+    }
+
+    private static List<Class<?>> resolveOrderEventTypes(Class<?>... eventTypesInAnnotation) {
+        List<Class<OrderEvent>> resolved = SubscriptionAnnotations.resolveDomainEventTypes("order-subscription",
+                new Handlers(), handler("onOrderEvent"), OrderEvent.class, eventTypesInAnnotation, "@Subscription");
+        return List.copyOf(resolved);
+    }
+
+    @Test
+    void a_sealed_event_type_resolves_to_the_declared_type_and_the_concrete_types_it_permits() {
+        // The declared type used to be dropped, so an event stored under its own CloudEvent type never matched. That
+        // happens with a CloudEventTypeMapper that maps a hierarchy onto the type string it was declared with.
+        assertThat(resolveOrderEventTypes())
+                .containsExactly(OrderEvent.class, OrderPlaced.class, PaymentReserved.class);
+    }
+
+    @Test
+    void a_sealed_event_type_listed_in_the_annotation_keeps_the_declared_type_too() {
+        assertThat(resolveOrderEventTypes(OrderEvent.class))
+                .containsExactly(OrderEvent.class, OrderPlaced.class, PaymentReserved.class);
+    }
+
+    @Test
+    void a_concrete_event_type_resolves_to_itself() {
+        assertThat(resolveOrderEventTypes(OrderPlaced.class)).containsExactly(OrderPlaced.class);
+    }
+
+    @Test
+    void refuses_an_interface_that_is_not_sealed() {
+        assertThatThrownBy(() -> SubscriptionAnnotations.resolveDomainEventTypes("open-subscription", new Handlers(),
+                handler("onOpenEvent"), OpenEvent.class, new Class<?>[0], "@Subscription"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(OpenEvent.class.getName())
+                .hasMessageContaining("non-sealed interface");
+    }
+
+    @Test
+    void refuses_an_array_event_type() {
+        assertThatThrownBy(() -> resolveOrderEventTypes(OrderPlaced[].class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("non-sealed interface, abstract type, or array");
     }
 }

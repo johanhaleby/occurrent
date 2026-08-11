@@ -31,7 +31,11 @@ description: >-
   name is a TimerName rather than a String (ADR 121), so this recipe also wraps a string handed to the
   SagaTimeout constructor, or to the timer-name argument of SagaEffect's StartTimeout, StartTimeoutAt or
   CancelTimeout, in TimerName.parse, and appends encode() to a timerName() read off any of those four types
-  into a declared String, marking the reads it cannot type for a manual pass.
+  into a declared String, marking the reads it cannot type for a manual pass. A saga also expands a declared
+  sealed event type into the concrete types it permits and refuses one whose concrete subtypes cannot be
+  found (ADR 124), and that change gets no recipe entry, because telling a refused declaration from a sealed
+  one that now works needs the sealed modifier, which the type model behind a class literal does not carry.
+  See section 9 of doc/migration/upgrading-to-0.33.0.md for the manual steps.
 recipeList:
   - org.occurrent.MigrateCheckpointStorageConditionalWrite_0_33
   - org.occurrent.MigrateOccurrentRenames_0_33

@@ -346,3 +346,116 @@ case of one consumer running, not a rare one, so the pair is refused up front wi
    checkpoint is then written unconditionally, which is what 0.32.0 did. A node that has lost its lease can move a
    checkpoint backwards, and the events between the two positions are delivered again, which stays inside the
    at-least-once contract.
+
+## 9. A saga declaring a supertype event is refused
+
+A saga declares the event types it handles, and Occurrent turns those into the subscription's type filter by asking the
+`CloudEventTypeMapper` for each one's CloudEvent type. A supertype has a CloudEvent type of its own that no stored event
+ever has, so declaring one asked for a string nothing matches.
+
+0.33.0 expands a declared sealed type into the concrete types it permits, which fixes that case. Where the concrete types
+cannot be found, the saga is refused when it is built:
+
+```
+java.lang.IllegalArgumentException: no event is stored under the type of com.example.OrderEvent and its concrete subtypes
+cannot all be found, so a subscription derived from it would silently miss stored event types. Declare the concrete
+event types instead, or make every level of the hierarchy below OrderEvent final or sealed.
+```
+
+**Read this as a report about a saga that never worked, not as a regression.** Under every type mapper Occurrent ships,
+the saga you are being told about was already receiving nothing, or already missing part of its hierarchy, and it looked
+like a process still waiting for events rather than a defect. The exception is the first time anything said so.
+
+You are affected when a declared type is one of these:
+
+| Shape | Java | Kotlin |
+|---|---|---|
+| An interface that is not sealed | `interface OrderEvent` | `interface OrderEvent` |
+| An abstract class that is not sealed | `abstract class OrderEvent` | `abstract class OrderEvent` |
+| A sealed hierarchy reopened below the declared type | `non-sealed class Base implements OrderEvent` | `open class Base : OrderEvent` or `abstract class Base : OrderEvent` |
+
+A saga that declares concrete types is unaffected, and so is one that declares a sealed type whose every level is sealed
+or final. Java records and Kotlin data classes are final already, so an ordinary sealed hierarchy of records needs
+nothing.
+
+### Seal the hierarchy
+
+The better remedy when you own the events, because the saga then keeps working when you add an event type. In Java, mark
+the reopened level `sealed` and list what it permits:
+
+```java
+// Before, refused: Base reopens the hierarchy, so nothing below it can be found
+public sealed interface OrderEvent permits Base { }
+public non-sealed class Base implements OrderEvent { }
+
+// After
+public sealed interface OrderEvent permits Base { }
+public sealed class Base implements OrderEvent permits OrderPlaced, PaymentReserved { }
+```
+
+In Kotlin, an `open class` or an `abstract class` in the middle becomes `sealed`:
+
+```kotlin
+sealed interface OrderEvent
+sealed class Base : OrderEvent            // was open class or abstract class
+data class OrderPlaced(val orderId: String) : Base()
+```
+
+### Or declare the concrete event types
+
+Use this when the hierarchy is not yours to seal, or when it is deliberately open. Replace the supertype registration
+with one per concrete type:
+
+```java
+// Before, refused
+Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+        .correlateAll(OrderEvent::orderId)
+        .startsOn(OrderEvent.class)
+        .react(OrderEvent.class, (state, event) -> ...)
+        .build();
+
+// After
+Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+        .correlateAll(OrderEvent::orderId)
+        .startsOn(OrderPlaced.class)
+        .react(OrderPlaced.class, (state, event) -> ...)
+        .react(PaymentReserved.class, (state, event) -> ...)
+        .build();
+```
+
+A flow step written as `step.on(OrderEvent.class, then)` or a step condition written as `event(OrderEvent.class, 2)`
+changes the same way, to one `on(..)` per concrete type, or to `anyOf(event(OrderPlaced.class), event(PaymentReserved.class))`
+when the step should fire on either.
+
+One handler per type is more code than one on the supertype. If that matters, note that handler lookup still falls back
+through superclasses and interfaces, so you can register the shared handler under a concrete type and delegate, or keep
+one method and reference it from each registration.
+
+### If you wrote a type mapper that collapses the hierarchy
+
+One case genuinely worked in 0.32.0 and now throws. A `CloudEventTypeMapper` that maps every type in a hierarchy onto one
+CloudEvent type string makes a declared supertype match, because the string the filter asks for is the string every event
+has. Declaring the concrete types keeps that working, since they all map to the same string, so take the second remedy
+above. Occurrent cannot tell your mapper apart from the default one at build time, which is why the refusal does not make
+an exception for it. There is no filter override on a saga yet, and
+[#751](https://github.com/johanhaleby/occurrent/issues/751) tracks adding one.
+
+The same mapper gets a fix in the other direction, and it needs nothing from you. `@Subscription`, `@Saga` and
+`@Projection` used to derive their filter from the concrete types a sealed type permits and leave the declared type out,
+so an event stored under the declared type's own CloudEvent type never matched and the subscription silently received
+nothing. The filter now names the declared type too. A subscription that worked keeps working, because another type in a
+filter can only widen what matches.
+
+### Why there is no recipe for this one
+
+`UpgradeToOccurrent_0_33` does not touch this, and it cannot even flag it for review, which is worth explaining because
+every other breaking change in this release gets recipe help.
+
+Rewriting was never possible, since the concrete subtypes of an open hierarchy cannot be read off the declaration. A
+review marker looked possible and is not. Deciding whether `startsOn(OrderEvent.class)` is refused means knowing whether
+`OrderEvent` is sealed, and the type behind a class literal in another file does not carry that. OpenRewrite has the flag
+in its model but does not populate it there, so a marker would have flagged every sealed hierarchy as well, which is
+exactly the code this release fixes. Pointing you at correct code is worse than pointing at nothing.
+
+So this section is the migration path. `build()` throws with the type named the first time the saga is built, which for a
+Spring Boot application is startup, so a test that builds your sagas finds all of them.

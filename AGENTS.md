@@ -151,6 +151,12 @@ is for, and what it is allowed to cost.
   Tests are how a capability with no in-repo caller stays honest.
 - Nullness uses JSpecify (`@NullMarked`, `@Nullable`) in newer APIs, not uniformly across older code.
 - Validate nulls and invalid arguments eagerly, with `Objects.requireNonNull` or `IllegalArgumentException`.
+- **Several modules independently derive things from a domain event `Class`, so check the others before adding a
+  derivation.** Type mapping, filter derivation, subscription registration and saga registration each walk event types,
+  and the sealed-hierarchy expansion in `SubscriptionAnnotations` was written a second time in the saga DSL before anyone
+  noticed. `git grep getPermittedSubclasses` and `git grep CloudEventTypeMapper` find the existing ones. When you do find
+  a duplicate, diff the copies before deleting either, because each side may have got something right that the other
+  did not.
 - Prefer static factories and builders for fluent public APIs.
 - Apache 2 license headers on source files.
 - Kotlin extension names must not collide with Java members on the same type (see ADR 0012).

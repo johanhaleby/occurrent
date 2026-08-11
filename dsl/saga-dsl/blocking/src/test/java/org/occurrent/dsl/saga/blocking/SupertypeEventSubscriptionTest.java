@@ -171,7 +171,7 @@ class SupertypeEventSubscriptionTest {
                 .startsOn(OpenEvent.class)
                 .evolve(OpenEvent.class, (state, e) -> e.orderId())
                 .build())
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(OpenEvent.class.getName())
                 .hasMessageContaining("Declare the concrete event types instead");
     }
@@ -183,7 +183,7 @@ class SupertypeEventSubscriptionTest {
                 .startsOn(OpenOrderPlaced.class)
                 .step("wait", step -> step.on(OpenEvent.class, Continuation.end()))
                 .build())
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(OpenEvent.class.getName());
     }
 

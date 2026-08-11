@@ -26,6 +26,7 @@ import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
+import org.occurrent.filter.internal.EventTypeExpansion;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 
@@ -158,16 +159,20 @@ public final class SubscriptionAnnotations {
     @SuppressWarnings("unchecked")
     public static <E> List<Class<E>> resolveDomainEventTypes(String id, Object bean, Method method, Class<E> specifiedEventType, Class<?>[] eventTypesSpecifiedInAnnotation, String annotationName) {
         if (eventTypesSpecifiedInAnnotation.length == 0) {
-            return getConcreteEventTypes(id, specifiedEventType);
+            return typesToSubscribeOn(id, List.of(specifiedEventType));
         }
-        return Arrays.stream(eventTypesSpecifiedInAnnotation)
-                .flatMap(e -> getConcreteEventTypes(id, (Class<E>) e).stream())
-                .peek(e -> {
-                    if (!specifiedEventType.isAssignableFrom(e)) {
-                        throw new IllegalStateException("Event type %s specified in the %s annotation with id %s is not assignable from the event type specified in %s#%s(..).".formatted(e.getName(), annotationName, id, bean.getClass().getName(), method.getName()));
-                    }
-                })
-                .toList();
+        List<Class<E>> declaredTypes = Arrays.stream(eventTypesSpecifiedInAnnotation).map(e -> (Class<E>) e).toList();
+        // The handler takes one parameter, so every type it is asked to receive has to fit it. Checked over the concrete
+        // types rather than over what the filter names, because a declared supertype does not fit a narrower parameter
+        // that its own concrete types do.
+        for (Class<E> declaredType : declaredTypes) {
+            for (Class<E> concreteType : getConcreteEventTypes(id, declaredType)) {
+                if (!specifiedEventType.isAssignableFrom(concreteType)) {
+                    throw new IllegalStateException("Event type %s specified in the %s annotation with id %s is not assignable from the event type specified in %s#%s(..).".formatted(concreteType.getName(), annotationName, id, bean.getClass().getName(), method.getName()));
+                }
+            }
+        }
+        return typesToSubscribeOn(id, declaredTypes);
     }
 
     /**
@@ -340,19 +345,34 @@ public final class SubscriptionAnnotations {
         return bean;
     }
 
+    /**
+     * The concrete event types {@code specifiedEventType} covers, which is the type itself unless it is sealed. Leaves
+     * the declared type out, because a caller checks these against the handler's own parameter type, and a declared
+     * supertype is not assignable to a narrower parameter its concrete types are. {@link #typesToSubscribeOn} is what
+     * the filter is built from.
+     */
+    @SuppressWarnings("unchecked")
     private static <E> @NonNull List<Class<E>> getConcreteEventTypes(String subscriptionId, Class<E> specifiedEventType) {
-        final List<Class<E>> domainEventTypesToSubscribeTo;
-        if (specifiedEventType.isSealed()) {
-            //noinspection unchecked
-            Class<E>[] permittedSubclasses = (Class<E>[]) specifiedEventType.getPermittedSubclasses();
-            domainEventTypesToSubscribeTo = Arrays.stream(permittedSubclasses).flatMap(c -> getConcreteEventTypes(subscriptionId, c).stream()).toList();
-        } else if (specifiedEventType.isInterface() || specifiedEventType.isArray() || Modifier.isAbstract(specifiedEventType.getModifiers())) {
-            String msg = "You cannot subscribe to a non-sealed interface, abstract type, or array (problem is with %s for subscription '%s'). A concrete or sealed event type is required, or list the event types explicitly with the annotation's eventTypes attribute (for example eventTypes = {MyEvent1.class, MyEvent2.class}).";
-            throw new IllegalArgumentException(msg.formatted(specifiedEventType.getName(), subscriptionId));
-        } else {
-            domainEventTypesToSubscribeTo = List.of(specifiedEventType);
-        }
-        return domainEventTypesToSubscribeTo;
+        return (List<Class<E>>) (List<?>) EventTypeExpansion.concreteTypesOf(specifiedEventType,
+                type -> cannotSubscribeOn(subscriptionId, type));
+    }
+
+    /**
+     * The types a subscription's filter names, the declared types plus the concrete types each covers. The declared type
+     * stays in, so an event stored under its own CloudEvent type still matches, which is the case for a
+     * {@code CloudEventTypeMapper} that maps a hierarchy onto the type string of the type it was declared with. An extra
+     * type in the filter can only widen what matches.
+     */
+    @SuppressWarnings("unchecked")
+    private static <E> @NonNull List<Class<E>> typesToSubscribeOn(String subscriptionId, List<Class<E>> declaredTypes) {
+        Set<Class<? extends E>> declared = new LinkedHashSet<>(declaredTypes);
+        return (List<Class<E>>) (List<?>) List.copyOf(
+                EventTypeExpansion.expand(declared, type -> cannotSubscribeOn(subscriptionId, type)));
+    }
+
+    private static IllegalArgumentException cannotSubscribeOn(String subscriptionId, Class<?> eventType) {
+        String msg = "You cannot subscribe to a non-sealed interface, abstract type, or array (problem is with %s for subscription '%s'). A concrete or sealed event type is required, or list the event types explicitly with the annotation's eventTypes attribute (for example eventTypes = {MyEvent1.class, MyEvent2.class}).";
+        return new IllegalArgumentException(msg.formatted(eventType.getName(), subscriptionId));
     }
 
     /**

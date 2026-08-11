@@ -18,8 +18,8 @@ package org.occurrent.dsl.saga;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.dsl.saga.internal.EventTypeExpansion;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
+import org.occurrent.filter.internal.EventTypeExpansion;
 
 import java.util.*;
 import java.util.function.BiFunction;
@@ -123,6 +123,17 @@ public interface Saga<E, S extends @Nullable Object, C> {
 
     /** The event types that create a new instance when none exists for the correlation id. */
     Set<Class<? extends E>> startEventTypes();
+
+    /**
+     * The refusal a saga reports for an event type its subscription cannot be built from. Shared by {@link Builder},
+     * {@link #create} and {@code FlowSaga.Builder} so all three say the same thing.
+     */
+    static IllegalArgumentException cannotSubscribeOn(Class<?> eventType) {
+        return new IllegalArgumentException("no event is stored under the type of " + eventType.getName()
+                + " and its concrete subtypes cannot all be found, so a subscription derived from it would silently miss "
+                + "stored event types. Declare the concrete event types instead, or make every level of the hierarchy "
+                + "below " + eventType.getSimpleName() + " final or sealed.");
+    }
 
     /**
      * All event types the saga reacts to, the default subscription selector (mirrors {@code Projection#eventTypes()}).
@@ -263,7 +274,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
         } else {
             Set<Class<? extends E>> union = new LinkedHashSet<>(eventTypes);
             union.addAll(starts);
-            types = EventTypeExpansion.expand(union);
+            types = EventTypeExpansion.expand(union, Saga::cannotSubscribeOn);
         }
         return new Saga<>() {
             @Override
@@ -570,9 +581,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 declaredTypes.add((Class<? extends E>) type);
             }
             declaredTypes.addAll(startTypes);
-            // Expand before checking correlation, so a concrete type the saga only receives through a declared sealed
-            // supertype needs a correlation too.
-            Set<Class<? extends E>> allTypes = EventTypeExpansion.expand(declaredTypes);
+            Set<Class<? extends E>> allTypes = EventTypeExpansion.expand(declaredTypes, Saga::cannotSubscribeOn);
             if (correlateAll == null) {
                 TypeDispatch<Function<E, @Nullable String>> coverage = new TypeDispatch<>(correlators);
                 for (Class<?> type : allTypes) {
