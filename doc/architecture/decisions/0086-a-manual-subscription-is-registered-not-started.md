@@ -59,6 +59,17 @@ A subscription that has run before is unaffected either way: it resumes from its
 capture is optional, because it needs a checkpoint storage and something able to report a position. Given
 neither, the wrapper still works and a first run starts from the moment it is started.
 
+> **Amended for 0.33.0.** "Writes it when the subscription starts" described where the implementation put
+> the write, not what it should have been. `DurableSubscriptionModel` pins the position the moment its own
+> `subscribe` resolves it, forced eagerly by `SpringMongoSubscriptionModel`. That is what would have happened
+> here too, immediately at registration, had this wrapper never deferred `subscribe` in the first place.
+> Writing the pin later, at start, left a gap. Two nodes registering minutes apart during a rolling deploy
+> could see whichever started first win the pin, which need not be whichever registered first, silently
+> skipping events between the two registrations (see #669 and ADR 116's amendments). The wrapper now writes
+> at registration, which is not a safer ordering chosen on its own terms. It is what makes this wrapper a
+> faithful stand-in for the `subscribe` call it withholds, matching what this section's opening sentence
+> already promised.
+
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
 reason the wrapper reports its own ids from `subscriptionIds()`, merged with the delegate's, since

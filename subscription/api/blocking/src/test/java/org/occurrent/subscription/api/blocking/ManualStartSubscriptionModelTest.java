@@ -36,6 +36,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.*;
@@ -50,6 +52,39 @@ import static org.assertj.core.api.Assertions.*;
 class ManualStartSubscriptionModelTest {
 
     private static final String SUBSCRIPTION_ID = "someSubscription";
+
+    // System.getLogger(ManualStartSubscriptionModel.class.getName()) backs onto java.util.logging absent another
+    // platform logging bridge, which is what these tests assert against.
+    private static final class CapturingLogHandler extends Handler {
+        private final List<LogRecord> records = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void publish(LogRecord record) {
+            records.add(record);
+        }
+
+        @Override
+        public void flush() {
+        }
+
+        @Override
+        public void close() {
+        }
+
+        static CapturingLogHandler attached() {
+            CapturingLogHandler handler = new CapturingLogHandler();
+            java.util.logging.Logger.getLogger(ManualStartSubscriptionModel.class.getName()).addHandler(handler);
+            return handler;
+        }
+
+        void detach() {
+            java.util.logging.Logger.getLogger(ManualStartSubscriptionModel.class.getName()).removeHandler(this);
+        }
+
+        List<LogRecord> records() {
+            return records;
+        }
+    }
 
     @Test
     void registering_a_subscription_does_not_reach_the_wrapped_model() {
@@ -465,7 +500,6 @@ class ManualStartSubscriptionModelTest {
 
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
         });
-        model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.ifAbsent());
     }
@@ -544,15 +578,16 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void nothing_is_written_to_checkpoint_storage_until_a_subscription_is_started() {
+    void the_start_position_is_written_to_checkpoint_storage_as_soon_as_a_subscription_registers() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        delegate.globalCheckpoint = new StringCheckpoint("at-registration");
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
 
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
         });
 
-        assertThat(storage.checkpoints).isEmpty();
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
     }
 
     @Test
@@ -571,22 +606,58 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void a_subscription_that_has_run_before_keeps_its_own_checkpoint() {
+    void a_subscription_that_has_run_before_keeps_its_own_checkpoint_without_logging_anything() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("from-a-previous-run"));
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
         delegate.globalCheckpoint = new StringCheckpoint("at-registration");
 
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
-        });
+        CapturingLogHandler logHandler = CapturingLogHandler.attached();
+        try {
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            });
+        } finally {
+            logHandler.detach();
+        }
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("from-a-previous-run");
+        assertThat(logHandler.records())
+                .as("a checkpoint from a previous run winning is the ordinary case, not one worth logging")
+                .isEmpty();
     }
 
     @Test
-    void two_nodes_racing_to_pin_the_same_subscription_id_do_not_lose_events_between_the_two_positions() {
+    void a_checkpoint_written_between_the_existence_check_and_capturing_the_position_is_treated_as_a_race_not_prior_history() {
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        // Writes another node's pin as a side effect of answering the position query, standing for that node's
+        // write landing between this node's existence check and its own position capture, both of which now
+        // happen inside subscribe() itself.
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> {
+            storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("landed-during-registration"));
+            return new StringCheckpoint("this-nodes-own-position");
+        };
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+
+        CapturingLogHandler logHandler = CapturingLogHandler.attached();
+        try {
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            });
+        } finally {
+            logHandler.detach();
+        }
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("landed-during-registration");
+        assertThat(logHandler.records())
+                .as("existence is checked before the position is captured, so this write is a race to compare against rather than prior history to accept silently")
+                .anySatisfy(record -> assertThat(record.getMessage())
+                        .contains("this-nodes-own-position", "landed-during-registration"));
+    }
+
+    @Test
+    void two_nodes_registering_at_the_same_time_at_different_positions_logs_the_second_nodes_loss_instead_of_leaving_it_silent() {
         // Two separate model instances stand for two nodes. Their own bookkeeping is independent, but they share the
         // one resource that matters here: the checkpoint storage both are about to pin the same subscription id in.
         // The storage's exists() always answers false (see RaceSimulatingCheckpointStorage), standing in for the
@@ -600,34 +671,101 @@ class ManualStartSubscriptionModelTest {
         ManualStartSubscriptionModel secondNode = ManualStartSubscriptionModel.stoppedByDefault(secondDelegate, secondPositionSource, storage);
         firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
         });
-        secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
-        });
 
-        // Whichever pins first wins, and the second call must not throw even though its write is refused.
+        // The pin happens at registration now, so the second node's loss is decided and logged here, not later
+        // when either node actually starts.
+        CapturingLogHandler logHandler = CapturingLogHandler.attached();
+        try {
+            secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            });
+        } finally {
+            logHandler.detach();
+        }
+
         assertThatCode(() -> firstNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
         assertThatCode(() -> secondNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
-
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("first-nodes-position");
+        assertThat(logHandler.records())
+                .anySatisfy(record -> assertThat(record.getMessage())
+                        .contains("first-nodes-position", "second-nodes-position"));
     }
 
     @Test
-    void a_pin_refused_because_another_node_already_pinned_first_does_not_stop_the_subscription_from_starting() {
-        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
-        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
-        // Stands for the other node's write having already landed before this node's start reaches the pin.
-        storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("pinned-by-another-node"));
-        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("this-nodes-own-position");
-        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+    void two_nodes_registering_at_the_same_time_at_the_same_position_logs_nothing() {
+        RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
+        RecordingSubscriptionModel firstDelegate = new RecordingSubscriptionModel();
+        RecordingSubscriptionModel secondDelegate = new RecordingSubscriptionModel();
+        GlobalCheckpointSource<@Nullable Checkpoint> sharedPositionSource = () -> new StringCheckpoint("shared-position");
+        ManualStartSubscriptionModel firstNode = ManualStartSubscriptionModel.stoppedByDefault(firstDelegate, sharedPositionSource, storage);
+        ManualStartSubscriptionModel secondNode = ManualStartSubscriptionModel.stoppedByDefault(secondDelegate, sharedPositionSource, storage);
+        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
         });
 
-        assertThatCode(() -> model.start(true))
-                .as("the ifAbsent() refusal means another node's pin won, not that this node failed to start")
-                .doesNotThrowAnyException();
+        CapturingLogHandler logHandler = CapturingLogHandler.attached();
+        try {
+            secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            });
+        } finally {
+            logHandler.detach();
+        }
 
-        assertThat(delegate.subscribeCalls).extracting(SubscribeCall::subscriptionId).containsExactly(SUBSCRIPTION_ID);
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("shared-position");
+        assertThat(logHandler.records())
+                .as("the two nodes captured the same position, so accepting the stored one is exactly this node's own write arriving second")
+                .isEmpty();
+    }
+
+    @Test
+    void an_earlier_registrant_always_wins_the_pin_even_when_a_later_registrant_starts_first() {
+        // Stands for a rolling deploy where one node registers, the source position moves on, and a second node
+        // registers the same subscription id minutes later. A duplicate id on the same model would throw, so a
+        // second model instance stands for the second node, sharing the storage the way the racing test above does.
+        // The second registration finds the first one's pin already stored, which is the ordinary case a checkpoint
+        // storage read here always finds for a subscription somebody already registered, not a race to log.
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        RecordingSubscriptionModel earlierDelegate = new RecordingSubscriptionModel();
+        GlobalCheckpointSource<@Nullable Checkpoint> earlierPositionSource = () -> new StringCheckpoint("earlier-registration-position");
+        ManualStartSubscriptionModel earlierNode = ManualStartSubscriptionModel.stoppedByDefault(earlierDelegate, earlierPositionSource, storage);
+        earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        RecordingSubscriptionModel laterDelegate = new RecordingSubscriptionModel();
+        GlobalCheckpointSource<@Nullable Checkpoint> laterPositionSource = () -> new StringCheckpoint("later-registration-position");
+        ManualStartSubscriptionModel laterNode = ManualStartSubscriptionModel.stoppedByDefault(laterDelegate, laterPositionSource, storage);
+        laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        // The later registrant starts first, but the pin was already decided at registration, so this changes
+        // nothing about which position the subscription resumes from.
+        assertThatCode(() -> laterNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
+        assertThatCode(() -> earlierNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("earlier-registration-position");
+    }
+
+    @Test
+    void a_subscription_registered_on_a_running_model_still_pins_its_registration_position_before_starting_live() {
+        // The pin write happens unconditionally, before this model knows whether the registration will be deferred
+        // or handed straight to the wrapped model, because the pin must land before any resumeSubscription can
+        // possibly race ahead of it. On an already-running model that means a subscription which was never
+        // deferred still gets pinned. This proves that costs nothing observable. The wrapped model still receives
+        // exactly the caller's own startAt, immediately, exactly as it did before this pin existed.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("live-registration-position");
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+        model.start(true);
+        StartAt callersOwnStartAt = StartAt.now();
+
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, callersOwnStartAt, __ -> {
+        });
+
+        assertThat(delegate.subscribeCalls).hasSize(1);
+        SubscribeCall call = delegate.subscribeCalls.getFirst();
+        assertThat(call.startAt()).isSameAs(callersOwnStartAt);
+        assertThat(subscription).isSameAs(delegate.subscriptions.get(SUBSCRIPTION_ID));
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
-        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("pinned-by-another-node");
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("live-registration-position");
     }
 
     private static CloudEvent cloudEvent(String id) {

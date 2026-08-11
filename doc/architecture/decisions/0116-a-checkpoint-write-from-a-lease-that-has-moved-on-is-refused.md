@@ -434,6 +434,35 @@ a first write and is reported as success rather than refused, though nothing is 
 The one shipped caller, `ManualStartSubscriptionModel.pinStartPosition`, swallows the refusal either way
 and is unaffected by which family it runs against.
 
+> **Amended for 0.33.0.** "Swallows the refusal either way" assumed that whatever a refused write lost to
+> was interchangeable with what this node offered, which held as long as `ifAbsent()` had only one shipped
+> caller racing itself. It stopped holding once that caller is used across nodes that can capture different
+> positions at registration, minutes apart during a rolling deploy rather than at the same moment. Losing a
+> race like that to a genuinely different position and running from it anyway can silently skip the events
+> between the two registrations. `pinStartPosition` still cannot tell that apart from the other case this
+> class exists for, a node starting behind a leader election long after another node has already been
+> running the subscription for real. Both look identical here. Something is stored that differs from what
+> this node captured, and `Checkpoint` promises nothing beyond `asString()` to compare with. Refusing
+> to start in the second case would be worse than the bug this fixes, so a stored position always wins
+> either way. What changed is that a checkpoint already present when the losing node registered is accepted
+> without comment, since that is the ordinary case of a subscription with real history, while one that
+> appears only after registration and differs from what this node captured is logged at `WARNING` with both
+> positions named, so the discrepancy is visible instead of silent. See `ManualStartSubscriptionModelTest`.
+
+> **Amended again, before 0.33.0 shipped.** The amendment above still wrote at start and used a `WARNING` to
+> tell a same-generation race apart from a node starting behind a leader election long after another has
+> been running the subscription for real, since both look identical to `Checkpoint`'s opacity. Johan ruled
+> that a log must not be what settles this. `pinStartPosition` now writes at registration instead of at
+> start, which removes the ambiguity rather than detects it. The winner is whichever node's write reaches
+> storage first, always at or before every node's own captured position, whether that belongs to an earlier
+> registration or to a subscription that has since run for real. Accepting either one costs at most a
+> redelivered event, never a skipped one, so a refusal is accepted outright. A checkpoint already present
+> when a node checks is the ordinary case and stays unlogged. One that lands between that check and the
+> node's own write is worth naming, a genuine same-generation race or, rarer still, a write delayed long
+> enough to arrive after a later registration's, and is logged at `INFO`, since nothing here prevents that
+> window, only makes it visible. Pinning at registration is not simply a safer ordering chosen for its own
+> sake. ADR 86's own amendment records why it is the correct one. See `ManualStartSubscriptionModelTest`.
+
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
 
