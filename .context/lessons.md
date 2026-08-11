@@ -1143,3 +1143,28 @@ deliberately, because a positive invariant exposes what it does NOT cover: here 
 non-final concrete class can still have subclasses the filter misses, which the compatibility exemption
 preserves on purpose and which the repository's records-for-events convention makes rare, since a record
 is implicitly final.
+
+## A detector whose probe fails quietly manufactures the alarm it exists to raise
+
+**What happened.** The U13 stalled-worker detector emitted `WORKER-STALLED` one tick after arming,
+against an agent that had written to its worktree 111 seconds earlier. The detector was wrong, not the
+worker. Its probe was `find "$WT" -type f -newermt '-90 minutes'`, and `find` on this machine is `bfs`,
+which rejects a relative timestamp there and exits with an error. The `2>/dev/null` that was there to
+keep one transient failure from killing the monitor also swallowed `Invalid timestamp`, so an empty
+result reached a branch that read empty as "nothing has been written" and converted it straight into
+the stall condition.
+
+**Why it matters.** Two separate mistakes lined up. The probe assumed GNU `find` semantics on a machine
+where `find` resolves to `bfs`, and the fallback treated an unmeasurable answer as a measured one. The
+second is the worse of the two, because it is the shape that makes a broken detector indistinguishable
+from a working one. Note the direction this failed in: crying wolf is the survivable direction, and it
+was caught within one tick precisely because it was loud. The identical defect on the quiet side, a poll
+that fails and reports nothing, is the arrival-and-departure blind spot already recorded here, and it is
+found only when someone notices the fleet moved without the orchestrator.
+
+**How to apply.** A monitor has two answers to distinguish and must never collapse them: the condition
+was measured and is false, and the condition could not be measured. Give the probe its own failure
+event (`DETECTOR-UNHEALTHY` here, on the second consecutive empty probe) and let a failed probe emit
+that instead of the condition. Verify a probe against the actual binary before arming it, since
+`find`, `grep`, `stat` and `date` on this machine are not the GNU tools their flags were written for.
+When a monitor fires within a tick or two of arming, suspect the monitor first.

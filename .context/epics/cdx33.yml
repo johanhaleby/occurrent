@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33
-revision: 53
+revision: 54
 updated_at: 2026-08-11T19:56:20Z
 updated_by: "orchestrator session faee3625 (U12 MERGED as 743391bc6, all 15 library units done; UDOCS2 dispatched as the last unit)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -22,7 +22,25 @@ pending_actions:
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-11T09:13:22Z
+  - id: act-003
+    type: dispatch-chip
+    target: "U13 dispatched as an in-session subagent (nearest allowed type; agent id in updated_by)"
+    expected: "one PR correcting FlowStateImpl's retention bound, the changelog's sealed-type entry and migration section 10, plus a DELIVERY_RESULT"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-11T19:40:00Z
 units:
+  U13:
+    issue: null
+    goal: "Documentation truth for two defects in this epic's own output: #754 (FlowStateImpl.java:52 still states the superseded retention bound historyWindow + stepWindow + 1) and #755 (the reopened-hierarchy startup refusal now applies to subscriptions as well as sagas, which is a breaking change against 0.32.0 that the changelog denies and migration section 10 frames as saga-only)"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   U1:
     issue: null
     goal: "Applied-position ordering (finding 1, blocker): direction decided at its plan gate (document early-return window / refuse recording for async Mongo projections / committed-prefix design), docs-truth floor either way, ADR 0111 amendment"
