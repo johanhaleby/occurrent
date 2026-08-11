@@ -559,3 +559,21 @@ decision someone took rather than one nobody saw.
 Related: this same epic already lost twenty minutes to a hand-rolled monitor when the tested
 pattern was on the shelf. Both misses were recorded rules that existed and were not applied, which
 is a different failure from not knowing them.
+
+## A push you did not read back is not a push, 2026-08-11
+
+Twenty memory checkpoints, every one of them reported to Johan as committed and pushed, were still
+sitting on the session worktree branch when the `timerid` epic closed. `origin/main` carried none of
+them, the last one that landed was `6f6d16ebf` from the previous epic. They surfaced only because a
+routine push finally failed with a non-fast-forward, which prompted a rebase that replayed all twenty.
+
+**Why it happened.** The checkpoint ran as one compound command, `git add && git commit && git push`.
+The commit half printed its confirmation, the push half was rejected, and the combined output was
+read as success because the first lines looked right. Nothing after that ever checked the remote.
+
+**How to apply.** After a memory checkpoint, read the fact back from the remote rather than from the
+command that was supposed to produce it. `git log --oneline origin/main -1` after a fetch, or a grep
+for the text just written, costs one call and is the only evidence the push exists. This is the same
+rule already recorded for fabricated timestamps and for merge gates, applied to the one place it had
+not been, which is the orchestrator's own bookkeeping. A claim made to Johan about durable state is
+worth exactly the verification behind it.
