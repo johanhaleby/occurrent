@@ -577,3 +577,21 @@ for the text just written, costs one call and is the only evidence the push exis
 rule already recorded for fabricated timestamps and for merge gates, applied to the one place it had
 not been, which is the orchestrator's own bookkeeping. A claim made to Johan about durable state is
 worth exactly the verification behind it.
+
+## A merged pull request is not a finished branch, 2026-08-11
+
+The `timerid` closeout sweep found commit `8851a68e0` sitting on `timerid/u4-persistence-proof`,
+pushed at 06:59:40Z, two minutes after the CAS merge pinned `0804b1dbd`. GitHub had deleted the
+branch on merge and the worker's push recreated it, so nothing on the pull request showed the extra
+commit. It was real work, the read direction of the Mongo persistence proof, and it would have been
+lost with the worktree.
+
+**Why the merge gate cannot catch it.** The gate checked the right things and the head was correct
+when it merged. The commit did not exist yet. No merge-time check can see a commit pushed after it.
+
+**How to apply.** In the closeout sweep, before removing any unit worktree or branch, ask whether the
+branch tip is still the SHA the merge was pinned to. `git ls-remote origin 'refs/heads/<epic>/*'`
+against the merged heads recorded in the epic state answers it for the whole epic in one call, and a
+branch that reappeared after a delete-on-merge is the loudest form of the signal. Then adopt whatever
+is there as a unit rather than deleting it, which is also why worktree removal belongs at the end of
+the sweep and not at the merge.
