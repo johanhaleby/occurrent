@@ -843,3 +843,27 @@ is routing (user mobile or away), the worker must hand the plan back and stop ra
 And arm a stuck-detector at epic start, threshold above the longest legitimate silence, which for
 foreground Maven chunking is about ten minutes so twenty cries wolf. All four are now in the
 `/orchestrator` skill; this entry is the history.
+
+## A subagent's task output file is not a liveness signal (2026-08-11, cdx33)
+
+The stalled-worker detector I armed watched the mtime of each subagent's `tasks/<id>.output` file and
+fired twice within an hour, both times wrongly. Both files sat at exactly 183 bytes and never grew,
+so that file is a stub written once rather than a transcript appended as the agent works. Its mtime
+tracks nothing, which means a detector keyed on it reports every healthy worker as stalled and
+teaches you to ignore the one alert that matters.
+
+What actually reflects work is the work: source and doc files changing in whichever tree the agent
+writes to. The second alert is what led me to look, and the look showed U6 had written `changelog.md`
+nine minutes earlier, ADR 116 eleven, and the migration guide ten. Entirely healthy, twice slandered.
+
+The replacement watches `find -mmin` over `*.java`, `*.kt`, `*.md`, `*.xml`, `*.yml` across both the
+session worktree and the agent-worktree root, excluding `.git`, `.context` and `target`, at a
+35-minute threshold. Excluding `.context` matters: my own checkpoint writes would otherwise mask a
+fleet that had gone completely silent, which is the failure the detector exists to catch.
+
+**How to apply:** pick a liveness signal that the work itself produces, and before trusting a
+detector, confirm the signal moves when the worker is demonstrably working. A file that never grows
+is a red flag on the signal, not on the worker. Threshold above the longest legitimate silence: with
+foreground Maven chunks capped near ten minutes, 20 was too tight and 35 holds. Same family as the
+rollup that described only the checks that happened to exist, and the `git show` whose ref the shell
+had eaten: the tool answered confidently, just not the question I asked.
