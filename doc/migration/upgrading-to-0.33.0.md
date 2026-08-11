@@ -438,13 +438,13 @@ cannot all be found, so a subscription derived from it would silently miss store
 event types instead, or make every level of the hierarchy below OrderEvent final or sealed.
 ```
 
-A subscription reports the same shape with a message of its own:
+A subscription reports the same shape with a message of its own, naming the subscription id alongside the type:
 
 ```
-java.lang.IllegalArgumentException: You cannot subscribe to a non-sealed interface, abstract type, or array (problem is
-with com.example.OrderEvent for subscription 'order-subscription'). A concrete or sealed event type is required, or list
-the event types explicitly with the annotation's eventTypes attribute (for example eventTypes = {MyEvent1.class,
-MyEvent2.class}).
+java.lang.IllegalArgumentException: no event is stored under the type of com.example.OrderEvent and its concrete subtypes
+cannot all be found, so subscription 'order-subscription' would silently miss stored event types. Declare the concrete
+event types with the annotation's eventTypes attribute instead (for example eventTypes = {MyEvent1.class,
+MyEvent2.class}), or make every level of the hierarchy below OrderEvent final or sealed.
 ```
 
 **For a saga, read this as a report about a saga that never worked, not as a regression.** Under every type mapper
@@ -453,12 +453,12 @@ hierarchy, and it looked like a process still waiting for events rather than a d
 anything said so.
 
 **For a subscription, only one of the three shapes below is new.** `SubscriptionAnnotations` already refused a non-sealed
-interface and a non-sealed abstract class with this same message in 0.32.0, so a subscription declaring either shape was
-already refused before this release. The third shape, a sealed hierarchy reopened below the declared type, is what
-changes: 0.32.0 accepted it and built a filter naming only the reopened level, so the concrete events stored beneath that
-level were silently missed rather than delivered. 0.33.0 refuses it instead, the same new refusal a saga gets in this
-shape, so a subscription in this one shape that started fine under 0.32.0 now refuses to start. That is the breaking part
-of this change for a subscription.
+interface and a non-sealed abstract class with an `IllegalArgumentException` in 0.32.0, so a subscription declaring
+either shape was already refused before this release, under an older message this release also rewords. The third shape,
+a sealed hierarchy reopened below the declared type, is what changes in substance. 0.32.0 accepted it and built a filter
+naming only the reopened level, so the concrete events stored beneath that level were silently missed rather than
+delivered. 0.33.0 refuses it instead, the same new refusal a saga gets in this shape, so a subscription in this one shape
+that started fine under 0.32.0 now refuses to start. That is the breaking part of this change for a subscription.
 
 You are affected when a declared type is one of these:
 
