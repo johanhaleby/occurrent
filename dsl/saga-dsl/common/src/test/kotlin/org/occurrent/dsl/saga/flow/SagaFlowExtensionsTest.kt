@@ -81,7 +81,7 @@ class SagaFlowExtensionsTest {
                 { assertThat(started.state().currentStep()).isEqualTo("awaiting-first-player") },
                 {
                     assertThat(started.effects()).containsExactly(
-                        SagaEffect.startTimeout("step:awaiting-first-player", Duration.ofMinutes(10))
+                        SagaEffect.startTimeout(stepTimer("awaiting-first-player"), Duration.ofMinutes(10))
                     )
                 }
             )
@@ -91,7 +91,7 @@ class SagaFlowExtensionsTest {
         fun `the timeout firing closes the game and completes the saga`() {
             val started = start(saga, GameCreated("g1"))
 
-            val step = saga.step(started.state(), SagaInput.timeout("g1", TimerName.parse("step:awaiting-first-player")))
+            val step = saga.step(started.state(), SagaInput.timeout("g1", stepTimer("awaiting-first-player")))
 
             assertAll(
                 { assertThat(saga.isTerminal(step.state())).isTrue() },
@@ -107,7 +107,7 @@ class SagaFlowExtensionsTest {
 
             assertAll(
                 { assertThat(saga.isTerminal(step.state())).isTrue() },
-                { assertThat(step.effects()).containsExactly(SagaEffect.cancelTimeout("step:awaiting-first-player")) }
+                { assertThat(step.effects()).containsExactly(SagaEffect.cancelTimeout(stepTimer("awaiting-first-player"))) }
             )
         }
     }
@@ -149,7 +149,7 @@ class SagaFlowExtensionsTest {
             val started = start(saga, LobbyOpened("g1"))
 
             assertThat(started.effects()).containsExactly(
-                SagaEffect.startTimeout("step:awaiting-game-start", Duration.ofMinutes(10))
+                SagaEffect.startTimeout(stepTimer("awaiting-game-start"), Duration.ofMinutes(10))
             )
         }
 
@@ -191,7 +191,7 @@ class SagaFlowExtensionsTest {
                 {
                     assertThat(afterMove.effects()).containsExactly(
                         SagaEffect.issue(SendStartEmail("g1")),
-                        SagaEffect.cancelTimeout("step:awaiting-game-start")
+                        SagaEffect.cancelTimeout(stepTimer("awaiting-game-start"))
                     )
                 }
             )
@@ -224,7 +224,7 @@ class SagaFlowExtensionsTest {
                 {
                     assertThat(afterSecondJoin.effects()).containsExactly(
                         SagaEffect.issue(SendStartEmail("g1")),
-                        SagaEffect.cancelTimeout("step:awaiting-game-start")
+                        SagaEffect.cancelTimeout(stepTimer("awaiting-game-start"))
                     )
                 }
             )
@@ -234,7 +234,7 @@ class SagaFlowExtensionsTest {
         fun `the timeout firing before the join is fulfilled reminds the players and completes the saga`() {
             val started = start(saga, LobbyOpened("g1"))
 
-            val step = saga.step(started.state(), SagaInput.timeout("g1", TimerName.parse("step:awaiting-game-start")))
+            val step = saga.step(started.state(), SagaInput.timeout("g1", stepTimer("awaiting-game-start")))
 
             assertAll(
                 { assertThat(saga.isTerminal(step.state())).isTrue() },
@@ -339,7 +339,7 @@ class SagaFlowExtensionsTest {
 
             assertThat(started.effects()).containsExactly(
                 SagaEffect.issue(ReservePayment("o1", 100)),
-                SagaEffect.startTimeout("step:awaiting-payment", Duration.ofMinutes(30))
+                SagaEffect.startTimeout(stepTimer("awaiting-payment"), Duration.ofMinutes(30))
             )
         }
 
@@ -354,7 +354,7 @@ class SagaFlowExtensionsTest {
                 {
                     assertThat(step.effects()).containsExactly(
                         SagaEffect.issue(ShipOrder("o1")),
-                        SagaEffect.cancelTimeout("step:awaiting-payment")
+                        SagaEffect.cancelTimeout(stepTimer("awaiting-payment"))
                     )
                 }
             )
@@ -372,8 +372,8 @@ class SagaFlowExtensionsTest {
                 {
                     assertThat(firstFailure.effects()).containsExactly(
                         SagaEffect.issue(ReservePayment("o1", 100)),
-                        SagaEffect.cancelTimeout("step:awaiting-payment"),
-                        SagaEffect.startTimeout("step:awaiting-payment", Duration.ofMinutes(30))
+                        SagaEffect.cancelTimeout(stepTimer("awaiting-payment")),
+                        SagaEffect.startTimeout(stepTimer("awaiting-payment"), Duration.ofMinutes(30))
                     )
                 }
             )
@@ -392,8 +392,8 @@ class SagaFlowExtensionsTest {
                 {
                     assertThat(secondFailure.effects()).containsExactly(
                         SagaEffect.issue(ReservePayment("o1", 100)),
-                        SagaEffect.cancelTimeout("step:awaiting-payment"),
-                        SagaEffect.startTimeout("step:awaiting-payment", Duration.ofMinutes(30))
+                        SagaEffect.cancelTimeout(stepTimer("awaiting-payment")),
+                        SagaEffect.startTimeout(stepTimer("awaiting-payment"), Duration.ofMinutes(30))
                     )
                 }
             )
@@ -412,7 +412,7 @@ class SagaFlowExtensionsTest {
                 {
                     assertThat(thirdFailure.effects()).containsExactly(
                         SagaEffect.issue(CancelOrder("o1")),
-                        SagaEffect.cancelTimeout("step:awaiting-payment")
+                        SagaEffect.cancelTimeout(stepTimer("awaiting-payment"))
                     )
                 }
             )
@@ -422,7 +422,7 @@ class SagaFlowExtensionsTest {
         fun `the step timeout firing before any resolution cancels the order and completes the saga`() {
             val started = start(saga, OrderPlaced("o1", 100))
 
-            val step = saga.step(started.state(), SagaInput.timeout("o1", TimerName.parse("step:awaiting-payment")))
+            val step = saga.step(started.state(), SagaInput.timeout("o1", stepTimer("awaiting-payment")))
 
             assertAll(
                 { assertThat(saga.isTerminal(step.state())).isTrue() },
@@ -910,6 +910,15 @@ class SagaFlowExtensionsTest {
                     }
                 }
             }.isInstanceOf(IllegalStateException::class.java)
+        }
+    }
+
+    @Nested
+    inner class StepTimerName {
+
+        @Test
+        fun `the top-level stepTimer names a step's timer inside the step namespace`() {
+            assertThat(stepTimer("awaiting-payment")).isEqualTo(TimerName.of("step", "awaiting-payment"))
         }
     }
 }

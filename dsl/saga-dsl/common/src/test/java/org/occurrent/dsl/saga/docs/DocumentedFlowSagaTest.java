@@ -20,8 +20,6 @@ import org.junit.jupiter.api.*;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
-import org.occurrent.dsl.saga.SagaTimeout;
-import org.occurrent.dsl.saga.TimerName;
 import org.occurrent.dsl.saga.flow.Continuation;
 import org.occurrent.dsl.saga.flow.Expectation;
 import org.occurrent.dsl.saga.flow.FlowSaga;
@@ -35,6 +33,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.occurrent.dsl.saga.flow.FlowSaga.stepTimer;
 
 /**
  * The flow sagas the documentation's Testing chapter shows, kept compiling and passing here so a published snippet
@@ -168,7 +167,7 @@ class DocumentedFlowSagaTest {
             // Then
             assertAll(
                     () -> assertThat(step.state().currentStep()).isEqualTo("waiting-for-both-players"),
-                    () -> assertThat(step.effects()).containsExactly(SagaEffect.cancelTimeout("step:awaiting-players"))
+                    () -> assertThat(step.effects()).containsExactly(SagaEffect.cancelTimeout(stepTimer("awaiting-players")))
             );
         }
 
@@ -191,7 +190,7 @@ class DocumentedFlowSagaTest {
 
             // When
             Saga.Step<FlowState<GameEvent>, CloseGame> step =
-                    lobby().step(started.state(), SagaInput.timeout(new SagaTimeout(GAME_ID, TimerName.parse("step:awaiting-players"))));
+                    lobby().step(started.state(), SagaInput.timeout(GAME_ID, stepTimer("awaiting-players")));
 
             // Then
             assertAll(
@@ -207,7 +206,7 @@ class DocumentedFlowSagaTest {
 
             // When
             Saga.Step<FlowState<GameEvent>, CloseGame> step =
-                    lobby().step(started.state(), SagaInput.timeout(new SagaTimeout(GAME_ID, TimerName.parse("step:no-such-step"))));
+                    lobby().step(started.state(), SagaInput.timeout(GAME_ID, stepTimer("no-such-step")));
 
             // Then
             assertAll(
@@ -298,7 +297,7 @@ class DocumentedFlowSagaTest {
 
             // When
             Saga.Step<FlowState<AuctionEvent>, CloseAuction> step =
-                    auction().step(started.state(), SagaInput.timeout(new SagaTimeout(AUCTION_ID, TimerName.parse("step:bidding"))));
+                    auction().step(started.state(), SagaInput.timeout(AUCTION_ID, stepTimer("bidding")));
 
             // Then
             assertAll(
@@ -316,7 +315,7 @@ class DocumentedFlowSagaTest {
 
             // When
             Saga.Step<FlowState<AuctionEvent>, CloseAuction> step =
-                    auction().step(afterBid.state(), SagaInput.timeout(new SagaTimeout(AUCTION_ID, TimerName.parse("step:bidding"))));
+                    auction().step(afterBid.state(), SagaInput.timeout(AUCTION_ID, stepTimer("bidding")));
 
             // Then
             assertThat(step.effects()).containsExactly(SagaEffect.issue(new CloseAuction(AUCTION_ID)));

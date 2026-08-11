@@ -22,7 +22,6 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
-import org.occurrent.dsl.saga.SagaTimeout;
 import org.occurrent.dsl.saga.TimerName;
 
 import java.time.Duration;
@@ -35,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.occurrent.dsl.saga.flow.FlowSaga.stepTimer;
 
 /**
  * Covers the Java {@link FlowSaga} builder surface with the same order-fulfillment retry-loop scenario the Kotlin
@@ -70,7 +70,7 @@ class FlowSagaTest {
     record CancelOrder(String orderId) implements OrderCommand {
     }
 
-    private static final String PAYMENT_TIMER = "step:awaiting-payment";
+    private static final TimerName PAYMENT_TIMER = stepTimer("awaiting-payment");
 
     private static Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> orderFulfillmentSaga() {
         return FlowSaga.<OrderEvent, OrderCommand>builder()
@@ -250,7 +250,7 @@ class FlowSagaTest {
 
             Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
             Saga.Step<FlowState<OrderEvent>, OrderCommand> step =
-                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))));
+                    saga.step(started.state(), SagaInput.timeout("o1", PAYMENT_TIMER));
 
             assertAll(
                     () -> assertThat(saga.isTerminal(step.state())).isTrue(),
@@ -273,7 +273,7 @@ class FlowSagaTest {
 
             Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
             Saga.Step<FlowState<OrderEvent>, OrderCommand> step =
-                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))));
+                    saga.step(started.state(), SagaInput.timeout("o1", PAYMENT_TIMER));
 
             assertAll(
                     () -> assertThat(saga.isTerminal(step.state())).isTrue(),
@@ -370,7 +370,7 @@ class FlowSagaTest {
             Saga.Step<FlowState<OrderEvent>, OrderCommand> started = start(saga, new OrderPlaced("o1", 100));
 
             Saga.Step<FlowState<OrderEvent>, OrderCommand> step =
-                    saga.step(started.state(), SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(PAYMENT_TIMER))));
+                    saga.step(started.state(), SagaInput.timeout("o1", PAYMENT_TIMER));
 
             assertAll(
                     () -> assertThat(saga.isTerminal(step.state())).isTrue(),
@@ -750,8 +750,8 @@ class FlowSagaTest {
             assertAll(
                     () -> assertThat(step.state().currentStep()).isEqualTo("next"),
                     () -> assertThat(step.effects()).containsExactly(
-                            SagaEffect.cancelTimeout("step:wait"),
-                            SagaEffect.startTimeout("step:next", Duration.ofMinutes(1)))
+                            SagaEffect.cancelTimeout(stepTimer("wait")),
+                            SagaEffect.startTimeout(stepTimer("next"), Duration.ofMinutes(1)))
             );
         }
     }
@@ -907,6 +907,20 @@ class FlowSagaTest {
                     () -> assertThat(afterFirstCancel.currentStep()).isEqualTo("second"),
                     () -> assertThat(saga.isTerminal(afterSecondTimeout)).isTrue()
             );
+        }
+    }
+
+    @Nested
+    class StepTimerName {
+
+        @Test
+        void a_steps_timer_is_named_inside_the_step_namespace() {
+            assertThat(stepTimer("awaiting-payment")).isEqualTo(TimerName.of("step", "awaiting-payment"));
+        }
+
+        @Test
+        void a_steps_timer_is_stored_under_the_step_name_behind_a_step_prefix() {
+            assertThat(stepTimer("awaiting-payment").encode()).isEqualTo("step:awaiting-payment");
         }
     }
 }

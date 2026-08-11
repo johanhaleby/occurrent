@@ -18,6 +18,7 @@ package org.occurrent.dsl.saga.flow
 
 import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.saga.Saga
+import org.occurrent.dsl.saga.TimerName
 import java.time.Duration
 import java.time.Instant
 import java.util.function.BiFunction
@@ -57,6 +58,13 @@ fun <E : Any, C : Any> saga(block: FlowSagaBuilder<E, C>.() -> Unit): Saga<E, Fl
     builder.block()
     return builder.build()
 }
+
+/**
+ * The name of the timer that the step called [stepName] arms. Fire it in a test with
+ * `SagaInput.timeout("game-1", stepTimer("awaiting-players"))` and assert on it with
+ * `SagaEffect.cancelTimeout(stepTimer("awaiting-players"))`.
+ */
+fun stepTimer(stepName: String): TimerName = FlowSaga.stepTimer(stepName)
 
 /** Receiver for the flow [saga] block. Delegates to the Java [FlowSaga.Builder]. */
 @SagaDsl

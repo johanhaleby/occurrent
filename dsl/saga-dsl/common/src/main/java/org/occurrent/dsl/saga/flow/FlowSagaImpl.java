@@ -38,13 +38,14 @@ import java.util.function.Function;
 
 /**
  * Compiles a flow definition (steps, branches, window conditions, timeouts) down to the core {@link Saga} the executor
- * runs. The step name is the persisted position, a timer is named {@code "step:" + stepName}, and because a timer lives
- * only in the saga's own state envelope (there is exactly one per name), a re-armed timer replaces the previous one and
- * no separate fencing is needed here.
+ * runs. The step name is the persisted position, a timer is named by {@link FlowSaga#stepTimer(String)}, and because a
+ * timer lives only in the saga's own state envelope (there is exactly one per name), a re-armed timer replaces the
+ * previous one and no separate fencing is needed here.
  */
 final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
-    static final String TIMER_PREFIX = "step:";
+    /** The namespace every step timer belongs to, so a step's timer is stored as {@code step:<stepName>}. */
+    static final String TIMER_NAMESPACE = "step";
 
     /**
      * Default number of received events kept behind the current step's entry, on top of the initiating event and the
@@ -189,8 +190,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         if (state.completed() || state.currentStep() == null) {
             return withClearedBookkeeping(state, state.received());
         }
-        String expected = TIMER_PREFIX + state.currentStep();
-        if (!timerName.encode().equals(expected)) {
+        if (!timerName.equals(FlowSaga.stepTimer(state.currentStep()))) {
             return withClearedBookkeeping(state, state.received());
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
@@ -334,7 +334,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         if (!firedFromTimer && fromStep != null) {
             CompiledStep<E, C> from = stepsByName.get(fromStep);
             if (from.timeout() != null) {
-                effects.add(SagaEffect.cancelTimeout(TIMER_PREFIX + fromStep));
+                effects.add(SagaEffect.cancelTimeout(FlowSaga.stepTimer(fromStep)));
             }
         }
         armTimeoutIfAny(effects, state.currentStep(), ReceivedEvents.of(state.received()));
@@ -349,7 +349,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         if (timeout == null) {
             return;
         }
-        String timerName = TIMER_PREFIX + stepName;
+        TimerName timerName = FlowSaga.stepTimer(stepName);
         if (timeout.after() != null) {
             effects.add(SagaEffect.startTimeout(timerName, timeout.after()));
         } else {

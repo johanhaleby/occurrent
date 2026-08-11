@@ -19,6 +19,7 @@ package org.occurrent.dsl.saga.flow;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.Saga;
+import org.occurrent.dsl.saga.TimerName;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.ArrivingEvent;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.Branch;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.CompiledStep;
@@ -48,6 +49,19 @@ public final class FlowSaga {
     /** Starts building a flow saga over event type {@code E} issuing command type {@code C}. */
     public static <E, C> Builder<E, C> builder() {
         return new Builder<>();
+    }
+
+    /**
+     * The name of the timer that the step called {@code stepName} arms. Fire it in a test with
+     * {@code SagaInput.timeout("game-1", stepTimer("awaiting-players"))} and assert on it with
+     * {@code SagaEffect.cancelTimeout(stepTimer("awaiting-players"))}.
+     *
+     * @param stepName the step's name, the one given to {@link Builder#step(String, Consumer)}
+     * @return the timer name that step arms
+     */
+    public static TimerName stepTimer(String stepName) {
+        requireNonNull(stepName, "stepName cannot be null");
+        return TimerName.of(FlowSagaImpl.TIMER_NAMESPACE, stepName);
     }
 
     /**
