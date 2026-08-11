@@ -216,8 +216,8 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     /**
-     * The same repositionable fake, but its first {@code subscribe} call throws instead of returning a
-     * {@link Subscription}, standing in for a delegate that rejects a subscription outright.
+     * The same repositionable fake, but {@code subscribe} throws instead of returning a {@link Subscription},
+     * standing in for a delegate that rejects a subscription outright.
      */
     private static class ThrowingOnSubscribeRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
         @Override

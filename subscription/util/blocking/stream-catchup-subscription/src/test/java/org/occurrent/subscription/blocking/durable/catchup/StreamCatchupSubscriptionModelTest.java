@@ -224,7 +224,30 @@ class StreamCatchupSubscriptionModelTest {
 
         assertThatThrownBy(() -> subscription.pauseSubscription("subscription"))
                 .as("the delegate never saw this subscription, since the catch-up failed before handing over to it")
-                .isInstanceOf(RuntimeException.class);
+                .isInstanceOf(UnknownSubscriptionException.class);
+    }
+
+    /**
+     * A pause requested while the replay is still in flight only records itself in
+     * {@code pauseRequestedDuringCatchup}, for {@code applyPendingPauseIfAny} to apply once the replay hands over
+     * to the delegate. A replay that fails instead of handing over must still clear that record, or the pause
+     * outlives the catch-up it was requested for and {@code isPaused} keeps answering {@code true} forever.
+     */
+    @Test
+    void a_pause_requested_while_the_replay_is_in_flight_does_not_survive_the_replay_then_failing() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        CheckpointAwareSubscriptionModel reportsNoCheckpoint = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, null);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(reportsNoCheckpoint, eventStore, new CatchupSubscriptionModelConfig(100));
+        String subscriptionId = "subscription";
+
+        Subscription started = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> subscription.pauseSubscription(subscriptionId));
+
+        assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(5))).isInstanceOf(IllegalStateException.class);
+        assertThat(subscription.isPaused(subscriptionId))
+                .as("the pause was requested for a replay that never handed over to apply it, and must not survive "
+                        + "the replay failing")
+                .isFalse();
     }
 
     @Test
