@@ -6,9 +6,9 @@ Date: 2026-08-08
 
 Accepted. Unit B1 of the post-0.31.0 architecture review remediation arc, which trails the 0.32.0 tag.
 
-This ADR decides a contract and nothing else. The implementation follows in its own unit, as
-[#622](https://github.com/johanhaleby/occurrent/issues/622) asks for. Nothing described under "Decision" exists in the
-code yet.
+This ADR decided a contract, and [#638](https://github.com/johanhaleby/occurrent/issues/638) has since implemented it.
+`ReplayAware`, the coalescing views, and `ViewStateRepository.findAllById`/`saveAll` all exist in the DSLs described
+under "Decision" below.
 
 ## Context
 
@@ -53,7 +53,7 @@ the event rather than which phase it belongs to. `deliver` then reads it exactly
 because that is what picks the `MaterializedView` overload (`:193-204`). The replay/live distinction does exist
 elsewhere. `ReplayAwareSubscriptions.isCatchingUp`
 (`ReplayAwareSubscriptions.java:48`) answers it, reached through
-`static Optional<ReplayAwareSubscriptions> of(Object)` (`:58-65`). But its only consumers are the Spring registrars
+`static Optional<ReplayAwareSubscriptions> findIn(SubscriptionModelCapability)` (`:61-63`). But its only consumers are the Spring registrars
 and the saga timer check (`SagaAnnotationRegistrar.java:226-227`). Nothing in the projection DSL, in `MaterializedView`,
 or in `ViewStateRepository` consults it, and the DSL does not hold the subscription model to ask.
 
@@ -111,7 +111,7 @@ method every user of `MaterializedView` must implement, for the benefit of the f
 between the question and the update, and it makes the view ask where the runner already knows the answer and can simply
 say so.
 
-No `static Optional<ReplayAware> of(Object)` helper, unlike `ReplayAwareSubscriptions` and
+No `static Optional<ReplayAware> findIn(SubscriptionModelCapability)` helper, unlike `ReplayAwareSubscriptions` and
 `IntrospectableSubscriptions`. Those exist to unwrap `SubscriptionModelWrapper`. There is no delegating
 materialized view, so the helper would be ceremony around a bare `instanceof`.
 
