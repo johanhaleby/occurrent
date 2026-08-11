@@ -69,7 +69,16 @@ final class SagaTimerNameStubs {
     static final String SAGA_EFFECT = """
             package org.occurrent.dsl.saga;
 
-            public sealed interface SagaEffect<C> permits SagaEffect.CancelTimeout {
+            import java.time.Duration;
+            import java.time.Instant;
+
+            public sealed interface SagaEffect<C> permits SagaEffect.StartTimeout, SagaEffect.StartTimeoutAt, SagaEffect.CancelTimeout {
+                record StartTimeout<C>(TimerName timerName, Duration after) implements SagaEffect<C> {
+                }
+
+                record StartTimeoutAt<C>(TimerName timerName, Instant at) implements SagaEffect<C> {
+                }
+
                 record CancelTimeout<C>(TimerName timerName) implements SagaEffect<C> {
                 }
 

@@ -31,16 +31,18 @@ import java.util.Iterator;
 import java.util.List;
 
 /**
- * Migrates a saga timer's name from {@code String} to {@code TimerName} (ADR 121). Two shapes are rewritten, both
- * because the recipe can prove what the old code meant: {@code new SagaTimeout(sagaId, name)} with a {@code String}
- * second argument becomes {@code new SagaTimeout(sagaId, TimerName.parse(name))}, which is the value that string
- * already named, and {@code timerName()} read into a declared {@code String} gains {@code .encode()}. Every other
- * read of {@code timerName()} is flagged with a review comment rather than rewritten, since the recipe cannot see
- * what the surrounding code wants the name for, the same best-effort-plus-marker shape as
- * {@link MigrateEventStoreWriteStreamToList}. Deconstructing a {@code SagaEffect} timer record against a
- * {@code String} component is left alone entirely, because a record pattern's binding type is a judgement about the
- * code that follows it and the compiler points at every one. Java only, a Kotlin caller needs the manual steps in
- * doc/migration/upgrading-to-0.33.0.md.
+ * Migrates a saga timer's name from {@code String} to {@code TimerName} (ADR 121). Two kinds of construction are
+ * rewritten because the recipe can prove what the old code meant. A {@code String} handed to
+ * {@code SagaTimeout}'s second argument, or to the timer-name argument of {@code SagaEffect}'s three timer-effect
+ * records, {@code StartTimeout}, {@code StartTimeoutAt} and {@code CancelTimeout}, becomes
+ * {@code TimerName.parse(name)}, which is the value that string already named. A {@code timerName()} read off any
+ * of those same four types, into a declared {@code String}, gains {@code .encode()}. Every other read of
+ * {@code timerName()} is flagged with a review comment rather than rewritten, since the recipe cannot see what the
+ * surrounding code wants the name for, the same best-effort-plus-marker shape as
+ * {@link MigrateEventStoreWriteStreamToList}. Deconstructing a {@code SagaEffect}
+ * timer record against a {@code String} component is left alone entirely, because a record pattern's binding type
+ * is a judgement about the code that follows it and the compiler points at every one. Java only, a Kotlin caller
+ * needs the manual steps in doc/migration/upgrading-to-0.33.0.md.
  */
 public class MigrateSagaTimerName extends Recipe {
 
@@ -57,8 +59,17 @@ public class MigrateSagaTimerName extends Recipe {
 
     private static final String SAGA_TIMEOUT = "org.occurrent.dsl.saga.SagaTimeout";
     private static final String TIMER_NAME = "org.occurrent.dsl.saga.TimerName";
+    private static final String START_TIMEOUT = "org.occurrent.dsl.saga.SagaEffect$StartTimeout";
+    private static final String START_TIMEOUT_AT = "org.occurrent.dsl.saga.SagaEffect$StartTimeoutAt";
+    private static final String CANCEL_TIMEOUT = "org.occurrent.dsl.saga.SagaEffect$CancelTimeout";
 
-    private static final MethodMatcher TIMER_NAME_ACCESSOR = new MethodMatcher(SAGA_TIMEOUT + " timerName()");
+    // SagaTimeout and the three timer-effect records each declare their own timerName() accessor rather than
+    // sharing one, so a read off any of the four needs the same treatment.
+    private static final List<MethodMatcher> TIMER_NAME_ACCESSORS = List.of(
+            new MethodMatcher(SAGA_TIMEOUT + " timerName()"),
+            new MethodMatcher(START_TIMEOUT + " timerName()"),
+            new MethodMatcher(START_TIMEOUT_AT + " timerName()"),
+            new MethodMatcher(CANCEL_TIMEOUT + " timerName()"));
     private static final MethodMatcher TIMER_NAME_PARSE = new MethodMatcher(TIMER_NAME + " parse(java.lang.String)");
     private static final MethodMatcher TIMER_NAME_ENCODE = new MethodMatcher(TIMER_NAME + " encode()");
 
@@ -83,12 +94,13 @@ public class MigrateSagaTimerName extends Recipe {
 
     @Override
     public String getDescription() {
-        return "Rewrites `new SagaTimeout(sagaId, name)` with a `String` second argument into " +
-               "`new SagaTimeout(sagaId, TimerName.parse(name))`, and appends `encode()` to a `timerName()` read " +
-               "into a declared `String` (ADR 121). Any other read of `timerName()` is flagged with a review " +
-               "comment instead, since the recipe cannot see what the surrounding code wants the name for, and " +
-               "deconstructing a `SagaEffect` timer record against a `String` component is left for a human. See " +
-               "doc/migration/upgrading-to-0.33.0.md. Java only, a Kotlin caller needs the manual steps instead.";
+        return "Rewrites a `String` handed to `SagaTimeout`'s second argument, or to the timer-name argument of " +
+               "`SagaEffect.StartTimeout`, `StartTimeoutAt` or `CancelTimeout`, into `TimerName.parse(name)`, and " +
+               "appends `encode()` to a `timerName()` read into a declared `String` (ADR 121). Any other read of " +
+               "`timerName()` is flagged with a review comment instead, since the recipe cannot see what the " +
+               "surrounding code wants the name for, and deconstructing a `SagaEffect` timer record against a " +
+               "`String` component is left for a human. See doc/migration/upgrading-to-0.33.0.md. Java only, a " +
+               "Kotlin caller needs the manual steps instead.";
     }
 
     @Override
@@ -99,19 +111,37 @@ public class MigrateSagaTimerName extends Recipe {
             public J.NewClass visitNewClass(J.NewClass newClass, ExecutionContext ctx) {
                 J.NewClass n = super.visitNewClass(newClass, ctx);
 
-                if (!isJavaSource() || !TypeUtils.isOfClassType(typeOf(n.getClazz()), SAGA_TIMEOUT)) {
+                if (!isJavaSource()) {
                     return n;
                 }
 
+                // sagaId, timerName for SagaTimeout; timerName, after/at for the two duration-and-instant timer
+                // effects; timerName alone for CancelTimeout. The index is where the String argument sits that a
+                // 0.32.0 caller could have passed, and the arity guards against a call this isn't, rather than a
+                // stray constructor overload on one of these four types.
+                JavaType type = rawClassTypeOf(n);
+                if (TypeUtils.isOfClassType(type, SAGA_TIMEOUT)) {
+                    return migrateTimerNameArgument(n, 1, 2);
+                }
+                if (TypeUtils.isOfClassType(type, START_TIMEOUT) || TypeUtils.isOfClassType(type, START_TIMEOUT_AT)) {
+                    return migrateTimerNameArgument(n, 0, 2);
+                }
+                if (TypeUtils.isOfClassType(type, CANCEL_TIMEOUT)) {
+                    return migrateTimerNameArgument(n, 0, 1);
+                }
+                return n;
+            }
+
+            private J.NewClass migrateTimerNameArgument(J.NewClass n, int timerNameIndex, int arity) {
                 List<Expression> args = n.getArguments();
-                if (args.size() != 2) {
+                if (args.size() != arity) {
                     return n;
                 }
 
                 // Only the string form is the 0.32.0 call. An argument already carrying a TimerName, whether written
                 // by hand or wrapped by an earlier run of this recipe, is not String-typed and falls through here,
                 // which is what keeps a second cycle a no-op.
-                Expression timerName = args.get(1);
+                Expression timerName = args.get(timerNameIndex);
                 if (!TypeUtils.isString(timerName.getType()) || TIMER_NAME_PARSE.matches(timerName)) {
                     return n;
                 }
@@ -125,14 +155,17 @@ public class MigrateSagaTimerName extends Recipe {
                         .build()
                         .apply(new Cursor(getCursor(), timerName), timerName.getCoordinates().replace(),
                                 timerName.withPrefix(Space.EMPTY));
-                return n.withArguments(List.of(args.get(0), parsed.withPrefix(timerName.getPrefix())));
+
+                List<Expression> newArgs = new ArrayList<>(args);
+                newArgs.set(timerNameIndex, parsed.withPrefix(timerName.getPrefix()));
+                return n.withArguments(newArgs);
             }
 
             @Override
             public J.MethodInvocation visitMethodInvocation(J.MethodInvocation method, ExecutionContext ctx) {
                 J.MethodInvocation m = super.visitMethodInvocation(method, ctx);
 
-                if (!isJavaSource() || !TIMER_NAME_ACCESSOR.matches(m)) {
+                if (!isJavaSource() || TIMER_NAME_ACCESSORS.stream().noneMatch(accessor -> accessor.matches(m))) {
                     return m;
                 }
 
@@ -159,6 +192,20 @@ public class MigrateSagaTimerName extends Recipe {
             // Kotlin caller is left to the manual steps in doc/migration/upgrading-to-0.33.0.md.
             private boolean isJavaSource() {
                 return getCursor().firstEnclosing(J.CompilationUnit.class) != null;
+            }
+
+            // A mismatched constructor argument (a String where TimerName is now expected, exactly the 0.32.0 call
+            // this recipe exists to fix) leaves type inference for a generic diamond constructor with nothing to
+            // resolve against, and J.NewClass.getClazz().getType() comes back Unknown for the whole parameterized
+            // type, not just the constructor. The raw type underneath the diamond, SagaEffect.StartTimeout on its
+            // own without <>, is resolved independently of the constructor call and stays attributed either way.
+            private JavaType rawClassTypeOf(J.NewClass n) {
+                TypeTree clazz = n.getClazz();
+                if (clazz instanceof J.ParameterizedType parameterized) {
+                    NameTree rawClazz = parameterized.getClazz();
+                    return rawClazz == null ? null : rawClazz.getType();
+                }
+                return typeOf(clazz);
             }
 
             private JavaType typeOf(TypeTree clazz) {
