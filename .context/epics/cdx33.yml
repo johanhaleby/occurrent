@@ -1,10 +1,10 @@
 schema_version: 1
 epic: cdx33
-revision: 39
-updated_at: 2026-08-11T17:22:49Z
-updated_by: "orchestrator session faee3625 (EPIC CLOSED: 13 of 13 units DONE, main 27 of 27 on b8b6d71c4, tracker scan clean, all three monitors retired)"
+revision: 48
+updated_at: 2026-08-11T19:02:54Z
+updated_by: "orchestrator session faee3625 (U11 MERGED as d03d4e59b and swept, 14 of 15 units done; only U12 remains)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
-authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
+authority: "REOPENED 2026-08-11 after closeout. The tag is HELD again for U11 and U12. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
   - id: act-001
     type: dispatch-chip
@@ -222,3 +222,35 @@ units:
     last_meaningful_progress_at: 2026-08-11T16:45:31Z
     observed: {}
     assessment: "Inline orchestrator work; issues carry the fleet marker and origin link"
+  U11:
+    issue: 741
+    goal: "Persisted per-step matcher state plus a bound on the active step's retained events, the other half of design-review finding 3, with the false 0.31.0 no-unbounded-growth changelog claim corrected"
+    phase: DONE
+    health: PROGRESSING
+    swept: true
+    depends_on: []
+    session: "worktree subagent af8b678b3c64ae940"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "749", met: true, evidence: "MERGED as squash d03d4e59b4b60b8d39c65c4e5292e71a4f45b553, CAS-pinned to 9334aea4fd7601d6e625665637473f0c24a7c90b. Matrix completed/success on that exact head by RUN LIST, 27 of 27, MERGEABLE/CLEAN, 0 unresolved threads with all eight carrying a reply (verified resolved=8 withOwnerReply=8, none silent). Verified on origin/main: stepWindow present (10 hits), predicateId present (14 hits), the corrected bound historyWindow + 2*stepWindow + 1 stated, the carry-over eviction regression test present, ADR 0123 merged at 215 lines. Worktree was untracked-dirty from the scratch file the orchestrator told it to create; its 47 files were enumerated, the three narrative ones preserved to the session scratchpad, then removed. Branch deleted, no stranded push"}
+      - {check: manual_approval, ref: "U11 plan gate, Johan via the orchestrator", met: true, evidence: "SATISFIED 2026-08-11T17:44:27Z. Johan chose the FULL plan (counters plus the retention bound) over the smaller stepWindow-only escape hatch the worker offered, accepting a persisted-shape change pre-tag because after the tag it becomes a second breaking change, and accepting the fail-loud trade when a bounded step leaf declaration changes mid-flight. Johan also chose the knob name stepWindow. The worker found a THIRD broken design: the per-leaf fingerprint of (type, has-predicate, count) that the orchestrator handed it does NOT close known failure mode 1, because two leaves agreeing on all three produce an identical entry, so swapping them crosses their counters and fires the wrong branch. Its fix, approved: raw uncapped saturating counters with the threshold OUT of the key (removing failure mode 2 as a class), plus build-time eligibility requiring same-entry leaves to be equal EventMatchers. Orchestrator answered the other five questions: threshold out of key approved, stepWindow as a NEW knob not a redefinition of historyWindow, the false 0.31.0 growth claim corrected FORWARD rather than by editing a past changelog section, one Kotlin parity function approved, and IllegalStateException with a precise message rather than a new type per the ADR 104/105 precedent"}
+    blocking_on: []
+    next_action: none, merged and swept
+    last_meaningful_progress_at: 2026-08-11T19:02:54Z
+    observed: {}
+    assessment: "FOURTH broken design in this area and the first that is the orchestrator own rather than inherited. Johan answered do what is best long-term per AGENTS.md, so the ruling was DERIVED: existing structure is not a constraint to design around, an easier solution is not acceptable when the gap is correctness, and step conditions are UNRELEASED so the API shape is still free. Therefore give the predicate an identity rather than narrowing eligibility to survive its lack of one. Keep event(type, count, predicate) so an uncapped caller pays nothing, add an identifier overload that reaches the fingerprint, and refuse at build() a capped step with an unidentified predicated leaf, naming the overload as the remedy. Residual stated in the ADR: a caller who changes a predicate body while keeping its identifier still gets silent reuse, which is a broken caller promise of the same kind a schemaVersion carries, categorically different from the library assuming two predicates are the same"
+  U12:
+    issue: 743
+    goal: "A saga declaring a supertype event type subscribes on a CloudEvent type string no concrete event carries, so it silently receives nothing; reproduce first, then fix at the layer the flow DSL, on(Class, ..) and the core builder actually share"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "worktree subagent a80581aec529a818c"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "752", met: false, evidence: "PR 752 open on cdx33/u12-supertype-event-subscription, head 83c5c47558f1acedb45d1961f7622463cc2a74fa, two Copilot threads now open. Orchestrator verified two required things: it re-audited and took ADR 0124 rather than the 0123 in its plan, which U11 had claimed meanwhile, and its ADR NAMES the deliberate divergence from the projection DSL with #750 recorded, which was the required addition. Both out-of-scope traces filed before the PR referenced them: #750 the projection DSL identical defect, #751 Saga#filter parity"}
+      - {check: manual_approval, ref: "U12 plan gate, Johan via the orchestrator", met: true, evidence: "SATISFIED 2026-08-11T17:44:27Z by the orchestrator, since the remaining question (whether to add Saga#filter parity) was a decline-to-widen rather than a scope grant. REPRODUCED on all three routes with controls in the same harness proving the empty results are the defect: core, flow and window-condition sagas all issue nothing, and the core case is worst because startsOn(supertype) never creates an instance at all. The shared layer is the saga eventTypes() rather than the type mapper, so blast radius stays in dsl/saga-dsl. Decisive argument: every layer BELOW the filter is already supertype aware deliberately (TypeDispatch documents it, isInstance in the execution support, the flow impl and ReceivedEvents), and only the filter compares type strings for equality, so this is an internal inconsistency rather than a caller error. Second finding: the projection DSL knew about the constraint and mitigated it with a javadoc note plus a filter() hatch, and the saga DSL copied the derivation without either. Approved fix: expand sealed hierarchies transitively, keep the declared type so a collapsing custom mapper still works, refuse at build() what cannot be expanded, one shared helper for both builders. Saga#filter() deliberately NOT in this PR"}
+    blocking_on: [{what: "two Copilot threads plus a SCOPE EXTENSION from Johan: the expansion already existed as SubscriptionAnnotations.getConcreteEventTypes, so unify into one shared helper in an internal package of occurrent-filter rather than shipping a second copy. Converge on the union of the better choices: keep the declared type (the new side, and it fixes a latent subscription bug), refuse arrays (the old side), throw IllegalArgumentException (the recorded rule, correcting an orchestrator approval), message stays at the caller", since: 2026-08-11T18:48:54Z, recheck_after: "on worker push"}]
+    next_action: await the unified version; at merge-readiness verify the shared helper location, the collapsing-mapper test on the subscription side, both changelog entries, the migration section and the recipe marker
+    last_meaningful_progress_at: 2026-08-11T18:48:54Z
+    observed: {}
+    assessment: "Johan caught that the expansion already existed one module over, which neither the worker nor the orchestrator had grepped for. Unifying paid twice: the EXISTING subscription implementation drops the declared type after expanding, so a custom CloudEventTypeMapper collapsing a hierarchy makes @Subscription(SealedParent.class) subscribe to leaf strings no event carries and silently receive nothing, which is this units own defect one module over and previously uncovered. The diff also settled two questions in the older code favour: it refuses arrays and it throws IllegalArgumentException, the latter per the recorded caller-fixable rule that the orchestrator had approved away as IllegalStateException. Shared home is an internal package of occurrent-filter, deliberately NOT a new module, because the recorded Sonatype 1000-file publishing limit makes a new publishable leaf costly"

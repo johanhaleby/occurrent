@@ -33,6 +33,7 @@ import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.StepConditionProgress;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
@@ -95,6 +96,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String FLOW_LAST_ACTION = "lastAction";
     private static final String FLOW_MATCHED_BRANCH_INDEX = "matchedBranchIndex";
     private static final String FLOW_RECEIVED = "received";
+    private static final String FLOW_STEP_CONDITION_PROGRESS = "stepConditionProgress";
+    private static final String FLOW_LEAF_FINGERPRINT = "leafFingerprint";
+    private static final String FLOW_MATCH_COUNTS = "matchCounts";
 
     private static final EventFormat CLOUD_EVENT_JSON_FORMAT = Objects.requireNonNull(
             EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE), "CloudEvents JSON format must be on the classpath");
@@ -277,6 +281,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         document.append(FLOW_PREVIOUS_STEP_ENTRY_INDEX, flowState.previousStepEntryIndex());
         document.append(FLOW_LAST_ACTION, flowState.lastAction().name());
         document.append(FLOW_MATCHED_BRANCH_INDEX, flowState.matchedBranchIndex());
+        StepConditionProgress progress = flowState.stepConditionProgress();
+        if (progress != null) {
+            document.append(FLOW_STEP_CONDITION_PROGRESS, new Document(FLOW_LEAF_FINGERPRINT, progress.leafFingerprint())
+                    .append(FLOW_MATCH_COUNTS, progress.matchCounts()));
+        }
         List<String> received = new ArrayList<>();
         for (Object event : flowState.received()) {
             received.add(toCloudEventJson(requireConverter().toCloudEvent(event)));
@@ -346,7 +355,21 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 // reaction saw when that document was written.
                 document.getInteger(FLOW_PREVIOUS_STEP_ENTRY_INDEX, -1),
                 ActionKind.valueOf(document.getString(FLOW_LAST_ACTION)),
-                document.getInteger(FLOW_MATCHED_BRANCH_INDEX, -1));
+                document.getInteger(FLOW_MATCHED_BRANCH_INDEX, -1),
+                readStepConditionProgress(document));
+    }
+
+    // Absent counts read back as null, the record's own "not known" value, so the flow lowering counts the step's window
+    // instead. That is what a document written before this field existed gets, and it is also why a sub-document missing its
+    // fingerprint is read as absent rather than thrown on, since the counts cannot be matched to a declaration without it.
+    private static @Nullable StepConditionProgress readStepConditionProgress(Document document) {
+        Document progress = document.get(FLOW_STEP_CONDITION_PROGRESS, Document.class);
+        if (progress == null) {
+            return null;
+        }
+        String fingerprint = progress.getString(FLOW_LEAF_FINGERPRINT);
+        return fingerprint == null ? null
+                : new StepConditionProgress(fingerprint, progress.getList(FLOW_MATCH_COUNTS, Integer.class, List.of()));
     }
 
     private CloudEventConverter<Object> requireConverter() {

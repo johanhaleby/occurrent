@@ -60,7 +60,7 @@ types alongside it leaves that caller working and fixes everyone else.
 The declared type stays in the set for the same reason. Dropping it in favour of the concrete types would break exactly
 the caller whose mapper collapses the hierarchy.
 
-An intermediate sealed interface is left out, because no event is ever stored under its name and the caller never
+An intermediate sealed interface is left out, because it cannot be instantiated and the caller never
 declared it. A sealed class that can be instantiated stays, because events do carry its name.
 
 The filter shape does not change. A saga declaring several types already produced `Filter.type(Condition.or(eq, ..))`,
@@ -93,8 +93,9 @@ types it can find, so a filter derived from it would have matched some events an
 notice than receiving nothing at all.
 
 The message names the type and tells the caller to declare the concrete event types instead, or to make every level of
-the hierarchy below it final or sealed. It names declaring the concrete types first because that always works, including
-under a mapper that collapses the hierarchy.
+the hierarchy below it final or sealed. It names declaring the concrete types first because that is never refused, and it
+is also the remedy under a mapper that collapses the hierarchy, since the concrete types map to the same string the
+declared one did.
 
 ### One expansion for the whole repository, not a second copy
 
@@ -204,7 +205,7 @@ declaration. Marking looked possible, by flagging a class literal handed to the 
 abstract class that is not sealed. OpenRewrite has `Flag.Sealed` in its type model but does not populate it for the type
 behind a class literal, which a test proved by flagging a correctly sealed hierarchy, so the marker would have pointed at
 exactly the code this release fixes. Telling a reader to change correct code is worse than telling them nothing, so the
-recipe was removed and section 9 of the upgrade guide is the migration path instead. Deciding this needs the sealed
+recipe was removed and section 10 of the upgrade guide is the migration path instead. Deciding this needs the sealed
 modifier from the class declaration, which means a scanning recipe holding state across files, and that is a bigger piece
 of machinery than a marker is worth.
 

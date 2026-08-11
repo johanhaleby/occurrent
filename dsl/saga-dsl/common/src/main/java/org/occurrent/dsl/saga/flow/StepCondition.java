@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -42,11 +43,12 @@ import static java.util.Objects.requireNonNull;
  * A step's {@code timeout} is what expresses "this did not happen in time".
  * <p>
  * That property depends on a leaf's predicate being a deterministic function of the event it is handed, and nothing else.
- * The evaluator re-derives each leaf's count from the step window on every delivery, so a predicate that
- * consults the clock, a random source, mutable state, or a remote service can answer differently for the same event on a
- * later delivery, which breaks the "once true, always true" property the design rests on and makes a replay diverge from
- * the original run. Deciding an event on its own contents is supported, and anything else is not. Put a time or lookup
- * condition in the event that records the decision, or in a {@code timeout}, instead. See {@link EventMatcher#predicate()}.
+ * A predicate is run again whenever a leaf's count has to be derived from the step window rather than read off the count
+ * the instance carries, and a replay runs it again from the start, so one that consults the clock, a random source, mutable
+ * state, or a remote service can answer differently for the same event later. That breaks the "once true, always true"
+ * property the design rests on and makes a replay diverge from the original run. Deciding an event on its own contents is
+ * supported, and anything else is not. Put a time or lookup condition in the event that records the decision, or in a
+ * {@code timeout}, instead. See {@link EventMatcher#predicate()}.
  * <p>
  * Within one {@code allOf}, two children that match the same event are refused when the tree is built, since such a
  * declaration reads as more than it requires. {@code anyOf} permits them, and the rule has stated limits, see
@@ -75,17 +77,45 @@ public sealed interface StepCondition<E> permits StepCondition.AtLeast, StepCond
      * satisfies it. Nested inside {@link StepCondition} because it is not itself a condition. Lifting it to a
      * window-level count is what {@link AtLeast} does.
      *
-     * @param eventType the event type to match
-     * @param predicate an additional test the event must pass, or {@code null} to match on type alone. It must be a
-     *                  deterministic function of the event it is given, so the same event yields the same answer every time,
-     *                  because the evaluator re-runs it against the step window on every delivery and a replay runs it again
-     *                  from the start. Reading the clock, a random source, mutable state, or a remote service from a
-     *                  predicate is unsupported and can both fire the wrong branch and make a replay diverge
-     * @param <E>       the domain event type
+     * @param eventType   the event type to match
+     * @param predicate   an additional test the event must pass, or {@code null} to match on type alone. It must be a
+     *                    deterministic function of the event it is given, so the same event yields the same answer every time,
+     *                    because it is run again whenever a count has to be derived from the step window and a replay runs it
+     *                    again from the start. Reading the clock, a random source, mutable state, or a remote service from a
+     *                    predicate is unsupported and can both fire the wrong branch and make a replay diverge
+     * @param predicateId a name for {@code predicate} that stays the same across restarts and recompilations, so a saga can
+     *                    keep this leaf's count in its state instead of counting the step's events again. A lambda is a new
+     *                    object every time the class loads and two different lambdas never compare equal, so without a name
+     *                    there is nothing to tell a redeploy that changed a predicate from one that did not. Optional, and
+     *                    only a leaf that has one can have its count kept, see {@code FlowSaga.Builder.stepWindow}. Change
+     *                    it whenever the predicate's meaning changes
+     * @param <E>         the domain event type
      */
-    record EventMatcher<E>(Class<? extends E> eventType, @Nullable Predicate<E> predicate) {
+    record EventMatcher<E>(Class<? extends E> eventType, @Nullable Predicate<E> predicate, @Nullable String predicateId) {
         public EventMatcher {
             requireNonNull(eventType, "eventType cannot be null");
+            if (predicateId != null) {
+                if (predicate == null) {
+                    throw new IllegalArgumentException("predicateId '" + predicateId + "' names a predicate, so it cannot be given without one");
+                }
+                if (predicateId.isBlank()) {
+                    throw new IllegalArgumentException("predicateId cannot be blank");
+                }
+            }
+        }
+
+        /** As {@link #EventMatcher(Class, Predicate, String)} with no name for the predicate. */
+        public EventMatcher(Class<? extends E> eventType, @Nullable Predicate<E> predicate) {
+            this(eventType, predicate, null);
+        }
+
+        /**
+         * Whether {@code other} counts exactly the same events as this matcher. The predicate's name has no part in it,
+         * since a name says which predicate this is rather than which events it accepts.
+         */
+        public boolean matchesTheSameEvents(EventMatcher<E> other) {
+            requireNonNull(other, "other cannot be null");
+            return eventType.equals(other.eventType) && Objects.equals(predicate, other.predicate);
         }
     }
 
@@ -157,6 +187,39 @@ public sealed interface StepCondition<E> permits StepCondition.AtLeast, StepCond
     static <E, T extends E> StepCondition<E> event(Class<T> eventType, int count, @Nullable Predicate<T> predicate) {
         requireNonNull(eventType, "eventType cannot be null");
         return new AtLeast<>(new EventMatcher<>(eventType, (Predicate<E>) predicate), count);
+    }
+
+    /**
+     * A leaf matching one event of {@code eventType} that also satisfies {@code predicate}, with {@code predicateId}
+     * naming that predicate. See {@link #event(Class, int, String, Predicate)}.
+     */
+    static <E, T extends E> StepCondition<E> event(Class<T> eventType, String predicateId, Predicate<T> predicate) {
+        return event(eventType, 1, predicateId, predicate);
+    }
+
+    /**
+     * A leaf matching {@code count} events of {@code eventType} that also satisfy {@code predicate}, with
+     * {@code predicateId} naming that predicate so a saga can keep this leaf's count in its state rather than counting the
+     * step's events again on every delivery.
+     * <p>
+     * Naming a predicate is what makes {@code FlowSaga.Builder.stepWindow} usable on the step, since dropping a step's older
+     * events means its counts have to survive a redeploy, and a lambda is a different object every time the class loads.
+     * Give the name the predicate's meaning rather than its wording, {@code "isBig"} rather than {@code "amountOver1000"},
+     * and <b>change it whenever the meaning changes</b>. Keeping the name while changing what the predicate accepts is the
+     * one thing this cannot detect, and an instance parked in that step then keeps counting events it matched under the old
+     * test. Two leaves may share a name only when they are the same predicate value.
+     *
+     * @param eventType   the event type to match
+     * @param count       how many matching events are required, at least one
+     * @param predicateId a name for {@code predicate}, stable across restarts and recompilations, neither blank nor null
+     * @param predicate   the test the event must pass, deterministic in the event alone, see {@link EventMatcher#predicate()}
+     */
+    @SuppressWarnings("unchecked") // The predicate only ever runs on an event that eventType.isInstance already accepted.
+    static <E, T extends E> StepCondition<E> event(Class<T> eventType, int count, String predicateId, Predicate<T> predicate) {
+        requireNonNull(eventType, "eventType cannot be null");
+        requireNonNull(predicateId, "predicateId cannot be null");
+        requireNonNull(predicate, "predicate cannot be null");
+        return new AtLeast<>(new EventMatcher<>(eventType, (Predicate<E>) predicate, predicateId), count);
     }
 
     /**
@@ -248,9 +311,9 @@ public sealed interface StepCondition<E> permits StepCondition.AtLeast, StepCond
     // so it covers the allOf(...) factories, a directly constructed AllOf, and a nested allOf that flattening lifted into
     // this level alike. See the allOf javadoc for the rule, the anyOf asymmetry and the limits of the check.
     private static <E> void rejectSharedRequirements(List<StepCondition<E>> conditions) {
-        List<Set<EventMatcher<E>>> perChild = new ArrayList<>();
+        List<List<EventMatcher<E>>> perChild = new ArrayList<>();
         for (StepCondition<E> condition : conditions) {
-            Set<EventMatcher<E>> matchers = new LinkedHashSet<>();
+            List<EventMatcher<E>> matchers = new ArrayList<>();
             StepConditionWalk.forEachLeafMatcher(condition, matchers::add);
             perChild.add(matchers);
         }
@@ -268,14 +331,16 @@ public sealed interface StepCondition<E> permits StepCondition.AtLeast, StepCond
         }
     }
 
-    // The first matcher two children have in common, or null when they share none. A matcher is compared by equality, so two
-    // leaves over one matcher count exactly the same events whatever counts they ask for, which is what makes them a single
-    // requirement in disguise. Composite children are searched through, since an allOf child can be a whole anyOf subtree and
-    // one event reaching a leaf inside it satisfies that child too.
-    private static <E> @Nullable EventMatcher<E> firstShared(Set<EventMatcher<E>> earlier, Set<EventMatcher<E>> later) {
+    // The first matcher two children have in common, or null when they share none. Two matchers are compared on the events
+    // they accept and not on the name a predicate may carry, since a name says which predicate a leaf holds while this rule
+    // is about one event satisfying two children. Composite children are searched through, since an allOf child can be a
+    // whole anyOf subtree and one event reaching a leaf inside it satisfies that child too.
+    private static <E> @Nullable EventMatcher<E> firstShared(List<EventMatcher<E>> earlier, List<EventMatcher<E>> later) {
         for (EventMatcher<E> matcher : earlier) {
-            if (later.contains(matcher)) {
-                return matcher;
+            for (EventMatcher<E> candidate : later) {
+                if (matcher.matchesTheSameEvents(candidate)) {
+                    return matcher;
+                }
             }
         }
         return null;

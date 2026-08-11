@@ -950,3 +950,142 @@ log, and the worker was briefly misled by another session's failing Kotlin build
 that directory earlier in this session, though from an exact path the tool had just printed rather
 than by listing, which is the safe form. Never discover "my" log by recency there; capture command
 output per run instead.
+
+## A routing comment promising pre-tag work is a commitment the closeout must check (2026-08-11, cdx33)
+
+I wrote on issue #741, in bold, "Accepted as the designated pre-tag follow-up, not deferred past the
+release", and "still lands before the 0.33.0 tag". Then I closed the epic, declared 0.33.0
+release-ready, and never dispatched it. Johan caught the contradiction by asking whether none of the
+issues I had just created should be adopted before release.
+
+Both halves of the mechanism were mine. The routing comment exists precisely so the tracker shows a
+decision the user can read, which makes it a promise rather than a note, and I treated it as a note.
+And my closeout checked that every issue HAD a routing comment without checking what any of them
+SAID, so an issue whose comment committed the epic to more work passed the check by carrying the
+comment that contradicted the closure.
+
+**How to apply.** At closeout, read the routing decisions, do not just confirm they exist. Any
+comment that accepts work into this epic or promises it before a release is an unmet deliverable, and
+the epic cannot close while one is outstanding: either dispatch it, or change the decision and REWRITE
+the comment so the tracker stops claiming otherwise. The register's job is to make deferrals visible;
+its failure mode is an acceptance hiding among them. Concretely, grep the routed set for accept-shaped
+language (accepted, pre-tag, before the release, adopt) as part of the closeout, the same way the
+delivery gate greps for unresolved threads.
+
+## Reopening an epic must re-arm every monitor its gate depends on (2026-08-11, cdx33)
+
+The lifetime rule already says an adopted unit reopening a closed epic re-arms the monitor, and I
+applied it, but only to the work-item monitor. The review-thread watch and the stalled-worker detector
+stayed retired. So for a stretch after the reopen, the merge gate had no signal at all for thread
+resolution, which is half of what it checks, and no signal for a subagent going silent.
+
+Nothing was lost, because the first delivery had no review threads and I check the gate by hand before
+every merge anyway. But the gap was real and I did not notice it while writing the reopen checkpoint,
+which named one monitor by id as though that were the complete set.
+
+**How to apply:** the lifetime rule is per SIGNAL, not per monitor. On reopen, enumerate what the merge
+gate and the stall detector actually depend on (delivery and CI, thread resolution, worker liveness),
+and re-arm each. Recording the task ids together in `ORCHESTRATOR.md` is what makes the omission
+visible next time, since a single id in that slot reads as complete.
+
+## A warning left in an ADR amendment caught the very next change (2026-08-11, cdx33 U11)
+
+When the step-condition contract half shipped, its ADR 0120 amendment recorded that `windowStartIndex`
+clamps into `[1, size]` because a store defaults absent fields independently, and warned that any later
+change persisting a sibling number would inherit the same exposure. The next change did exactly that,
+and the warning fired: U11's first drop-evidence test compared the tail start against the step entry
+alone, and a PRE-EXISTING test
+(`a_window_start_past_the_step_entry_does_not_pull_the_initiating_event_into_the_window`) failed
+immediately, because a store defaulting the tail start to 1 and the entry to 0 reads as a real drop.
+The check now also requires an entry position of at least 1.
+
+Two things worth keeping. **Comparing two independently-defaulted persisted numbers is not a safe
+signal**, because a store that fills absent fields per field can manufacture the difference you are
+testing for. And the reconstructed-state tests are the tripwire that catches it: they have now earned
+their place twice, so treat a failure there as evidence about the design rather than a test to adjust.
+
+The meta-point is about where warnings go. This one worked because it sat in the ADR that the next
+author had to read anyway, next to the decision it qualifies, rather than in a lessons file or a PR
+comment. When a change leaves a hazard for its successor, write it where the successor will be standing.
+
+## A surviving mutation usually means the test picked the self-healing side of the guard (2026-08-11)
+
+U11 ran ten mutations and one survived: the persisted counts-length check. The reason was not a weak
+guard but a weak test, which supplied a too-LONG count list where the code self-heals by ignoring the
+excess. Reworked to a too-SHORT list, the mutation died immediately with `IndexOutOfBounds`.
+
+**How to apply:** when a mutation survives, before concluding the guard is untested, ask which side of
+it the test exercised. A guard that tolerates one direction and fails the other needs the failing
+direction, and picking the tolerant side produces a green test that proves nothing, which is exactly
+what mutation testing exists to expose.
+
+## Search for an existing implementation before approving a new helper (2026-08-11, cdx33 U12)
+
+Johan asked whether the sealed-type expansion U12 had just written already existed elsewhere. It did:
+`SubscriptionAnnotations.getConcreteEventTypes` in `framework/spring-boot-autoconfigure/common` has
+recursed sealed permitted subclasses and refused non-sealed interfaces and abstract types all along.
+The one-line grep that finds it is `getPermittedSubclasses` across the repository, and neither the
+worker nor I ran it. I reviewed a plan that proposed "a new expansion helper" and checked its design
+without checking whether the design already existed.
+
+Unifying then paid for itself twice over, which is the part worth remembering. Comparing the two
+implementations showed the EXISTING one carries the same latent bug the new one was written to fix: it
+drops the declared type after expanding, so with a custom `CloudEventTypeMapper` that collapses a
+hierarchy onto the parent's type string, `@Subscription(SealedParent.class)` subscribes to leaf strings
+no stored event carries and silently receives nothing. The comparison also settled two smaller
+questions in the older code's favour: it refuses arrays, which the new one did not, and it throws
+`IllegalArgumentException`, which the repository's own recorded rule requires (caller-fixable by
+passing something else) and which I had approved as `IllegalStateException` without rechecking.
+
+**How to apply.** When a brief or plan proposes a new helper, grep for the distinctive API it must use
+before approving it, not after. And when a duplicate turns up, do not just delete one copy: DIFF THEM.
+The differences are where one side has a bug the other has already fixed, or a rule the other forgot,
+and in this case the older copy was right about two things and wrong about the one that mattered.
+
+## Overclaimed prose has a mechanical tell: absolute quantifiers (2026-08-11, cdx33 U11)
+
+Three of eight review findings on one PR, and five once the worker swept for the pattern, were the same
+defect: a stated guarantee wider than the code. A documented total bound that the retention algorithm
+does not reach, a changelog line saying every same-type predicated pair is refused when equal ones are
+allowed, javadoc requiring a name for "every predicate in a capped step" when a guard's `onlyIf` needs
+none, and an exception whose suggested remedy could not work.
+
+The worker found the tell, and it is checkable rather than a matter of care: **every one of these was a
+sentence that could have been written before the code existed**, and the two that survived its own
+review were both absolutes, `always` and `every`, which the implementation qualifies. Grepping added
+prose for absolute quantifiers and checking each against the code would have caught four of the five.
+
+This is why the prose gate is not enough on its own. The writing gate checks dashes, semicolons and
+voice, all of which are properties of the text. Nothing in it asks whether a sentence is TRUE of the
+code beside it, and the sentences most likely to be false are the confident ones.
+
+**How to apply.** After writing javadoc, a changelog entry, a migration note or an ADR consequence,
+grep the added lines for `always`, `never`, `every`, `all`, `any`, `only` and `must`, and check each hit
+against the implementation rather than against the intent. Prose written from a design describes the
+design; the reader will hold it to the code. Fold this into the writing-gate step rather than treating
+it as a separate review, since it is the same pass over the same added lines.
+
+## Telling a plan-first subagent to touch a file so its worktree survives leaves a dirty worktree at sweep time (2026-08-11, cdx33 U11)
+
+I told U11 to create a scratch file before its first turn ended, so the harness would not auto-remove its
+isolation worktree at the plan gate. That worked. It also meant the worktree was permanently untracked-dirty,
+so the closeout `git worktree remove` refused, and the recorded rule that a dirty worktree is surfaced rather
+than force-removed fired on a directory containing nothing but 47 working files.
+
+Two things to carry.
+
+The workaround has a cost at the other end, so pay it deliberately: name the scratch directory in the brief
+and say it is disposable, or better, have the worker put scratch OUTSIDE the worktree entirely so the tree
+stays clean and the auto-removal problem is solved a different way. Either beats discovering it during a
+sweep and having to enumerate 47 files to decide whether any of them is real work.
+
+And the enumeration is the point rather than a chore. The rule is not "never remove a dirty worktree", it is
+"do not destroy work you have not looked at". Looking took one command and showed reply drafts already posted,
+helper scripts, backup copies used for mutation-restore, and a 303-line plan whose decisions are the merged
+215-line ADR. I preserved the three narrative files into the session scratchpad and then removed with
+`--force`, which is the honest form of the rule: verify, preserve what is unique, then clean.
+
+Smaller catch from the same minute: `git worktree remove ... | tail -1 && echo REMOVED` printed REMOVED while
+the removal had FAILED, because a pipeline's exit status is the last command's. The same class as reading
+BUILD SUCCESS from a log rather than trusting an exit code. Do not put `&&` after a pipe when the left side
+is the thing whose success you are reporting.

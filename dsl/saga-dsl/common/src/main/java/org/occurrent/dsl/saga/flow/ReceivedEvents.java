@@ -26,12 +26,14 @@ import static java.util.Objects.requireNonNull;
  * The events a flow saga instance has received, in arrival order with the initiating event first. It is the only "state" a
  * flow saga has, and is what a reaction, a guard, or a not-fulfilled branch reads.
  * <p>
- * These are the events in the instance's <em>retained window</em>, not necessarily its whole history. A flow saga keeps a
- * bounded window (the initiating event, always present, plus the current step's events and a configurable carry-over of
- * earlier ones, see the flow builder's {@code historyWindow}), so counts and lookups here span that window. A retry guard
- * such as {@code count(PaymentFailed.class) < 3} works as long as its threshold fits inside the window, which the default
- * comfortably covers. A guard that must count far beyond it needs a wider {@code historyWindow}. {@link #initiating()} is
- * the exception. It always returns the start event even after the window has moved past it.
+ * These are the events the instance still keeps, not necessarily its whole history. A flow saga keeps the initiating event,
+ * always present, plus the current step's events and a configurable carry-over of earlier ones (see the flow builder's
+ * {@code historyWindow}), so counts and lookups here span those. A retry guard such as
+ * {@code count(PaymentFailed.class) < 3} works as long as its threshold fits inside what is kept, which the default
+ * comfortably covers. A guard that must count far beyond it needs a wider {@code historyWindow}. Setting the flow builder's
+ * {@code stepWindow} caps the current step's own events too, which shrinks what every callback here reads while leaving a
+ * step condition counting exactly as it did. {@link #initiating()} is the exception. It always returns the start event even
+ * after the older events are gone.
  * <p>
  * How much of that retained history a given callback reads depends on which callback it is. A guard
  * ({@code on(Class, onlyIf, ...)}) and a {@code timeout}'s {@code onExpiry} read all of it, which is what makes a count
