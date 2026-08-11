@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 38
-updated_at: 2026-08-11T16:45:31Z
-updated_by: "orchestrator session faee3625 (all eleven library units DONE; UDOCS dispatched as a subagent with scripted-Bash writes; UREG substance already complete)"
+revision: 39
+updated_at: 2026-08-11T17:22:49Z
+updated_by: "orchestrator session faee3625 (EPIC CLOSED: 13 of 13 units DONE, main 27 of 27 on b8b6d71c4, tracker scan clean, all three monitors retired)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -195,24 +195,24 @@ units:
   UDOCS:
     issue: null
     goal: "Docs repo ripple: sweep held branches (52, 55, 61, 54 news post, others as touched), rebuild docs/0.33.0-preview, update occurrent-org.github.io#57. Trigger: every GATING library unit with a docs surface merged; stalled non-gating units defer their ripple alongside"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U1, U3, U5, U6, U8, U9]
     session: "subagent afbe9f24d44e68160 (no worktree isolation, it edits a second repository through scripted Bash)"
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "docs/0.33.0-preview and five held branches", met: true, evidence: "DELIVERED. Docs PRs 52 and 63 CLOSED (verified CLOSED via gh): 52 documented the withdrawn applied-position feature end to end, 63 renamed its header and without an async counterpart would have left two headings both saying synchronous plus a broken published anchor. Branches updated and pushed, none merged: 49 (e05dab2, the pre-existing kramdown blank line, placed here because 49 merges first so later rebases inherit it), 54 (b8b9a7a), 55 (ac19258, all four U6 facts), 61 (122fb73, all three U3 semantics verified by the orchestrator in its added lines), the unopened release-note branch (81aabfd), and the preview (0a2274f, rebuilt by 24 asserted exact-text replacements, never a merge). Preview built clean and grep-verified: withdrawn API 0 hits across eight patterns, new fencing and step-condition facts present, anchors resolve once each. Issue 57 body rewritten as the authoritative order. Merges remain Johan"}
     blocking_on: []
-    next_action: await DELIVERY_RESULT; verify the preview greps return zero for the withdrawn API and that issue 57 body matches the corrected order
-    last_meaningful_progress_at: 2026-08-11T16:45:31Z
+    next_action: none, delivered; the nine remaining docs PRs are held until the occurrent-0.33.0 tag exists
+    last_meaningful_progress_at: 2026-08-11T17:22:49Z
     observed: {}
-    assessment: "Held-branch convention, push never merge; trial-merge + exact-once paragraph greps per recorded docs lessons"
+    assessment: "Found three things nobody had listed. A FIFTH stale claim in PR 54 news post said two strategy beans now start with an unfenced timer poller, which U6 reversed, so the release notes would have published the opposite of shipped behaviour. PR 63 never mechanically depended on 52 (all three hunks change text already on main), so issue 57 dependency was editorial. And the preview already carried the duplicated historyWindow paragraph issue 57 warns about, two adjacent copies with no conflict. It also corrected the orchestrator own wording: the custom-strategy bug is that such a strategy NEVER REACHED the subscription model, not that there were two lease owners. Left to Johan in issue 57: whether to drop the now-redundant unopened release-note branch, and that PR 58 will look small after rebasing onto 54 since they duplicate 11 identical rename lines"
   UREG:
     issue: null
     goal: "Deferred/declined register at closeout: issues for finding 21 (measurement), finding 5 (wrapper contract); decline record for finding 20; ORCHESTRATOR.md register update"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
