@@ -915,3 +915,38 @@ quiet activity, and make sure the signal covers that. Excluding generated output
 reviewing a diff and wrong for detecting a stall. And when a derived health label contradicts
 observable evidence, the label is what to fix, not the worker: I corrected the epic state rather than
 nudging a worker that was doing exactly what it should.
+
+## Two SmartInitializingSingletons have no usable relative order (2026-08-11, cdx33 U6)
+
+The startup guard that refuses a checkpoint storage unable to evaluate write conditions was first
+written as its own `SmartInitializingSingleton`. Copilot pointed out that
+`OccurrentBlockingAnnotationBeanPostProcessor` is one too, and being a post-processor it is created
+early, so its callback can run a PUSH projection or saga catch-up and issue a conditional checkpoint
+write before the guard ever executes. The worker reproduced it: startup failed with
+`UnsupportedOperationException: This storage cannot evaluate NotOlderThan[writeVersion=42]`, the exact
+failure the guard existed to replace with an actionable message.
+
+The fix is not an `@Order`. Spring runs those callbacks in bean creation order, so the guard now runs
+as the FIRST STATEMENT of the registering callback itself, which makes precedence a property of the
+call site rather than of bean lifecycle. Proven by deletion: removing that one line makes the new test
+fail with the real exception. The guard's own bean callback stays for an application that registers no
+annotations, and running the check twice is free because it only reads beans.
+
+**How to apply:** a check that must precede a side effect belongs inside the thing that causes the
+side effect, not beside it in the same lifecycle phase. When a guard's correctness depends on
+ordering, prove it by deleting the guard and watching the specific failure return, because a guard
+that never runs and a guard that always passes look identical in a green build.
+
+## Two traps from the same unit, both worth keeping
+
+**A Mockito `CheckpointStorage` answers `false` to the new capability AND `null` from `save`.** A test
+meant to prove the fenced path needs both stubbed. The `null` return is why the worker's first
+ordering test passed for the wrong reason, which is the more dangerous half: it was green while
+proving nothing. Whenever a new boolean is added to an interface that tests mock, every mock silently
+answers the safe-looking default, so search for `mock(` on that type as part of the change.
+
+**rtk's tee directory is shared across sessions.** `ls -t` on it can return another worktree's build
+log, and the worker was briefly misled by another session's failing Kotlin build. I read a file from
+that directory earlier in this session, though from an exact path the tool had just printed rather
+than by listing, which is the safe form. Never discover "my" log by recency there; capture command
+output per run instead.
