@@ -149,16 +149,18 @@ convention that says to run that grep is now in AGENTS.md.
 **Comparing the two copies is what found the next defect, which is why they are diffed rather than one being deleted.**
 The subscription copy expands a sealed type and drops the declared type, keeping only what it permits. So a subscription
 never asks for the declared type's own CloudEvent type, and any event stored under that string is missed without a word.
-With the mappers Occurrent ships nothing is stored under it, so nothing is missed today. Write a `CloudEventTypeMapper`
-that maps a hierarchy onto the type string of the type it was declared with and `@Subscription(OrderEvent.class)` receives
-nothing, which is this ADR's defect one module over. The saga version kept the declared type and did not have it.
+That is a real gap under the mappers Occurrent ships whenever the declared type is itself concrete, since an event stored
+as an instance of it directly then has no CloudEvent type of its own in the filter, no custom mapper needed.
+`@Subscription(OrderEvent.class)` on a concrete sealed `OrderEvent` receives every permitted concrete type but never an
+`OrderEvent` stored on its own, which is this ADR's defect one module over. The saga version kept the declared type and
+did not have it.
 
 So the two converge on one helper carrying the better choice from each side, rather than two behaviours kept because
 touching the other caller was inconvenient:
 
 | Behaviour | From | Why |
 |---|---|---|
-| Keep the declared type in the set | The saga version | Makes a collapsing custom mapper work, and fixes the subscription gap above. Another disjunct can only widen what matches. |
+| Keep the declared type in the set | The saga version | Fixes the subscription gap above, a concrete declared type whose own instances are stored had no CloudEvent type of its own in the filter. Another disjunct can only widen what matches. |
 | Refuse an array type | The subscription version | An array is final and not an interface, so a check for interface and abstract alone lets it through, and no event is stored under it. |
 | Throw `IllegalArgumentException` | The subscription version | A caller fixes this by passing different types, which AGENTS.md says is an argument exception. The first version of this change threw `IllegalStateException`. |
 | The caller writes the message | Both | A saga and a subscription have different things to say, so the helper reports which type it could not expand and each caller formats and throws. |
@@ -236,9 +238,9 @@ derivation (`ProjectionFilters`, `SubscriptionFilters`, `DomainEventQueries`, an
 annotation registrars), and the reasoning for not widening a change the release is held for into four more modules on
 the day of the tag. Anyone who reads the difference should find #750 before concluding one side is wrong.
 
-A subscription's derived filter now also names the declared sealed type. That matters only for a custom
-`CloudEventTypeMapper` that maps a hierarchy onto the type string of the type it was declared with, where such a
-subscription received nothing before, so it gets its own changelog entry as a change to released behaviour.
+A subscription's derived filter now also names the declared sealed type. That matters whenever the declared type is
+itself concrete and an event is stored as an instance of it directly, under the mappers Occurrent ships or any other,
+where such a subscription received nothing before, so it gets its own changelog entry as a change to released behaviour.
 
 **No OpenRewrite recipe helps with the refusal, and a review marker was tried and abandoned rather than skipped on
 principle.** Rewriting was never possible, since the concrete subtypes of an open hierarchy cannot be read off the

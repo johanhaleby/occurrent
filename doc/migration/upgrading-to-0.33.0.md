@@ -551,9 +551,10 @@ already has one. Its `eventTypes` attribute is the explicit list, the same one t
 An annotation-based subscription's filter changes too, but not from the same mapper, and it needs nothing from you. It
 used to derive its filter from the concrete types a sealed type permits and leave the declared type out. The collapsing
 mapper above never had a gap from that, since its concrete types already mapped to the one string every event has. The
-filter now names the declared type too regardless, closing a gap that only a `CloudEventTypeMapper` mapping the declared
-type to a string none of its concrete types share could hit, and no mapper Occurrent ships works that way. A subscription
-that only hit this gap keeps working, because another type in a filter can only widen what matches.
+gap is real whenever the declared type is itself concrete and an event is stored as an instance of it directly, under
+the mapper Occurrent ships or any other, since the old filter never named that type's own CloudEvent type. The filter
+now names the declared type too, and a subscription that only hit this gap keeps working, because another type in a
+filter can only widen what matches.
 
 ### Why there is no recipe for this one
 
