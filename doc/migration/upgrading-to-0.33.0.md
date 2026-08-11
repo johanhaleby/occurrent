@@ -147,12 +147,14 @@ The static lookup on `ReplayAwareSubscriptions` and `IntrospectableSubscriptions
 
 `of` is the convention Java uses for constructing a value, and `Optional.of` in particular never returns empty, but
 this method searches a `SubscriptionModelWrapper` chain and can come back empty, so `findIn` says what it actually
-does. Every `Subscribable`, `SubscriptionModelLifeCycle`, `SubscriptionModel` and `SubscriptionModelWrapper` now
-extends `SubscriptionModelCapability`, so a caller whose argument is statically typed as one of those four keeps
-compiling without change. A caller holding the same value through a broader static type, an `Object` variable being
-the case that comes up, does not compile against the narrowed parameter even though the value underneath is a
-genuine subscription model, and has to declare it as one of the four instead. That is the trade-off this rename
-makes, not a gap in it. `findIn` keeps taking the marker rather than gaining a second `Object`-typed overload.
+does. Every capability facet, `Subscribable`, `SubscriptionModelLifeCycle`, `SubscriptionModel`,
+`SubscriptionModelWrapper` and the rest ADR 118 below lists, now extends `SubscriptionModelCapability`, so a caller
+whose argument is statically typed as one of them keeps compiling without change. A caller holding the same value
+through a broader static type, an `Object` variable being the case that comes up, does not compile against the
+narrowed parameter even though the value underneath is a genuine subscription model, and has to narrow the
+variable's declared type instead, to the marker itself or to whichever facet it actually is. That is the trade-off
+this rename makes, not a gap in it. `findIn` keeps taking the marker rather than gaining a second `Object`-typed
+overload.
 [ADR 118](../architecture/decisions/0118-a-subscription-model-capability-marker-replaces-object-in-the-of-lookups.md)
 has the reasoning. `RepositionableSubscriptions.findIn` never shipped under the `of` name, so it is not in this table.
 
