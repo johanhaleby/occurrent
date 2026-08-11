@@ -40,11 +40,13 @@ import java.util.OptionalLong;
 public interface CheckpointWriteVersionSource {
 
     /**
-     * The version to stamp the next checkpoint write for {@code subscriptionId} with.
+     * The version to stamp the next checkpoint write for {@code subscriptionId} with. When present it must be
+     * non-negative, since it becomes {@link CheckpointWriteCondition#notOlderThan(long)}, which rejects a negative
+     * value.
      *
      * @param subscriptionId The id of the subscription about to write a checkpoint
-     * @return The version to write, or {@link OptionalLong#empty()} for no version, which the caller turns into
-     * {@link CheckpointWriteCondition#any()}
+     * @return The non-negative version to write, or {@link OptionalLong#empty()} for no version, which the caller
+     * turns into {@link CheckpointWriteCondition#any()}
      */
     OptionalLong writeVersion(String subscriptionId);
 }
