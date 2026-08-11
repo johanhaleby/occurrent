@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 24
-updated_at: 2026-08-11T12:06:55Z
-updated_by: "orchestrator session faee3625 (U3 plan gate CLOSED, Johan ruled through the orchestrator: defer counters and pair with retention, reject shared matcher in allOf, Mongo store edit granted)"
+revision: 25
+updated_at: 2026-08-11T12:09:39Z
+updated_by: "orchestrator session faee3625 (U1 MERGED as 0f3980c20, the withdrawal is on main; both review blockers now closed; ORCHESTRATOR.md staleness that Copilot routed to the orchestrator is repaired)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -26,17 +26,17 @@ units:
   U1:
     issue: null
     goal: "Applied-position ordering (finding 1, blocker): direction decided at its plan gate (document early-return window / refuse recording for async Mongo projections / committed-prefix design), docs-truth floor either way, ADR 0111 amendment"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_4640fd9a-5acf-4678-863e-c4b79e9e7460
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "739", met: false, evidence: "PR 739 open, head f2bd0d3d6, FIVE unresolved Copilot threads with the worker in its pr-fix loop. The owed bookkeeping is now DONE and orchestrator-verified rather than taken from the report: issue 740 exists, carries the ⌁[cdx33/U1] marker, cross-links #361 and #739 both ways, and has its orchestrator-routing comment; #361 is REOPENED with an explanatory comment naming 740 as superseding it. ADR 0122 added, ADR 0111 amended at Status and decisions 5 and 7. Worker still running its last verification chunk (both Mongo starters)"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "739", met: true, evidence: "MERGED as squash 0f3980c20a42ad3389ebc6e14a1962120e79eede, CAS-pinned to 355f198fa8b351a5b4b05c872781584d65b37f6f. Matrix completed/success on that exact head by run list. 3 of 5 threads resolved, 2 left as reasoned declines the policy permits, both correctly scoped out (docs repo, and ORCHESTRATOR.md which is the orchestrator file and on the worker must-not-touch list) with concrete replies naming the owners. Verified on origin/main: no reference to the withdrawn API anywhere in dsl, framework, subscription or eventstore; ADR 0122 present; ADR 0111 carries a withdrawal blockquote AFTER its original Status text rather than a silent rewrite; all three sibling changelog bullets (U2, U7, U10) survived and both applied-position entries are gone. Final diff 26 files, 176 insertions, 2572 deletions, 14 files deleted. Branch deleted on merge, no stranded push"}
       - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: true, evidence: "SATISFIED 2026-08-11T10:38:40Z: Johan approved /Users/johan/.claude/plans/whimsical-cooking-hopper.md after four planning rounds plus a requested second opinion. Direction: WITHDRAW the applied-position feature from 0.33.0 (13 files deleted, 10 unwired), new ADR with the completed-prefix refutation and verified Axon/Marten/Emmett prior art, ADR 0111 withdrawn via amendment blockquotes, and an epic-grade 0.34.0 issue for the append-identity design with its three named open points. D3 resolved as none-of-the-above: withdraw-then-redesign"}
     blocking_on: []
-    next_action: await DELIVERY_RESULT and thread resolution, then verify the matrix by run list on the exact head and merge
-    last_meaningful_progress_at: 2026-08-11T11:41:22Z
+    next_action: sweep the worktree, branch and session
+    last_meaningful_progress_at: 2026-08-11T12:09:39Z
     observed: {}
     assessment: "Bigger than the meta-plan contingency and cleaner, nothing unsound ships at all. Grounds: no shipped configuration was sound (change streams and push feeds violate the position-order precondition, the in-memory store publishes outside its lock), WriteResult carries no position so the documented scenario was unreachable from the stream API, and AGENTS.md rules against docs-only for a correctness gap and against unsettled public abstractions. Finding 19 becomes moot, U9 work knowingly erased. #361 linkage and docs PR 52 retargeting via worker DELIVERY_RESULT plus UDOCS"
   U2:
