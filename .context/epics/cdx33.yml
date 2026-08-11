@@ -1,57 +1,73 @@
 schema_version: 1
 epic: cdx33
-revision: 1
-updated_at: 2026-08-11T09:05:38Z
-updated_by: orchestrator session faee3625 (registration; meta-plan /Users/johan/.claude/plans/unified-bubbling-koala.md approved by Johan 2026-08-11 via ExitPlanMode after fresh-context adversarial review REVISE with 7 findings folded and 4 structured-ask decisions D1/D2/D4/D5 resolved)
+revision: 2
+updated_at: 2026-08-11T09:13:22Z
+updated_by: "orchestrator session faee3625 (Wave A dispatched: chips U1 task_ba829706, U2 task_451aa889, U3 task_da2f0e02, U5 task_2459a4e4, U8 task_e3494741, U9 task_11128297, U10 task_e3b84149; worktree subagents U7 a32867d69034d2062, UADR a8343ed82d7f98335; monitor bkps4vt2j armed pre-dispatch)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
-pending_actions: []
+pending_actions:
+  - id: act-001
+    type: dispatch-chip
+    target: "Wave A chips U1/U2/U3/U5/U8/U9/U10 (task ids in updated_by)"
+    expected: "chips visible to Johan; sessions start on his click; spawn-result pending-lists suggest U1/U2/U3/U5 already started"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-11T09:13:22Z
+  - id: act-002
+    type: dispatch-chip
+    target: "U7 and UADR dispatched as in-session worktree subagents, not chips (nearest allowed type; ids in updated_by)"
+    expected: "each delivers a PR and a DELIVERY_RESULT completion notification"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-11T09:13:22Z
 units:
   U1:
     issue: null
     goal: "Applied-position ordering (finding 1, blocker): direction decided at its plan gate (document early-return window / refuse recording for async Mongo projections / committed-prefix design), docs-truth floor either way, ADR 0111 amendment"
-    phase: PLANNED
+    phase: READY
     health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_ba829706"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: false, evidence: null}
     blocking_on: []
-    next_action: spawn chip (plan-first, Opus/high)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: awaiting session start / first delivery signal
+    last_meaningful_progress_at: 2026-08-11T09:13:22Z
     observed: {}
     assessment: "Blocker; broken-as-documented (javadoc+ADR 0111 vs ADR 0084). Gate floor: docs truth. U9 boundary: must not alter the wait-deadline contract or U9 rebases after this gate"
   U2:
     issue: null
     goal: "Manual-start pin refusal (finding 12, blocker): compare stored vs captured on ifAbsent refusal, fail loud on difference, later-registrant-starts-first test, check manual-start ADR amendment need"
-    phase: PLANNED
+    phase: READY
     health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_451aa889"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: spawn chip (Sonnet/high)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: awaiting session start / first delivery signal
+    last_meaningful_progress_at: 2026-08-11T09:13:22Z
     observed: {}
     assessment: "Silent event loss in opt-in MANUAL mode, first run, adverse ordering. NOT the #681 edge (verified)"
   U3:
     issue: null
     goal: "StepCondition semantics AND evaluation (findings 2, 3 in full per D4, 4, ADR 0120 drift): fired-window reactions with initiating() reachable, compiled per-step matcher state, determinism contract, duplicate-children rule. Hard constraint: reads 0.32.0-written saga documents (seed-by-hand proof)"
-    phase: PLANNED
+    phase: READY
     health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_da2f0e02"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "U3 plan gate, Johan", met: false, evidence: null}
     blocking_on: []
-    next_action: spawn chip (plan-first, Opus/high)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: awaiting session start / first delivery signal
+    last_meaningful_progress_at: 2026-08-11T09:13:22Z
     observed: {}
     assessment: "Epic's largest unit and schedule risk; fallback at its plan gate is splitting finding 3's evaluation work into a pre-tag follow-up, Johan's call"
   U4:
@@ -72,16 +88,16 @@ units:
   U5:
     issue: null
     goal: "Migration tooling truth (findings 8, 11, 9-guide-half): recipe stubs delegate any() and reject stronger, empty writeVersion, TimerName effect-record constructor matchers, guide corrections, runtime-behavior test via DurableSubscriptionModel"
-    phase: PLANNED
+    phase: READY
     health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_2459a4e4"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: spawn chip (Sonnet/high)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: awaiting session start / first delivery signal
+    last_meaningful_progress_at: 2026-08-11T09:13:22Z
     observed: {}
     assessment: "Gating: official migration converts compile break into runtime failure today. Owns doc/migration/upgrading-to-0.33.0.md exclusively until U6"
   U6:
@@ -103,77 +119,77 @@ units:
   U7:
     issue: null
     goal: "Redis sentinels (finding 17): non-negative validation in notOlderThan ONLY if no shipped/documented version source can be negative, else adapter-boundary structured result"
-    phase: PLANNED
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "subagent a32867d69034d2062"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: dispatch subagent (Sonnet/medium)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: awaiting DELIVERY_RESULT notification
+    last_meaningful_progress_at: 2026-08-11T09:13:22Z
     observed: {}
     assessment: "Non-gating; must not touch CompetingConsumerCheckpointWriteVersionSource.java (U6's file)"
   U8:
     issue: null
     goal: "Filter AND short-circuit (finding 18): restore ordered short-circuit on in-memory query path keeping the reparse win, regression test vs 0.32.0 semantics, check #647 changelog entry"
-    phase: PLANNED
+    phase: READY
     health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_e3494741"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: spawn chip (Sonnet/high)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: awaiting session start / first delivery signal
+    last_meaningful_progress_at: 2026-08-11T09:13:22Z
     observed: {}
     assessment: "Gating: only true 0.32.0 behavior regression in the set (PR #647)"
   U9:
     issue: null
     goal: "Reactive wait deadline (finding 19): mirror blocking twin's wait-local deadline in ReactiveMongoAppliedProjectionPositionStore, outage test for returns-false-never-throws within deadline"
-    phase: PLANNED
+    phase: READY
     health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_11128297"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: spawn chip (Sonnet/medium)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: awaiting session start / first delivery signal
+    last_meaningful_progress_at: 2026-08-11T09:13:22Z
     observed: {}
     assessment: "Gating. Boundary: rebases after U1's plan gate if waitUntilApplied semantics move"
   U10:
     issue: null
     goal: "Lifecycle cleanup (findings 13, 14): opt-out marker only after delegate subscribe succeeds; terminal cleanup for failed catch-up respecting removal-as-cancellation semantics. 14 is the scope-cut line"
-    phase: PLANNED
+    phase: READY
     health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_e3b84149"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: spawn chip (Sonnet/high)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: awaiting session start / first delivery signal
+    last_meaningful_progress_at: 2026-08-11T09:13:22Z
     observed: {}
     assessment: "Non-gating but ships with release unless stalled; finding 14 fix needs a Changes changelog entry (released behavior)"
   UADR:
     issue: null
     goal: "ADR status drift (finding 6 residue: 0110, 0116 status lines and stale claims)"
-    phase: PLANNED
-    health: UNKNOWN
+    phase: RUNNING
+    health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "subagent a8343ed82d7f98335"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: manual_approval, ref: "design gate: Johan wording confirm before merge", met: false, evidence: null}
     blocking_on: []
-    next_action: dispatch subagent (Sonnet/low)
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: awaiting DELIVERY_RESULT notification
+    last_meaningful_progress_at: 2026-08-11T09:13:22Z
     observed: {}
     assessment: "Non-gating; prose, design-gate rule applies"
   UDOCS:
