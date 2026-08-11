@@ -59,6 +59,17 @@ import java.util.concurrent.TimeUnit;
  * so {@code FilterMatcher}'s AND does not short-circuit and every leaf is actually read; a filter that fails fast on
  * its first leaf costs one read regardless of leafCount, which is not the case this benchmark is measuring.
  * <p>
+ * {@code FilterMatcher.matchesAndFilter} briefly regressed the fail-fast claim in the previous paragraph. Between
+ * PR #647 and its fix, every data path in an AND was resolved through {@code readAll} before any operand was
+ * evaluated, so a leading metadata leaf that already decided the result no longer saved a payload read, and a
+ * store with no {@link org.occurrent.filtermatching.DataFieldReader} (which answers a read with
+ * {@code UnsupportedOperationException}) could throw on a filter that 0.32.0 evaluated to {@code false} without
+ * ever touching the payload. Ordered, left-to-right evaluation is restored, and this suite still does not prove it,
+ * because a throughput benchmark cannot distinguish "zero reads" from "one very cheap read" at these leaf counts.
+ * {@code FilterMatcherTest} asserts the call counts directly instead, once for the no-throw outcome with a refusing
+ * reader and once for the zero-{@code read}/zero-{@code readAll} count with a counting reader, both on a type
+ * mismatch ahead of two data leaves.
+ * <p>
  * Run with, for example:
  * <pre>{@code
  * java -jar benchmark/target/benchmarks.jar PayloadFilterReadBenchmark -wi 3 -i 5 -f 1
