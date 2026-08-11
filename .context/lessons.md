@@ -971,3 +971,19 @@ the comment so the tracker stops claiming otherwise. The register's job is to ma
 its failure mode is an acceptance hiding among them. Concretely, grep the routed set for accept-shaped
 language (accepted, pre-tag, before the release, adopt) as part of the closeout, the same way the
 delivery gate greps for unresolved threads.
+
+## Reopening an epic must re-arm every monitor its gate depends on (2026-08-11, cdx33)
+
+The lifetime rule already says an adopted unit reopening a closed epic re-arms the monitor, and I
+applied it, but only to the work-item monitor. The review-thread watch and the stalled-worker detector
+stayed retired. So for a stretch after the reopen, the merge gate had no signal at all for thread
+resolution, which is half of what it checks, and no signal for a subagent going silent.
+
+Nothing was lost, because the first delivery had no review threads and I check the gate by hand before
+every merge anyway. But the gap was real and I did not notice it while writing the reopen checkpoint,
+which named one monitor by id as though that were the complete set.
+
+**How to apply:** the lifetime rule is per SIGNAL, not per monitor. On reopen, enumerate what the merge
+gate and the stall detector actually depend on (delivery and CI, thread resolution, worker liveness),
+and re-arm each. Recording the task ids together in `ORCHESTRATOR.md` is what makes the omission
+visible next time, since a single id in that slot reads as complete.
