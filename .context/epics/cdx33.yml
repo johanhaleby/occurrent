@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33
-revision: 55
+revision: 56
 updated_at: 2026-08-11T19:56:20Z
 updated_by: "orchestrator session faee3625 (U12 MERGED as 743391bc6, all 15 library units done; UDOCS2 dispatched as the last unit)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -26,7 +26,7 @@ pending_actions:
     type: dispatch-chip
     target: "U13 dispatched as an in-session subagent (nearest allowed type; agent id in updated_by)"
     expected: "one PR correcting FlowStateImpl's retention bound, the changelog's sealed-type entry and migration section 10, plus a DELIVERY_RESULT"
-    status: PENDING
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-11T19:40:00Z
@@ -34,13 +34,13 @@ units:
   U13:
     issue: null
     goal: "Documentation truth for two defects in this epic's own output: #754 (FlowStateImpl.java:52 still states the superseded retention bound historyWindow + stepWindow + 1) and #755 (the reopened-hierarchy startup refusal now applies to subscriptions as well as sagas, which is a breaking change against 0.32.0 that the changelog denies and migration section 10 frames as saga-only)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "756", met: false, evidence: "Open at head 0664659b4, NOT merged. Nine review rounds, every round a confirmed defect, none of them drift. #754 fixed and #755 fixed across changelog, migration section 10, both refusal messages and ADR 124; #757 folded in after its deferral rationale evaporated. Docs repo held branch 2c4e205 and preview 07f3169 both pushed, docs main untouched. Round 9 abandoned point fixes and derived the shape enumeration from concreteTypesOf's predicate instead, which immediately found a gap eight rounds of findings had missed: an array declaration was getting a message telling it to seal itself, and section 10 had no array row at all. Both messages now branch for arrays and both sides have array tests. Verification pending: Java CI running on this head."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "756", met: true, evidence: "MERGED as squash 9f52fee8a317023b0d23906eb87a9e017e44407c, CAS-pinned to 55b67693981a51238d691c0143069cf162244d8e, which was 27 of 27 green by run list on its own full matrix. Eleven review rounds, every one a confirmed defect. #754, #755 and #757 closed; #758 filed and deferred. Docs held branch 2c4e205 and preview 07f3169 pushed, docs main untouched. Remote branch deleted, agent worktree removed, all three monitors retired. Main matrix on the merge commit still verifying."}
   U1:
     issue: null
     goal: "Applied-position ordering (finding 1, blocker): direction decided at its plan gate (document early-return window / refuse recording for async Mongo projections / committed-prefix design), docs-truth floor either way, ADR 0111 amendment"
