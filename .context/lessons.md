@@ -1018,3 +1018,26 @@ excess. Reworked to a too-SHORT list, the mutation died immediately with `IndexO
 it the test exercised. A guard that tolerates one direction and fails the other needs the failing
 direction, and picking the tolerant side produces a green test that proves nothing, which is exactly
 what mutation testing exists to expose.
+
+## Search for an existing implementation before approving a new helper (2026-08-11, cdx33 U12)
+
+Johan asked whether the sealed-type expansion U12 had just written already existed elsewhere. It did:
+`SubscriptionAnnotations.getConcreteEventTypes` in `framework/spring-boot-autoconfigure/common` has
+recursed sealed permitted subclasses and refused non-sealed interfaces and abstract types all along.
+The one-line grep that finds it is `getPermittedSubclasses` across the repository, and neither the
+worker nor I ran it. I reviewed a plan that proposed "a new expansion helper" and checked its design
+without checking whether the design already existed.
+
+Unifying then paid for itself twice over, which is the part worth remembering. Comparing the two
+implementations showed the EXISTING one carries the same latent bug the new one was written to fix: it
+drops the declared type after expanding, so with a custom `CloudEventTypeMapper` that collapses a
+hierarchy onto the parent's type string, `@Subscription(SealedParent.class)` subscribes to leaf strings
+no stored event carries and silently receives nothing. The comparison also settled two smaller
+questions in the older code's favour: it refuses arrays, which the new one did not, and it throws
+`IllegalArgumentException`, which the repository's own recorded rule requires (caller-fixable by
+passing something else) and which I had approved as `IllegalStateException` without rechecking.
+
+**How to apply.** When a brief or plan proposes a new helper, grep for the distinctive API it must use
+before approving it, not after. And when a duplicate turns up, do not just delete one copy: DIFF THEM.
+The differences are where one side has a bug the other has already fixed, or a rule the other forgot,
+and in this case the older copy was right about two things and wrong about the one that mattered.
