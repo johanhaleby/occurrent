@@ -19,6 +19,7 @@ package org.occurrent.dsl.saga;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
+import org.occurrent.filter.internal.EventTypeExpansion;
 
 import java.util.*;
 import java.util.function.BiFunction;
@@ -124,9 +125,24 @@ public interface Saga<E, S extends @Nullable Object, C> {
     Set<Class<? extends E>> startEventTypes();
 
     /**
+     * The refusal a saga reports for an event type its subscription cannot be built from. Shared by {@link Builder},
+     * {@link #create} and {@code FlowSaga.Builder} so all three say the same thing.
+     */
+    static IllegalArgumentException cannotSubscribeOn(Class<?> eventType) {
+        return new IllegalArgumentException("no event is stored under the type of " + eventType.getName()
+                + " and its concrete subtypes cannot all be found, so a subscription derived from it would silently miss "
+                + "stored event types. Declare the concrete event types instead, or make every level of the hierarchy "
+                + "below " + eventType.getSimpleName() + " final or sealed.");
+    }
+
+    /**
      * All event types the saga reacts to, the default subscription selector (mirrors {@code Projection#eventTypes()}).
      * Empty means "no type narrowing". Feeding a saga a broader stream is safe: an input it does not handle folds to the
      * same state and produces no effects.
+     * <p>
+     * A saga built by {@link Builder} or {@code FlowSaga.Builder} reports more than it was given whenever it declares a
+     * sealed type, because every concrete type that type permits is in here too. Handler lookup already accepts a
+     * supertype, so those concrete types are the ones a subscription has to ask for.
      */
     default Set<Class<? extends E>> eventTypes() {
         return Set.of();
@@ -249,16 +265,16 @@ public interface Saga<E, S extends @Nullable Object, C> {
             throw new IllegalArgumentException("a saga needs at least one start event type, startEventTypes cannot be empty");
         }
         // Union the start types into the subscription selector, exactly as Builder.build() does. eventTypes is the default
-        // subscription filter: a start type left out of a non-empty eventTypes would be filtered off the subscription, so a
-        // start event could never reach the saga and no instance could ever be created. An empty eventTypes still means
-        // "no type narrowing" (subscribe to everything), so only widen a set the caller has already narrowed.
+        // subscription filter, so a start type left out of a non-empty eventTypes would be filtered off the subscription
+        // and no instance could ever be created. An empty eventTypes still means "no type narrowing" (subscribe to
+        // everything), so only widen a set the caller has already narrowed.
         Set<Class<? extends E>> types;
         if (eventTypes.isEmpty()) {
             types = Set.of();
         } else {
             Set<Class<? extends E>> union = new LinkedHashSet<>(eventTypes);
             union.addAll(starts);
-            types = Set.copyOf(union);
+            types = EventTypeExpansion.expand(union, Saga::cannotSubscribeOn);
         }
         return new Saga<>() {
             @Override
@@ -557,26 +573,23 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 throw new IllegalStateException("a saga needs at least one startsOn(...) event type, call startsOn(...) before build()");
             }
 
-            Set<Class<?>> handledTypes = new LinkedHashSet<>();
-            handledTypes.addAll(eventEvolvers.keySet());
-            handledTypes.addAll(eventReactors.keySet());
-            handledTypes.addAll(startTypes);
+            Set<Class<? extends E>> declaredTypes = new LinkedHashSet<>();
+            for (Class<?> type : eventEvolvers.keySet()) {
+                declaredTypes.add((Class<? extends E>) type);
+            }
+            for (Class<?> type : eventReactors.keySet()) {
+                declaredTypes.add((Class<? extends E>) type);
+            }
+            declaredTypes.addAll(startTypes);
+            Set<Class<? extends E>> allTypes = EventTypeExpansion.expand(declaredTypes, Saga::cannotSubscribeOn);
             if (correlateAll == null) {
                 TypeDispatch<Function<E, @Nullable String>> coverage = new TypeDispatch<>(correlators);
-                for (Class<?> type : handledTypes) {
+                for (Class<?> type : allTypes) {
                     if (coverage.resolve(type) == null) {
                         throw new IllegalStateException("event type " + type.getName() + " has no correlation; register correlate("
                                 + type.getSimpleName() + ".class, ...) or a correlateAll(...) fallback before build()");
                     }
                 }
-            }
-
-            Set<Class<? extends E>> allTypes = new LinkedHashSet<>(startTypes);
-            for (Class<?> type : eventEvolvers.keySet()) {
-                allTypes.add((Class<? extends E>) type);
-            }
-            for (Class<?> type : eventReactors.keySet()) {
-                allTypes.add((Class<? extends E>) type);
             }
 
             S initial = this.initialState;
@@ -589,7 +602,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
             EventReactor<S, E, C> onStartFn = this.onStart;
             Predicate<S> terminalFn = this.isTerminal;
             Set<Class<? extends E>> starts = Set.copyOf(startTypes);
-            Set<Class<? extends E>> types = Set.copyOf(allTypes);
+            Set<Class<? extends E>> types = allTypes;
 
             return new Saga<>() {
                 @Override

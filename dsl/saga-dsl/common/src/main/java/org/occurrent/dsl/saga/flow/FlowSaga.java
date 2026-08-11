@@ -25,6 +25,7 @@ import org.occurrent.dsl.saga.flow.FlowSagaImpl.Branch;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.CompiledStep;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.WindowCondition;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
+import org.occurrent.filter.internal.EventTypeExpansion;
 
 import java.util.*;
 import java.util.function.BiFunction;
@@ -232,7 +233,7 @@ public final class FlowSaga {
             }
 
             validateTransitionToTargets(stepsByName.keySet());
-            Set<Class<? extends E>> eventTypes = collectEventTypes();
+            Set<Class<? extends E>> eventTypes = EventTypeExpansion.expand(collectEventTypes(), Saga::cannotSubscribeOn);
             validateCorrelationCoverage(eventTypes);
             validateStepWindowCanKeepCounts();
 
@@ -297,7 +298,7 @@ public final class FlowSaga {
                     }
                 }
             }
-            return Set.copyOf(types);
+            return Collections.unmodifiableSet(types);
         }
 
         private void validateCorrelationCoverage(Set<Class<? extends E>> eventTypes) {
