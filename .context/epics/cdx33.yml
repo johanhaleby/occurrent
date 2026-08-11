@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 21
-updated_at: 2026-08-11T11:37:10Z
-updated_by: "orchestrator session faee3625 (U2 Option E delivered on head 1de6225f6 and verified; PR 728 hold LIFTED; this revision also repairs a corruption the orchestrator itself pushed, see the note below)"
+revision: 22
+updated_at: 2026-08-11T11:41:22Z
+updated_by: "orchestrator session faee3625 (U1 hold condition satisfied: epic issue 740 filed and routed, 361 reopened and cross-linked; six fleet issues routed as deferrals)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "PR 728 hold LIFTED 2026-08-11: the Option E rewrite on head 1de6225f6db43ed524510ae82dbe86d300608fa9 is orchestrator-verified and merges on the normal gate (matrix on that exact head by run list, plus resolved threads). Any head at or before 3d6abd2089b626ae96254e711a71f7da24b6c5f1 carries the SUPERSEDED warn-and-proceed shape and must never be merged. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -32,11 +32,11 @@ units:
     depends_on: []
     session: local_4640fd9a-5acf-4678-863e-c4b79e9e7460
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "739", met: false, evidence: "PR 739 open, head 262ad953cabb7b0b0cef9fcb76805de17fecf4e3: 14 files removed, 11 unwired, ADR 0122 added (number confirmed free by a cross-branch ls-tree over every origin ref, claimed only on this branch). No residual references to the withdrawn API outside ADRs, the changelog and my own .context files. OWED: the 0.34.0 epic issue is a required plan deliverable and is NOT filed yet, the PR body references only #361; verify at merge-readiness per the PR-body bookkeeping rule"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "739", met: false, evidence: "PR 739 open, head f2bd0d3d6, FIVE unresolved Copilot threads with the worker in its pr-fix loop. The owed bookkeeping is now DONE and orchestrator-verified rather than taken from the report: issue 740 exists, carries the ⌁[cdx33/U1] marker, cross-links #361 and #739 both ways, and has its orchestrator-routing comment; #361 is REOPENED with an explanatory comment naming 740 as superseding it. ADR 0122 added, ADR 0111 amended at Status and decisions 5 and 7. Worker still running its last verification chunk (both Mongo starters)"}
       - {check: manual_approval, ref: "U1 plan gate (D3 direction), Johan", met: true, evidence: "SATISFIED 2026-08-11T10:38:40Z: Johan approved /Users/johan/.claude/plans/whimsical-cooking-hopper.md after four planning rounds plus a requested second opinion. Direction: WITHDRAW the applied-position feature from 0.33.0 (13 files deleted, 10 unwired), new ADR with the completed-prefix refutation and verified Axon/Marten/Emmett prior art, ADR 0111 withdrawn via amendment blockquotes, and an epic-grade 0.34.0 issue for the append-identity design with its three named open points. D3 resolved as none-of-the-above: withdraw-then-redesign"}
     blocking_on: []
-    next_action: await DELIVERY_RESULT; do not merge until the 0.34.0 epic issue exists and #361 linkage is stated
-    last_meaningful_progress_at: 2026-08-11T11:28:00Z
+    next_action: await DELIVERY_RESULT and thread resolution, then verify the matrix by run list on the exact head and merge
+    last_meaningful_progress_at: 2026-08-11T11:41:22Z
     observed: {}
     assessment: "Bigger than the meta-plan contingency and cleaner, nothing unsound ships at all. Grounds: no shipped configuration was sound (change streams and push feeds violate the position-order precondition, the in-memory store publishes outside its lock), WriteResult carries no position so the documented scenario was unreachable from the stream API, and AGENTS.md rules against docs-only for a correctness gap and against unsettled public abstractions. Finding 19 becomes moot, U9 work knowingly erased. #361 linkage and docs PR 52 retargeting via worker DELIVERY_RESULT plus UDOCS"
   U2:
