@@ -595,3 +595,28 @@ against the merged heads recorded in the epic state answers it for the whole epi
 branch that reappeared after a delete-on-merge is the loudest form of the signal. Then adopt whatever
 is there as a unit rather than deleting it, which is also why worktree removal belongs at the end of
 the sweep and not at the merge.
+
+## The v7 monitor cannot see a thread being resolved (2026-08-11, cdx33)
+
+The v7 fleet-monitor pattern keys its delta on PR number, head SHA, mergeable, `reviewDecision`,
+a failing-check count and a DONE/running flag. A Copilot review arrives as `COMMENTED`, which
+leaves `reviewDecision` an EMPTY STRING, and resolving a thread changes no other field. So a
+worker that answers a reviewer and resolves the thread without pushing a commit takes its PR
+from blocked to merge-ready and the monitor emits nothing at all.
+
+This was caught before it cost anything, by asking what signal would tell me that U2's and U8's
+unresolved Copilot threads had been dealt with. The answer was none: U8's fix happened to need a
+commit, so its head would move, but U2's might not have.
+
+It is the same defect family as the already-recorded hand-rolled monitor that only reported
+arrival and departure, and the same rule applies, wire the missing signal rather than shorten the
+heartbeat. The v7 pattern is not wrong, it simply watches delivery and CI rather than review
+completion, and the merge gate needs all three.
+
+**How to apply:** when the merge gate includes review threads, and it always does here, arm a
+companion watch that polls unresolved-thread counts per open PR and emits on change
+(`THREADS-ALL-RESOLVED` is the merge-gate candidate, `THREADS-OPEN` means still blocked). Keep it
+separate from v7 rather than widening v7's delta key, so a truncated or unhealthy poll in one
+cannot silence the other, and retire both together under the monitor lifetime rule. Recorded in
+`ORCHESTRATOR.md` with the task ids. Worth folding into `references/fleet-monitor.md` as a v8
+addendum at the next edit of that file, since the gap is generic and not specific to this epic.
