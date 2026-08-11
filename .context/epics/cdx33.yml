@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 2
-updated_at: 2026-08-11T09:13:22Z
-updated_by: "orchestrator session faee3625 (Wave A dispatched: chips U1 task_ba829706, U2 task_451aa889, U3 task_da2f0e02, U5 task_2459a4e4, U8 task_e3494741, U9 task_11128297, U10 task_e3b84149; worktree subagents U7 a32867d69034d2062, UADR a8343ed82d7f98335; monitor bkps4vt2j armed pre-dispatch)"
+revision: 3
+updated_at: 2026-08-11T09:27:41Z
+updated_by: "orchestrator session faee3625 (UADR delivered PR 726, orchestrator-verified, held at the design gate for Johan wording confirm plus one rewrap fix in flight; U7 recovered from a dead background Maven run)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -127,8 +127,8 @@ units:
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: awaiting DELIVERY_RESULT notification
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    next_action: awaiting DELIVERY_RESULT after the background-run recovery (foreground chunked Redis tests)
+    last_meaningful_progress_at: 2026-08-11T09:27:41Z
     observed: {}
     assessment: "Non-gating; must not touch CompetingConsumerCheckpointWriteVersionSource.java (U6's file)"
   U8:
@@ -179,17 +179,17 @@ units:
   UADR:
     issue: null
     goal: "ADR status drift (finding 6 residue: 0110, 0116 status lines and stale claims)"
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
     session: "subagent a8343ed82d7f98335"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "726", met: false, evidence: "DELIVERED and orchestrator-verified at head 56f3e4f2eb0e859ddefc17967df1a66d20f25f10: 0 failing checks, 0 pending, one Copilot thread resolved, second Copilot review on that head with no new comments, #638 and #665 confirmed closed, findIn signature confirmed at ReplayAwareSubscriptions.java:61-63. NOT merged: design gate awaits Johan wording confirm, and one introduced 140-char line (file wraps at 120) is being rewrapped by the worker"}
       - {check: manual_approval, ref: "design gate: Johan wording confirm before merge", met: false, evidence: null}
-    blocking_on: []
-    next_action: awaiting DELIVERY_RESULT notification
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    blocking_on: [{what: "Johan wording confirm on the ADR prose (design gate)", since: 2026-08-11T09:27:41Z, recheck_after: "next tick"}]
+    next_action: route the wording confirm to Johan once the rewrap head lands, then CAS merge
+    last_meaningful_progress_at: 2026-08-11T09:27:41Z
     observed: {}
     assessment: "Non-gating; prose, design-gate rule applies"
   UDOCS:
