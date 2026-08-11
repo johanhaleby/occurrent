@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 9
-updated_at: 2026-08-11T09:51:37Z
-updated_by: "orchestrator session faee3625 (U7 DELIVERY_RESULT received with the conditional evidence its brief required; U5 PR 731 and U9 PR 730 delivered, Copilot reviewed both)"
+revision: 10
+updated_at: 2026-08-11T09:53:13Z
+updated_by: "orchestrator session faee3625 (U7 DONE and swept, PR 729 squashed as 6ad6bc084327c405db253a761d3055a61b7a30e3; two of thirteen units complete)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -119,22 +119,22 @@ units:
   U7:
     issue: null
     goal: "Redis sentinels (finding 17): non-negative validation in notOlderThan ONLY if no shipped/documented version source can be negative, else adapter-boundary structured result"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "subagent a32867d69034d2062"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "729", met: false, evidence: "PR 729, code head 411cb7dce37848fb09c7e87fb47c67bcf4b2f8d8 ran the full matrix 27 of 27 SUCCESS; current head 68213aa4bbead38473ef4e70538af0adf30dbeea differs by ONE changelog line only (verified via the compare API), so the code is byte-identical to the green head. Threads 0 unresolved. One check still QUEUED on the markdown head, merge waits for it. Orchestrator re-ran the writing-gate greps on the added line: clean"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "729", met: true, evidence: "MERGED as squash 6ad6bc084327c405db253a761d3055a61b7a30e3, CAS-pinned to 68213aa4bbead38473ef4e70538af0adf30dbeea and the post-merge head equals that pin. Gate on a fresh read at merge time: 0 failing, 0 pending, 0 unresolved threads. The code head 411cb7dce ran the full matrix 27 of 27; the merged head differed by one changelog line only. Non-negative validation confirmed present on origin/main at CheckpointWriteCondition.java:51-60. Branch already deleted on merge, no stranded commit, worktree clean at the merged pin and swept"}
     blocking_on: []
-    next_action: CAS merge pinned to 68213aa4bbead38473ef4e70538af0adf30dbeea once the queued check completes
-    last_meaningful_progress_at: 2026-08-11T09:51:37Z
+    next_action: none, merged and swept
+    last_meaningful_progress_at: 2026-08-11T09:53:13Z
     observed: {}
     assessment: "Took the PREFERRED non-negative validation in CheckpointWriteCondition, and the conditional evidence holds: the only production version source is CompetingConsumerCheckpointWriteVersionSource, reaching only the two Mongo lease strategies, whose version comes from MongoListenerLockService seeding 0 and incrementing by 1, with the default fencingToken returning empty; no ADR or migration text permits a negative, no other call sites exist, and the Redis adapter comment already asserted the invariant. Copilot then correctly required the refinement be folded into the existing unreleased changelog bullet rather than omitted, which reverses this unit brief no-changelog instruction; the convention (AGENTS.md unreleased-capability rule) is what governs and the orchestrator confirmed the fold is minimal"
   U8:
     issue: null
     goal: "Filter AND short-circuit (finding 18): restore ordered short-circuit on in-memory query path keeping the reparse win, regression test vs 0.32.0 semantics, check #647 changelog entry"
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
