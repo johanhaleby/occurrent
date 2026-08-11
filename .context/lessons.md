@@ -1201,3 +1201,27 @@ sweep. List the claims the change falsifies, grep for each claim's subject rathe
 string, and check the held branches and the rendered preview, not just the source. Report anchors and
 claims as two separate results, because "the docs agree" that means only the anchors resolved is the
 kind of sentence that stops anyone looking further.
+
+## All threads resolved is not review clean, because a review body carries findings too
+
+**What happened.** The companion thread watch reported `THREADS-ALL-RESOLVED: PR 756, all 2 threads
+resolved, merge-gate candidate`, and it was telling the truth. Copilot's second review of that head
+had nonetheless raised two substantive findings, both correct, and both delivered as prose in the
+review BODY with no anchored thread behind them. The thread count stayed at 2 of 2 resolved throughout.
+I only saw them because I read the review body while waiting for the workflow to finish, not because
+any signal pointed at them.
+
+**Why it matters.** The merge gate is stated as green plus threads resolved, and the thread watch was
+built precisely because a resolved thread changes nothing v7 watches. Both halves were satisfied here
+while a defect sat in the review. One of the two findings was that the changelog's affected-set
+criterion excluded a shape the code refuses, a concrete sealed root with a reopened descendant, which
+is the exact shape the docs' own worked example uses. Merging on the two green signals would have
+shipped it.
+
+**How to apply.** Treat a review's body as a first-class finding surface. At the merge gate, read
+`pulls/<n>/reviews` bodies for the current head, not just `reviewThreads`, and only then call the
+review clean. The thread watch stays useful for detecting when a worker has finished answering, but
+it answers "are the anchored conversations closed", never "did the reviewer say something". Extending
+the watch to notice a new review body on the current head is the missing signal here, and the standing
+rule applies: when the user or the orchestrator sees something before the monitor does, wire the
+signal rather than shortening the heartbeat.
