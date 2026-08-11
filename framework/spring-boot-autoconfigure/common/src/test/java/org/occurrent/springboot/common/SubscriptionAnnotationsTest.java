@@ -295,13 +295,33 @@ class SubscriptionAnnotationsTest {
     }
 
     @Test
-    void refuses_an_array_event_type_with_a_message_that_does_not_offer_sealing_it() {
+    void refuses_an_array_listed_in_eventTypes_with_a_message_covering_both_remedies() {
         // An array can never be sealed or final in a way that fixes this, so this shape gets its own message rather
-        // than the "cannot all be enumerated" one, which would tell a reader to do something impossible.
+        // than the "cannot all be enumerated" one, which would tell a reader to do something impossible. The message
+        // cannot tell whether the array came from eventTypes or from the handler's own parameter, so it names both.
         assertThatThrownBy(() -> resolveOrderEventTypes(OrderPlaced[].class))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("order-subscription")
-                .hasMessageContaining("no event is ever stored as an array")
+                .hasMessageContaining("does not support an array")
+                .hasMessageContaining("handler method's own event parameter")
+                .hasMessageContaining("eventTypes attribute")
+                .hasMessageNotContaining("cannot all be enumerated")
+                .hasMessageNotContaining("final or sealed");
+    }
+
+    @Test
+    void refuses_an_array_handler_parameter_with_the_same_dual_remedy_message() {
+        // Unlike the case above, no eventTypes is specified at all here, the array is the handler's own declared
+        // parameter type. Listing a concrete type in eventTypes would not fix this: resolveDomainEventTypes checks
+        // eventTypes elements for assignability to the handler's parameter type, and no element type is assignable to
+        // an array of it, so that path throws a different exception (IllegalStateException) rather than helping.
+        assertThatThrownBy(() -> SubscriptionAnnotations.<OrderPlaced[]>resolveDomainEventTypes("array-param-subscription",
+                new Handlers(), handler("onOrderEvent"), OrderPlaced[].class, new Class<?>[0], "@Subscription"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("array-param-subscription")
+                .hasMessageContaining("does not support an array")
+                .hasMessageContaining("handler method's own event parameter")
+                .hasMessageContaining("eventTypes attribute")
                 .hasMessageNotContaining("cannot all be enumerated")
                 .hasMessageNotContaining("final or sealed");
     }

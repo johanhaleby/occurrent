@@ -130,8 +130,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
      */
     static IllegalArgumentException cannotSubscribeOn(Class<?> eventType) {
         if (eventType.isArray()) {
-            return new IllegalArgumentException("no event is ever stored as an array, so " + eventType.getName()
-                    + " can never be a declared event type. Declare the concrete event types instead.");
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be a declared event type, since this expansion does not support an array. Declare the concrete event types instead.");
         }
         return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
                 + " cannot all be enumerated, so a filter derived from it would miss some of them. Declare the concrete "

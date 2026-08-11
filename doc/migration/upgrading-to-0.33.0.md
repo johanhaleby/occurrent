@@ -477,9 +477,12 @@ its subtypes are knowable, so a reopened level below it is refused just the same
 exactly the ones that were going missing. For a subscription, the third row is the only one of the four that is new in
 0.33.0, the first, second and fourth were already refused in 0.32.0.
 
-The fourth row is refused for a different reason than the first three. No event is ever stored as an array at all, not
-because its concrete subtypes cannot be enumerated. Sealing or finalizing an array is not a real option, so its message
-skips that remedy and only points at declaring the concrete event types.
+The fourth row is refused for a different reason than the first three. This expansion does not support an array as a
+declared event type at all, not because its concrete subtypes cannot be enumerated. Sealing or finalizing an array is
+not a real option, so its message skips that remedy. A saga's message points at declaring the concrete event types. A
+subscription's message cannot tell where the array came from, so it names both fixes, changing the handler method's own
+event parameter to a concrete event type, or listing concrete event types in the `eventTypes` attribute if that is
+where the array was declared instead.
 
 A saga or a subscription that declares concrete types is unaffected, and so is one that declares a sealed type whose
 every level is sealed or final. Java records and Kotlin data classes are final already, so an ordinary sealed hierarchy

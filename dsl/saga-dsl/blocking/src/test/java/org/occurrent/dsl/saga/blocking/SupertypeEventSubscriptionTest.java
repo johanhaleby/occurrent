@@ -186,7 +186,7 @@ class SupertypeEventSubscriptionTest {
                 .evolve(OrderPlaced[].class, (state, e) -> state)
                 .build())
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("no event is ever stored as an array")
+                .hasMessageContaining("does not support an array")
                 .hasMessageNotContaining("cannot all be enumerated")
                 .hasMessageNotContaining("final or sealed");
     }
