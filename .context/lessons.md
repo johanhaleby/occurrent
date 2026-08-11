@@ -1301,3 +1301,28 @@ tree's non-markdown content identical to it". `git diff --name-only <that-head> 
 answers the third part, and an empty result is what licenses reusing the earlier head's verdict.
 Poll the specific workflow on the specific SHA rather than the PR rollup, since the rollup answers
 about the head and cannot tell you what it did not run.
+
+## A first-time shard failure is not evidence of a regression, and not evidence of a flake either
+
+**What happened.** The cdx33 closeout found main red on the merge commit: 26 of 27 green, with
+`test (subscription-mongodb-spring, java-21)` failing on
+`SubscriptionModelConformance$TheLifeCycle.a_paused_subscription_receives_what_the_fixture_declares_and_delivers_again_once_resumed`,
+asserting subsequence `["2", "3"]` against actual `["3"]`, so a model declaring it holds events while
+paused dropped the held one. The merged change was two exception message strings, one javadoc line and
+markdown, which has no mechanical path to pause semantics. The same shard passed on java-25 in the same
+run, had passed on both JDKs in the previous main run, and the six main runs before that were green.
+The job log carried nine `ChangeStreamHistoryLost` (MongoDB error 286) events. A rerun of the failed
+job on the same commit passed, and main finished 27 of 27.
+
+**Why it matters.** Both available shortcuts were wrong. "The diff cannot plausibly cause this" is the
+reasoning that lets a real regression through, and it was especially tempting here because the diff was
+prose. "The shard is known flaky, ignore it" was also unavailable, because this shard had been green on
+the immediately preceding run, so there was no standing red to point at. The only thing that settled it
+was rerunning the same job on the same commit, which costs one wait and produces evidence instead of an
+argument.
+
+**How to apply.** On a red closeout, gather three facts before forming a view: did the sibling matrix
+entry pass, was this shard green on the previous run of the same branch, and does the log show
+infrastructure signatures rather than assertion logic. Then rerun rather than conclude. Record the
+signature either way, since a flake that is never written down is rediscovered from scratch every time.
+This one is worth recognising: change-stream history loss under a paused-subscription hold test.
