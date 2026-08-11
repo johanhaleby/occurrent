@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 8
-updated_at: 2026-08-11T09:40:08Z
-updated_by: "orchestrator session faee3625 (U8 rerun green so the shard was a flake, but ONE unresolved Copilot thread blocks the merge; worker owns it)"
+revision: 9
+updated_at: 2026-08-11T09:51:37Z
+updated_by: "orchestrator session faee3625 (U7 DELIVERY_RESULT received with the conditional evidence its brief required; U5 PR 731 and U9 PR 730 delivered, Copilot reviewed both)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -94,10 +94,10 @@ units:
     depends_on: []
     session: "chip task_2459a4e4"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "731", met: false, evidence: "PR 731 open, head 7f08d9b97636318a7b800bf52879627995e56fd9. Copilot has reviewed and left unresolved threads; worker owns its pr-fix loop. Not merge-ready"}
     blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    next_action: await thread resolution and DELIVERY_RESULT
+    last_meaningful_progress_at: 2026-08-11T09:51:37Z
     observed: {}
     assessment: "Gating: official migration converts compile break into runtime failure today. Owns doc/migration/upgrading-to-0.33.0.md exclusively until U6"
   U6:
@@ -125,12 +125,12 @@ units:
     depends_on: []
     session: "subagent a32867d69034d2062"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "729", met: false, evidence: "PR 729, code head 411cb7dce37848fb09c7e87fb47c67bcf4b2f8d8 ran the full matrix 27 of 27 SUCCESS; current head 68213aa4bbead38473ef4e70538af0adf30dbeea differs by ONE changelog line only (verified via the compare API), so the code is byte-identical to the green head. Threads 0 unresolved. One check still QUEUED on the markdown head, merge waits for it. Orchestrator re-ran the writing-gate greps on the added line: clean"}
     blocking_on: []
-    next_action: awaiting DELIVERY_RESULT after the background-run recovery (foreground chunked Redis tests)
-    last_meaningful_progress_at: 2026-08-11T09:27:41Z
+    next_action: CAS merge pinned to 68213aa4bbead38473ef4e70538af0adf30dbeea once the queued check completes
+    last_meaningful_progress_at: 2026-08-11T09:51:37Z
     observed: {}
-    assessment: "Non-gating; must not touch CompetingConsumerCheckpointWriteVersionSource.java (U6's file)"
+    assessment: "Took the PREFERRED non-negative validation in CheckpointWriteCondition, and the conditional evidence holds: the only production version source is CompetingConsumerCheckpointWriteVersionSource, reaching only the two Mongo lease strategies, whose version comes from MongoListenerLockService seeding 0 and incrementing by 1, with the default fencingToken returning empty; no ADR or migration text permits a negative, no other call sites exist, and the Redis adapter comment already asserted the invariant. Copilot then correctly required the refinement be folded into the existing unreleased changelog bullet rather than omitted, which reverses this unit brief no-changelog instruction; the convention (AGENTS.md unreleased-capability rule) is what governs and the orchestrator confirmed the fold is minimal"
   U8:
     issue: null
     goal: "Filter AND short-circuit (finding 18): restore ordered short-circuit on in-memory query path keeping the reparse win, regression test vs 0.32.0 semantics, check #647 changelog entry"
@@ -155,10 +155,10 @@ units:
     depends_on: []
     session: "chip task_11128297"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "730", met: false, evidence: "PR 730 open, head 534cdd3255b00ce161bea1879686ce9b1df5e8f3. Copilot has reviewed and left unresolved threads; worker owns its pr-fix loop. Not merge-ready"}
     blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T09:13:22Z
+    next_action: await thread resolution and DELIVERY_RESULT
+    last_meaningful_progress_at: 2026-08-11T09:51:37Z
     observed: {}
     assessment: "Gating. Boundary: rebases after U1's plan gate if waitUntilApplied semantics move"
   U10:

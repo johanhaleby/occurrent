@@ -262,6 +262,7 @@ Local patterns:
 - Focused test class: `rtk mvn -pl <module-path> -am -Dtest=<TestClass> test`
 - DCB touched-module set: `rtk mvn -q -pl eventstore/api/dcb,eventstore/inmemory,eventstore/mongodb/spring/blocking,application/service/blocking,subscription/mongodb/spring/blocking -am test`
 - **Authoritative gate: read the log for `BUILD SUCCESS`/`BUILD FAILURE`, never trust a wrapper exit code.** Confirm the JDK is 21 (`mvn -version`).
+- **`-Dtest=<Class>` combined with `-am` fails the whole reactor** on the first upstream module that has no such test class, so pass `-Dsurefire.failIfNoSpecifiedTests=false` alongside it (cdx33 U7, 2026-08-11). Without the flag the run dies before reaching the module you were targeting, which reads as a failure of your change.
 
 Release: `mvn_local_snapshot.sh` runs a release-profile local install with `-Drevision=...`. `mvn_release.sh` requires Java 21, uses `mvn deploy -Prelease` with GPG signing, source/javadoc jars, Sonatype Central publishing, and tags `occurrent-<version>`.
 
