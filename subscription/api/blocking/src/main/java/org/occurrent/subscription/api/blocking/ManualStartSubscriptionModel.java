@@ -159,10 +159,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
 
         claim(subscriptionId);
         try {
-            // Checked before capturing the position, not after, so a checkpoint written in between is never missed.
-            // Reading it the other way round could observe no checkpoint, then have one land before the position
-            // is captured, and wrongly treat that write as a first-run pin to compare against later instead of the
-            // existing checkpoint it actually is.
+            // Checked before capturing the position, not after. Capturing the position first would let another
+            // node's write land before this check runs, making a fresh race look like prior history and get
+            // silently accepted instead of compared.
             boolean checkpointAlreadyExisted = checkpointStorage != null && checkpointStorage.exists(subscriptionId);
             // Captured before taking the lock, so a slow position source cannot block start(boolean), and captured
             // whatever the state looks like from here, because a stop() landing in between would otherwise leave this
