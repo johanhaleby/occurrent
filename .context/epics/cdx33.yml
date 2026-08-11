@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 31
-updated_at: 2026-08-11T15:09:36Z
-updated_by: "orchestrator session faee3625 (PR 742 carries two correct Copilot findings, one a released-API regression on join; orchestrator ruled both must be fixed and told the worker how)"
+revision: 32
+updated_at: 2026-08-11T15:25:12Z
+updated_by: "orchestrator session faee3625 (U4 dispatched as a subagent, its dependency cleared by verifying PR 742 does not touch SagaFlowExtensions.kt)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -73,18 +73,18 @@ units:
   U4:
     issue: null
     goal: "Kotlin StepCondition variance (finding 10): on(condition) takes out E, compile test"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U3]
-    session: null
+    session: "worktree subagent ae3fe6d4ee9905efe"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: dispatch subagent after U3 plan confirms no SagaFlowExtensions.kt overlap
-    last_meaningful_progress_at: 2026-08-11T09:05:38Z
+    next_action: await DELIVERY_RESULT; if PR 742 merges first the worker rebases, and reconcile any changelog clause it deliberately skipped to avoid colliding with 742
+    last_meaningful_progress_at: 2026-08-11T15:25:12Z
     observed: {}
-    assessment: "Non-gating; small"
+    assessment: "Dependency cleared by evidence rather than by waiting: PR 742 touches 15 files in dsl/saga-dsl and NONE of them is SagaFlowExtensions.kt, so U4 can run in parallel. Two collision guards in the brief: its compile test goes in a NEW Kotlin test file because 742 is editing DocumentedFlowSagaKotlinTest.kt, and it adds no changelog clause if that would collide with 742 edit of the same unreleased entry, leaving the orchestrator to reconcile after both merge. Adding out to a type parameter position is source-compatible, so no migration machinery is owed"
   U5:
     issue: null
     goal: "Migration tooling truth (findings 8, 11, 9-guide-half): recipe stubs delegate any() and reject stronger, empty writeVersion, TimerName effect-record constructor matchers, guide corrections, runtime-behavior test via DurableSubscriptionModel"
