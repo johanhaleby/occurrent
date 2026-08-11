@@ -111,9 +111,10 @@ method every user of `MaterializedView` must implement, for the benefit of the f
 between the question and the update, and it makes the view ask where the runner already knows the answer and can simply
 say so.
 
-No `static Optional<ReplayAware> findIn(SubscriptionModelCapability)` helper, unlike `ReplayAwareSubscriptions` and
-`IntrospectableSubscriptions`. Those exist to unwrap `SubscriptionModelWrapper`. There is no delegating
-materialized view, so the helper would be ceremony around a bare `instanceof`.
+No static lookup helper for `ReplayAware`, unlike `ReplayAwareSubscriptions.findIn(SubscriptionModelCapability)`
+and `IntrospectableSubscriptions.findIn(SubscriptionModelCapability)`. Those exist to unwrap a
+`SubscriptionModelWrapper`. There is no delegating materialized view, so the helper would be ceremony around a
+bare `instanceof`.
 
 > **Amended on 2026-08-08 by [ADR 111](0111-a-projection-records-the-position-it-has-applied.md).** A
 > delegating materialized view now exists, the position recorder built there, and it wraps a view rather
