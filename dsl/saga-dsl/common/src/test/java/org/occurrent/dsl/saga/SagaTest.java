@@ -927,6 +927,32 @@ class SagaTest {
             assertThatThrownBy(() -> saga.startEventTypes().add(PaymentReserved.class))
                     .isInstanceOf(UnsupportedOperationException.class);
         }
+
+        @Test
+        void expands_a_sealed_event_type_the_caller_declared() {
+            Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.create(
+                    null,
+                    OrderEvent::orderId,
+                    Set.of(OrderPlaced.class),
+                    Set.of(OrderEvent.class),
+                    (state, input) -> state,
+                    (state, input) -> List.of());
+
+            assertThat(saga.eventTypes()).contains(OrderEvent.class, OrderPlaced.class, PaymentReserved.class);
+        }
+
+        @Test
+        void an_empty_eventTypes_stays_empty_and_is_not_refused() {
+            Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.create(
+                    null,
+                    OrderEvent::orderId,
+                    Set.of(OrderPlaced.class),
+                    Set.of(),
+                    (state, input) -> state,
+                    (state, input) -> List.of());
+
+            assertThat(saga.eventTypes()).isEmpty();
+        }
     }
 
     @Nested

@@ -70,6 +70,15 @@ class EventTypeExpansionTest {
     static final class SealedSubclass extends InstantiableBase {
     }
 
+    sealed static class PartlyOpenInstantiableBase permits ReopenedSubclassHolder, ReopenedAbstractSubclass {
+    }
+
+    static final class ReopenedSubclassHolder extends PartlyOpenInstantiableBase {
+    }
+
+    static abstract non-sealed class ReopenedAbstractSubclass extends PartlyOpenInstantiableBase {
+    }
+
     @Test
     void a_sealed_interface_expands_into_the_concrete_types_it_permits() {
         Set<Class<? extends OrderEvent>> expanded = EventTypeExpansion.expand(Set.of(OrderEvent.class));
@@ -141,6 +150,15 @@ class EventTypeExpansionTest {
         assertThatThrownBy(() -> EventTypeExpansion.expand(Set.of(PartlyOpenEvent.class)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(PartlyOpenEvent.class.getName());
+    }
+
+    @Test
+    void a_sealed_class_that_can_be_instantiated_is_kept_even_when_a_branch_below_it_is_reopened() {
+        Set<Class<? extends PartlyOpenInstantiableBase>> expanded =
+                EventTypeExpansion.expand(Set.of(PartlyOpenInstantiableBase.class));
+
+        // Not refused, because events do carry this class's own name, so it never receives nothing.
+        assertThat(expanded).contains(PartlyOpenInstantiableBase.class, ReopenedSubclassHolder.class);
     }
 
     @Test
