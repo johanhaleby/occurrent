@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 14
-updated_at: 2026-08-11T10:27:16Z
-updated_by: "orchestrator session faee3625 (U2 returned BLOCKED after refuting four disambiguation mechanisms; orchestrator proposed Option E, pin at registration, for the worker to verify)"
+revision: 15
+updated_at: 2026-08-11T10:34:23Z
+updated_by: "orchestrator session faee3625 (U10 merged as 1e4dfbeb5 with one reasoned-decline thread open per policy; #737 filed by the worker with the fleet marker, routed at the next sweep)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "DO NOT MERGE PR 728 on green plus resolved threads, it is HELD pending a redesign Johan ruled on 2026-08-11, see U2 below. standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, U-ADR prose merges only on Johan's wording confirm. Release gate: U1 U2 U3 U5 U6 U8 U9 U-DOCS DONE before the 0.33.0 tag"
 pending_actions:
@@ -164,16 +164,16 @@ units:
   U10:
     issue: null
     goal: "Lifecycle cleanup (findings 13, 14): opt-out marker only after delegate subscribe succeeds; terminal cleanup for failed catch-up respecting removal-as-cancellation semantics. 14 is the scope-cut line"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_e22bccfe-56f9-4717-a309-aa2beb8a3e12
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "733", met: false, evidence: "PR 733 open, head bbe4270aa95e30a72f2b8c0d7e93bf6f2b1e55ea, threads ONE unresolved, checks green 26 of 26 as of this revision. Not merged"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "733", met: true, evidence: "MERGED as squash 1e4dfbeb5c8944c0c4745963e3dcf3e8fa3bb770, CAS-pinned to 38629623afbeda8b1a6464abc2f2713af8941cb3. Matrix completed success on the exact head (run-list verified, not rollup-only). ONE thread left open as a reasoned decline per policy: Copilot correctly noted the failure-cleanup removal is keyed by subscriptionId with no per-attempt identity, and the worker showed the identical shape exists at four pre-existing sites (both catch-up models success paths and the DCB model), so fixing only the new site would not close the race; recorded as item 4 on #737. Both halves shipped: finding 13 marker-after-subscribe, finding 14 terminal cleanup, with the released-behavior changelog bullet present"}
     blocking_on: []
-    next_action: awaiting session start / first delivery signal
-    last_meaningful_progress_at: 2026-08-11T10:16:46Z
+    next_action: sweep session and branch; route #737 at the dispatch-time tracker scan
+    last_meaningful_progress_at: 2026-08-11T10:34:23Z
     observed: {}
     assessment: "Non-gating but ships with release unless stalled; finding 14 fix needs a Changes changelog entry (released behavior)"
   UADR:
