@@ -812,3 +812,34 @@ Recovery that worked, for reuse: `git rebase --abort`, `git reset --hard origin/
 `git archive <last-good-commit> <path> | tar -x` to restore the last parsing revision, re-apply the
 intended edits with asserted string replacements, validate, then one plain commit and push followed
 by a remote read-back and a second validate.
+
+## A worker parked on its own prompt is unreachable, and "queued" told me so (2026-08-11, cdx33)
+
+U3 sat for two and a half hours while Johan believed it was implementing and I believed it had my
+message. It was blocked on its own `AskUserQuestion`, and the ruling I relayed was queued behind a
+turn that only a human answering IN THAT SESSION could ever finish. Johan noticed the silence
+before I did, which by the skill's own rule makes it a detection defect rather than bad luck.
+
+The evidence was in the tool result all along, and I read past it. A send to a live in-session
+subagent returns "queued for delivery at its next tool round" and lands. A send to U2 earlier
+returned "Message sent". The send to U3 returned "queued ... processed after the in-flight turn
+finishes, if that session stays healthy", which is a conditional that was already false.
+
+Two compounding causes, both mine. I treated a conditional delivery receipt as delivery. And I was
+running purely event-driven, with monitors on pull requests and review threads but no timed tick at
+all, so a worker that simply stops writing produced no signal anywhere. The skill's own cadence
+section says to arm a heartbeat; I never armed one, which is the third time today a recorded rule
+was not applied rather than not known.
+
+Recovery that worked, and is worth reusing: the abandoned session's revision-2 plan was still on
+disk in its session scratchpad, so re-dispatching a subagent with that file path plus the rulings
+cost one message instead of a fresh investigation. The replacement runs on a deliberately different
+branch name (`u3b`) so the abandoned session cannot collide if anyone later answers its prompt.
+
+**How to apply.** Read the delivery receipt: verify a "queued" send took effect before believing the
+worker knows anything. Never route a decision to a session parked on its own prompt, replace it and
+salvage its artifact. Decide in the brief WHO the plan gate is presented to: when the orchestrator
+is routing (user mobile or away), the worker must hand the plan back and stop rather than prompt.
+And arm a stuck-detector at epic start, threshold above the longest legitimate silence, which for
+foreground Maven chunking is about ten minutes so twenty cries wolf. All four are now in the
+`/orchestrator` skill; this entry is the history.
