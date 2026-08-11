@@ -133,7 +133,7 @@ since membership does not require observing the events that were filtered out. I
 delivery source's fast writer-side counter can defeat, portable unchanged to a future PostgreSQL or MySQL store,
 where `BIGSERIAL` and `AUTO_INCREMENT` are non-transactional for the same reason and suffer the identical
 position-versus-commit-order gap. This is the direction recorded for a follow-up epic
-([issue placeholder, filled in by the withdrawing pull request]), not built here, because it needs a replay
+([#740](https://github.com/johanhaleby/occurrent/issues/740)), not built here, because it needs a replay
 membership rule (a full replay would otherwise have to track every historical append id), a stated migration story
 for `WriteResult` and `DcbAppendResult` construction outside this repository, and it reaches the cloud-event
 extension and all four event stores rather than one DSL module.
@@ -144,8 +144,8 @@ extension and all four event stores rather than one DSL module.
   configuration of the withdrawn feature was ever sound.
 - [ADR 111](0111-a-projection-records-the-position-it-has-applied.md) is marked withdrawn, with amendment
   blockquotes at its Status section and at decisions 5 and 7 pointing here, rather than rewritten silently.
-- [#361](https://github.com/johanhaleby/occurrent/issues/361) reopens. Its resolution now depends on the
-  append-identity design.
+- [#361](https://github.com/johanhaleby/occurrent/issues/361) reopens, and
+  [#740](https://github.com/johanhaleby/occurrent/issues/740) tracks the append-identity design that resolves it.
 - Occurrent's own ADR corpus already forbids the mistake this feature made: ADR 21 separated a commit-order token
   from `long` at the type level for exactly this reason, on the write path. This ADR is the read-path correction to
   the same principle.
