@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 30
-updated_at: 2026-08-11T15:02:36Z
-updated_by: "orchestrator session faee3625 (U3b delivered PR 742; U6 still writing prose in the session worktree, branch b1ce469 pushed)"
+revision: 31
+updated_at: 2026-08-11T15:09:36Z
+updated_by: "orchestrator session faee3625 (PR 742 carries two correct Copilot findings, one a released-API regression on join; orchestrator ruled both must be fixed and told the worker how)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -65,9 +65,9 @@ units:
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "742", met: false, evidence: "PR 742 open on cdx33/u3b-stepcondition, head 9f9def500b2c5cc8bf46e57de0034c8ebf1012be, checks running, no DELIVERY_RESULT yet. Title and body cover both shipped halves: the reaction now reads the fulfilling window, and a duplicated allOf requirement is refused, plus four corrected ADR 0120 statements. Worker verified active by file writes (ADR 0120, SpringMongoSagaStateStore, a new SpringMongoSagaStateStoreFlowConditionRoundTripTest and ReceivedEventsTest) rather than by its task output file, which is a 183-byte stub whose mtime tracks nothing"}
       - {check: manual_approval, ref: "U3 plan gate, Johan", met: true, evidence: "SATISFIED 2026-08-11T12:06:55Z via structured ask in the orchestrator session rather than in U3 own session, since the gate had been parked over two hours. Three rulings: (1) finding 3 counters DEFERRED and paired with the retention bound as a pre-tag follow-up, accepting the worker argument against D4 as literally written, so this PR lands findings 2 and 4 plus the determinism contract, the ADR 0120 corrections and the retention documentation; (2) finding 4 rejects a shared EventMatcher or equal child in allOf, which also catches allOf(event(A,2), event(A,3)), with anyOf left permissive and that asymmetry recorded in the ADR; (3) the orchestrator granted the SpringMongoSagaStateStore edit, which is a file-ownership call rather than Johan, with the hand-seeded pre-0.33.0 document test required per the #724 precedent"}
-    blocking_on: []
-    next_action: await DELIVERY_RESULT, then verify the matrix by RUN LIST on the exact head, the hand-seeded old-document test, and the follow-up brief material for the deferred counters work
-    last_meaningful_progress_at: 2026-08-11T15:02:36Z
+    blocking_on: [{what: "two Copilot findings the orchestrator confirmed and ruled on: the join callback narrowing (a RELEASED 0.31.0 behaviour change the PR wrongly claims not to make, must be preserved via a discriminator since ADR 0120 lowered join to sugar meaning semantics preserved) and the duplicate rule catching only leaf-vs-leaf overlap while advertising a wider invariant", since: 2026-08-11T15:09:36Z, recheck_after: "on worker push"}]
+    next_action: await the fixes; at merge-readiness verify the join regression test exists, the PR compatibility paragraph is corrected, and the documented invariant matches exactly what the check enforces
+    last_meaningful_progress_at: 2026-08-11T15:09:36Z
     observed: {}
     assessment: "REPLACED 2026-08-11. The original chip session parked on its own AskUserQuestion and could never receive the answers: a session blocked on an interactive prompt has an in-flight turn only a human in that session can finish, so the relayed ruling queued behind it forever, and the tool result had said queued rather than sent. Salvage: its revision-2 plan survived on disk at the session scratchpad (PLAN-u3.md, written after a fresh-context review that broke its own counter design), so the replacement subagent got the plan path plus the three rulings instead of a fresh investigation. Deliberately on branch u3b so the abandoned session cannot collide if anyone later answers its prompt. Scope per the rulings: findings 2 and 4 plus the determinism contract and ADR 0120 corrections; counters deferred"
   U4:
