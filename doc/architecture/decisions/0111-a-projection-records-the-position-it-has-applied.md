@@ -7,6 +7,12 @@ Date: 2026-08-08
 Accepted. Resolves [#361](https://github.com/johanhaleby/occurrent/issues/361). Additive across the projection DSL, the
 view DSL and the Spring Boot starters.
 
+> **Withdrawn on 2026-08-11 by [ADR 122](0122-an-applied-position-is-not-a-completed-prefix.md), before this
+> feature ever shipped.** `waitUntilApplied` read a monotonic maximum as a completed prefix, which needs
+> position-ordered delivery, and no delivery source Occurrent ships provides that. `AppliedProjectionPositionStore`,
+> its recording wrappers, both Mongo-backed stores, and `@Projection`'s `recordAppliedPosition` attribute are all
+> removed from 0.33.0. [#361](https://github.com/johanhaleby/occurrent/issues/361) reopens.
+
 ## Context
 
 An asynchronous projection updates its read model behind the write side. A client that ran a command and got back the
@@ -225,6 +231,10 @@ The Mongo starters contribute the implementation, the same way they contribute `
 collection named by `occurrent.projection.applied-position-collection` (default `appliedPositions`), and stores one
 document per projection id.
 
+> **Amended on 2026-08-11 by [ADR 122](0122-an-applied-position-is-not-a-completed-prefix.md).** The
+> `recordAppliedPosition` attribute, the registrar wiring described here, and the Mongo starter beans are all
+> removed. No configuration this decision permits was ever sound, so there was nothing safe left to keep opt-in.
+
 ### 6. An event with no position is refused rather than ignored
 
 When a recording projection is handed an event whose metadata has no position, it throws an `IllegalStateException`
@@ -249,6 +259,13 @@ There is a second, milder case worth stating in the same place. A projection sub
 event types it handles, so an event it does not handle never reaches it and never moves its position. Waiting for the
 position of such an event times out. That is the honest answer rather than a defect, because a projection that never
 sees the event has no effect for the client to read, but the javadoc has to say it or the timeout looks like a bug.
+
+> **Amended on 2026-08-11 by [ADR 122](0122-an-applied-position-is-not-a-completed-prefix.md).** "Which is what a
+> subscription does" was wrong. Occurrent reserves Mongo positions before commit while change streams deliver in
+> commit order, so position order is not delivery order there either, contradicting
+> [ADR 84](0084-what-a-position-guarantees.md). `advance` never going backwards keeps the recorded value monotonic,
+> but a monotonic value is not a completed prefix unless delivery is actually position-ordered, and on every
+> delivery source Occurrent ships it was not.
 
 ### 8. What this deliberately does not cover
 
