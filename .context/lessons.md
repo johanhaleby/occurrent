@@ -1120,3 +1120,26 @@ on the concrete types and widened only the filter.
 algorithm they share. A shared helper's return value can be load-bearing in more than one direction, and
 "the two implementations differ" is a smaller question than "the two call sites use the result
 differently". The diff-the-copies rule catches the first; only reading the call sites catches the second.
+
+## Three variants of one defect means the property was approximated, not stated (2026-08-11, cdx33 U12)
+
+The supertype-expansion unit fixed the same defect three times, each variant found by review rather than
+by design. The original: a declared supertype yields a filter naming a type no event carries, so the saga
+receives nothing. Then the worker's own local review: a non-sealed CONCRETE class inside a sealed
+hierarchy was collected and its branch called complete, so its subclasses vanished from the filter. Then
+Copilot's re-review: an instantiable sealed ROOT suppressed the incompleteness refusal, so descendants
+below a reopened branch vanished the same way.
+
+Each fix was correct and each revealed the next level, which is the signal. The unit was deciding, case
+by case, which hierarchy shapes are safe, when what it needed was one sentence: **the derived filter must
+name every event type that dispatch would accept.** Stated that way, all three variants are the same
+violation, and the test is a table over hierarchy shapes asserting expansion either names everything
+`isInstance` would accept or refuses, rather than another example per bug.
+
+**How to apply.** When a second variant of a defect arrives, stop fixing variants. Write the invariant
+the code is meant to hold, put it where the next reader will stand (the ADR and the code, not a PR
+comment), and test it as a property over the shapes that can violate it. Then state the residual
+deliberately, because a positive invariant exposes what it does NOT cover: here a directly declared
+non-final concrete class can still have subclasses the filter misses, which the compatibility exemption
+preserves on purpose and which the repository's records-for-events convention makes rare, since a record
+is implicitly final.
