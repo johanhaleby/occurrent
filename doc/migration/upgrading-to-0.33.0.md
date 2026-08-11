@@ -346,3 +346,53 @@ case of one consumer running, not a rare one, so the pair is refused up front wi
    checkpoint is then written unconditionally, which is what 0.32.0 did. A node that has lost its lease can move a
    checkpoint backwards, and the events between the two positions are delivered again, which stays inside the
    at-least-once contract.
+
+## 9. A flow saga can cap the events of the step it is parked in
+
+Nothing here changes unless you ask for it, so you can skip this section if no flow saga of yours idles in one step.
+
+`historyWindow` never limited the whole of a flow saga's retained state. It limits the carry-over behind the current
+step's entry, and it is applied when a step is left, so the step being left keeps every one of its own events. An
+instance parked in one step while a large number of correlated events arrive therefore kept all of them, whatever
+`historyWindow` was set to, `historyWindow(0)` included. The 0.31.0 entry that introduced `historyWindow` claimed the
+retained state did not grow without bound, and that was only true for a flow whose steps turn over.
+
+`stepWindow(int)` is the cap for the other half. It limits how many of the current step's own events are kept and is
+applied on every delivery.
+
+```java
+FlowSaga.<OrderEvent, OrderCommand>builder()
+        .historyWindow(20)
+        .stepWindow(50)
+        .startsOn(OrderPlaced.class)
+```
+
+Kotlin has `stepWindow(50)` in the `saga { }` block beside `historyWindow`. Set both and the instance keeps at most
+`historyWindow + stepWindow + 1` events, the last one being the initiating event, which is always kept.
+
+**What a callback can read shrinks, and that is the whole cost.** A step condition is unaffected, because its counts are
+carried in the instance's state rather than recounted from the events, so a step completes on the same event it would
+have without the cap. What reads less is everything that reads the received events directly:
+
+- a guard, `on(Type.class, onlyIf, ...)`, so a retry guard counting `PaymentFailed` needs its threshold to fit inside
+  the cap, the same requirement `historyWindow` already has
+- a `timeout`'s `onExpiry`
+- a window-condition reaction, `on(condition, then, whenFulfilled)`, which reads what is left of its step's window
+
+Two things stay guaranteed at any cap of 1 or more. `received.initiating()` still reaches the start event, and the event
+that fired a branch is still the last element of `received.asList()`.
+
+**One failure mode comes with the cap.** Once the cap has dropped a step's older events, nothing can rebuild that step's
+counts from scratch, so changing which events a capped step waits on while instances are parked in that step makes those
+instances refuse their next delivery with an `IllegalStateException` naming the step. Retrying does not help. Put the
+previous condition declaration back until the parked instances have moved on, or delete the instance. Changing the count
+a leaf asks for is safe, and so is changing a step no instance is currently parked in.
+
+**A saga that cannot tell two of its leaves apart is refused at startup.** Two leaves over one event type that both
+have a predicate, in the same step, look identical to the bookkeeping that keeps their counts, so `build()` throws
+`IllegalStateException` naming the step rather than risk moving one leaf's count onto the other's predicate after a
+redeploy reorders them. Ask for different counts on the two leaves, restructure the step, or leave that flow without a
+`stepWindow`. Such a step works exactly as before when you do not set one.
+
+[ADR 123](../architecture/decisions/0123-a-step-conditions-counts-are-carried-so-the-steps-events-can-be-dropped.md)
+has the reasoning, including why this is a second setting rather than a new meaning for `historyWindow`.

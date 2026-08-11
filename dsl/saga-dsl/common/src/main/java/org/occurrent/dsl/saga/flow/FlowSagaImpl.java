@@ -24,11 +24,13 @@ import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.TimerName;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.StepConditionProgress;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -49,10 +51,13 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     /**
      * Default number of received events kept behind the current step's entry, on top of the initiating event and the
-     * current step's own events (which are always retained because a window condition counts over them). 100 comfortably
-     * covers a retry loop or a guard that looks a few steps back, while keeping a long-running instance's state bounded.
+     * current step's own events. 100 comfortably covers a retry loop or a guard that looks a few steps back, while capping
+     * what a long-running instance carries from step to step.
      */
     static final int DEFAULT_HISTORY_WINDOW = 100;
+
+    /** What {@code stepWindow} is when it was never set, meaning every event the current step receives is kept. */
+    static final int UNBOUNDED_STEP_WINDOW = Integer.MAX_VALUE;
 
     private final Class<? extends E> startType;
     private final BiFunction<EventMetadata, E, List<C>> onStartCommands;
@@ -63,9 +68,12 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private final @Nullable Function<E, @Nullable String> correlateAll;
     private final Set<Class<? extends E>> startEventTypes;
     private final Set<Class<? extends E>> eventTypes;
-    // Carry-over: how many received events before the current step's entry are retained (and so visible to guards and
-    // reactions). The current step's own events are always kept regardless, since a window condition must count over them.
+    // How many received events before the current step's entry are kept, and so what a guard and a reaction can still read
+    // of the earlier history. Applied when a step is left.
     private final int historyWindow;
+    // How many of the current step's own events are kept. Applied on every delivery, since a step being parked on is what
+    // it caps. UNBOUNDED_STEP_WINDOW keeps all of them.
+    private final int stepWindow;
 
     FlowSagaImpl(Class<? extends E> startType,
                  BiFunction<EventMetadata, E, List<C>> onStartCommands,
@@ -76,7 +84,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                  @Nullable Function<E, @Nullable String> correlateAll,
                  Set<Class<? extends E>> startEventTypes,
                  Set<Class<? extends E>> eventTypes,
-                 int historyWindow) {
+                 int historyWindow,
+                 int stepWindow) {
         this.startType = startType;
         this.onStartCommands = onStartCommands;
         this.steps = steps;
@@ -87,6 +96,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         this.startEventTypes = startEventTypes;
         this.eventTypes = eventTypes;
         this.historyWindow = historyWindow;
+        this.stepWindow = stepWindow;
     }
 
     @Override
@@ -153,23 +163,34 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                 return state;
             }
             String first = steps.get(0).name();
-            // No react on the start event itself: onStart carries the instance-creation effects.
-            return new FlowStateImpl<>(first, List.of(event), 1, 1, false, null, -1, ActionKind.NONE, -1);
+            // No react on the start event itself, onStart carries the instance-creation effects. The counts start out
+            // unknown, so the next delivery derives them from a window that begins after this event.
+            return new FlowStateImpl<>(first, List.of(event), 1, 1, false, null, -1, ActionKind.NONE, -1, null);
         }
         if (state.completed() || state.currentStep() == null) {
             return state;
         }
-        List<E> received = append(state.received(), event);
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
-        List<E> window = received.subList(windowStartIndex(state.stepEntryIndex(), state.windowStart(), received.size()), received.size());
+        List<E> appended = append(state.received(), event);
+        // Drop the current step's oldest events past stepWindow before anything reads them, so a guard and a reaction in
+        // this delivery see exactly what gets persisted.
+        int windowStart = boundedWindowStart(state.stepEntryIndex(), state.windowStart(), appended.size());
+        List<E> received = retain(appended, state.windowStart(), windowStart);
+        List<E> window = received.subList(windowStartIndex(state.stepEntryIndex(), windowStart, received.size()), received.size());
+        List<Integer> counts = stepConditionCounts(state, step, windowStart, window, event);
+        int[] leafCursor = {0};
         List<Branch<E, C>> branches = step.branches();
         for (int i = 0; i < branches.size(); i++) {
             Branch<E, C> branch = branches.get(i);
-            if (triggered(branch.trigger(), event, received, window)) {
-                return applyTransition(state, branch.then(), received, ActionKind.BRANCH, i);
+            if (triggered(branch.trigger(), event, received, window, counts, leafCursor)) {
+                return applyTransition(state, windowStart, branch.then(), received, ActionKind.BRANCH, i);
             }
         }
-        return withClearedBookkeeping(state, received);
+        return withClearedBookkeeping(state, windowStart, received, progressFor(step, counts));
+    }
+
+    private static <E, C> @Nullable StepConditionProgress progressFor(CompiledStep<E, C> step, @Nullable List<Integer> counts) {
+        return counts == null ? null : new StepConditionProgress(step.leaves().fingerprint(), counts);
     }
 
     // A classic on(Class, ...) branch fires only on a matching arriving event (a guard reads the event plus the received
@@ -178,36 +199,44 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // entry satisfies its tree, so it is re-evaluated on every arriving event regardless of that event's own type, since a
     // tree can span several leaf types. received is wrapped in ReceivedEvents only inside the guard branch, since an
     // unguarded classic branch (the common case) and a window condition never read it.
-    private static <E> boolean triggered(Trigger<E> trigger, E event, List<E> received, List<E> window) {
+    private static <E> boolean triggered(Trigger<E> trigger, E event, List<E> received, List<E> window,
+                                         @Nullable List<Integer> counts, int[] leafCursor) {
         return switch (trigger) {
             case ArrivingEvent<E> arriving ->
                     arriving.eventType().isInstance(event) && (arriving.guard() == null || arriving.guard().test(event, ReceivedEvents.of(received)));
-            case WindowCondition<E> windowCondition -> conditionFulfilled(windowCondition.condition(), window);
+            case WindowCondition<E> windowCondition -> counts == null
+                    ? conditionFulfilled(windowCondition.condition(), window)
+                    : conditionFulfilled(windowCondition.condition(), counts, leafCursor);
         };
     }
 
     private FlowStateImpl<E> evolveOnTimeout(FlowStateImpl<E> state, TimerName timerName) {
         if (state.completed() || state.currentStep() == null) {
-            return withClearedBookkeeping(state, state.received());
+            return unchangedExceptBookkeeping(state);
         }
         if (!timerName.equals(FlowSaga.stepTimer(state.currentStep()))) {
-            return withClearedBookkeeping(state, state.received());
+            return unchangedExceptBookkeeping(state);
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
         if (step.timeout() == null) {
-            return withClearedBookkeeping(state, state.received());
+            return unchangedExceptBookkeeping(state);
         }
-        return applyTransition(state, step.timeout().then(), state.received(), ActionKind.TIMEOUT, -1);
+        return applyTransition(state, state.windowStart(), step.timeout().then(), state.received(), ActionKind.TIMEOUT, -1);
     }
 
-    // Stay in the current step with no transition: keep the given received log but reset the evolve-to-react bookkeeping,
-    // so react (which routes on lastAction) does nothing rather than re-running a previous transition's reaction. Used
-    // both when an event matches no branch / fulfils no window condition, and on an ignored timeout. windowStart and
-    // stepEntryIndex are preserved: no transition happened, so the current step's window is unchanged and its accumulating
-    // events must not be dropped (a window condition counts over them).
-    private FlowStateImpl<E> withClearedBookkeeping(FlowStateImpl<E> state, List<E> received) {
-        return new FlowStateImpl<>(state.currentStep(), received, state.windowStart(), state.stepEntryIndex(), state.completed(),
-                state.currentStep(), -1, ActionKind.NONE, -1);
+    // No event arrived, so nothing is dropped and no count changes.
+    private FlowStateImpl<E> unchangedExceptBookkeeping(FlowStateImpl<E> state) {
+        return withClearedBookkeeping(state, state.windowStart(), state.received(), state.stepConditionProgress());
+    }
+
+    // Stay in the current step with no transition. Keep the given received log and counts but reset the evolve-to-react
+    // bookkeeping, so react (which routes on lastAction) does nothing rather than re-running a previous transition's
+    // reaction. Used both when an event matches no branch or fulfils no window condition, and on an ignored timeout.
+    // stepEntryIndex is preserved because no transition happened, so the current step's window still starts where it did.
+    private FlowStateImpl<E> withClearedBookkeeping(FlowStateImpl<E> state, int windowStart, List<E> received,
+                                                    @Nullable StepConditionProgress progress) {
+        return new FlowStateImpl<>(state.currentStep(), received, windowStart, state.stepEntryIndex(), state.completed(),
+                state.currentStep(), -1, ActionKind.NONE, -1, progress);
     }
 
     // The relative index into a retained received list where the window of a step entered at entryPosition begins.
@@ -215,8 +244,21 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // Clamped into [1, size], because a store defaults each absent bookkeeping field on its own and can hand back a
     // combination no evolve ever wrote. Index 0 is the pinned initiating event and belongs to no step's window, and a
     // start past the end gives an empty window rather than an IndexOutOfBoundsException from inside command dispatch.
+    // The lower clamp also carries stepWindow's own case, where windowStart has legitimately passed the step's entry, and
+    // index 1 is then the oldest of the step's events that survived.
     private static int windowStartIndex(int entryPosition, int windowStart, int size) {
         return Math.min(Math.max(1, entryPosition - windowStart + 1), size);
+    }
+
+    // Where the retained tail has to start so that at most stepWindow of the current step's own events are kept. Retention
+    // is a contiguous tail, so capping the current step's events at n means keeping the last n events of all once the step
+    // has more than n, with the initiating event pinned on top as always.
+    private int boundedWindowStart(int stepEntryIndex, int windowStart, int size) {
+        if (stepWindow == UNBOUNDED_STEP_WINDOW) {
+            return windowStart;
+        }
+        int kept = size - windowStartIndex(stepEntryIndex, windowStart, size);
+        return kept > stepWindow ? windowStart + (kept - stepWindow) : windowStart;
     }
 
     // Every transition resets stepEntryIndex to the new step's entry, including a transitionTo back into the current step
@@ -224,32 +266,35 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // carries. In a mixed step, a classic branch self-looping wipes a sibling window condition's partial count the same
     // way it already wipes a join's. This is today's join semantics generalized, kept deliberately, and becomes visible
     // once branches mix, so it is also stated in ADR 120, the on(StepCondition) javadoc and the docs, and asserted by a test.
-    private FlowStateImpl<E> applyTransition(FlowStateImpl<E> from, Continuation continuation, List<E> received, ActionKind kind, int branchIndex) {
+    private FlowStateImpl<E> applyTransition(FlowStateImpl<E> from, int windowStart, Continuation continuation, List<E> received, ActionKind kind, int branchIndex) {
         // The new step is entered after every event received so far, so its entry is the absolute event count. received holds
         // the initiating event (position 0) plus the tail starting at windowStart, so that count is windowStart plus the tail
         // length, i.e. windowStart + (received.size() - 1). When nothing has been dropped (windowStart == 1) this is exactly
         // received.size(), matching the pre-windowing behaviour.
-        int newStepEntry = from.windowStart() + received.size() - 1;
-        // Bound the retained history: drop received events older than historyWindow behind the step we are leaving. Anchoring
-        // on the step we leave (not the one we enter) guarantees that step's own events survive for its reaction to read;
-        // historyWindow adds earlier events on top for guards that look further back. windowStart only ever advances.
-        int newWindowStart = Math.max(from.windowStart(), from.stepEntryIndex() - historyWindow);
-        List<E> retained = retain(received, from.windowStart(), newWindowStart);
+        int newStepEntry = windowStart + received.size() - 1;
+        // Drop received events older than historyWindow behind the step we are leaving. Anchoring on the step we leave (not
+        // the one we enter) keeps that step's own events for its reaction to read, and historyWindow adds earlier events on
+        // top for guards that look further back. windowStart only ever advances, which is also what makes this leave a
+        // stepWindow drop from this same delivery alone rather than trying to move back behind it.
+        int newWindowStart = Math.max(windowStart, from.stepEntryIndex() - historyWindow);
+        List<E> retained = retain(received, windowStart, newWindowStart);
         String fromStep = from.currentStep();
         // Where the fired window begins, carried over for react, since overwriting stepEntryIndex with the entered step's
         // entry destroys it and it cannot be recovered from the state afterwards. newWindowStart never exceeds it, so the
         // fired window is always fully inside retained.
         int previousStepEntry = from.stepEntryIndex();
+        // The entered step's window is empty, so its counts start out unknown and the next delivery derives them. That is
+        // also what resets a self-loop's partial counts, since a transitionTo naming the current step comes through here too.
         return switch (continuation) {
             case Continuation.Next ignored -> {
                 int next = stepIndex.get(fromStep) + 1;
                 if (next < steps.size()) {
-                    yield new FlowStateImpl<>(steps.get(next).name(), retained, newWindowStart, newStepEntry, false, fromStep, previousStepEntry, kind, branchIndex);
+                    yield new FlowStateImpl<>(steps.get(next).name(), retained, newWindowStart, newStepEntry, false, fromStep, previousStepEntry, kind, branchIndex, null);
                 }
-                yield new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, previousStepEntry, kind, branchIndex);
+                yield new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, previousStepEntry, kind, branchIndex, null);
             }
-            case Continuation.TransitionTo transitionTo -> new FlowStateImpl<>(transitionTo.stepName(), retained, newWindowStart, newStepEntry, false, fromStep, previousStepEntry, kind, branchIndex);
-            case Continuation.End ignored -> new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, previousStepEntry, kind, branchIndex);
+            case Continuation.TransitionTo transitionTo -> new FlowStateImpl<>(transitionTo.stepName(), retained, newWindowStart, newStepEntry, false, fromStep, previousStepEntry, kind, branchIndex, null);
+            case Continuation.End ignored -> new FlowStateImpl<>(null, retained, newWindowStart, newStepEntry, true, fromStep, previousStepEntry, kind, branchIndex, null);
         };
     }
 
@@ -389,6 +434,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     // Generalizes the old per-Expectation join check. An AtLeast leaf counts its matcher's hits in the window, AllOf and
     // AnyOf recurse and combine with && / ||. window is the same step-entry-anchored slice evolveOnEvent already computed.
+    // Used when this step's counts are not carried in the state, which is either the first delivery into the step, a
+    // declaration the counts no longer describe, or a step whose leaves cannot be told apart (see StepLeaves).
     private static <E> boolean conditionFulfilled(StepCondition<E> condition, List<E> window) {
         return switch (condition) {
             case StepCondition.AtLeast<E> atLeast -> countMatches(atLeast.matcher(), window) >= atLeast.count();
@@ -411,14 +458,111 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         };
     }
 
+    // The same check read off the carried counts instead of the window. leafCursor walks the tree in declaration order, the
+    // order StepLeaves collected the matchers in, and it is advanced over every leaf even once the answer is settled,
+    // because a later child's position in the count list depends on how many leaves the earlier children hold. That is why
+    // neither composite stops early here, unlike the window version above.
+    private static <E> boolean conditionFulfilled(StepCondition<E> condition, List<Integer> counts, int[] leafCursor) {
+        return switch (condition) {
+            case StepCondition.AtLeast<E> atLeast -> counts.get(leafCursor[0]++) >= atLeast.count();
+            case StepCondition.AllOf<E> allOf -> {
+                boolean fulfilled = true;
+                for (StepCondition<E> child : allOf.conditions()) {
+                    fulfilled = conditionFulfilled(child, counts, leafCursor) && fulfilled;
+                }
+                yield fulfilled;
+            }
+            case StepCondition.AnyOf<E> anyOf -> {
+                boolean fulfilled = false;
+                for (StepCondition<E> child : anyOf.conditions()) {
+                    fulfilled = conditionFulfilled(child, counts, leafCursor) || fulfilled;
+                }
+                yield fulfilled;
+            }
+        };
+    }
+
+    /**
+     * The counts to evaluate this step's conditions with, or {@code null} to count the window instead. The carried counts
+     * are used once they were counted for the declaration this step has now, and are re-derived from the window when they
+     * were not, which covers a document written before the field existed and a redeploy that changed a leaf. Re-deriving
+     * needs the events, so a step whose older events {@code stepWindow} already dropped has nothing left to fall back on
+     * and refuses the delivery instead of counting short.
+     */
+    private @Nullable List<Integer> stepConditionCounts(FlowStateImpl<E> state, CompiledStep<E, C> step, int windowStart,
+                                                        List<E> window, E event) {
+        StepLeaves<E> leaves = step.leaves();
+        if (leaves.matchers().isEmpty() || !leaves.countable()) {
+            return null;
+        }
+        StepConditionProgress progress = state.stepConditionProgress();
+        if (progress != null && describesTheSameLeaves(progress, leaves)) {
+            return incremented(leaves.matchers(), progress.matchCounts(), event);
+        }
+        if (droppedFromTheCurrentStep(state, windowStart)) {
+            throw new IllegalStateException("step '" + step.name() + "' cannot be evaluated for this instance, because the"
+                    + " step's condition declaration changed while the instance was parked in it and stepWindow had already"
+                    + " dropped the events its counts would be rebuilt from. Retrying the delivery cannot help. Put the"
+                    + " previous condition declaration for this step back until the parked instances have moved on, or"
+                    + " delete the instance");
+        }
+        return counted(leaves.matchers(), window);
+    }
+
+    // Whether any of the current step's own events are already gone, which is what leaves nothing to rebuild its counts
+    // from. Reading the tail as starting past the step's entry is the signal, and the entry check is what keeps a store's
+    // defaulting from looking like one, since an instance that has entered a step was entered at position 1 or later, while
+    // a defaulted entry reads as 0 and a defaulted tail start reads as 1 and so can never pass a real entry position.
+    private static boolean droppedFromTheCurrentStep(FlowStateImpl<?> state, int windowStart) {
+        return state.stepEntryIndex() >= 1 && windowStart > state.stepEntryIndex();
+    }
+
+    // Whether the carried counts were counted for the leaves this step declares now. The length check and the negative
+    // check are here because a store defaults each absent field on its own and can hand back a list no evolve ever wrote,
+    // and a count is only ever written as zero or more.
+    private static <E> boolean describesTheSameLeaves(StepConditionProgress progress, StepLeaves<E> leaves) {
+        if (!progress.leafFingerprint().equals(leaves.fingerprint()) || progress.matchCounts().size() != leaves.matchers().size()) {
+            return false;
+        }
+        for (int count : progress.matchCounts()) {
+            if (count < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Saturating at Integer.MAX_VALUE, because a leaf's truth can never be undone by a later event, so a count that high
+    // already exceeds every threshold a leaf can ask for and losing the exact total past it changes no answer.
+    private static <E> List<Integer> incremented(List<StepCondition.EventMatcher<E>> matchers, List<Integer> counts, E event) {
+        List<Integer> next = new ArrayList<>(counts.size());
+        for (int i = 0; i < matchers.size(); i++) {
+            int count = counts.get(i);
+            next.add(matches(matchers.get(i), event) && count < Integer.MAX_VALUE ? count + 1 : count);
+        }
+        return next;
+    }
+
+    private static <E> List<Integer> counted(List<StepCondition.EventMatcher<E>> matchers, List<E> window) {
+        List<Integer> counts = new ArrayList<>(matchers.size());
+        for (StepCondition.EventMatcher<E> matcher : matchers) {
+            counts.add(countMatches(matcher, window));
+        }
+        return counts;
+    }
+
     private static <E> int countMatches(StepCondition.EventMatcher<E> matcher, List<E> window) {
         int count = 0;
         for (E event : window) {
-            if (matcher.eventType().isInstance(event) && (matcher.predicate() == null || matcher.predicate().test(event))) {
+            if (matches(matcher, event)) {
                 count++;
             }
         }
         return count;
+    }
+
+    private static <E> boolean matches(StepCondition.EventMatcher<E> matcher, E event) {
+        return matcher.eventType().isInstance(event) && (matcher.predicate() == null || matcher.predicate().test(event));
     }
 
     private static <E> List<E> append(List<E> received, E event) {
@@ -431,7 +575,52 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     // --- Compiled model (package-private) -----------------------------------------------------------------------------
 
-    record CompiledStep<E, C>(String name, List<Branch<E, C>> branches, @Nullable TimeoutSpec<E, C> timeout) {
+    record CompiledStep<E, C>(String name, List<Branch<E, C>> branches, @Nullable TimeoutSpec<E, C> timeout, StepLeaves<E> leaves) {
+    }
+
+    /**
+     * Every leaf the window conditions of one step declare, flattened across its branches in declaration order, which is
+     * the order a carried count list is read in.
+     * <p>
+     * {@code fingerprint} holds the step's name and, per leaf, its event type and whether it has a predicate. What it
+     * deliberately leaves out is the count a leaf asks for, because a carried count is the raw number of events that
+     * matched the leaf's matcher rather than something capped at a threshold, so raising or lowering a count on a redeploy
+     * still leaves the carried numbers meaning what they meant.
+     * <p>
+     * A predicate has no identity a fingerprint can capture, so two leaves that agree on event type and on having a
+     * predicate produce the same entry, and swapping them in the declaration would move each one's count onto the other's
+     * predicate with nothing to notice it. {@code countable} is false exactly when that is possible, meaning some entry
+     * appears more than once with matchers that are not equal. Such a step counts its window on every delivery instead,
+     * which is always available because {@code stepWindow} refuses to build a saga containing one.
+     */
+    record StepLeaves<E>(List<StepCondition.EventMatcher<E>> matchers, String fingerprint, @Nullable Class<?> indistinguishableEventType) {
+
+        boolean countable() {
+            return indistinguishableEventType == null;
+        }
+
+        static <E, C> StepLeaves<E> of(String stepName, List<Branch<E, C>> branches) {
+            List<StepCondition.EventMatcher<E>> matchers = new ArrayList<>();
+            for (Branch<E, C> branch : branches) {
+                if (branch.trigger() instanceof WindowCondition<E> windowCondition) {
+                    StepConditionWalk.forEachLeafMatcher(windowCondition.condition(), matchers::add);
+                }
+            }
+            StringBuilder fingerprint = new StringBuilder(stepName);
+            Map<String, StepCondition.EventMatcher<E>> firstPerEntry = new LinkedHashMap<>();
+            Class<?> indistinguishable = null;
+            for (StepCondition.EventMatcher<E> matcher : matchers) {
+                String entry = matcher.eventType().getName() + (matcher.predicate() == null ? "" : "?");
+                fingerprint.append('|').append(entry);
+                StepCondition.EventMatcher<E> earlier = firstPerEntry.putIfAbsent(entry, matcher);
+                // Comparing against the first leaf of the entry is enough, since any leaf differing from it means they are
+                // not all the same matcher, which is the only thing that makes crossing two counts harmless.
+                if (earlier != null && !earlier.equals(matcher) && indistinguishable == null) {
+                    indistinguishable = matcher.eventType();
+                }
+            }
+            return new StepLeaves<>(List.copyOf(matchers), fingerprint.toString(), indistinguishable);
+        }
     }
 
     /** What makes a branch fire, a classic arriving-event match, or a window condition over the step's received events. */

@@ -122,6 +122,10 @@ public final class StepBuilder<E, C> {
      * cannot be mistaken for one of this step's. {@code received.initiating()} reaches past the window as always. A guard and
      * a {@code timeout}'s {@code onExpiry} read the whole retained history instead, which is what makes a count spanning
      * several steps possible there.
+     * <p>
+     * The flow builder's {@code stepWindow} is the one thing that narrows this. It caps how many of the step's events the
+     * instance keeps, so a condition still fires on the same event, and {@code whenFulfilled} then reads only the events
+     * still kept, the tipping one among them.
      */
     @SuppressWarnings("unchecked") // Safe. A StepCondition only ever reads an event through eventType.isInstance, never writes one.
     public StepBuilder<E, C> on(StepCondition<? extends E> condition, Continuation then, Function<ReceivedEvents<E>, List<C>> whenFulfilled) {
@@ -239,6 +243,7 @@ public final class StepBuilder<E, C> {
         if (branches.isEmpty()) {
             throw new IllegalStateException("step '" + stepName + "' needs at least one on(...) branch or a join(...)");
         }
-        return new CompiledStep<>(stepName, List.copyOf(branches), timeout);
+        List<Branch<E, C>> compiled = List.copyOf(branches);
+        return new CompiledStep<>(stepName, compiled, timeout, StepLeaves.of(stepName, compiled));
     }
 }

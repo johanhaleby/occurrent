@@ -239,11 +239,29 @@ rejected designs did not. It is tracked separately, together with the retention 
 twice. Counters are what make it possible to stop retaining the active step's events, and the retention bound is what makes
 counters pay for themselves.
 
+> **Superseded by [ADR 123](0123-a-step-conditions-counts-are-carried-so-the-steps-events-can-be-dropped.md)
+> (2026-08-11).** Both halves are now built. A step's counts are carried in `FlowStateImpl.stepConditionProgress` and
+> `stepWindow(int)` caps how many of the current step's own events are kept. Two corrections to the paragraph above. The
+> shape that survives a redeploy is not the one #741 sketched, since a fingerprint of event type, whether a leaf has a
+> predicate, and the count it asks for is identical for two leaves that agree on all three, so swapping them moves each
+> count onto the other's predicate silently. ADR 123 keeps raw uncapped counts, leaves the count a leaf asks for out of the
+> fingerprint, and proves at build time that two leaves sharing a fingerprint entry are the same `EventMatcher`. And
+> counters do not make the cap possible so much as make it safe, because a step with only classic branches could always
+> have dropped its oldest events, while a window condition under a cap needs the counts to stay correct.
+
 **Retention is documented rather than changed.** `historyWindow` bounds the carry-over behind the current step's entry
 and only that. Trimming runs on a transition, and the step being left keeps all of its own events, so `historyWindow(0)`
 still retains every event of the active step and an instance parked in one noisy step grows. `FlowSaga.Builder.historyWindow`,
 `FlowStateImpl`'s "Bounded retention" section and `ReceivedEvents` now say so plainly instead of implying a limit that only
 applies to a flow whose steps turn over.
+
+> **Superseded by [ADR 123](0123-a-step-conditions-counts-are-carried-so-the-steps-events-can-be-dropped.md)
+> (2026-08-11).** Retention is now changed as well as documented. `historyWindow` still limits only the carry-over, and that
+> part stands, but the current step is no longer uncapped, because `stepWindow(int)` limits how many of its own events are
+> kept. Under that cap, a guard, a `timeout`'s `onExpiry` and a window-condition reaction all read only the events still
+> kept, so this record's statement that `whenFulfilled` reads every event received since the step was entered is narrowed
+> for a capped step, which reads what is left of that window with the tipping event among it. `FlowStateImpl`'s section is
+> renamed "Retained events" and covers both settings.
 
 **The wire format did change, and the self-loop reset rule now really is where this record said it was.** The
 `Consequences` claim that "no wire format changed ... `SpringMongoSagaStateStore` needed no change" is superseded.

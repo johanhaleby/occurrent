@@ -84,6 +84,17 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     }
 
     /**
+     * Sets how many of the current step's own received events are kept, which limits what the instance stores rather than
+     * what a step condition counts. Unbounded by default, so a step keeps every event it receives unless this is set.
+     * A condition's counts are carried in the instance's state, so a step still completes on the same event it would have
+     * without this set, while a guard, a window-condition reaction and a timeout reaction read only the events still kept.
+     * Must be at least 1.
+     */
+    fun stepWindow(events: Int) {
+        delegate.stepWindow(events)
+    }
+
+    /**
      * Declares the event type [T] that starts an instance, and optionally the commands to issue on start. Correlate [T] with
      * [correlate] or [correlateAll] like any other event type.
      */

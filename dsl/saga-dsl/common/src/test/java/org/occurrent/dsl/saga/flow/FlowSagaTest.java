@@ -25,6 +25,7 @@ import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.TimerName;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
+import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.StepConditionProgress;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -32,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -505,6 +507,418 @@ class FlowSagaTest {
             ReceivedEvents<WinEvent> received = state.receivedEvents();
 
             assertThat(received.count(Tick.class)).isLessThan(40);
+        }
+    }
+
+    @Nested
+    class StepWindowCap {
+
+        sealed interface CapEvent permits Opened, Approved, Noise {
+            String id();
+        }
+
+        record Opened(String id) implements CapEvent {
+        }
+
+        record Approved(String id, int score) implements CapEvent {
+        }
+
+        record Noise(String id) implements CapEvent {
+        }
+
+        sealed interface CapCommand permits Report {
+        }
+
+        record Report(String what) implements CapCommand {
+        }
+
+        /** Waits for 3 Approved in one step, with the step's own retained events capped at {@code stepWindow}. */
+        private static Saga<CapEvent, FlowState<CapEvent>, CapCommand> waitingForThree(int stepWindow, List<String> saw) {
+            return FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(stepWindow)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.event(Approved.class, 3), Continuation.end(),
+                            received -> {
+                                saw.add("approved=" + received.count(Approved.class) + " kept=" + received.asList().size());
+                                return List.of(new Report("done"));
+                            }))
+                    .build();
+        }
+
+        private static FlowState<CapEvent> deliver(Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga, FlowState<CapEvent> state, CapEvent... events) {
+            FlowState<CapEvent> current = state;
+            for (CapEvent event : events) {
+                current = saga.evolve(current, SagaInput.event(event));
+            }
+            return current;
+        }
+
+        private static Noise[] noise(int count) {
+            Noise[] events = new Noise[count];
+            for (int i = 0; i < count; i++) {
+                events[i] = new Noise("c1");
+            }
+            return events;
+        }
+
+        @Test
+        void a_count_still_completes_on_the_same_event_after_the_cap_dropped_the_earlier_matches() {
+            List<String> saw = new ArrayList<>();
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(2, saw);
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            // The first two Approved are pushed out by the noise that follows them, so nothing could recount them.
+            FlowState<CapEvent> pushedOut = deliver(saga, opened, new Approved("c1", 1), new Approved("c1", 2));
+            FlowState<CapEvent> afterNoise = deliver(saga, pushedOut, noise(10));
+            FlowState<CapEvent> afterThird = saga.evolve(afterNoise, SagaInput.event(new Approved("c1", 3)));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(afterNoise)).as("two of three approved, so still waiting").isFalse(),
+                    () -> assertThat(afterNoise.received()).as("the cap keeps 2 of the step's events plus the initiating one").hasSize(3),
+                    () -> assertThat(saga.isTerminal(afterThird)).as("the third Approved completes it, carried counts and all").isTrue()
+            );
+        }
+
+        @Test
+        void the_retained_event_count_stays_capped_however_long_the_step_is_parked_on() {
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(5, new ArrayList<>());
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            int atTen = deliver(saga, opened, noise(10)).received().size();
+            int atThousand = deliver(saga, opened, noise(1000)).received().size();
+
+            assertAll(
+                    () -> assertThat(atTen).as("already at the cap after ten").isEqualTo(6),
+                    () -> assertThat(atThousand).as("constant, which is what an unset stepWindow does not give you").isEqualTo(atTen)
+            );
+        }
+
+        @Test
+        void an_unset_step_window_keeps_every_event_the_step_receives() {
+            List<String> saw = new ArrayList<>();
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> unbounded = FlowSaga.<CapEvent, CapCommand>builder()
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.event(Approved.class, 3), Continuation.end(),
+                            received -> {
+                                saw.add("kept=" + received.asList().size());
+                                return List.of();
+                            }))
+                    .build();
+            FlowState<CapEvent> opened = unbounded.evolve(unbounded.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> afterNoise = deliver(unbounded, opened, noise(30));
+
+            assertThat(afterNoise.received()).as("30 noise events plus the initiating one, none dropped").hasSize(31);
+        }
+
+        @Test
+        void the_event_that_fired_the_condition_and_the_initiating_event_are_both_still_readable() {
+            List<String> saw = new ArrayList<>();
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(1, saw);
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> almost = deliver(saga, opened, new Approved("c1", 1), new Approved("c1", 2), noise(4)[0]);
+            FlowState<CapEvent> fired = saga.step(almost, SagaInput.event(new Approved("c1", 9))).state();
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(fired)).isTrue(),
+                    () -> assertThat(saw).as("a cap of 1 leaves the reaction the tipping event and nothing else of the window")
+                            .containsExactly("approved=1 kept=1"),
+                    () -> assertThat(fired.receivedEvents().asList().getLast()).as("the tipping event is the last element")
+                            .isEqualTo(new Approved("c1", 9)),
+                    () -> assertThat(fired.receivedEvents().initiating(Opened.class)).isEqualTo(new Opened("c1"))
+            );
+        }
+
+        @Test
+        void a_guard_reads_only_the_events_the_cap_kept() {
+            List<Integer> guardSaw = new ArrayList<>();
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(3)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(Approved.class, (approved, received) -> {
+                        guardSaw.add(received.count(Noise.class));
+                        return true;
+                    }, Continuation.end()))
+                    .build();
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> afterNoise = deliver(saga, opened, noise(20));
+            saga.evolve(afterNoise, SagaInput.event(new Approved("c1", 1)));
+
+            assertThat(guardSaw).as("20 noise events arrived, the cap keeps 3 including the Approved that just arrived")
+                    .containsExactly(2);
+        }
+
+        @Test
+        void a_timeout_reaction_reads_only_the_events_the_cap_kept() {
+            List<Integer> expirySaw = new ArrayList<>();
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(2)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step
+                            .on(StepCondition.event(Approved.class, 3), Continuation.end())
+                            .timeout(Duration.ofMinutes(5), Continuation.end(), received -> {
+                                expirySaw.add(received.count(Noise.class));
+                                return List.of();
+                            }))
+                    .build();
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> afterNoise = deliver(saga, opened, noise(15));
+            saga.step(afterNoise, SagaInput.timeout("c1", stepTimer("wait")));
+
+            assertThat(expirySaw).as("15 noise events arrived and the cap keeps 2 of them").containsExactly(2);
+        }
+
+        @Test
+        void a_self_loop_still_resets_a_partial_count_under_the_cap() {
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(2)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step
+                            .on(StepCondition.event(Approved.class, 2), Continuation.end())
+                            .on(Noise.class, Continuation.transitionTo("wait")))
+                    .build();
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> afterFirst = saga.evolve(opened, SagaInput.event(new Approved("c1", 1)));
+            FlowState<CapEvent> afterSelfLoop = saga.evolve(afterFirst, SagaInput.event(new Noise("c1")));
+            FlowState<CapEvent> afterSecondOverall = saga.evolve(afterSelfLoop, SagaInput.event(new Approved("c1", 2)));
+            FlowState<CapEvent> afterThirdOverall = saga.evolve(afterSecondOverall, SagaInput.event(new Approved("c1", 3)));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(afterSecondOverall)).as("the self-loop dropped the first count, carried counts included").isFalse(),
+                    () -> assertThat(saga.isTerminal(afterThirdOverall)).isTrue()
+            );
+        }
+
+        @Test
+        void a_first_step_condition_naming_the_start_type_still_never_counts_the_start_delivery_under_the_cap() {
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(2)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.event(Opened.class, 1), Continuation.end()))
+                    .build();
+
+            FlowState<CapEvent> afterStart = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            assertThat(saga.isTerminal(afterStart)).as("the start delivery only enters the step, its window opens after it").isFalse();
+        }
+
+        @Test
+        void a_reordered_declaration_recounts_from_the_window_when_nothing_was_dropped() {
+            // The counts an unbounded flow carries stop describing the step once the leaves move, so they are re-derived from
+            // the window instead. Two sagas over the same state is what a redeploy looks like to evolve, which is pure.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> before = FlowSaga.<CapEvent, CapCommand>builder()
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.allOf(
+                            StepCondition.event(Approved.class, 2), StepCondition.event(Noise.class, 1)), Continuation.end()))
+                    .build();
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> after = FlowSaga.<CapEvent, CapCommand>builder()
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.allOf(
+                            StepCondition.event(Noise.class, 1), StepCondition.event(Approved.class, 2)), Continuation.end()))
+                    .build();
+            FlowState<CapEvent> opened = before.evolve(before.initialState(), SagaInput.event(new Opened("c1")));
+            FlowState<CapEvent> parked = deliver(before, opened, new Approved("c1", 1), new Approved("c1", 2));
+
+            FlowState<CapEvent> afterRedeploy = after.evolve(parked, SagaInput.event(new Noise("c1")));
+
+            assertAll(
+                    () -> assertThat(before.isTerminal(parked)).as("waiting for its Noise").isFalse(),
+                    () -> assertThat(after.isTerminal(afterRedeploy)).as("the reordered leaves are counted afresh and the tree is satisfied").isTrue()
+            );
+        }
+
+        @Test
+        void a_declaration_that_changed_while_the_cap_had_dropped_events_refuses_the_delivery() {
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> before = waitingForThree(1, new ArrayList<>());
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> after = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(1)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.allOf(
+                            StepCondition.event(Approved.class, 3), StepCondition.event(Noise.class, 1)), Continuation.end()))
+                    .build();
+            FlowState<CapEvent> opened = before.evolve(before.initialState(), SagaInput.event(new Opened("c1")));
+            FlowState<CapEvent> parked = deliver(before, deliver(before, opened, new Approved("c1", 1)), noise(2));
+
+            assertThatThrownBy(() -> after.evolve(parked, SagaInput.event(new Approved("c1", 2))))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("step 'wait'")
+                    .hasMessageContaining("declaration changed")
+                    .hasMessageContaining("Retrying the delivery cannot help");
+        }
+
+        @Test
+        void a_raised_count_still_completes_after_the_cap_dropped_events() {
+            // The carried counts are raw totals rather than something capped at the count a leaf asks for, so raising that
+            // count on a redeploy leaves them meaning what they meant and the step completes on the higher total.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> before = waitingForThree(1, new ArrayList<>());
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> after = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(1)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.event(Approved.class, 4), Continuation.end()))
+                    .build();
+            FlowState<CapEvent> opened = before.evolve(before.initialState(), SagaInput.event(new Opened("c1")));
+            FlowState<CapEvent> parked = deliver(before, opened, new Approved("c1", 1), new Approved("c1", 2), new Approved("c1", 3));
+
+            FlowState<CapEvent> afterFourth = after.evolve(parked, SagaInput.event(new Approved("c1", 4)));
+
+            assertAll(
+                    () -> assertThat(before.isTerminal(parked)).as("three was enough for the old declaration, but it fired on the third already").isTrue(),
+                    () -> assertThat(after.isTerminal(afterFourth)).as("the raised count is reached on the fourth, not stuck one short").isTrue()
+            );
+        }
+
+        @Test
+        void two_predicated_leaves_over_one_type_keep_counting_the_window_and_refuse_the_cap() {
+            List<String> fired = new ArrayList<>();
+            FlowSaga.Builder<CapEvent, CapCommand> ambiguous = FlowSaga.<CapEvent, CapCommand>builder()
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("decide", step -> step
+                            .on(StepCondition.event(Approved.class, 1, (Approved a) -> a.score() > 100), Continuation.end(),
+                                    received -> {
+                                        fired.add("big");
+                                        return List.of();
+                                    })
+                            .on(StepCondition.event(Approved.class, 1, (Approved a) -> a.score() < 0), Continuation.end(),
+                                    received -> {
+                                        fired.add("negative");
+                                        return List.of();
+                                    }));
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = ambiguous.build();
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            saga.step(opened, SagaInput.event(new Approved("c1", -5)));
+
+            assertAll(
+                    () -> assertThat(fired).as("nothing tells the two leaves apart, so the window is counted and the right branch fires")
+                            .containsExactly("negative"),
+                    () -> assertThatThrownBy(ambiguous.stepWindow(4)::build)
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("step 'decide'")
+                            .hasMessageContaining("Approved")
+                            .hasMessageContaining("both have a predicate")
+            );
+        }
+
+        @Test
+        void two_leaves_over_one_type_sharing_a_predicate_instance_are_told_apart_well_enough_to_cap() {
+            Predicate<Approved> approvedHigh = approved -> approved.score() > 10;
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(2)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step
+                            .on(StepCondition.event(Approved.class, 1, approvedHigh), Continuation.transitionTo("wait"))
+                            .on(StepCondition.event(Approved.class, 1, approvedHigh), Continuation.end()))
+                    .build();
+
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            assertThat(saga.isTerminal(saga.evolve(opened, SagaInput.event(new Approved("c1", 50)))))
+                    .as("two leaves over one matcher count the same events, so crossing their counts changes nothing")
+                    .isFalse();
+        }
+
+        @Test
+        void counts_that_cannot_describe_the_declaration_are_derived_from_the_window_again() {
+            // Both combinations a store can produce by defaulting or mangling the field on its own. Neither is a count list
+            // any evolve wrote, and the flow is unbounded, so the window is still there to count.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> oneLeaf = FlowSaga.<CapEvent, CapCommand>builder()
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.event(Approved.class, 2), Continuation.end()))
+                    .build();
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> twoLeaves = FlowSaga.<CapEvent, CapCommand>builder()
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.allOf(
+                            StepCondition.event(Approved.class, 2), StepCondition.event(Noise.class, 1)), Continuation.end()))
+                    .build();
+            List<CapEvent> received = List.of(new Opened("c1"), new Approved("c1", 1), new Noise("c1"));
+            FlowStateImpl<CapEvent> negativeCount = new FlowStateImpl<>("wait", received, 1, 1, false, "wait", -1,
+                    ActionKind.NONE, -1, new StepConditionProgress("wait|" + Approved.class.getName(), List.of(-7)));
+            // One count for a step declaring two leaves, which is what reading the second leaf's count off the end would be.
+            FlowStateImpl<CapEvent> tooFewCounts = new FlowStateImpl<>("wait", received, 1, 1, false, "wait", -1,
+                    ActionKind.NONE, -1, new StepConditionProgress(
+                    "wait|" + Approved.class.getName() + "|" + Noise.class.getName(), List.of(1)));
+
+            FlowState<CapEvent> fromNegative = oneLeaf.evolve(negativeCount, SagaInput.event(new Approved("c1", 2)));
+            FlowState<CapEvent> fromTooFew = twoLeaves.evolve(tooFewCounts, SagaInput.event(new Approved("c1", 2)));
+
+            assertAll(
+                    () -> assertThat(oneLeaf.isTerminal(fromNegative)).as("two Approved are in the window, so the count-2 leaf is satisfied").isTrue(),
+                    () -> assertThat(twoLeaves.isTerminal(fromTooFew)).as("both leaves are satisfied by the window, counted afresh").isTrue()
+            );
+        }
+
+        @Test
+        void a_count_that_reached_the_integer_limit_stays_there_instead_of_wrapping() {
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(1)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("wait", step -> step.on(StepCondition.event(Approved.class, 2), Continuation.end()))
+                    .build();
+            FlowStateImpl<CapEvent> atTheLimit = new FlowStateImpl<>("wait", List.of(new Opened("c1")), 1, 1, false, "wait",
+                    -1, ActionKind.NONE, -1,
+                    new StepConditionProgress("wait|" + Approved.class.getName(), List.of(Integer.MAX_VALUE)));
+
+            FlowState<CapEvent> afterAnother = saga.evolve(atTheLimit, SagaInput.event(new Approved("c1", 1)));
+
+            assertThat(saga.isTerminal(afterAnother)).as("a wrapped count would go negative and stop satisfying the leaf").isTrue();
+        }
+
+        @Test
+        void step_window_rejects_a_cap_below_one() {
+            FlowSaga.Builder<CapEvent, CapCommand> builder = FlowSaga.builder();
+
+            assertAll(
+                    () -> assertThatThrownBy(() -> builder.stepWindow(0))
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("at least 1"),
+                    () -> assertThatThrownBy(() -> builder.stepWindow(-3))
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("at least 1")
+            );
+        }
+
+        @Test
+        void a_reaction_under_the_cap_reads_the_kept_step_events_and_not_an_earlier_step_s() {
+            List<String> saw = new ArrayList<>();
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = FlowSaga.<CapEvent, CapCommand>builder()
+                    .stepWindow(2)
+                    .historyWindow(50)
+                    .startsOn(Opened.class)
+                    .correlateAll(CapEvent::id)
+                    .step("first", step -> step.on(Noise.class, Continuation.next()))
+                    .step("second", step -> step.on(StepCondition.event(Approved.class, 2), Continuation.end(),
+                            received -> {
+                                saw.add("kept=" + received.asList().size() + " noise=" + received.count(Noise.class));
+                                return List.of();
+                            }))
+                    .build();
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> inSecond = deliver(saga, opened, new Noise("c1"));
+            FlowState<CapEvent> parked = deliver(saga, deliver(saga, inSecond, new Approved("c1", 1)), noise(5));
+            saga.step(parked, SagaInput.event(new Approved("c1", 2)));
+
+            assertThat(saw).as("the cap left 2 of the second step's own events, and the first step's Noise is not among them")
+                    .containsExactly("kept=2 noise=1");
         }
     }
 
@@ -1027,7 +1441,7 @@ class FlowSagaTest {
                     }))
                     .build();
             FlowStateImpl<SeedEvent> seeded = new FlowStateImpl<>(null, List.of(new Started("s"), new Tick("s")),
-                    1, 2, true, "wait", 99, ActionKind.BRANCH, 0);
+                    1, 2, true, "wait", 99, ActionKind.BRANCH, 0, null);
 
             saga.react(seeded, SagaInput.event(new Tick("s")));
 

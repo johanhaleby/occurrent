@@ -42,11 +42,12 @@ import static java.util.Objects.requireNonNull;
  * A step's {@code timeout} is what expresses "this did not happen in time".
  * <p>
  * That property depends on a leaf's predicate being a deterministic function of the event it is handed, and nothing else.
- * The evaluator re-derives each leaf's count from the step window on every delivery, so a predicate that
- * consults the clock, a random source, mutable state, or a remote service can answer differently for the same event on a
- * later delivery, which breaks the "once true, always true" property the design rests on and makes a replay diverge from
- * the original run. Deciding an event on its own contents is supported, and anything else is not. Put a time or lookup
- * condition in the event that records the decision, or in a {@code timeout}, instead. See {@link EventMatcher#predicate()}.
+ * A predicate is run again whenever a leaf's count has to be derived from the step window rather than read off the count
+ * the instance carries, and a replay runs it again from the start, so one that consults the clock, a random source, mutable
+ * state, or a remote service can answer differently for the same event later. That breaks the "once true, always true"
+ * property the design rests on and makes a replay diverge from the original run. Deciding an event on its own contents is
+ * supported, and anything else is not. Put a time or lookup condition in the event that records the decision, or in a
+ * {@code timeout}, instead. See {@link EventMatcher#predicate()}.
  * <p>
  * Within one {@code allOf}, two children that match the same event are refused when the tree is built, since such a
  * declaration reads as more than it requires. {@code anyOf} permits them, and the rule has stated limits, see
@@ -78,8 +79,8 @@ public sealed interface StepCondition<E> permits StepCondition.AtLeast, StepCond
      * @param eventType the event type to match
      * @param predicate an additional test the event must pass, or {@code null} to match on type alone. It must be a
      *                  deterministic function of the event it is given, so the same event yields the same answer every time,
-     *                  because the evaluator re-runs it against the step window on every delivery and a replay runs it again
-     *                  from the start. Reading the clock, a random source, mutable state, or a remote service from a
+     *                  because it is run again whenever a count has to be derived from the step window and a replay runs it
+     *                  again from the start. Reading the clock, a random source, mutable state, or a remote service from a
      *                  predicate is unsupported and can both fire the wrong branch and make a replay diverge
      * @param <E>       the domain event type
      */

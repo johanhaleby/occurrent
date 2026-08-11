@@ -80,28 +80,54 @@ public final class FlowSaga {
         private final List<CompiledStep<E, C>> steps = new ArrayList<>();
         private final Set<String> stepNames = new LinkedHashSet<>();
         private int historyWindow = FlowSagaImpl.DEFAULT_HISTORY_WINDOW;
+        private int stepWindow = FlowSagaImpl.UNBOUNDED_STEP_WINDOW;
 
         private Builder() {
         }
 
         /**
-         * Sets how many received events are retained behind the current step's entry, and so how far back a guard, a window
+         * Sets how many received events are kept behind the current step's entry, and so how far back a guard, a window
          * condition, or a timeout reaction can read history through {@link ReceivedEvents}. The initiating event and the
-         * current step's own events are always retained on top of this (a window condition must count over the current
-         * step's events), so this only bounds the earlier history. The default is {@value FlowSagaImpl#DEFAULT_HISTORY_WINDOW}.
-         * Raise it for a guard that counts far across a self-looping step (for example a retry cap higher than the default),
-         * and lower it to trim the persisted state of a long-running instance. Must be at least zero.
+         * current step's own events are kept on top of this, so this only limits the earlier history. The default is
+         * {@value FlowSagaImpl#DEFAULT_HISTORY_WINDOW}. Raise it for a guard that counts far across a self-looping step (for
+         * example a retry cap higher than the default), and lower it to trim the persisted state of a long-running instance.
+         * Must be at least zero.
          * <p>
-         * What this bounds is the carry-over, and only that. Trimming happens on a transition, and the step being left keeps
-         * all of its own events, so an instance parked in one step while a large number of correlated events arrive grows
-         * however low this is set, {@code 0} included. A flow whose steps turn over stays within the window, and one that can
-         * idle in a noisy step needs a {@code timeout} to move it on.
+         * This is applied when a step is left, and the step being left keeps all of its own events, so an instance parked in
+         * one step while a large number of correlated events arrive grows however low this is set, {@code 0} included. That
+         * is what {@link #stepWindow(int)} caps.
          */
         public Builder<E, C> historyWindow(int events) {
             if (events < 0) {
                 throw new IllegalArgumentException("historyWindow cannot be negative");
             }
             this.historyWindow = events;
+            return this;
+        }
+
+        /**
+         * Sets how many of the current step's own received events are kept, which limits what the instance stores rather
+         * than what a step condition counts. Unbounded by default, so a step keeps every event it receives unless this is
+         * set. Set it on a flow that can idle in a step a large number of correlated events arrive in, and where a
+         * {@code timeout} moving the instance on is not enough on its own.
+         * <p>
+         * A condition's counts are carried in the instance's state rather than recounted from the events, so a step still
+         * completes on the same event it would have without this set. What shrinks is what a guard, a window-condition
+         * reaction and a {@code timeout}'s {@code onExpiry} can read, down to the events still kept. Must be at least 1, so
+         * the event that fired a branch is always the last element of {@link ReceivedEvents#asList()}, and
+         * {@link ReceivedEvents#initiating()} reaches the start event as always. Together with
+         * {@link #historyWindow(int)} the total kept is at most {@code historyWindow + stepWindow + 1}.
+         * <p>
+         * {@link #build()} refuses a saga with a step whose window conditions declare two leaves that cannot be told apart,
+         * meaning two leaves over one event type that both have a predicate, because carrying counts for those two forward
+         * across a redeploy that swaps them would move each count onto the other's predicate. Give those leaves different
+         * counts, or restructure the step, or leave the flow unbounded.
+         */
+        public Builder<E, C> stepWindow(int events) {
+            if (events < 1) {
+                throw new IllegalArgumentException("stepWindow must be at least 1, was " + events);
+            }
+            this.stepWindow = events;
             return this;
         }
 
@@ -201,9 +227,30 @@ public final class FlowSaga {
             validateTransitionToTargets(stepsByName.keySet());
             Set<Class<? extends E>> eventTypes = collectEventTypes();
             validateCorrelationCoverage(eventTypes);
+            validateStepWindowCanCarryCounts();
 
             return new FlowSagaImpl<>(startType, onStartCommands, List.copyOf(steps), stepIndex, stepsByName,
-                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow);
+                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow, stepWindow);
+        }
+
+        // Dropping a step's older events means its condition counts have to be carried in the instance's state, and a count
+        // can only be carried for a leaf a later declaration can still be matched to. Two leaves over one event type that
+        // both have a predicate are indistinguishable, so refuse the combination here rather than move a count onto the
+        // wrong predicate after a redeploy reorders them.
+        private void validateStepWindowCanCarryCounts() {
+            if (stepWindow == FlowSagaImpl.UNBOUNDED_STEP_WINDOW) {
+                return;
+            }
+            for (CompiledStep<E, C> step : steps) {
+                Class<?> indistinguishable = step.leaves().indistinguishableEventType();
+                if (indistinguishable != null) {
+                    throw new IllegalStateException("step '" + step.name() + "' declares two window-condition leaves over "
+                            + indistinguishable.getSimpleName() + " that both have a predicate, and stepWindow(" + stepWindow
+                            + ") cannot keep their counts across a redeploy because nothing tells the two leaves apart. Ask"
+                            + " for different counts on them, or restructure the step so no two leaves over one event type"
+                            + " both have a predicate, or drop stepWindow(...) for this flow");
+                }
+            }
         }
 
         private void validateTransitionToTargets(Set<String> stepNamesInGraph) {
