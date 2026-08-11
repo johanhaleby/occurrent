@@ -34,6 +34,7 @@ import java.time.Duration;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * {@link DurableSubscriptionModel#resumeSubscription(String)} against a recording fake rather than a real Mongo
@@ -110,6 +111,25 @@ class DurableSubscriptionModelResumeRepositioningTest {
 
         assertThat(delegate.plainResumeCalled).isTrue();
         assertThat(delegate.repositionedTo).as("an opted-out subscription must not be repositioned from storage").isNull();
+    }
+
+    @Test
+    void a_delegate_subscribe_that_throws_leaves_no_opt_out_marker_behind_for_a_later_resubscribe() {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        ThrowingOnSubscribeRepositionableSubscriptionModel delegate = new ThrowingOnSubscribeRepositionableSubscriptionModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        })).isInstanceOf(RuntimeException.class);
+
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.repositionedTo)
+                .as("the failed subscribe attempt must not have opted this id out of checkpoint management, so a "
+                        + "same-JVM resubscribe still repositions from the stored checkpoint (the #690 guarantee)")
+                .isInstanceOf(StartAt.StartAtCheckpoint.class);
     }
 
     /**
@@ -192,6 +212,17 @@ class DurableSubscriptionModelResumeRepositioningTest {
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
             repositionedTo = startAt;
             return dummySubscription(subscriptionId);
+        }
+    }
+
+    /**
+     * The same repositionable fake, but {@code subscribe} throws instead of returning a {@link Subscription},
+     * standing in for a delegate that rejects a subscription outright.
+     */
+    private static class ThrowingOnSubscribeRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            throw new RuntimeException("delegate refused the subscription");
         }
     }
 }

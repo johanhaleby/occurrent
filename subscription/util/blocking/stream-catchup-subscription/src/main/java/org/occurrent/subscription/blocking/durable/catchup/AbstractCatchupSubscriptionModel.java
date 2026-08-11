@@ -240,7 +240,20 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
 
     protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
         runningCatchupSubscriptions.put(subscriptionId, true);
-        FutureTask<Subscription> task = new FutureTask<>(catchup);
+        // catchup itself removes the running marker on normal completion, and deliberately leaves it in place when
+        // shouldKeepReplaying already turned false so a cancellation can still be told apart from a completion (see
+        // the comment on subscriptionsWasCancelledOrShutdown in the mode-specific classes). Neither path throws, so
+        // catching here only ever means the replay itself failed, and is the one place both modes share to stop such
+        // a failure from leaving the subscription looking like it is still running or catching up forever.
+        FutureTask<Subscription> task = new FutureTask<>(() -> {
+            try {
+                return catchup.call();
+            } catch (Throwable failure) {
+                runningCatchupSubscriptions.remove(subscriptionId);
+                pauseRequestedDuringCatchup.remove(subscriptionId);
+                throw failure;
+            }
+        });
         Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(task);
         return task;
     }
