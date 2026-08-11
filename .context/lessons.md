@@ -746,3 +746,36 @@ when you use it, say in the epic state that the PR's own rollup is not evidence 
 
 Third variant of one root cause, recorded twice already today: the rollup describes the checks that
 happen to exist and attach, never the validation that actually ran.
+
+## The user had to point me at two of my own units, and the skill's model of session signals was wrong (2026-08-11, cdx33)
+
+Johan told me "U2 asks how to proceed?" and, earlier, "you should also check out U1". Both were
+parked in states I had no signal for. U2 had presented its plan gate in its own session and gone
+idle asking a question. U1 had run four planning rounds with Johan, had four `ExitPlanMode`
+rejections, and had reversed its whole direction into withdrawing a feature, none of which reached
+me. Two monitors were armed and neither could see any of it.
+
+The root cause was a false belief encoded in the `/orchestrator` skill itself, not merely a missed
+check. The cadence rules justified a 1200 to 1800 second heartbeat for the human-wait class
+"because end-of-session and task notifications arrive event-driven", and the delegation section
+said a session's return channel means "you learn it ended". Neither holds here. In-session
+subagents do notify (U7 and U-ADR both did, repeatedly). Spawned chip sessions did not notify once
+across seven units. And the decisive case is not covered by any notification even in principle: a
+session waiting at a human gate has not ENDED, so there is nothing to fire, and it is precisely the
+state that needs the orchestrator.
+
+I had already recorded the neighbouring lesson today (a stopped worker with an open obligation is
+invisible to both monitors, caught via `isRunning` while checking something else). Writing it down
+did not make it fire, because I ran it opportunistically rather than as part of a tick. That is the
+same meta-failure this file already names: a recorded rule that nothing forces anyone to apply.
+
+Graduated into the `/orchestrator` skill the same day, since it is host behavior rather than
+anything about this repository: the Result-flow bullet now says session liveness is polled and
+never pushed and that a gate-waiting session emits nothing; the human-wait class is no longer a
+long-heartbeat class but action-ready-for-the-user, surfaced in the tick that finds it with a
+recommendation; a session-liveness sweep is now a required part of every tick alongside the two
+monitors, with the three actionable states named (idle-with-obligation, running-but-parked,
+genuinely active) and the warning not to read "running" as "progressing"; and a plan-first brief
+must now require the worker to MESSAGE the orchestrator when it reaches its gate, so the
+orchestrator can route it as one structured ask carrying register knowledge the worker lacks, which
+is also what spares the user a session switch. This entry stays as the history of how it was learned.
