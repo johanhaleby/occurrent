@@ -58,11 +58,6 @@ public class OccurrentProperties {
      */
     private SagaProperties saga = new SagaProperties();
 
-    /**
-     * Projection Configuration (the {@code @Projection} read model, both stacks)
-     */
-    private ProjectionProperties projection = new ProjectionProperties();
-
 
     public static class ApplicationServiceProperties {
 
@@ -416,88 +411,6 @@ public class OccurrentProperties {
 
     public void setSaga(SagaProperties saga) {
         this.saga = saga;
-    }
-
-    public ProjectionProperties getProjection() {
-        return projection;
-    }
-
-    public void setProjection(ProjectionProperties projection) {
-        this.projection = projection;
-    }
-
-    public static class ProjectionProperties {
-
-        /**
-         * The collection a {@code @Projection(recordAppliedPosition = true)} records its applied position into, on
-         * the Mongo starter's zero-config {@code AppliedProjectionPositionStore}. One document per projection id.
-         */
-        private String appliedPositionCollection = "appliedPositions";
-
-        /**
-         * How {@code AppliedProjectionPositionStore.waitUntilApplied(..)} paces its polls.
-         */
-        private AppliedPositionProperties appliedPosition = new AppliedPositionProperties();
-
-        public String getAppliedPositionCollection() {
-            return appliedPositionCollection;
-        }
-
-        public void setAppliedPositionCollection(String appliedPositionCollection) {
-            this.appliedPositionCollection = appliedPositionCollection;
-        }
-
-        public AppliedPositionProperties getAppliedPosition() {
-            return appliedPosition;
-        }
-
-        public void setAppliedPosition(AppliedPositionProperties appliedPosition) {
-            this.appliedPosition = appliedPosition;
-        }
-
-        public static class AppliedPositionProperties {
-
-            /**
-             * The interval before the first re-check of the recorded position. Kept short so a projection that is
-             * already caught up answers immediately.
-             */
-            private Duration initial = Duration.ofMillis(25);
-
-            /**
-             * The longest the interval grows to. A projection that is behind is polled at this pace rather than at
-             * {@code initial}, which is what keeps a lagging projection from being hammered by every waiting caller.
-             */
-            private Duration max = Duration.ofMillis(250);
-
-            /**
-             * What the interval is multiplied by after each poll that found the projection still behind.
-             */
-            private double multiplier = 2.0;
-
-            public Duration getInitial() {
-                return initial;
-            }
-
-            public void setInitial(Duration initial) {
-                this.initial = initial;
-            }
-
-            public Duration getMax() {
-                return max;
-            }
-
-            public void setMax(Duration max) {
-                this.max = max;
-            }
-
-            public double getMultiplier() {
-                return multiplier;
-            }
-
-            public void setMultiplier(double multiplier) {
-                this.multiplier = multiplier;
-            }
-        }
     }
 
     public static class SagaProperties {

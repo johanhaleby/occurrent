@@ -22,7 +22,6 @@ import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.dsl.projection.AppliedProjectionPositionStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
@@ -53,7 +52,6 @@ import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionMod
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
-import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.context.ApplicationContext;
 import reactor.core.publisher.Mono;
 
@@ -62,7 +60,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -144,9 +141,6 @@ class ProjectionAnnotationRegistrar {
                 annotation.startAtGlobalPosition() >= 0,
                 annotation.resumeBehavior() != ResumeBehavior.DEFAULT,
                 annotation.startupMode() != StartupMode.DEFAULT);
-        if (synchronous && annotation.recordAppliedPosition()) {
-            throw new IllegalArgumentException("@Projection '%s' combines mode = SYNCHRONOUS with recordAppliedPosition = true. A synchronous projection has already updated the read model by the time the command returns, so recording a position for it buys a write and nothing else. Drop recordAppliedPosition.".formatted(id));
-        }
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = invokeFactory(method, bean);
@@ -320,11 +314,7 @@ class ProjectionAnnotationRegistrar {
         Object store = resolveStore(annotation, id);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         Runnable registerOnFeed;
-        if (annotation.recordAppliedPosition()) {
-            BiFunction<EventMetadata, E, Mono<Void>> update = recordingUpdate(store, projection, id);
-            Filter replayFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
-            registerOnFeed = () -> feed.register(id, update, replayFilter);
-        } else if (store instanceof ViewStateRepository) {
+        if (store instanceof ViewStateRepository) {
             registerOnFeed = () -> feed.register(id, projection, (ViewStateRepository<S, ID>) store);
         } else {
             // resolveStore guarantees a ViewStateRepository or MaterializedView, so this is a MaterializedView. Drive it
@@ -465,9 +455,6 @@ class ProjectionAnnotationRegistrar {
 
     @SuppressWarnings("unchecked")
     private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectAgnosticOrStream(ReactiveProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, Projection<S, E, ID> projection, Object store, @Nullable StartAt startAt) {
-        if (annotation.recordAppliedPosition()) {
-            return runner.project(id, projection, recordingUpdate(store, projection, id), startAt);
-        }
         if (store instanceof MaterializedView) {
             return runner.project(id, projection, (MaterializedView<E>) store, startAt);
         }
@@ -476,40 +463,10 @@ class ProjectionAnnotationRegistrar {
 
     @SuppressWarnings("unchecked")
     private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectDcb(ReactiveDcbProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, DcbProjection<S, E, ID> dcbProjection, Object store, @Nullable DcbStartAt startAt) {
-        if (annotation.recordAppliedPosition()) {
-            return runner.project(id, dcbProjection, recordingUpdate(store, dcbProjection.projection(), id), startAt);
-        }
         if (store instanceof MaterializedView) {
             return runner.project(id, dcbProjection, (MaterializedView<E>) store, startAt);
         }
         return runner.project(id, dcbProjection, (ViewStateRepository<S, ID>) store, startAt);
-    }
-
-    // Builds the reactive update for store (a MaterializedView or a ViewStateRepository) and wraps it so every
-    // applied event also advances an AppliedProjectionPositionStore bean, matching the update projectAgnosticOrStream and
-    // projectDcb would otherwise drive the runner with directly.
-    @SuppressWarnings("unchecked")
-    private <E, S, ID> BiFunction<EventMetadata, E, Mono<Void>> recordingUpdate(Object store, Projection<S, E, ID> projection, String id) {
-        BiFunction<EventMetadata, E, Mono<Void>> update = store instanceof MaterializedView
-                ? Projections.reactiveUpdateWithMetadata((MaterializedView<E>) store)
-                : Projections.reactiveUpdateWithMetadata(projection, (ViewStateRepository<S, ID>) store, id);
-        return Projections.recordingAppliedPosition(update, resolveAppliedProjectionPositionStore(id), id);
-    }
-
-    // getIfAvailable rather than getBean, applies @Primary/@Fallback resolution and only throws when the container
-    // genuinely cannot pick, the blocking twin uses the same pattern for AppliedProjectionPositionStore.
-    private AppliedProjectionPositionStore resolveAppliedProjectionPositionStore(String id) {
-        final AppliedProjectionPositionStore store;
-        try {
-            store = applicationContext.getBeanProvider(AppliedProjectionPositionStore.class).getIfAvailable();
-        } catch (NoUniqueBeanDefinitionException e) {
-            String[] names = applicationContext.getBeanNamesForType(AppliedProjectionPositionStore.class);
-            throw new IllegalStateException(("@Projection '%s' sets recordAppliedPosition = true and found %d AppliedProjectionPositionStore beans (%s) and cannot pick one. Mark one @Primary.").formatted(id, names.length, String.join(", ", names)), e);
-        }
-        if (store == null) {
-            throw new IllegalStateException(("@Projection '%s' sets recordAppliedPosition = true, which needs an AppliedProjectionPositionStore bean, and there is none. Declare one (AppliedProjectionPositionStore.inMemory() to get started), or use the Mongo starter's zero-config default.").formatted(id));
-        }
-        return store;
     }
 
     private static Object invokeFactory(Method method, Object bean) {
