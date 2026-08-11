@@ -53,7 +53,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
         when(provider.getIfUnique()).thenReturn(strategy);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, true);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(5L));
     }
@@ -65,7 +65,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
         when(provider.getIfUnique()).thenReturn(null);
         when(provider.getIfAvailable()).thenReturn(null);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, true);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEmpty();
     }
@@ -82,7 +82,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
         when(provider.getIfAvailable()).thenThrow(new NoUniqueBeanDefinitionException(CompetingConsumerStrategy.class,
                 List.of("occurrentCompetingConsumerStrategy", "myOwnStrategy")));
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, true);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThatThrownBy(() -> source.writeVersion(SUBSCRIPTION_ID))
                 .isInstanceOf(AmbiguousCompetingConsumerStrategyException.class)
@@ -102,7 +102,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
                 .thenThrow(new BeanCurrentlyInCreationException("occurrentCompetingConsumerStrategy"))
                 .thenReturn(strategy);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, true);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEmpty();
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(9L));
@@ -118,7 +118,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
         when(provider.getIfUnique()).thenReturn(null, strategy);
         when(provider.getIfAvailable()).thenReturn(null);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, true);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEmpty();
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(3L));
@@ -132,7 +132,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
         when(provider.getIfUnique()).thenReturn(strategy);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, true);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(1L));
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEqualTo(OptionalLong.of(2L));
@@ -146,7 +146,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
     void never_asks_the_strategy_before_the_first_write() {
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
 
-        new CompetingConsumerCheckpointWriteVersionSource(provider, true);
+        new CompetingConsumerCheckpointWriteVersionSource(provider, () -> true);
 
         verify(provider, never()).getIfUnique();
     }
@@ -156,7 +156,7 @@ class CompetingConsumerCheckpointWriteVersionSourceTest {
     void fencing_turned_off_answers_empty_without_asking_for_a_strategy() {
         ObjectProvider<CompetingConsumerStrategy> provider = mock(ObjectProvider.class);
 
-        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, false);
+        var source = new CompetingConsumerCheckpointWriteVersionSource(provider, () -> false);
 
         assertThat(source.writeVersion(SUBSCRIPTION_ID)).isEmpty();
         verify(provider, never()).getIfUnique();

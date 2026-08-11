@@ -231,7 +231,7 @@ public class OccurrentMongoAutoConfiguration<E> {
         // the strategy bean itself, so a checkpoint-writing model does not force the strategy, and through it every
         // CompetingConsumerListener bean, into existence before this bean is fully constructed.
         CheckpointWriteVersionSource writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(competingConsumerStrategyProvider,
-                occurrentProperties.getSubscription().getCompetingConsumer().isFenceCheckpoints());
+                occurrentProperties.getSubscription().getCompetingConsumer()::isFenceCheckpoints);
         // Checkpoints after every event by default, see DurableSubscriptionModel javadoc for the EveryN.every(n)
         // throughput tradeoff if checkpoint write volume becomes a bottleneck.
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage, writeVersionSource);

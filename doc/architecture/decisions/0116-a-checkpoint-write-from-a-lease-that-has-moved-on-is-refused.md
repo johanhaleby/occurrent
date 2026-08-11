@@ -501,6 +501,34 @@ A user who declares their own `CheckpointStorage` bean is unaffected, since that
 the fence. A user who hand-wires their own models passes the source themselves, which is one argument
 in two places.
 
+> **Amended for 0.33.0.** Several strategy beans with no `@Primary` no longer start the application. The
+> paragraph above argued the opposite, that such an application starts today and must keep starting, and #684
+> moved `SagaAnnotationRegistrar` from `getIfAvailable` to `getIfUnique` so the saga timer poller would stand
+> down the same way. Both of those are superseded. A second strategy bean almost always means customization or
+> a mistake, and reading either one as a request to run without a fence turns a configuration change into
+> silently disabled safety. So an ambiguous strategy now fails startup, naming the beans found and the remedy,
+> which is to mark one `@Primary` or leave only that one in the context. `getIfUnique` followed by
+> `getIfAvailable` is how "no strategy at all" is told apart from "several with no `@Primary`", since the first
+> answers null for both and the second throws for the second case and names the beans. Do not restore the
+> stand-down for an application that fails to start this way. The failure is the point, and #684's own
+> reproduction was a test that wanted to reach an assertion, not an application that wanted no fence.
+>
+> The Mongo starter's default strategy is a `@Fallback`, so an application's own `CompetingConsumerStrategy` of
+> any type replaces it rather than competing with it, at every injection point and in the lazy lookup the fence
+> makes. A `@ConditionalOnMissingBean(CompetingConsumerStrategy.class)` cannot carry that on its own, because
+> `@EnableOccurrent` imports the same configuration through a plain `@Import` and the condition is then
+> evaluated before the application's own bean is registered. Spring resolves a type with one non-fallback
+> candidate to that candidate, so the injected strategy and the fence's own resolution always agree, and the
+> starter asks for the strategy through the shared rule rather than as a parameter of its own, so the ambiguous
+> case reports the remedy instead of an unsatisfied parameter.
+>
+> `CheckpointStorage` also answers `evaluatesWriteConditions()` now, and the fenced starter path refuses a
+> storage that answers `false`. Pairing one with a fence used to be accepted and then refused on the first
+> checkpoint write after a lease was acquired, which is the ordinary steady state of a single consumer holding
+> its lease rather than a rare case. `occurrent.subscription.competing-consumer.fence-checkpoints=false` is how
+> an application keeps such a storage, and every checkpoint is then written unconditionally, so a node that has
+> lost its lease can move a checkpoint backwards and the events between the two positions are delivered again.
+
 ### The reactor stack gets the condition now, and a source when it has one to give
 
 #665 names four storages. `ReactorCheckpointStorage` is one of them and it does get the conditional

@@ -22,6 +22,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.context.ApplicationContext;
 
 /**
  * Refuses to finish startup when the competing-consumer fence cannot do what the configuration implies, rather than
@@ -33,16 +34,27 @@ import org.springframework.beans.factory.SmartInitializingSingleton;
  */
 class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton {
 
+    /**
+     * Whether checkpoint writes carry the lease version.
+     * <p>
+     * Answers the default when no {@link OccurrentProperties} bean is registered, so a wiring site can ask without
+     * requiring one to exist.
+     */
+    static boolean fenceCheckpoints(ObjectProvider<OccurrentProperties> propertiesProvider) {
+        OccurrentProperties properties = propertiesProvider.getIfAvailable();
+        return properties == null || properties.getSubscription().getCompetingConsumer().isFenceCheckpoints();
+    }
+
     private final ObjectProvider<CompetingConsumerStrategy> strategyProvider;
     private final ObjectProvider<CheckpointStorage> storageProvider;
-    private final OccurrentProperties properties;
+    private final ObjectProvider<OccurrentProperties> propertiesProvider;
 
     CheckpointFencingConfigurationCheck(ObjectProvider<CompetingConsumerStrategy> strategyProvider,
                                         ObjectProvider<CheckpointStorage> storageProvider,
-                                        OccurrentProperties properties) {
+                                        ObjectProvider<OccurrentProperties> propertiesProvider) {
         this.strategyProvider = strategyProvider;
         this.storageProvider = storageProvider;
-        this.properties = properties;
+        this.propertiesProvider = propertiesProvider;
     }
 
     @Override
@@ -50,7 +62,7 @@ class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton 
         // Throws when several strategy beans compete, whatever the fencing property says, because the strategy also
         // decides which node delivers events and which one polls a saga's timers.
         CompetingConsumerStrategy strategy = CompetingConsumerStrategies.resolveUnique(strategyProvider);
-        if (strategy == null || !properties.getSubscription().getCompetingConsumer().isFenceCheckpoints()) {
+        if (strategy == null || !fenceCheckpoints(propertiesProvider)) {
             return;
         }
         @Nullable CheckpointStorage storage = storageProvider.getIfUnique();

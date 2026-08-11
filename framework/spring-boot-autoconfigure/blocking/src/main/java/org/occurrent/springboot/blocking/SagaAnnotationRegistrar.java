@@ -96,7 +96,7 @@ class SagaAnnotationRegistrar {
         this.startPositionSupport = startPositionSupport;
         this.registeredIds = registeredIds;
         this.writeVersionSource = new CompetingConsumerCheckpointWriteVersionSource(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
-                applicationContext.getBean(OccurrentProperties.class).getSubscription().getCompetingConsumer().isFenceCheckpoints());
+                () -> CheckpointFencingConfigurationCheck.fenceCheckpoints(applicationContext.getBeanProvider(OccurrentProperties.class)));
     }
 
     // A @Saga factory returns a Saga descriptor: subscribe to its events, materialize per-instance state into a

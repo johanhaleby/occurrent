@@ -34,11 +34,21 @@ default Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
 }
 
 OptionalLong writeVersion(String subscriptionId);
+
+default boolean evaluatesWriteConditions() {
+    return false;
+}
 ```
 
-The reactor twin gets the same two members, `Mono<Checkpoint> save(String, Checkpoint, CheckpointWriteCondition)`
-and `Mono<Long> writeVersion(String)`, with an empty `Mono` meaning no version is stored. A refusal on that stack
-signals `Mono.error`, it never throws from assembly.
+The reactor twin gets the same three members, `Mono<Checkpoint> save(String, Checkpoint, CheckpointWriteCondition)`,
+`Mono<Long> writeVersion(String)` and the same `evaluatesWriteConditions()`, with an empty `Mono` meaning no version
+is stored. A refusal on that stack signals `Mono.error`, it never throws from assembly.
+
+`evaluatesWriteConditions()` is the only one of the three with a default, and the default is `false`, so a storage that
+writes unconditionally compiles and keeps working without answering it. Say `true` when your storage accepts and
+refuses `notOlderThan` and `ifAbsent` as documented and leaves a stored version untouched under `any()`. A caller that
+depends on a conditional write asks first, which is how the Spring Boot starter refuses a wiring that would otherwise
+throw on the first checkpoint write. Section 8 covers that failure.
 
 A test double that overrides the two-argument `save` to observe writes stops seeing them, because the subscription
 models now call the three-argument `save` directly, so override that one instead.
@@ -75,6 +85,12 @@ public OptionalLong writeVersion(String subscriptionId) {
 That is not a stopgap you are expected to replace before compiling. It is the correct, permanent answer for a store
 that genuinely cannot evaluate a condition. `UnsupportedOperationException` is the same refusal an event store gives
 for a capability it was not built with.
+
+Such a store leaves `evaluatesWriteConditions()` alone, since the default already answers `false` for it. That answer
+is what lets a caller find out before it wires anything up, rather than on the first write, so leaving it at the
+default is part of the recipe rather than an omission. One place acts on it today. The Spring Boot Mongo starter
+refuses to start when it would pair your store with a competing-consumer lease, and section 8 says what to do about
+that.
 
 Occurrent's own Mongo and Redis checkpoint storages do not need this recipe. They already evaluate `notOlderThan`
 and `ifAbsent` for real. Redis Cluster is the exception. It still refuses a conditional write outright, and
@@ -302,3 +318,31 @@ lobby.step(state, SagaInput.timeout("game-1", stepTimer("awaiting-players")));
 
 Kotlin has both of those. There is a top-level `stepTimer` next to `saga { }`, and `startTimeout`, `startTimeoutAt`,
 `cancelTimeout`, `evolveOnTimeout` and `reactOnTimeout` each take a `TimerName` as well as a string.
+
+## 8. Two ways the Spring Boot starter now refuses to start
+
+Both of these used to start and go wrong later, so they are startup failures on purpose. Each message names the beans
+involved and what to do.
+
+**Several `CompetingConsumerStrategy` beans with no `@Primary`.** Adding a strategy of your own used to leave two beans
+of that type, and Occurrent read the ambiguity as no strategy at all, which wrote every checkpoint unconditionally and
+ran a `@Saga`'s timer poller on every instance. Both of those are the protections the strategy exists to provide.
+Occurrent now throws `AmbiguousCompetingConsumerStrategyException` during startup. Mark the bean you want with
+`@Primary`, or leave only that one in the context.
+
+You probably do not have two. The Mongo starter's default strategy backs off for yours now, whatever type yours is, so
+one strategy bean of your own replaces it rather than joining it. That also fixes a case that was quietly broken. A
+custom strategy of a type other than `SpringMongoLeaseCompetingConsumerStrategy` never reached the subscription model
+at all, which kept delivering under the starter's own lease.
+
+**A `CheckpointStorage` that only writes unconditionally, wired next to a strategy.** The starter stamps each
+checkpoint write with the lease version, and a storage that refuses `notOlderThan` throws
+`UnsupportedOperationException` the first time a node writes a checkpoint while holding its lease. That is the ordinary
+case of one consumer running, not a rare one, so the pair is refused up front with
+`CheckpointStorageCannotFenceException`. Two ways out:
+
+1. Answer `true` from `evaluatesWriteConditions()` on a storage that does evaluate conditions, see section 2.
+2. Set `occurrent.subscription.competing-consumer.fence-checkpoints=false` to keep a storage that cannot. Every
+   checkpoint is then written unconditionally, which is what 0.32.0 did. A node that has lost its lease can move a
+   checkpoint backwards, and the events between the two positions are delivered again, which stays inside the
+   at-least-once contract.

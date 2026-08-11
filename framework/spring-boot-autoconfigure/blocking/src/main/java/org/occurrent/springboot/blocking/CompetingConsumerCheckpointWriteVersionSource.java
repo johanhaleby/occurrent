@@ -22,6 +22,7 @@ import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.OptionalLong;
+import java.util.function.BooleanSupplier;
 
 /**
  * Turns a {@link CompetingConsumerStrategy} bean, resolved lazily, into a {@link CheckpointWriteVersionSource} (see
@@ -45,23 +46,30 @@ import java.util.OptionalLong;
 public final class CompetingConsumerCheckpointWriteVersionSource implements CheckpointWriteVersionSource {
 
     private final ObjectProvider<CompetingConsumerStrategy> strategyProvider;
-    private final boolean fenceCheckpoints;
+    private final BooleanSupplier fenceCheckpoints;
+    private volatile @Nullable Boolean fencing;
     private volatile @Nullable CompetingConsumerStrategy strategy;
 
     /**
      * @param strategyProvider Resolves the {@link CompetingConsumerStrategy} bean to read a fencing token from.
-     * @param fenceCheckpoints {@code false} answers no version for every subscription, which writes every checkpoint
-     *                         unconditionally. Pass {@code occurrent.subscription.competing-consumer.fence-checkpoints}
-     *                         when the wiring site is configured by that property.
+     * @param fenceCheckpoints Answers {@code false} to write every checkpoint unconditionally. Asked once, on the same
+     *                         first write that resolves the strategy, so a wiring site reading
+     *                         {@code occurrent.subscription.competing-consumer.fence-checkpoints} can be built before
+     *                         the properties bean exists.
      */
-    public CompetingConsumerCheckpointWriteVersionSource(ObjectProvider<CompetingConsumerStrategy> strategyProvider, boolean fenceCheckpoints) {
+    public CompetingConsumerCheckpointWriteVersionSource(ObjectProvider<CompetingConsumerStrategy> strategyProvider, BooleanSupplier fenceCheckpoints) {
         this.strategyProvider = strategyProvider;
         this.fenceCheckpoints = fenceCheckpoints;
     }
 
     @Override
     public OptionalLong writeVersion(String subscriptionId) {
-        if (!fenceCheckpoints) {
+        Boolean fenced = fencing;
+        if (fenced == null) {
+            fenced = fenceCheckpoints.getAsBoolean();
+            fencing = fenced;
+        }
+        if (!fenced) {
             return OptionalLong.empty();
         }
         CompetingConsumerStrategy resolved = strategy;

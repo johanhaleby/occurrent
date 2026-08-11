@@ -45,10 +45,9 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link SagaAnnotationRegistrar#resolveSagaCompetingConsumerStrategy()} gates the saga timer poller on a
- * {@link CompetingConsumerStrategy} bean. Several of them with no {@code @Primary} refuse to start, because either
- * answer available without one is worse than a failure: picking a bean would gate the poller on a lease the
- * application did not choose, and standing the gate down would run a poller on every instance while looking like the
- * gate is on. A {@code @Primary} bean is the way to say which lease to use.
+ * {@link CompetingConsumerStrategy} bean. Several of them with no {@code @Primary} refuse to start. Picking one would
+ * gate the poller on a lease the application did not choose, and standing the gate down would run a poller on every
+ * instance while the configuration looks like the gate is on. A {@code @Primary} bean says which lease to use.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SagaAnnotationTimerPollerCompetingConsumerTest {

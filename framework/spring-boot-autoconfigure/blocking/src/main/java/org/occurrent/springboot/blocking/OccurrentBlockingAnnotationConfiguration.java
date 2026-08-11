@@ -55,8 +55,8 @@ public class OccurrentBlockingAnnotationConfiguration {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointFencingConfigurationCheck occurrentCheckpointFencingConfigurationCheck(ObjectProvider<CompetingConsumerStrategy> competingConsumerStrategyProvider,
                                                                                            ObjectProvider<CheckpointStorage> checkpointStorageProvider,
-                                                                                           OccurrentProperties occurrentProperties) {
-        return new CheckpointFencingConfigurationCheck(competingConsumerStrategyProvider, checkpointStorageProvider, occurrentProperties);
+                                                                                           ObjectProvider<OccurrentProperties> occurrentPropertiesProvider) {
+        return new CheckpointFencingConfigurationCheck(competingConsumerStrategyProvider, checkpointStorageProvider, occurrentPropertiesProvider);
     }
 
     /**
