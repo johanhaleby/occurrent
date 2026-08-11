@@ -424,9 +424,11 @@ has the reasoning, including why this is a second setting rather than a new mean
 ## 10. A saga or subscription declaring a supertype event is refused
 
 A saga declares the event types it handles, and so does an annotation-based subscription (`@Subscription`,
-`@StreamSubscription`, `@SynchronousSubscription`, `@DcbSubscription`). Both turn those declarations into a type filter
-by asking the `CloudEventTypeMapper` for each one's CloudEvent type. A filter built from only the declared type missed
-every concrete type it permits, so a sealed supertype could ask for fewer types than dispatch would actually accept.
+`@StreamSubscription`, `@SynchronousSubscription`, `@DcbSubscription`), but 0.32.0 turned those declarations into a type
+filter differently on each side. A saga took its declared types verbatim, with no expansion at all, so declaring a
+sealed supertype asked for that supertype's own CloudEvent type alone and missed every concrete type it permits. A
+subscription expanded a sealed type into the concrete types it permits instead, but dropped the declared type itself,
+the mirror problem, and treated a reopened level below it as a complete answer rather than an incomplete one.
 
 0.33.0 expands a declared sealed type into the concrete types it permits, which fixes that case on both sides. Where the
 concrete types cannot be found, a saga is refused when it is built and a subscription is refused when it is registered,
