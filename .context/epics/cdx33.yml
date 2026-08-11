@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 27
-updated_at: 2026-08-11T13:00:24Z
-updated_by: "orchestrator session faee3625 (Johan on mobile, so U6 re-dispatched as a worktree subagent instead of a chip; the chip was dismissed first to avoid a duplicate worker)"
+revision: 28
+updated_at: 2026-08-11T13:34:39Z
+updated_by: "orchestrator session faee3625 (U6 plan gate CLOSED, Johan chose option A: evaluatesWriteConditions on CheckpointStorage; ownership extended to subscription/api and six storages)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -110,12 +110,12 @@ units:
     session: "worktree subagent a73c222882b9549d1 (chip task_4ff34e51 dismissed unstarted)"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: manual_approval, ref: "U6 plan gate (capability-discovery mechanism under D1-kept contract), Johan", met: false, evidence: null}
+      - {check: manual_approval, ref: "U6 plan gate (capability-discovery mechanism under D1-kept contract), Johan", met: true, evidence: "SATISFIED 2026-08-11T13:34:39Z via structured ask in the orchestrator session (Johan mobile). OPTION A: add one default method evaluatesWriteConditions() returning false to CheckpointStorage on BOTH stacks, so unable-by-default means startup failure rather than delivery failure. Decisive evidence from the worker: CheckpointStorageFixture.evaluatesWriteConditions() already exists in the TCK and its javadoc states the gap is that nothing on CheckpointStorage reports it back, so this fills a documented contract gap rather than speculating. Consistent with D1, which kept the ADR 116 break and anticipated exactly this small addition. Orchestrator granted the ownership extension (subscription/api both stacks, six shipped storages needing a true override, ~14 mock stubs, and the TCK fixture javadoc sentence that is now false). Also approved: @Fallback as the mechanism, widening occurrentCompetingDurableSubscriptionModel to the interface, a SmartInitializingSingleton validator, two named exceptions, and the fence-checkpoints opt-out property"}
     blocking_on: []
-    next_action: await its BLOCKED plan-gate return, then route the finding-16 mechanism to Johan as a mobile-friendly structured ask
-    last_meaningful_progress_at: 2026-08-11T13:00:24Z
+    next_action: worker implementing option A after rebasing over the 739 withdrawal; on delivery verify the six storage overrides, the mock stubs and the corrected TCK fixture javadoc
+    last_meaningful_progress_at: 2026-08-11T13:34:39Z
     observed: {}
-    assessment: "Dispatch vehicle changed from chip to worktree subagent because Johan went mobile: a chip needs a click and a model pick, which the attendance rule says inverts the default toward subagents. A subagent cannot take an approval mid-flight, so the brief tells it to plan, then return BLOCKED with the plan rather than calling ExitPlanMode, and the orchestrator routes the ruling. D5 (fail startup on ambiguous strategy beans) is settled input, not a gate question; the one open question is the finding-16 mechanism, since CheckpointStorage cannot be asked whether it supports conditional writes and the contract is frozen"
+    assessment: "Plan corrected the brief in three ways worth keeping: there is NO reactor fencing wiring at all so both findings are blocking-only; @ConditionalOnMissingBean on the interface is unsafe because EnableOccurrent uses a plain @Import and a condition can evaluate before an application bean registers, which is why this file already uses @Fallback for occurrentTypeMapper (verified against Spring 7.0.8 source that @Fallback makes getIfUnique pick the user bean); and ambiguity can be told from absence via getIfAvailable NoUniqueBeanDefinitionException.getBeanNamesFound() with no constructor change. The unit also REVERSES closed issue #684, whose fix was the stand-down being removed, so its changelog bullet is rewritten in place and the ADR 116 amendment names the reversal so nobody restores it later as a bug fix"
   U7:
     issue: null
     goal: "Redis sentinels (finding 17): non-negative validation in notOlderThan ONLY if no shipped/documented version source can be negative, else adapter-boundary structured result"
