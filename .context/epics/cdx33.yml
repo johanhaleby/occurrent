@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33
-revision: 33
-updated_at: 2026-08-11T15:33:45Z
-updated_by: "orchestrator session faee3625 (U3 MERGED as dc6faa6a7 and swept, nine of thirteen units done; U4 delivered PR 744)"
+revision: 34
+updated_at: 2026-08-11T15:40:49Z
+updated_by: "orchestrator session faee3625 (U4 MERGED as 408187c76 and swept, ten of thirteen units done; only U6, UDOCS and UREG remain)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Design gates: U1 and U3 plan-first, UADR closed. Release gate now: U1 (739), U2 done, U3, U5 done, U6, U8 done, UDOCS. Finding 19 is MOOT because PR 739 deletes the file U9 fixed, so U9 merged work is deliberately erased. The PR 728 hold is spent: Option E merged as 6743d3e6c3c14a962e85e06e90396acfd684456f"
 pending_actions:
@@ -73,16 +73,16 @@ units:
   U4:
     issue: null
     goal: "Kotlin StepCondition variance (finding 10): on(condition) takes out E, compile test"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U3]
     session: "worktree subagent ae3fe6d4ee9905efe"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "744", met: false, evidence: "PR 744 open on cdx33/u4-kotlin-variance, head af9e1506834f49f2bc6680ecdf098c0df5cf09d9, checks running, no review threads yet"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "744", met: true, evidence: "MERGED as squash 408187c763f8d42a50a825cd0d342af5211128a0, CAS-pinned to af9e1506834f49f2bc6680ecdf098c0df5cf09d9. Matrix completed/success on that exact head by run list, 26 of 26, 0 pending, 0 unresolved threads, and Copilot reviewed that head with NO findings. Verified on origin/main: StepCondition<out E> present and the new 56-line StepConditionKotlinVarianceTest.kt present. The worker proved its compile test real by reverting the out projection, confirming the exact expected compile error, then restoring from a saved copy rather than git restore. It also confirmed there is exactly ONE StepCondition-taking on overload, correcting the review prose which implied two. No changelog clause owed: the existing entry says Kotlin gets matching on(condition, then) sugar, which this fix makes more true rather than false, so the deliberate skip was right and needed no reconciliation after 742 merged. Branch deleted, no stranded push, worktree clean at the pin and swept"}
     blocking_on: []
-    next_action: await DELIVERY_RESULT; verify the compile-time test is real (must not compile without the out projection) and reconcile any changelog clause it skipped to avoid colliding with 742, now merged
-    last_meaningful_progress_at: 2026-08-11T15:33:45Z
+    next_action: none, merged and swept
+    last_meaningful_progress_at: 2026-08-11T15:40:49Z
     observed: {}
     assessment: "Dependency cleared by evidence rather than by waiting: PR 742 touches 15 files in dsl/saga-dsl and NONE of them is SagaFlowExtensions.kt, so U4 can run in parallel. Two collision guards in the brief: its compile test goes in a NEW Kotlin test file because 742 is editing DocumentedFlowSagaKotlinTest.kt, and it adds no changelog clause if that would collide with 742 edit of the same unreleased entry, leaving the orchestrator to reconcile after both merge. Adding out to a type parameter position is source-compatible, so no migration machinery is owed"
   U5:
