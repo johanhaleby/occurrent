@@ -1251,3 +1251,26 @@ code rather than the sentence against the code. Here the test was one question, 
 required for this gap", answered by reading two methods. Also treat an ADR as a source of the premise
 under review, not as evidence for it: when the prose being corrected was written from an ADR, the ADR
 is a suspect too, which is why the fix had to land in three of its passages.
+
+## "Generated no new comments" can sit on top of four suppressed findings
+
+**What happened.** The previous lesson said to read a review's body, not just its threads. That was not
+enough. Copilot's review of PR 756's final head opened with "Copilot reviewed 6 out of 6 changed files
+in this pull request and generated no new comments", the unresolved-thread count was 0, and CI was
+green. Collapsed inside the body under `<details><summary>Suppressed comments (4)</summary>` were four
+findings, each anchored to a file and line, and all four were correct: the refusal message, the
+migration guide, the changelog entry and ADR 124 all still asserted that a declared supertype is never
+stored under its own type, which is false for the concrete sealed root the same documents describe.
+
+**Why it matters.** Every signal a merge gate normally reads said clean, including the reviewer's own
+one-line verdict, which is a stronger claim than an empty thread list. Three of the four findings were
+internal contradictions introduced by the previous round of corrections, so the surfaces disagreed with
+themselves. Merging on "no new comments" would have shipped them, and the suppression is invisible in
+the API fields a monitor would poll.
+
+**How to apply.** At the merge gate, fetch the review body and grep it for `Suppressed comments`, and
+read the collapsed block before believing the summary sentence above it. The reviewer's own verdict is
+a summary of what it decided to surface, not of what it found. More generally: on this PR each stronger
+green signal, threads resolved, then checks green, then the reviewer saying it found nothing, arrived
+just before a real defect, so treat an accumulation of clean signals on a change that has already
+needed six rounds as weak evidence rather than strong.
