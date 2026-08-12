@@ -56,13 +56,20 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <strong>Redis Cluster.</strong> The version key carries a hash tag built from whatever the checkpoint key itself
  * hashes on, so Cluster places both keys in the same slot and the scripts above, and the two-key {@code DEL} in
  * {@link #delete(String)}, are never refused for crossing slots. A subscription id with no braces of its own hashes
- * on its full text either way, and one that already contains a matched pair hashes on the text between them, the
- * same substring Cluster would use for the checkpoint key. The one shape this cannot help is a subscription id
- * whose only closing brace has no opening brace anywhere before it in the string. Cluster then hashes the checkpoint
- * key on its whole, untagged text, and no hash tag built around that text can reproduce the same slot without
- * introducing a closing brace of its own that Cluster would find first. Such an id refuses a conditional write the
- * same way every id used to, immediately, with the error Cluster reports for crossing slots. No subscription id
- * this library or its tests generate takes that shape.
+ * on its full text either way, and one that already contains a matched, non-empty pair hashes on the text between
+ * them, the same substring Cluster would use for the checkpoint key.
+ * <p>
+ * The one shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no
+ * brace pair, an unmatched brace, or an empty pair like {@code {}}) and that whole id contains a closing brace
+ * somewhere in it, for example {@code "{}orders"} or {@code "a}b{c"}. Wrapping such text in a fresh hash tag only
+ * reproduces it when the text has no closing brace of its own, since Cluster stops at the first one it finds, and
+ * that is then the wrap's own or an earlier one already inside the id, not the one this class appended. Such an id
+ * still refuses a conditional write immediately, with the error Cluster reports for crossing slots, the same way
+ * every id used to. No subscription id this library or its tests generate takes that shape.
+ * <p>
+ * This also assumes the {@link RedisOperations} passed in serializes a key to its own literal bytes, the same
+ * assumption the checkpoint's plain {@code GET} already makes. A key serializer that reshapes the string changes
+ * what Cluster actually hashes, and nothing in this class can see that reshaping to compensate for it.
  */
 @NullMarked
 public class SpringRedisCheckpointStorage implements CheckpointStorage {
@@ -213,11 +220,13 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     /**
      * Runs a write script and turns its return code into either the saved checkpoint or a refusal.
      * <p>
-     * The refusal is excluded from the retry strategy's own predicate, not merely allowed to exhaust it. This
-     * storage's default {@link RetryStrategy} is {@code exponentialBackoff}, whose default max attempts is infinite,
-     * so a refusal left inside the ordinary retry path would retry a write that can never succeed and hang the
-     * delivery thread forever. Excluding it is what {@link CheckpointWriteConditionNotFulfilledException}'s javadoc
-     * means by "must never be retried on the path that threw it".
+     * The refusal, and a Cluster {@code CROSSSLOT} failure, are both excluded from the retry strategy's own
+     * predicate, not merely allowed to exhaust it. This storage's default {@link RetryStrategy} is
+     * {@code exponentialBackoff}, whose default max attempts is infinite, so either one left inside the ordinary
+     * retry path would retry a write that can never succeed and hang the delivery thread forever. Excluding the
+     * refusal is what {@link CheckpointWriteConditionNotFulfilledException}'s javadoc means by "must never be
+     * retried on the path that threw it", and a slot mismatch is the same kind of failure, just reported by Cluster
+     * instead of by this class.
      */
     private Checkpoint saveConditionally(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, RedisScript<Long> script, byte[]... extraArgs) {
         Supplier<Checkpoint> save = () -> {
@@ -234,8 +243,21 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
             throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, condition);
         };
 
-        Predicate<Throwable> retryUnlessShutdownOrRefused = e -> !shutdown && !(e instanceof CheckpointWriteConditionNotFulfilledException);
+        Predicate<Throwable> retryUnlessShutdownOrRefused = e -> !shutdown && !(e instanceof CheckpointWriteConditionNotFulfilledException) && !isClusterSlotMismatch(e);
         return requireNonNull(executeWithRetry(save, retryUnlessShutdownOrRefused, retryStrategy).get());
+    }
+
+    // Cluster reports two script keys in different slots as CROSSSLOT, a deterministic failure no retry turns into
+    // a success. Neither Lettuce nor Spring Data Redis gives this its own exception type, so this walks the cause
+    // chain for the stable error-code word Redis itself puts at the start of the reply.
+    private static boolean isClusterSlotMismatch(Throwable e) {
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            String message = cause.getMessage();
+            if (message != null && message.startsWith("CROSSSLOT")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // True unconditionally. The comparison is real on a standalone server, a replicated one, and on Cluster, since

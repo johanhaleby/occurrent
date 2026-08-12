@@ -18,6 +18,7 @@ package org.occurrent.subscription.redis.spring.blocking;
 
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -58,19 +59,39 @@ class SpringRedisCheckpointStorageClusterSlotTest {
     }
 
     /**
-     * Documents, rather than works around, the one shape the class javadoc names, a subscription id whose only
-     * closing brace has no opening brace before it anywhere in the string. Cluster hashes such an id on its whole,
-     * untagged text, and no hash tag built around that text can reproduce the same slot without introducing a
-     * closing brace of its own that Cluster would find first, so the mismatch below is Cluster's own hash-tag rule,
-     * not a gap in {@code versionKey}. Confirmed against an independent Python implementation of the same CRC16 and
-     * tag-extraction rules before this test was written, so the recorded expectation is not a guess.
+     * Documents, rather than works around, the one shape the class javadoc names, a subscription id where Cluster
+     * itself falls back to hashing the whole id (no brace pair, an unmatched brace, or an empty pair like
+     * {@code {}}) and that whole id contains a closing brace somewhere in it. Cluster hashes such an id on its
+     * whole, untagged text, and no hash tag built around that text can reproduce the same slot without introducing
+     * a closing brace of its own that Cluster would find first, so the mismatch below is Cluster's own hash-tag
+     * rule, not a gap in {@code versionKey}. Confirmed against an independent Python implementation of the same
+     * CRC16 and tag-extraction rules before this test was written, so the recorded expectation is not a guess.
      */
     @ParameterizedTest
-    @ValueSource(strings = {"orders}v2", "a}b{c"})
+    @ValueSource(strings = {"orders}v2", "a}b{c", "{}orders", "{}v2", "orders{}v2", "{}"})
     void a_stray_closing_brace_with_no_opening_brace_before_it_is_the_one_shape_the_hash_tag_cannot_reproduce(String subscriptionId) {
         String versionKey = SpringRedisCheckpointStorage.versionKey(subscriptionId);
 
         assertThat(clusterSlot(versionKey)).isNotEqualTo(clusterSlot(subscriptionId));
+    }
+
+    /**
+     * Asserts the exact wrapped string, not just the slot it hashes to. An id landing in the whole-key fallback for
+     * one reason (an unmatched brace) and one landing there for another (an empty pair like {@code {}}) can both
+     * still fail the slot-equality tests above for reasons unrelated to that specific fallback, so those tests
+     * alone cannot tell a correct fallback from a broken one. Each fallback branch must wrap the id unchanged and
+     * whole, never a substring of it, and this checks that directly.
+     */
+    @Test
+    void version_key_wraps_the_whole_subscription_id_whenever_cluster_would_fall_back_to_hashing_it_whole() {
+        assertThat(SpringRedisCheckpointStorage.versionKey("orders"))
+                .isEqualTo("occurrent:checkpoint-version:{orders}");
+        assertThat(SpringRedisCheckpointStorage.versionKey("{tenant-42}-orders"))
+                .isEqualTo("occurrent:checkpoint-version:{tenant-42}");
+        assertThat(SpringRedisCheckpointStorage.versionKey("{}orders"))
+                .isEqualTo("occurrent:checkpoint-version:{{}orders}");
+        assertThat(SpringRedisCheckpointStorage.versionKey("a}b{c"))
+                .isEqualTo("occurrent:checkpoint-version:{a}b{c}");
     }
 
     // Redis Cluster's own slot algorithm (Cluster specification, "Keys hash tags"): hash the substring between the

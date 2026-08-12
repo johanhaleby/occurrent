@@ -23,6 +23,7 @@ import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
+import io.lettuce.core.RedisCommandExecutionException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
@@ -48,9 +49,12 @@ import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.data.redis.RedisSystemException;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -75,6 +79,10 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @Timeout(20)
 @DisplayNameGeneration(DisplayNameGenerator.Simple.class)
@@ -252,6 +260,31 @@ class SpringRedisCheckpointStorageTest {
                 assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(1)))
                         .as("a version below the stored one must be refused immediately, not queued behind a 30 second backoff")
                         .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class));
+    }
+
+    @Test
+    void a_cluster_crossslot_failure_escapes_retry_immediately_instead_of_hanging_the_calling_thread() {
+        // Given a retry strategy whose backoff is longer than this test's own timeout and whose max attempts is the
+        // exponentialBackoff default, infinite. If a CROSSSLOT failure were retried even once, this test would still
+        // be waiting out that backoff when assertTimeoutPreemptively gives up, since the write can never succeed.
+        // No test container here runs Cluster mode, so the failure is injected on a mocked RedisOperations instead
+        // of provoked from a real one.
+        @SuppressWarnings("unchecked")
+        RedisOperations<String, String> redis = mock(RedisOperations.class);
+        when(redis.getValueSerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
+        RuntimeException crossSlot = new RedisSystemException("CROSSSLOT Keys in request don't hash to the same slot",
+                new RedisCommandExecutionException("CROSSSLOT Keys in request don't hash to the same slot"));
+        // The last matcher is typed Object[], not Object, because saveConditionally passes an already-built array
+        // as the vararg parameter. A plain any() matches one vararg element, which this call never has exactly
+        // one of, so the stub would silently miss and the mock would return null instead of throwing.
+        when(redis.execute(any(RedisScript.class), any(), any(), anyList(), any(Object[].class))).thenThrow(crossSlot);
+
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redis, RetryStrategy.exponentialBackoff(Duration.ofSeconds(30), Duration.ofSeconds(30), 1.0f));
+
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
+                assertThatThrownBy(() -> storage.save(UUID.randomUUID().toString(), new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(1)))
+                        .as("a Cluster CROSSSLOT failure must be refused immediately, not queued behind a 30 second backoff")
+                        .isSameAs(crossSlot));
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {

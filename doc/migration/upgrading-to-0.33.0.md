@@ -123,9 +123,14 @@ redelivered, which is within the at-least-once contract this library has always 
 `SpringRedisCheckpointStorage` keeps the checkpoint and its stored version in two differently named keys, and
 Cluster refuses a script that touches keys in different slots. The version key's name carries a hash tag built from
 whatever the checkpoint key itself hashes on, so Cluster places both in the same slot and `notOlderThan` and
-`ifAbsent` work there exactly as they do on a standalone or replicated server. The one shape this cannot help is a
-subscription id whose only closing brace has no opening brace before it anywhere in the string, which still refuses
-a conditional write immediately, with the error Cluster reports for crossing slots.
+`ifAbsent` work there exactly as they do on a standalone or replicated server.
+
+The one shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no
+brace pair, an unmatched brace, or an empty pair like `{}`) and that whole id contains a closing brace somewhere in
+it, for example `"{}orders"` or `"a}b{c"`. Such an id still refuses a conditional write immediately, with the error
+Cluster reports for crossing slots, the same way every id used to before this fix. This also assumes the
+`RedisOperations` passed in serializes a key to its own literal bytes, the same assumption the checkpoint's plain
+`GET` already makes.
 
 ## 5. Five subscription-capability interfaces are renamed
 
