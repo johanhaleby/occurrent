@@ -167,6 +167,12 @@ is what would fail if that flag were dropped. This is the same line the duplicat
 preserved and the unreleased surface made strict, and it is why the `Consequences` claim that "join keeps working,
 unchanged in behavior" is still true and why `doc/migration/upgrading-to-0.33.0.md` needs no correction.
 
+> **Amended on 2026-08-12 by [ADR 125](0125-a-lowered-joins-reaction-reads-its-own-window-not-the-whole-retained-history.md).**
+> The exemption above is reversed. A lowered `join`'s reaction now narrows exactly like every other `WindowCondition`
+> trigger, and `loweredFromJoin` is gone from the record. The `Consequences` claim that "join keeps working, unchanged
+> in behavior" no longer holds for the reaction window, and `doc/migration/upgrading-to-0.33.0.md` does need the
+> correction this paragraph said it would not, added as its section 11.
+
 **The documented examples stop inferring the matched alternative, and no API is added for it.** A step that reacts
 differently per outcome writes one `on(...)` branch per outcome, ordered, first satisfied one winning. That is strictly
 more explicit than a single `anyOf` branch that works out afterwards what fired, because the ordering that breaks a tie

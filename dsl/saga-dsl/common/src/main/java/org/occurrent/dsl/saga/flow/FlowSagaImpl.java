@@ -357,13 +357,14 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return effects;
     }
 
-    // What a firing branch's reaction reads. An on(StepCondition, ...) reaction gets the events received since the step it
-    // fired from was entered, so a count it takes matches the count that fulfilled the condition. Everything else reads the
-    // whole retained history, meaning a classic branch, a lowered join (whose 0.31.0 contract this must not narrow), and a
-    // state whose previousStepEntryIndex is -1, which is what a store rebuilt without that field hands back.
+    // What a firing branch's reaction reads. Every WindowCondition trigger, on(StepCondition, ...) and the lowered join
+    // sugar alike, gets whatever of the events received since the step it fired from was entered is still retained, all
+    // of them unless a stepWindow cap has already evicted the step's own oldest ones. The condition still fires on the
+    // count it counted regardless, since that count is carried forward rather than re-derived from what remains. A
+    // classic branch reads the whole retained history instead, and so does a WindowCondition whose state has
+    // previousStepEntryIndex -1, which is what a store rebuilt without that field hands back.
     private ReceivedEvents<E> reactionWindow(FlowStateImpl<E> state, Trigger<E> trigger) {
-        boolean windowed = trigger instanceof WindowCondition<E> windowCondition
-                && !windowCondition.loweredFromJoin()
+        boolean windowed = trigger instanceof WindowCondition<E>
                 && state.previousStepEntryIndex() >= 0;
         if (!windowed) {
             return ReceivedEvents.of(state.received());
@@ -659,11 +660,11 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     /**
-     * A window condition trigger. {@code loweredFromJoin} marks the ones the deprecated {@code join(...)} produced, whose
-     * reaction keeps reading the whole retained history because {@code join} shipped in 0.31.0 with that contract and
-     * lowering it to a condition tree is not allowed to change what its callback sees.
+     * A window condition trigger, built by {@code on(StepCondition, ...)} directly and by the deprecated {@code
+     * join(...)}'s lowering alike. Both read the window {@code condition} was evaluated over, the events received since the
+     * step this branch fired from was entered.
      */
-    record WindowCondition<E>(StepCondition<E> condition, boolean loweredFromJoin) implements Trigger<E> {
+    record WindowCondition<E>(StepCondition<E> condition) implements Trigger<E> {
     }
 
     record Branch<E, C>(Trigger<E> trigger, BranchReaction<E, C> reaction, Continuation then) {
