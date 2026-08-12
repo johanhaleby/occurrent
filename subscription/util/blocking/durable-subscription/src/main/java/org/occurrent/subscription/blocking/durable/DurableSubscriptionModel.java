@@ -138,9 +138,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             notCheckpointedSubscriptions.add(subscriptionId);
             try {
                 return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
-            } catch (RuntimeException e) {
+            } catch (Throwable t) {
                 notCheckpointedSubscriptions.remove(subscriptionId);
-                throw e;
+                throw t;
             }
         }
 

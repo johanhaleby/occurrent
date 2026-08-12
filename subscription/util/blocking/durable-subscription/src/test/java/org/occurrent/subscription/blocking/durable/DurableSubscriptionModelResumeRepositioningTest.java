@@ -137,6 +137,25 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     @Test
+    void a_delegate_subscribe_that_throws_an_error_also_leaves_no_opt_out_marker_behind() {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        ErrorThrowingOnSubscribeRepositionableSubscriptionModel delegate = new ErrorThrowingOnSubscribeRepositionableSubscriptionModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        })).isInstanceOf(Error.class);
+
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.repositionedTo)
+                .as("an Error out of the delegate's subscribe must not leave the marker behind either, or it never "
+                        + "clears and every later resubscribe with this id is treated as opted out forever")
+                .isInstanceOf(StartAt.StartAtCheckpoint.class);
+    }
+
+    @Test
     void a_resume_racing_a_still_running_subscribe_sees_the_opt_out_marker_before_the_delegate_returns() throws InterruptedException {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         PausingRepositionableSubscriptionModel delegate = new PausingRepositionableSubscriptionModel();
@@ -264,6 +283,17 @@ class DurableSubscriptionModelResumeRepositioningTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             throw new RuntimeException("delegate refused the subscription");
+        }
+    }
+
+    /**
+     * The same repositionable fake, but {@code subscribe} throws an {@link Error} rather than a
+     * {@link RuntimeException}, standing in for something like an {@code OutOfMemoryError} escaping the delegate.
+     */
+    private static class ErrorThrowingOnSubscribeRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            throw new Error("delegate crashed");
         }
     }
 
