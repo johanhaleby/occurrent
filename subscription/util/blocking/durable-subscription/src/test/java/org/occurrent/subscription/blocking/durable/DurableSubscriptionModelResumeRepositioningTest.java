@@ -31,6 +31,10 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -132,6 +136,43 @@ class DurableSubscriptionModelResumeRepositioningTest {
                 .isInstanceOf(StartAt.StartAtCheckpoint.class);
     }
 
+    @Test
+    void a_resume_racing_a_still_running_subscribe_sees_the_opt_out_marker_before_the_delegate_returns() throws InterruptedException {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        PausingRepositionableSubscriptionModel delegate = new PausingRepositionableSubscriptionModel();
+        CountDownLatch insideSubscribe = new CountDownLatch(1);
+        CountDownLatch releaseSubscribe = new CountDownLatch(1);
+        delegate.subscribeEntered = insideSubscribe;
+        delegate.holdSubscribeUntil = releaseSubscribe;
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        // Left behind by an earlier checkpoint-managed subscription with the same id, and must never reposition
+        // the opted-out subscribe call below, whether resumeSubscription lands before or after it returns.
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            pool.execute(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            }));
+            assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
+
+            model.resumeSubscription(SUBSCRIPTION_ID);
+
+            assertThat(delegate.plainResumeCalled)
+                    .as("the marker must already be visible while the delegate's own subscribe call is still in "
+                            + "flight, so resumeSubscription forwards to the delegate's own resume rather than "
+                            + "treating this id as checkpoint managed")
+                    .isTrue();
+            assertThat(delegate.repositionedTo)
+                    .as("a subscription that opted out must never be repositioned from a stored checkpoint, "
+                            + "concurrent resume or not")
+                    .isNull();
+        } finally {
+            releaseSubscribe.countDown();
+            pool.shutdownNow();
+        }
+    }
+
     /**
      * Records whether {@link #resumeSubscription(String)} was called, and answers something for every other
      * {@link CheckpointAwareSubscriptionModel} member, since {@link DurableSubscriptionModel} requires a whole one
@@ -223,6 +264,31 @@ class DurableSubscriptionModelResumeRepositioningTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             throw new RuntimeException("delegate refused the subscription");
+        }
+    }
+
+    /**
+     * The same repositionable fake, but {@code subscribe} signals {@code subscribeEntered} and then blocks on
+     * {@code holdSubscribeUntil}, standing in for a delegate whose subscribe call is still in flight when a
+     * concurrent {@code resumeSubscription} lands.
+     */
+    private static class PausingRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
+        @Nullable CountDownLatch subscribeEntered;
+        @Nullable CountDownLatch holdSubscribeUntil;
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            if (subscribeEntered != null) {
+                subscribeEntered.countDown();
+            }
+            if (holdSubscribeUntil != null) {
+                try {
+                    assertThat(holdSubscribeUntil.await(10, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return super.subscribe(subscriptionId, filter, startAt, action);
         }
     }
 }

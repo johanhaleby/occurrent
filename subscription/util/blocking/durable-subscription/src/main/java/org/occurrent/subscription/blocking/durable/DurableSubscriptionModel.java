@@ -132,12 +132,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
         StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
         if (startAtToUse == null) {
-            // Not allowed to start, delegate to the wrapped subscription instead. Recorded only once the delegate
-            // has accepted the subscription, so a delegate that throws leaves no opt-out marker behind for a later
-            // resubscribe with the same id to inherit.
-            Subscription subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+            // Not allowed to start, delegate to the wrapped subscription instead. Recorded before the delegate call
+            // so a concurrent resumeSubscription sees the opt-out too, and removed again if the delegate throws so
+            // a failed subscribe leaves no marker for a later resubscribe with the same id to inherit.
             notCheckpointedSubscriptions.add(subscriptionId);
-            return subscription;
+            try {
+                return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+            } catch (RuntimeException e) {
+                notCheckpointedSubscriptions.remove(subscriptionId);
+                throw e;
+            }
         }
 
         return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
