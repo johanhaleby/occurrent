@@ -189,8 +189,10 @@ Change the import and the type name at every use listed in the tables above, the
 
 ## 6. A flow saga's `join` is deprecated in favor of step conditions
 
-Nothing breaks. `join` keeps working exactly as it did, and this section is only useful if you want to move off it,
-or if you need something `join` cannot express in the first place.
+`join` keeps working, and this section is only useful if you want to move off it, or if you need something `join`
+cannot express in the first place. What changes regardless is `join`'s own reaction window, narrower in this release
+whether or not you migrate off it. See [section 11](#11-a-lowered-joins-reaction-now-reads-its-own-window-not-the-whole-retained-history)
+before relying on a `join` in any step but the first.
 
 A flow step can now wait on a `StepCondition` tree instead of only a single-branch choice or a `join`. `join`'s
 per-type counting is one case a tree expresses, `allOf(event(Type, count), ...)`, so every existing `join` call has a
@@ -583,3 +585,50 @@ pointing at nothing.
 So this section is the migration path. `build()` throws with the type named the first time the saga is built, and a
 subscription throws it the first time the subscription registers, which for a Spring Boot application is startup either
 way, so a test that starts your context or builds your sagas finds all of them.
+
+## 11. A lowered `join`'s reaction now reads its own window, not the whole retained history
+
+`join`'s callback used to read every event the instance still keeps, the same as a guard or a `timeout`'s `onExpiry`
+does. It now reads only the events received since the step it fired from was entered, the same window
+`on(StepCondition, ...)` reads. `received.initiating()` still reaches the start event no matter how many steps ago
+it arrived.
+
+You are affected if a `join` past a saga's first step counts or inspects an event an earlier step left behind.
+Nothing changes for a `join` in the first step, since the window since that step was entered is already the whole
+retained history there.
+
+Java, before and after:
+
+```java
+FlowSaga.<GameEvent, GameCommand>builder()
+        .startsOn(MatchStarted.class)
+        .step("lobby", step -> step.on(PlayerJoined.class, Continuation.next()))
+        .step("ready-check", step -> step.join(List.of(Expectation.of(PlayerReady.class, 2)), Continuation.end(),
+                received -> {
+                    // Before: counted the PlayerJoined events "lobby" left behind, plus this step's own.
+                    // After: counts only events received since "ready-check" was entered, so this is 0
+                    // unless a PlayerJoined event also arrives inside this step.
+                    int lateJoiners = received.count(PlayerJoined.class);
+                    return List.of(new StartMatch(lateJoiners));
+                }));
+```
+
+A `join` that only ever counts the type its own expectations name, which is what most calls do, sees no change. The
+window narrows only for a callback that reads a type its `join` did not ask for, or that calls `count`, `all`, `any`
+or `none` expecting them to reach past the step it fired from.
+
+`join`'s deprecation javadoc said this could never happen, that lowering it to `on(allOf(...))` changed nothing
+about what the callback sees. That was false, and the javadoc is corrected in this release.
+
+### Why there is no recipe for this one
+
+`UpgradeToOccurrent_0_33` does not touch `StepBuilder`, `saga.flow` or `Expectation` at all, and it cannot flag this
+either. A behavioural change to what a callback reads is not something a rewrite can see. `step.join(...)` and the
+code inside `whenFulfilled` look identical before and after this release, so there is no syntax to match against.
+Whether a given `join` is affected depends on what its callback actually reads and on what an earlier step in the
+same saga left behind, both runtime facts a static rewrite has no way to evaluate.
+
+So this section is the migration path. Search your codebase for `.join(` calls in a step that is not a saga's
+first, and check whether `whenFulfilled` reads a type its own expectations did not name. A test that drives the
+saga across a step transition and asserts on the join's effects catches a real regression the same way
+`FlowSagaTest`'s own join test now does.
