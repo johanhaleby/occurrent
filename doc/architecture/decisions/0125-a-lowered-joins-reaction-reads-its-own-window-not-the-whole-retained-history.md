@@ -6,8 +6,7 @@ Date: 2026-08-12
 
 Accepted. Reverses part of [ADR 120](0120-a-step-condition-is-a-monotone-matcher-tree.md)'s 2026-08-11 amendment,
 which exempted a lowered `join` from the window narrowing `on(StepCondition, ...)` got. Ships in 0.33.0, which is
-held for it. 124 was the highest number claimed anywhere at write time, re-audited across every remote branch per
-the max-plus-one rule.
+held for it.
 
 ## Context
 
