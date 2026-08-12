@@ -117,11 +117,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     static final int RETAINED_EVENT_WARNING_THRESHOLD = 1_000;
 
     // Bounds the latch below so an instance that crosses the threshold and is then abandoned (completed, or simply never
-    // saved again) cannot hold its entry forever. Cleared wholesale rather than evicted one entry at a time: simpler, and
-    // the only cost of clearing early is at most one duplicate warning per instance still above the threshold, which is
-    // harmless for a diagnostic log line. In the ordinary case the latch stays far smaller than this, since an entry is
-    // removed as soon as its instance drops back below the threshold (see warnIfRetainedSizeCrossesThreshold).
-    private static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
+    // saved again) cannot hold its entry forever. At capacity, adding a new saga id evicts one arbitrary existing entry
+    // rather than clearing the whole map, so the cost of running past capacity is at most one duplicate warning per
+    // evicted instance, not every instance currently tracked re-warning on every subsequent save. In the ordinary case
+    // the latch stays far smaller than this, since an entry is removed as soon as its instance drops back below the
+    // threshold (see warnIfRetainedSizeCrossesThreshold). Package-private for the same reason as the threshold above: a
+    // test exercising the capacity backstop builds exactly this many tracked instances instead of duplicating the number.
+    static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
 
     // Edge-triggered latch, keyed by saga id: present and true means "already warned while at or above the threshold".
     // An instance is removed the moment it drops back below the threshold (typically after a stepWindow trim), so a later
@@ -325,13 +327,23 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // on every subsequent save while it remains at or above it, and warns again only after a later save has carried it
     // back below the threshold (typically a stepWindow trim) and it crosses again. See the latch fields' javadoc for the
     // memory-safety argument.
-    private void warnIfRetainedSizeCrossesThreshold(String sagaId, int retainedEventCount) {
+    // Package-private so a test can exercise the latch's edge-triggering and capacity backstop directly, with plain
+    // counts, instead of building enough real retained events to cross the threshold thousands of times over.
+    void warnIfRetainedSizeCrossesThreshold(String sagaId, int retainedEventCount) {
         if (retainedEventCount < RETAINED_EVENT_WARNING_THRESHOLD) {
             retainedEventWarningLatch.remove(sagaId);
             return;
         }
-        if (retainedEventWarningLatch.size() > RETAINED_EVENT_WARNING_LATCH_CAPACITY) {
-            retainedEventWarningLatch.clear();
+        // Evicts one arbitrary entry rather than clearing the whole map, and only when sagaId is not already tracked.
+        // Clearing wholesale at capacity would reset every already-warned instance at once, and under sustained load at
+        // the cap that reset repeats on every save, turning the diagnostic into continuous re-warning instead of the
+        // rare duplicate this backstop is meant to cost.
+        if (!retainedEventWarningLatch.containsKey(sagaId) && retainedEventWarningLatch.size() >= RETAINED_EVENT_WARNING_LATCH_CAPACITY) {
+            Iterator<String> oldest = retainedEventWarningLatch.keySet().iterator();
+            if (oldest.hasNext()) {
+                oldest.next();
+                oldest.remove();
+            }
         }
         boolean alreadyWarned = retainedEventWarningLatch.putIfAbsent(sagaId, Boolean.TRUE) != null;
         if (!alreadyWarned) {

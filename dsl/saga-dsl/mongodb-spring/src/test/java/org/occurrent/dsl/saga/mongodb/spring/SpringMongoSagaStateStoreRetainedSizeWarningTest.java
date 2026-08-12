@@ -32,7 +32,6 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
-import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
@@ -49,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore.RETAINED_EVENT_WARNING_LATCH_CAPACITY;
 import static org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore.RETAINED_EVENT_WARNING_THRESHOLD;
 
 /**
@@ -68,7 +68,7 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
 
     private ListAppender<ILoggingEvent> appender;
     private Logger logger;
-    private SagaStateStore<FlowState<FlowEvent>> store;
+    private SpringMongoSagaStateStore<FlowState<FlowEvent>> store;
 
     @BeforeEach
     void attachAppenderAndCreateStore() {
@@ -161,5 +161,32 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
         assertThat(warnings()).hasSize(2);
         assertThat(warnings().get(0).getFormattedMessage()).contains("s1");
         assertThat(warnings().get(1).getFormattedMessage()).contains("s2");
+    }
+
+    // Exercises warnIfRetainedSizeCrossesThreshold directly, with plain counts, rather than through compareAndSave: at
+    // the real capacity that would mean building and CloudEvent-serializing 1,000+ retained events for over 10,000
+    // instances, which is too slow for a unit test and tests nothing extra over the smaller counts used here.
+    @Test
+    void running_past_the_latch_capacity_evicts_one_entry_rather_than_every_tracked_instance() {
+        for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
+            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
+        int warningsAtCapacity = warnings().size();
+
+        // One instance beyond capacity: evicts a single existing entry rather than clearing the map.
+        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        int warningsAfterOneOverflow = warnings().size();
+
+        // Re-saving every already-tracked instance must not turn into a storm: at most the one entry the overflow
+        // evicted re-warns, never all RETAINED_EVENT_WARNING_LATCH_CAPACITY of them.
+        for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
+            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
+
+        assertThat(warningsAtCapacity).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
+        assertThat(warningsAfterOneOverflow).isEqualTo(warningsAtCapacity + 1);
+        assertThat(warnings().size() - warningsAfterOneOverflow)
+                .as("re-saving every already-latched instance re-warns at most the one entry the overflow evicted")
+                .isLessThanOrEqualTo(1);
     }
 }
