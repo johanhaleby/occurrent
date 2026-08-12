@@ -45,6 +45,11 @@ class SagaFlowKotlinPredicateIdentityTest {
 
     sealed interface CapCommand
 
+    /** A receiver whose bound `::test` reference is what [SagaFlowKotlinPredicateIdentityTest] tests identity over. */
+    class ScoreFilter(private val threshold: Int) {
+        fun test(approved: Approved): Boolean = approved.score > threshold
+    }
+
     @Test
     fun `two leaves sharing a name and the same function value are accepted under the cap`() {
         val approvedHigh: (Approved) -> Boolean = { it.score > 10 }
@@ -118,5 +123,25 @@ class SagaFlowKotlinPredicateIdentityTest {
             .isInstanceOf(IllegalArgumentException::class.java)
             .hasMessageContaining("allOf children 0 and 1")
             .hasMessageContaining("Approved")
+    }
+
+    @Test
+    fun `two textually separate bound method references over the same receiver are refused the cap`() {
+        val filter = ScoreFilter(10)
+
+        assertThatThrownBy {
+            saga<CapEvent, CapCommand> {
+                stepWindow(2)
+                startsOn<Opened>()
+                correlateAll { it.id }
+                step("decide") {
+                    on(event<Approved>(1, "big", filter::test), then = end)
+                    on(event<Approved>(1, "big", filter::test), then = end)
+                }
+            }
+        }
+            .isInstanceOf(IllegalStateException::class.java)
+            .hasMessageContaining("step 'decide'")
+            .hasMessageContaining("share the predicate name 'big'")
     }
 }
