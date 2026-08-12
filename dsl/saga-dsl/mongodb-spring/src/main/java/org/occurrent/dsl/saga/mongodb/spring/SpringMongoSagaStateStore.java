@@ -45,6 +45,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 
@@ -102,6 +103,31 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     private static final EventFormat CLOUD_EVENT_JSON_FORMAT = Objects.requireNonNull(
             EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE), "CloudEvents JSON format must be on the classpath");
+
+    // A flow saga's retained events sit inside the same document as the rest of its state, so an instance that keeps
+    // accumulating them (an unbounded stepWindow, or a step that never transitions) heads toward MongoDB's 16 MB document
+    // limit with no signal before the write itself starts failing. This is an early warning, not an enforced cap: the
+    // unbounded default stays, ADR 123 already gives the remedy (a stepWindow cap), and this only makes the growth visible.
+    // A round number one to two orders of magnitude below the document limit for typical CloudEvent sizes (a few hundred
+    // bytes to a few KB each): high enough that a normal, short-lived flow never sees it, low enough to warn well before a
+    // runaway instance is anywhere near failing to save. Not made configurable: it is a diagnostic tripwire, not a
+    // behavioural limit, and the actual remedy (stepWindow) is already configurable per saga.
+    // Package-private rather than private: a test asserting the edge-triggering behaviour builds exactly this many events
+    // rather than hardcoding a duplicate of the number here.
+    static final int RETAINED_EVENT_WARNING_THRESHOLD = 1_000;
+
+    // Bounds the latch below so an instance that crosses the threshold and is then abandoned (completed, or simply never
+    // saved again) cannot hold its entry forever. Cleared wholesale rather than evicted one entry at a time: simpler, and
+    // the only cost of clearing early is at most one duplicate warning per instance still above the threshold, which is
+    // harmless for a diagnostic log line. In the ordinary case the latch stays far smaller than this, since an entry is
+    // removed as soon as its instance drops back below the threshold (see warnIfRetainedSizeCrossesThreshold).
+    private static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
+
+    // Edge-triggered latch, keyed by saga id: present and true means "already warned while at or above the threshold".
+    // An instance is removed the moment it drops back below the threshold (typically after a stepWindow trim), so a later
+    // re-crossing warns again. This keeps the map's steady-state population close to the number of instances currently
+    // above the threshold, not the number that ever existed.
+    private final Map<String, Boolean> retainedEventWarningLatch = new ConcurrentHashMap<>();
 
     private final MongoOperations mongoOperations;
     private final String collectionName;
@@ -226,7 +252,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 .append(VERSION, envelope.version());
         S state = envelope.state();
         if (state != null) {
-            document.append(STATE, toStateValue(state));
+            document.append(STATE, toStateValue(sagaId, state));
         }
         List<Document> timers = new ArrayList<>();
         for (TimerEntry timer : envelope.timers()) {
@@ -253,9 +279,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // flowStateToDocument), so events round-trip by their stable CloudEvent type. Any other state (a core saga's
     // own model) goes through convertToMongoType, exactly like the snapshot store: a scalar stays a scalar and a
     // POJO/record becomes a sub-document.
-    private Object toStateValue(S state) {
+    private Object toStateValue(String sagaId, S state) {
         if (cloudEventConverter != null && state instanceof FlowStateImpl<?> flowState) {
-            return flowStateToDocument(flowState);
+            return flowStateToDocument(sagaId, flowState);
         }
         if (cloudEventConverter != null && state instanceof FlowState<?>) {
             // A flow saga's state is always the executor's FlowStateImpl, which the read path (readState) reconstructs field
@@ -267,7 +293,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return mongoOperations.getConverter().convertToMongoType(state);
     }
 
-    private Document flowStateToDocument(FlowStateImpl<?> flowState) {
+    private Document flowStateToDocument(String sagaId, FlowStateImpl<?> flowState) {
+        warnIfRetainedSizeCrossesThreshold(sagaId, flowState.received().size());
         Document document = new Document();
         if (flowState.currentStep() != null) {
             document.append(FLOW_CURRENT_STEP, flowState.currentStep());
@@ -292,6 +319,27 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         document.append(FLOW_RECEIVED, received);
         return document;
+    }
+
+    // Edge-triggered: warns once when an instance's retained-event count crosses the threshold from below, stays silent
+    // on every subsequent save while it remains at or above it, and warns again only after a later save has carried it
+    // back below the threshold (typically a stepWindow trim) and it crosses again. See the latch fields' javadoc for the
+    // memory-safety argument.
+    private void warnIfRetainedSizeCrossesThreshold(String sagaId, int retainedEventCount) {
+        if (retainedEventCount < RETAINED_EVENT_WARNING_THRESHOLD) {
+            retainedEventWarningLatch.remove(sagaId);
+            return;
+        }
+        if (retainedEventWarningLatch.size() > RETAINED_EVENT_WARNING_LATCH_CAPACITY) {
+            retainedEventWarningLatch.clear();
+        }
+        boolean alreadyWarned = retainedEventWarningLatch.putIfAbsent(sagaId, Boolean.TRUE) != null;
+        if (!alreadyWarned) {
+            log.warn("Flow saga instance '{}' has retained {} received events, at or above the warning threshold of {}. " +
+                            "Consider capping the flow's step with stepWindow(...) to trim what it retains, or the document " +
+                            "risks growing toward MongoDB's 16 MB document limit.",
+                    sagaId, retainedEventCount, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
     }
 
     private SagaEnvelope<S> toEnvelope(Document document) {
