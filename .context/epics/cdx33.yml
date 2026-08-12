@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33
-revision: 61
+revision: 62
 updated_at: 2026-08-11T19:56:20Z
 updated_by: "orchestrator session faee3625 (U12 MERGED as 743391bc6, all 15 library units done; UDOCS2 dispatched as the last unit)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -34,13 +34,13 @@ units:
   U14:
     issue: null
     goal: "Narrow the deprecated join's reaction to the window that fulfilled it, so it matches on(StepCondition) and matches the ReceivedEvents javadoc that already documents the narrowed behaviour. Johan reversed the recorded decision on AGENTS.md grounds; this takes the second resolution Copilot itself offered on PR 742, a breaking change with the required migration, rather than the discriminator that was chosen then"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: "WIP pushed as 16c775454 on cdx33/u14-join-window off base 3da1faa62, no PR yet. Machine shut down mid-unit; the subagent is gone but its handover is preserved below."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "759", met: true, evidence: "MERGED as squash be135fced96995d4689d35150c8fc26512a9e20d, CAS-pinned to 46945f3c6 which was 28 of 28 green. Main 27 of 27 SUCCESS by run list on the merge commit. Three review rounds, suppressed findings 7 then 3 then 1, the last being the held-docs item routed separately. Johan confirmed ADR 0125 twice, once as first drafted and again after the stepWindow caveat reworded its Decision. Branch deleted, all eight cdx33 unit sessions archived."}
     next_action: "Resume from origin/cdx33/u14-join-window. DONE and verified in the WIP commit: loweredFromJoin removed from reactionWindow AND from the WindowCondition record (it had exactly one reader), both StepBuilder call sites updated, join's deprecated javadoc now states the reaction reads the same window on(StepCondition) does, the LoweredJoin test inverted to a_join_reaction_reads_only_its_own_window_not_the_whole_retained_history asserting notes=0 plus initiating=j, mutation-checked by forcing windowed=false and watching 7 tests fail then restoring from a scratchpad copy, and 529 of 529 green in dsl/saga-dsl/common. ReceivedEvents javadoc needed no edit, it already documents the narrowed behaviour. NOT STARTED: the changelog Breaking changes bullet, migration section 11 with its own why-no-recipe subsection modelled on section 10, the ADR amendment, the blocking saga module test run, and the PR itself."
     blocking_on: []
   U13:
