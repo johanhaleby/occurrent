@@ -67,20 +67,19 @@ fun <E : Any, C : Any> saga(block: FlowSagaBuilder<E, C>.() -> Unit): Saga<E, Fl
 fun stepTimer(stepName: String): TimerName = FlowSaga.stepTimer(stepName)
 
 /**
- * Wraps a Kotlin function as a [Predicate] with equals/hashCode delegating to [delegate], since a bare SAM conversion
- * allocates a fresh object on every call and two leaves built from the very same function value would then never be
- * recognized as counting the same events, or as sharing an [allOf] child's requirement (see [StepScope.event]). Parity
- * only. Two separately-declared lambdas, even functionally identical ones, still compare unequal here, exactly as two
- * separately-declared Java lambdas do.
- *
- * Equality here is decided by [delegate]'s own equals. A bound method reference such as `thing::test` compares equal
- * to another one whenever their receivers do, even if that receiver's equals happens to ignore a field the method
- * itself reads.
+ * Wraps a Kotlin function as a [Predicate] with equals/hashCode over [delegate]'s own identity, since a bare SAM
+ * conversion allocates a fresh object on every call and two leaves built from the very same function value would
+ * then never be recognized as counting the same events, or as sharing an [allOf] child's requirement (see
+ * [StepScope.event]). Identity rather than [delegate]'s own equals, so a bound method reference such as
+ * `thing::test` is only interchangeable with a call passing that exact reference again, never with a second
+ * `thing::test` over an equal but distinct receiver whose equals happens to ignore a field the method reads. Parity
+ * only. Two separately-declared lambdas, even functionally identical ones, still compare unequal here, exactly as
+ * two separately-declared Java lambdas do.
  */
 private class FunctionPredicate<T>(private val delegate: (T) -> Boolean) : Predicate<T> {
     override fun test(candidate: T): Boolean = delegate(candidate)
-    override fun equals(other: Any?): Boolean = other is FunctionPredicate<*> && delegate == other.delegate
-    override fun hashCode(): Int = delegate.hashCode()
+    override fun equals(other: Any?): Boolean = other is FunctionPredicate<*> && delegate === other.delegate
+    override fun hashCode(): Int = System.identityHashCode(delegate)
 }
 
 /** Constructs [FunctionPredicate], kept out of the two inline [StepScope.event] bodies so the class itself can stay private. */
