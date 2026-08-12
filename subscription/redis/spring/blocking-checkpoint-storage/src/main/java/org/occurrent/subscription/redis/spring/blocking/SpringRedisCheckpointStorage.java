@@ -57,7 +57,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * hashes on, so Cluster places both keys in the same slot and the scripts above, and the two-key {@code DEL} in
  * {@link #delete(String)}, are never refused for crossing slots. A subscription id with no braces of its own hashes
  * on its full text either way, and one that already contains a matched, non-empty pair hashes on the text between
- * them, the same substring Cluster would use for the checkpoint key.
+ * them, the same substring Cluster would use for the checkpoint key. Two ids that happen to share a hash tag, two
+ * ids tenant-scoped under the same {@code "{tenant}"} for instance, still get distinct version keys, since the
+ * version key carries the full subscription id too, after the tag and outside its braces where Cluster never looks.
  * <p>
  * The one shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no
  * brace pair, an unmatched brace, or an empty pair like {@code {}}) and that whole id contains a closing brace
@@ -295,11 +297,15 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
     }
 
-    // Wraps the same substring Redis Cluster's own slot algorithm would pick out of the checkpoint key (subscriptionId
-    // itself, unprefixed), in a hash tag of its own, so the two keys the write scripts touch land in the same slot.
-    // Package-private, not private, so a test can compute it against an independent Cluster slot implementation.
+    // The hash tag wraps the same substring Redis Cluster's own slot algorithm would pick out of the checkpoint key
+    // (subscriptionId itself, unprefixed), so the two keys the write scripts touch land in the same slot. The full
+    // subscription id is appended after it, outside the braces, where Cluster never looks once it has found the
+    // hash tag's closing brace, purely so two ids that share a hash tag (two tenant-scoped ids under the same
+    // "{tenant}" tag, for instance) still get distinct version keys instead of silently sharing one fencing
+    // version. Package-private, not private, so a test can compute it against an independent Cluster slot
+    // implementation.
     static String versionKey(String subscriptionId) {
-        return VERSION_KEY_PREFIX + "{" + clusterHashTag(subscriptionId) + "}";
+        return VERSION_KEY_PREFIX + "{" + clusterHashTag(subscriptionId) + "}:" + subscriptionId;
     }
 
     // Redis Cluster's own slot algorithm (CLUSTER-SPEC, "Keys hash tags"): the first '{', then the first '}' after

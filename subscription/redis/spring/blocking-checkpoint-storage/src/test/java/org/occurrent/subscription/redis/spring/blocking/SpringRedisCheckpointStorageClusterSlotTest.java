@@ -85,13 +85,30 @@ class SpringRedisCheckpointStorageClusterSlotTest {
     @Test
     void version_key_wraps_the_whole_subscription_id_whenever_cluster_would_fall_back_to_hashing_it_whole() {
         assertThat(SpringRedisCheckpointStorage.versionKey("orders"))
-                .isEqualTo("occurrent:checkpoint-version:{orders}");
+                .isEqualTo("occurrent:checkpoint-version:{orders}:orders");
         assertThat(SpringRedisCheckpointStorage.versionKey("{tenant-42}-orders"))
-                .isEqualTo("occurrent:checkpoint-version:{tenant-42}");
+                .isEqualTo("occurrent:checkpoint-version:{tenant-42}:{tenant-42}-orders");
         assertThat(SpringRedisCheckpointStorage.versionKey("{}orders"))
-                .isEqualTo("occurrent:checkpoint-version:{{}orders}");
+                .isEqualTo("occurrent:checkpoint-version:{{}orders}:{}orders");
         assertThat(SpringRedisCheckpointStorage.versionKey("a}b{c"))
-                .isEqualTo("occurrent:checkpoint-version:{a}b{c}");
+                .isEqualTo("occurrent:checkpoint-version:{a}b{c}:a}b{c");
+    }
+
+    /**
+     * Two subscription ids sharing a hash tag are exactly what a Cluster deployment is expected to have, tenant
+     * scoping by {@code "{tenant}"} is the documented reason hash tags exist. The tag alone is not a safe version
+     * key, since two such ids would then read and write the same fencing version as each other. The full id after
+     * the tag is what keeps them apart. Each case here appends {@code "-other"} after the id's own closing brace,
+     * so {@code clusterHashTag} extracts the identical tag for both. Confirmed independently before this test was
+     * written that without the full id in the key, these pairs would collide.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"{tenant}-orders", "orders-{tenant}", "a{b{c}d}e"})
+    void two_ids_sharing_a_hash_tag_still_get_distinct_version_keys(String subscriptionId) {
+        String sameTagOtherId = subscriptionId + "-other";
+
+        assertThat(SpringRedisCheckpointStorage.versionKey(subscriptionId))
+                .isNotEqualTo(SpringRedisCheckpointStorage.versionKey(sameTagOtherId));
     }
 
     // Redis Cluster's own slot algorithm (Cluster specification, "Keys hash tags"): hash the substring between the
