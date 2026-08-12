@@ -4,7 +4,7 @@
 either interface, in this repository and outside it, now has two more members to answer. No calling code changes,
 because the two-argument `save` you already call stays exactly as it was, as a default that delegates to the new
 one. `UpgradeToOccurrent_0_33` stubs the two new members for you on a Java class it finds missing them, delegating
-`any()` to your existing write and marking the rest with a review comment, so the module compiles again. The recipe
+`any()` to your existing write and marking the rest with a review comment, so the module compiles again. That stub
 is Java only, so a Kotlin implementer adds the same two members by hand, see section 2. Evaluating a condition for
 real is still yours either way.
 [ADR 116](../architecture/decisions/0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) has the
@@ -64,9 +64,9 @@ for that subscription id, whatever version it would carry, and refuses the same 
 
 If you implement in Java, run `UpgradeToOccurrent_0_33` first. On every Java implementation it finds missing them, it
 adds the `save` overload and `writeVersion`, each marked with a `TODO [Occurrent 0.33 upgrade]` comment, so the
-module compiles again without a manual pass. The recipe is Java only, the same limitation the saga timer rewrite in
-section 7 runs into, so a Kotlin implementer does the equivalent by hand, below. What the recipe generates for a Java
-class is exactly the snippet below. `save` delegates `any()` to your existing two-argument override and refuses
+module compiles again without a manual pass. This checkpoint-storage stub is Java only, the same limitation the saga
+timer rewrite in section 7 runs into, so a Kotlin implementer does the equivalent by hand, below. What it generates
+for a Java class is exactly the snippet below. `save` delegates `any()` to your existing two-argument override and refuses
 anything stronger, and `writeVersion` answers empty. A store that only ever wrote unconditionally can leave that
 exactly as generated:
 
@@ -108,9 +108,9 @@ checkpoint saved by an earlier release has to stay readable.
 
 ### By hand in Kotlin
 
-`UpgradeToOccurrent_0_33` does not touch a Kotlin file at all, the same limitation the saga timer rewrite in section 7
-runs into. A Kotlin implementer of the blocking `CheckpointStorage` adds the same two members the Java stub above
-adds, against the interface's real signatures:
+This checkpoint-storage stub does not touch a Kotlin file at all, the same limitation the saga timer rewrite in
+section 7 runs into. A Kotlin implementer of the blocking `CheckpointStorage` adds the same two members the Java
+stub above adds, against the interface's real signatures:
 
 ```kotlin
 override fun save(subscriptionId: String, checkpoint: Checkpoint, condition: CheckpointWriteCondition): Checkpoint {
