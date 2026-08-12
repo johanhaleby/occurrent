@@ -1665,17 +1665,19 @@ class FlowSagaTest {
 
         @SuppressWarnings("deprecation")
         @Test
-        void a_join_reaction_still_reads_the_whole_retained_history_and_not_just_its_own_window() {
-            // join shipped in 0.31.0 reading the whole retained history, and ADR 120 lowers it to a condition tree as sugar,
-            // which means the semantics are preserved exactly. Narrowing an on(StepCondition, ...) reaction to its own window
-            // must therefore not narrow a join's, since a caller's second-step join callback can be counting an event an
-            // earlier step left behind.
+        void a_join_reaction_reads_only_its_own_window_not_the_whole_retained_history() {
+            // join shipped in 0.31.0 reading the whole retained history, and ADR 120 first lowered it to a condition tree as
+            // sugar that preserved that exactly. The exemption is reversed: a lowered join's reaction now reads the same
+            // window an on(StepCondition, ...) reaction does, the events received since the step it fired from was entered,
+            // so an event an earlier step left behind is no longer visible to it either. initiating() still reaches past the
+            // window regardless.
             Saga<JoinEvent, FlowState<JoinEvent>, JoinCommand> saga = FlowSaga.<JoinEvent, JoinCommand>builder()
                     .startsOn(Started.class)
                     .correlateAll(JoinEvent::id)
                     .step("first", step -> step.on(Go.class, Continuation.next()))
                     .step("second", step -> step.join(List.of(Expectation.of(Ready.class, 1)), Continuation.end(),
-                            received -> List.of(new Saw("notes=" + received.count(Note.class)))))
+                            received -> List.of(new Saw("notes=" + received.count(Note.class)
+                                    + " initiating=" + received.initiating(Started.class).id()))))
                     .build();
 
             FlowState<JoinEvent> afterStart = start(saga, new Started("j")).state();
@@ -1685,8 +1687,9 @@ class FlowSagaTest {
 
             assertAll(
                     () -> assertThat(fired.state().completed()).isTrue(),
-                    () -> assertThat(fired.effects()).as("the Note from step one is still visible to the join's callback")
-                            .containsExactly(SagaEffect.issue(new Saw("notes=1")))
+                    () -> assertThat(fired.effects())
+                            .as("the Note from step one is outside the join's own window, but initiating() still reaches the start event")
+                            .containsExactly(SagaEffect.issue(new Saw("notes=0 initiating=j")))
             );
         }
 

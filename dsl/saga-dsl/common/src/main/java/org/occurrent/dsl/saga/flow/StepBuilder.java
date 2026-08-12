@@ -133,7 +133,7 @@ public final class StepBuilder<E, C> {
         requireNonNull(then, "then cannot be null");
         requireNonNull(whenFulfilled, "whenFulfilled cannot be null");
         requireNoJoin();
-        WindowCondition<E> trigger = new WindowCondition<>((StepCondition<E>) condition, false);
+        WindowCondition<E> trigger = new WindowCondition<>((StepCondition<E>) condition);
         BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
         branches.add(new Branch<>(trigger, reaction, then));
         return this;
@@ -146,8 +146,10 @@ public final class StepBuilder<E, C> {
      * @deprecated in favor of {@code on(allOf(...))}, which this now lowers to internally. An expectation of {@code n}
      * events of a type becomes {@code event(type, n)}, and the whole list becomes one {@code allOf(...)} tree. Two
      * expectations naming the same type collapse to the higher of their counts, which is what such a join has always meant,
-     * since each expectation is checked against the same window independently. Behavior is unchanged, only the way you write
-     * it. See {@link StepCondition}.
+     * since each expectation is checked against the same window independently. {@code whenFulfilled} reads the same window
+     * the condition was evaluated over, the events received since this step was entered, exactly as {@link
+     * #on(StepCondition, Continuation, Function)}'s does. Behavior is unchanged, only the way you write it. See
+     * {@link StepCondition}.
      */
     @Deprecated
     public StepBuilder<E, C> join(List<Expectation<E>> expecting, Continuation then, Function<ReceivedEvents<E>, List<C>> whenFulfilled) {
@@ -164,9 +166,7 @@ public final class StepBuilder<E, C> {
             throw new IllegalArgumentException("a join step needs at least one expectation");
         }
         joinDeclared = true;
-        // Marked as lowered from join, so the reaction keeps reading the whole retained history. join shipped in 0.31.0 with
-        // that contract and lowering it to a condition tree must not change what its callback sees.
-        WindowCondition<E> trigger = new WindowCondition<>(StepCondition.allOf(toConditions(expecting)), true);
+        WindowCondition<E> trigger = new WindowCondition<>(StepCondition.allOf(toConditions(expecting)));
         BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
         branches.add(new Branch<>(trigger, reaction, then));
         return this;
