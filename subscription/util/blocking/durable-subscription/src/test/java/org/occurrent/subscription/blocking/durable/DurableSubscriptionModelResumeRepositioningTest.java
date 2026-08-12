@@ -31,6 +31,8 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -153,6 +155,29 @@ class DurableSubscriptionModelResumeRepositioningTest {
                 .as("an Error out of the delegate's subscribe must not leave the marker behind either, or it never "
                         + "clears and every later resubscribe with this id is treated as opted out forever")
                 .isInstanceOf(StartAt.StartAtCheckpoint.class);
+    }
+
+    @Test
+    void a_failed_duplicate_subscribe_does_not_erase_the_marker_of_an_already_active_subscription_with_the_same_id() {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DuplicateRejectingRepositionableSubscriptionModel delegate = new DuplicateRejectingRepositionableSubscriptionModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        }).waitUntilStarted();
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        })).isInstanceOf(RuntimeException.class);
+
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.repositionedTo)
+                .as("the second call's failure must release only its own share of the marker, not the first, "
+                        + "still-active subscription's, or the first subscription's next resume gets wrongly "
+                        + "repositioned from storage")
+                .isNull();
+        assertThat(delegate.plainResumeCalled).isTrue();
     }
 
     @Test
@@ -294,6 +319,22 @@ class DurableSubscriptionModelResumeRepositioningTest {
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             throw new Error("delegate crashed");
+        }
+    }
+
+    /**
+     * The same repositionable fake, but a second {@code subscribe} call for an id it already has throws, standing
+     * in for a delegate refusing a duplicate subscription id such as {@code DuplicateSubscriptionIdException}.
+     */
+    private static class DuplicateRejectingRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
+        private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            if (!subscribed.add(subscriptionId)) {
+                throw new RuntimeException("duplicate subscription id " + subscriptionId);
+            }
+            return super.subscribe(subscriptionId, filter, startAt, action);
         }
     }
 
