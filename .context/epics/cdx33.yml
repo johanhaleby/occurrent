@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33
-revision: 59
+revision: 60
 updated_at: 2026-08-11T19:56:20Z
 updated_by: "orchestrator session faee3625 (U12 MERGED as 743391bc6, all 15 library units done; UDOCS2 dispatched as the last unit)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -31,6 +31,16 @@ pending_actions:
     safe_to_repeat: false
     issued_at: 2026-08-11T19:40:00Z
 units:
+  U14:
+    issue: null
+    goal: "Narrow the deprecated join's reaction to the window that fulfilled it, so it matches on(StepCondition) and matches the ReceivedEvents javadoc that already documents the narrowed behaviour. Johan reversed the recorded decision on AGENTS.md grounds; this takes the second resolution Copilot itself offered on PR 742, a breaking change with the required migration, rather than the discriminator that was chosen then"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   U13:
     issue: null
     goal: "Documentation truth for two defects in this epic's own output: #754 (FlowStateImpl.java:52 still states the superseded retention bound historyWindow + stepWindow + 1) and #755 (the reopened-hierarchy startup refusal now applies to subscriptions as well as sagas, which is a breaking change against 0.32.0 that the changelog denies and migration section 10 frames as saga-only)"
