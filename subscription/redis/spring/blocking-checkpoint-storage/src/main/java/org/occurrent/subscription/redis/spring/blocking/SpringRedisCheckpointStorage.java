@@ -280,7 +280,10 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     public void delete(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         Supplier<Long> deleteBoth = () -> redis.delete(List.of(subscriptionId, versionKey(subscriptionId)));
-        executeWithRetry(deleteBoth, __ -> !shutdown, retryStrategy).get();
+        // A CROSSSLOT failure here is excluded from retry for the same reason as in saveConditionally, the same
+        // two-key pair crosses slots the same way, and the default infinite backoff would otherwise hang whatever
+        // called delete().
+        executeWithRetry(deleteBoth, e -> !shutdown && !isClusterSlotMismatch(e), retryStrategy).get();
     }
 
     @Override

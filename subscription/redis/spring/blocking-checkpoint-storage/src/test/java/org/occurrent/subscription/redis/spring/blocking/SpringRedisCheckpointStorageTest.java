@@ -287,6 +287,25 @@ class SpringRedisCheckpointStorageTest {
                         .isSameAs(crossSlot));
     }
 
+    @Test
+    void deleting_a_checkpoint_escapes_a_cluster_crossslot_failure_immediately_instead_of_hanging_the_calling_thread() {
+        // delete() sends the checkpoint and version keys to a single multi-key DEL, so it can hit the same CROSSSLOT
+        // failure the write scripts can, and needs the same exclusion from retry.
+        @SuppressWarnings("unchecked")
+        RedisOperations<String, String> redis = mock(RedisOperations.class);
+        when(redis.getValueSerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
+        RuntimeException crossSlot = new RedisSystemException("CROSSSLOT Keys in request don't hash to the same slot",
+                new RedisCommandExecutionException("CROSSSLOT Keys in request don't hash to the same slot"));
+        when(redis.delete(anyList())).thenThrow(crossSlot);
+
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redis, RetryStrategy.exponentialBackoff(Duration.ofSeconds(30), Duration.ofSeconds(30), 1.0f));
+
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
+                assertThatThrownBy(() -> storage.delete(UUID.randomUUID().toString()))
+                        .as("a Cluster CROSSSLOT failure on delete must be refused immediately, not queued behind a 30 second backoff")
+                        .isSameAs(crossSlot));
+    }
+
     private List<CloudEvent> serialize(DomainEvent e) {
         return List.of(CloudEventBuilder.v1()
                 .withId(e.eventId())
