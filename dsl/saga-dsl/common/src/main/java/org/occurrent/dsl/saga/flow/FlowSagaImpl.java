@@ -26,6 +26,7 @@ import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.StepConditionProgress;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
+import org.occurrent.filter.Filter;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -74,6 +75,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // How many of the current step's own events are kept. Applied on every delivery, since a step being parked on is what
     // it caps. UNBOUNDED_STEP_WINDOW keeps all of them.
     private final int stepWindow;
+    // Null unless the caller set one, in which case it replaces the filter derived from eventTypes.
+    private final @Nullable Filter filter;
 
     FlowSagaImpl(Class<? extends E> startType,
                  BiFunction<EventMetadata, E, List<C>> onStartCommands,
@@ -85,7 +88,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                  Set<Class<? extends E>> startEventTypes,
                  Set<Class<? extends E>> eventTypes,
                  int historyWindow,
-                 int stepWindow) {
+                 int stepWindow,
+                 @Nullable Filter filter) {
         this.startType = startType;
         this.onStartCommands = onStartCommands;
         this.steps = steps;
@@ -97,6 +101,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         this.eventTypes = eventTypes;
         this.historyWindow = historyWindow;
         this.stepWindow = stepWindow;
+        this.filter = filter;
     }
 
     @Override
@@ -121,6 +126,11 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     @Override
     public Set<Class<? extends E>> eventTypes() {
         return eventTypes;
+    }
+
+    @Override
+    public @Nullable Filter filter() {
+        return filter;
     }
 
     @SuppressWarnings("NullableProblems")

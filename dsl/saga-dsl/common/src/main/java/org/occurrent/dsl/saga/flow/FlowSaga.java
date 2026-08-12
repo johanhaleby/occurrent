@@ -25,6 +25,7 @@ import org.occurrent.dsl.saga.flow.FlowSagaImpl.Branch;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.CompiledStep;
 import org.occurrent.dsl.saga.flow.FlowSagaImpl.WindowCondition;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
+import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 
 import java.util.*;
@@ -82,6 +83,7 @@ public final class FlowSaga {
         private final Set<String> stepNames = new LinkedHashSet<>();
         private int historyWindow = FlowSagaImpl.DEFAULT_HISTORY_WINDOW;
         private int stepWindow = FlowSagaImpl.UNBOUNDED_STEP_WINDOW;
+        private @Nullable Filter filter;
 
         private Builder() {
         }
@@ -199,6 +201,21 @@ public final class FlowSaga {
             return this;
         }
 
+        /**
+         * Sets an explicit selector that replaces the one derived from the event types the flow's start, steps and step
+         * conditions name, so the saga can select on more than event type (subject, source, data, time). It also builds
+         * a flow over a hierarchy whose concrete types cannot all be found, which is otherwise refused here, since
+         * nothing is derived and so nothing is refused. See {@link Saga#filter()} for what that leaves you responsible
+         * for. Optional, can be set only once.
+         */
+        public Builder<E, C> filter(Filter filter) {
+            if (this.filter != null) {
+                throw new IllegalStateException("filter(...) has already been set and can only be set once");
+            }
+            this.filter = requireNonNull(filter, "filter cannot be null");
+            return this;
+        }
+
         /** Adds a step named {@code name}, configured by {@code block}. Step names must be unique and non-blank. */
         public Builder<E, C> step(String name, Consumer<StepBuilder<E, C>> block) {
             requireNonNull(name, "name cannot be null");
@@ -233,12 +250,17 @@ public final class FlowSaga {
             }
 
             validateTransitionToTargets(stepsByName.keySet());
-            Set<Class<? extends E>> eventTypes = EventTypeExpansion.expand(collectEventTypes(), Saga::cannotSubscribeOn);
+            // No filter is derived under an explicit one, so the walk that refuses a type a derived filter would miss
+            // has nothing to protect and only reports what it finds. Coverage below runs over the same shape either way.
+            Set<Class<? extends E>> declaredTypes = collectEventTypes();
+            Set<Class<? extends E>> eventTypes = filter == null
+                    ? EventTypeExpansion.expand(declaredTypes, Saga::cannotSubscribeOn)
+                    : EventTypeExpansion.expandWhatCanBeFound(declaredTypes);
             validateCorrelationCoverage(eventTypes);
             validateStepWindowCanKeepCounts();
 
             return new FlowSagaImpl<>(startType, onStartCommands, List.copyOf(steps), stepIndex, stepsByName,
-                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow, stepWindow);
+                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow, stepWindow, filter);
         }
 
         // Dropping a step's older events means its condition counts have to live in the instance's state, and a count can

@@ -139,7 +139,8 @@ public final class SagaRunner<E, C> {
     }
 
     /**
-     * Runs {@code saga}. It subscribes with a filter derived from the saga's handled event types, builds per-instance
+     * Runs {@code saga}. It subscribes with the saga's explicit {@link Saga#filter() filter} when it has one and a
+     * filter derived from its handled event types otherwise, builds per-instance
      * state in {@code stateStore}, dispatches issued commands through {@code commandDispatcher}, and starts a timer
      * poller. If a {@link #competingConsumerStrategy(CompetingConsumerStrategy) competing-consumer strategy} was set on
      * this runner, only the instance holding the saga's timer lease polls the store, otherwise every instance polls.

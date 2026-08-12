@@ -20,6 +20,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.*
 import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.cloudevents.OccurrentCloudEventExtension
+import org.occurrent.filter.Filter
 import java.time.Duration
 import java.time.Instant
 
@@ -33,6 +34,11 @@ class SagaExtensionsTest {
     data class GameStarted(override val gameId: String) : GameEvent
     data class MoveMade(override val gameId: String, val player: String) : GameEvent
     data class GameWon(override val gameId: String, val winner: String) : GameEvent
+
+    /** Not sealed, so its concrete types cannot be enumerated and a derived filter would miss them. */
+    interface OpenGameEvent {
+        val gameId: String
+    }
 
     sealed interface GameCommand
     data class NotifyPlayer(val gameId: String, val message: String) : GameCommand
@@ -329,6 +335,40 @@ class SagaExtensionsTest {
                 { assertThat(saga.sagaId(GameStarted("game-1"))).isEqualTo("game-1") },
                 { assertThat(saga.sagaId(MoveMade("game-1", "alice"))).isEqualTo("game-1") }
             )
+        }
+    }
+
+    @Nested
+    inner class ExplicitFilter {
+
+        @Test
+        fun `filter sets the selector the saga subscribes on`() {
+            val subject = Filter.subject("game-1")
+
+            val saga = saga<GameEvent, GameState?, GameCommand>(initialState = null) {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+                filter(subject)
+            }
+
+            assertThat(saga.filter()).isSameAs(subject)
+        }
+
+        @Test
+        fun `a saga without one reports no filter`() {
+            assertThat(gameSaga().filter()).isNull()
+        }
+
+        @Test
+        fun `filter builds a saga on an open supertype that is otherwise refused`() {
+            val saga = saga<OpenGameEvent, GameState?, GameCommand>(initialState = null) {
+                correlateAll { it.gameId }
+                startsOn<OpenGameEvent>()
+                evolve<OpenGameEvent> { state, _ -> state }
+                filter(Filter.type("game-event"))
+            }
+
+            assertThat(saga.eventTypes()).containsExactly(OpenGameEvent::class.java)
         }
     }
 }

@@ -24,8 +24,9 @@ import org.occurrent.filter.Filter;
 import java.util.List;
 
 /**
- * Derives the plain {@link Filter} a {@link Saga} subscribes on: a type filter over its handled event types, resolved to
- * CloudEvent type strings, or {@link Filter#all()} when it declares none. Mirrors the projection DSL's filter derivation.
+ * Works out the plain {@link Filter} a {@link Saga} subscribes on. That is its explicit {@link Saga#filter() filter}
+ * when it has one, and otherwise a type filter over its handled event types, resolved to CloudEvent type strings, or
+ * {@link Filter#all()} when it declares none. Mirrors the projection DSL's filter derivation.
  */
 final class SagaFilters {
 
@@ -33,6 +34,10 @@ final class SagaFilters {
     }
 
     static <E> Filter filterFor(CloudEventConverter<E> cloudEventConverter, Saga<E, ?, ?> saga) {
+        Filter explicit = saga.filter();
+        if (explicit != null) {
+            return explicit;
+        }
         List<Condition<String>> typeConditions = saga.eventTypes().stream()
                 .map(type -> Condition.eq(cloudEventConverter.getCloudEventType(type)))
                 .toList();

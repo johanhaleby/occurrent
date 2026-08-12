@@ -44,6 +44,11 @@ import static java.util.Objects.requireNonNull;
  * Shared by the saga DSL and the subscription annotations, which each derive a type filter from declared event types and
  * each used to walk the hierarchy themselves. The caller formats and throws, because a saga and a subscription have
  * different things to say about the type they were given.
+ * <p>
+ * The rule above governs {@link #expand} and {@link #concreteTypesOf}, the two entry points a derived filter is built
+ * from. {@link #expandWhatCanBeFound} walks the same hierarchy and refuses nothing, for a caller that was handed an
+ * explicit filter and so derives none. Nothing here relaxes the rule, because a caller with no derived filter has no
+ * filter for it to be true of.
  */
 public final class EventTypeExpansion {
 
@@ -65,6 +70,26 @@ public final class EventTypeExpansion {
         for (Class<? extends E> declared : declaredTypes) {
             expanded.add(declared);
             expanded.addAll(concreteTypesOf(declared, cannotExpand));
+        }
+        return Collections.unmodifiableSet(expanded);
+    }
+
+    /**
+     * The declared types plus every concrete type they cover that can be found, in the same order {@link #expand} uses,
+     * refusing nothing. A declared type whose concrete types cannot all be found contributes the ones that can.
+     * <p>
+     * <strong>Only for a caller that is not deriving a filter.</strong> The rule at the top of this class is enforced by
+     * {@link #expand}, and this method enforces nothing, so a filter built from what comes back here can miss event
+     * types that dispatch would accept. It exists for a caller that has been given an explicit filter and so derives
+     * none, and still wants to report which event types it handles. The saga DSL's {@code filter(Filter)} override is
+     * the one such caller.
+     */
+    public static <E> Set<Class<? extends E>> expandWhatCanBeFound(Set<Class<? extends E>> declaredTypes) {
+        requireNonNull(declaredTypes, "declaredTypes cannot be null");
+        Set<Class<? extends E>> expanded = new LinkedHashSet<>();
+        for (Class<? extends E> declared : declaredTypes) {
+            expanded.add(declared);
+            collect(declared, expanded, new HashSet<>());
         }
         return Collections.unmodifiableSet(expanded);
     }

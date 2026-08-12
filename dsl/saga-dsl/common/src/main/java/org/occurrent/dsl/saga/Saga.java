@@ -19,6 +19,7 @@ package org.occurrent.dsl.saga;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.saga.internal.TypeDispatch;
+import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 
 import java.util.*;
@@ -135,7 +136,9 @@ public interface Saga<E, S extends @Nullable Object, C> {
         }
         return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
                 + " cannot all be enumerated, so a filter derived from it would miss some of them. Declare the concrete "
-                + "event types instead, or make " + eventType.getSimpleName() + " and every level below it final or sealed.");
+                + "event types instead, make " + eventType.getSimpleName() + " and every level below it final or sealed, "
+                + "or set an explicit filter(...), which is used instead of deriving one and is the way out when a "
+                + "CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type string.");
     }
 
     /**
@@ -146,9 +149,37 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * A saga built by {@link Builder} or {@code FlowSaga.Builder} reports more than it was given whenever it declares a
      * sealed type, because every concrete type that type permits is in here too. Handler lookup already accepts a
      * supertype, so those concrete types are the ones a subscription has to ask for.
+     * <p>
+     * A declared type whose concrete types cannot all be found is refused when the saga is built, since a filter derived
+     * from it would miss some of them. Under an explicit {@link #filter()} no filter is derived, so that type is
+     * accepted and reported here with whatever concrete types could be found.
      */
     default Set<Class<? extends E>> eventTypes() {
         return Set.of();
+    }
+
+    /**
+     * An optional explicit selector that replaces the one derived from {@link #eventTypes()}, so a saga can select on
+     * more than event type (subject, source, data, time), mirroring {@code Projection#filter()}. {@code null}, the
+     * default, means "derive the selector from {@code eventTypes()}".
+     * <p>
+     * It is also the way to run a saga over an event hierarchy the derived filter cannot express. A declared type whose
+     * concrete types cannot all be found is refused when the saga is built, and setting a filter skips that check,
+     * because nothing is derived. The case that needs it is a {@code CloudEventTypeMapper} of your own that maps a whole
+     * hierarchy onto a single CloudEvent type string.
+     * <p>
+     * Two things follow, and both are yours to get right rather than Occurrent's to check. A filter that does not admit
+     * the {@link #startEventTypes()} means no instance is ever created, the same way a filter narrower than a
+     * projection's handlers starves them. And the build-time refusal is switched off for <em>every</em> declared type on
+     * this saga rather than only the one you could not enumerate, so a filter set for an unrelated reason, narrowing by
+     * subject say, also stops you being told about a sealed hierarchy that was reopened somewhere below the type you
+     * declared.
+     * <p>
+     * A filter broader than the declared event types is safe, because an event the saga does not handle leaves the
+     * state unchanged and produces no effects.
+     */
+    default @Nullable Filter filter() {
+        return null;
     }
 
     /** One live transition: {@link #evolve} then {@link #react}. What an executor runs per input, and what tests assert on. */
@@ -258,6 +289,25 @@ public interface Saga<E, S extends @Nullable Object, C> {
                                                                    Set<Class<? extends E>> eventTypes,
                                                                    BiFunction<S, SagaInput<E>, S> evolve,
                                                                    BiFunction<S, SagaInput<E>, List<SagaEffect<C>>> react) {
+        return create(initialState, sagaId, startEventTypes, eventTypes, evolve, react, null);
+    }
+
+    /**
+     * As {@link #create(Object, Function, Set, Set, BiFunction, BiFunction)}, with an explicit {@link #filter()} that
+     * replaces the selector derived from {@code eventTypes}. Pass {@code null} to derive one, which is what the
+     * six-argument form does.
+     * <p>
+     * The filter is what lets this factory build a saga over an event hierarchy whose concrete types cannot all be
+     * found, since nothing is derived and so nothing is refused. {@code eventTypes} is still worth declaring, because it
+     * stays the saga's answer to which event types it handles.
+     */
+    static <E, S extends @Nullable Object, C> Saga<E, S, C> create(S initialState,
+                                                                   Function<E, @Nullable String> sagaId,
+                                                                   Set<Class<? extends E>> startEventTypes,
+                                                                   Set<Class<? extends E>> eventTypes,
+                                                                   BiFunction<S, SagaInput<E>, S> evolve,
+                                                                   BiFunction<S, SagaInput<E>, List<SagaEffect<C>>> react,
+                                                                   @Nullable Filter filter) {
         requireNonNull(sagaId, "sagaId cannot be null");
         requireNonNull(startEventTypes, "startEventTypes cannot be null");
         requireNonNull(eventTypes, "eventTypes cannot be null");
@@ -270,14 +320,19 @@ public interface Saga<E, S extends @Nullable Object, C> {
         // Union the start types into the subscription selector, exactly as Builder.build() does. eventTypes is the default
         // subscription filter, so a start type left out of a non-empty eventTypes would be filtered off the subscription
         // and no instance could ever be created. An empty eventTypes still means "no type narrowing" (subscribe to
-        // everything), so only widen a set the caller has already narrowed.
+        // everything), so only widen a set the caller has already narrowed. Under an explicit filter the union no longer
+        // decides what arrives, and it is kept so that eventTypes() answers the same question either way.
         Set<Class<? extends E>> types;
         if (eventTypes.isEmpty()) {
             types = Set.of();
         } else {
             Set<Class<? extends E>> union = new LinkedHashSet<>(eventTypes);
             union.addAll(starts);
-            types = EventTypeExpansion.expand(union, Saga::cannotSubscribeOn);
+            // No filter is derived under an explicit one, so the walk that refuses a type a derived filter would miss
+            // has nothing to protect and only reports what it finds.
+            types = filter == null
+                    ? EventTypeExpansion.expand(union, Saga::cannotSubscribeOn)
+                    : EventTypeExpansion.expandWhatCanBeFound(union);
         }
         return new Saga<>() {
             @Override
@@ -308,6 +363,11 @@ public interface Saga<E, S extends @Nullable Object, C> {
             @Override
             public Set<Class<? extends E>> eventTypes() {
                 return types;
+            }
+
+            @Override
+            public @Nullable Filter filter() {
+                return filter;
             }
         };
     }
@@ -376,6 +436,13 @@ public interface Saga<E, S extends @Nullable Object, C> {
             public Set<Class<? extends E>> eventTypes() {
                 return (Set<Class<? extends E>>) (Set<?>) saga.eventTypes();
             }
+
+            @Override
+            public @Nullable Filter filter() {
+                // Carried across for the same reason eventTypes() is. Widening changes the Java type the saga is driven
+                // through, never which stored events it wants, so the wrapped saga's selector is still the right one.
+                return saga.filter();
+            }
         };
     }
 
@@ -402,6 +469,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
         private @Nullable Function<E, @Nullable String> correlateAll;
         private @Nullable EventReactor<S, E, C> onStart;
         private @Nullable Predicate<S> isTerminal;
+        private @Nullable Filter filter;
 
         private Builder(S initialState) {
             this.initialState = initialState;
@@ -556,6 +624,21 @@ public interface Saga<E, S extends @Nullable Object, C> {
             return this;
         }
 
+        /**
+         * Sets an explicit selector that replaces the one derived from the registered event types, so the saga can
+         * select on more than event type (subject, source, data, time). It also builds a saga over a hierarchy whose
+         * concrete types cannot all be found, which is otherwise refused here, since nothing is derived and so nothing
+         * is refused. See {@link Saga#filter()} for what that leaves you responsible for. Optional, can be set only
+         * once.
+         */
+        public Builder<E, S, C> filter(Filter filter) {
+            if (this.filter != null) {
+                throw new IllegalStateException("filter(...) has already been set and can only be set once");
+            }
+            this.filter = requireNonNull(filter, "filter cannot be null");
+            return this;
+        }
+
         /** The terminal predicate. Optional (default never terminal), can be set only once. */
         public Builder<E, S, C> isTerminal(Predicate<S> isTerminal) {
             if (this.isTerminal != null) {
@@ -584,7 +667,11 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 declaredTypes.add((Class<? extends E>) type);
             }
             declaredTypes.addAll(startTypes);
-            Set<Class<? extends E>> allTypes = EventTypeExpansion.expand(declaredTypes, Saga::cannotSubscribeOn);
+            // No filter is derived under an explicit one, so the walk that refuses a type a derived filter would miss
+            // has nothing to protect and only reports what it finds. Coverage below runs over the same shape either way.
+            Set<Class<? extends E>> allTypes = filter == null
+                    ? EventTypeExpansion.expand(declaredTypes, Saga::cannotSubscribeOn)
+                    : EventTypeExpansion.expandWhatCanBeFound(declaredTypes);
             if (correlateAll == null) {
                 TypeDispatch<Function<E, @Nullable String>> coverage = new TypeDispatch<>(correlators);
                 for (Class<?> type : allTypes) {
@@ -606,6 +693,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
             Predicate<S> terminalFn = this.isTerminal;
             Set<Class<? extends E>> starts = Set.copyOf(startTypes);
             Set<Class<? extends E>> types = allTypes;
+            Filter explicitFilter = this.filter;
 
             return new Saga<>() {
                 @Override
@@ -668,6 +756,11 @@ public interface Saga<E, S extends @Nullable Object, C> {
                 @Override
                 public Set<Class<? extends E>> eventTypes() {
                     return types;
+                }
+
+                @Override
+                public @Nullable Filter filter() {
+                    return explicitFilter;
                 }
             };
         }

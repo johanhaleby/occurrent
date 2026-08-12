@@ -200,9 +200,51 @@ class EventTypeExpansionTest {
         }
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("hierarchyShapes")
+    void expanding_what_can_be_found_refuses_no_shape_and_otherwise_answers_what_expand_answers(String shape, Class<?> declaredType, Outcome expected) {
+        Set<Class<?>> lenient = expandOneLeniently(declaredType);
+
+        assertThat(lenient).as("%s always names itself", shape).contains(declaredType);
+        if (expected == Outcome.REFUSED) {
+            // The second entry point exists for this. A caller with an explicit filter derives nothing, so there is
+            // no filter for the rule to be true of, and it gets the partial answer rather than an exception.
+            return;
+        }
+        assertThat(lenient).as("%s answers exactly what expand answers when expand accepts it", shape)
+                .isEqualTo(expandOne(declaredType));
+    }
+
+    @Test
+    void expanding_what_can_be_found_names_the_concrete_types_it_can_reach_below_a_reopened_level() {
+        Set<Class<?>> found = expandOneLeniently(PartlyOpenEvent.class);
+
+        assertThatThrownBy(() -> expandOne(PartlyOpenEvent.class))
+                .as("the shape this is about is one expand refuses")
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(found)
+                .as("the reachable side of the hierarchy is still named")
+                .contains(PartlyOpenEvent.class, SealedLeaf.class);
+    }
+
+    @Test
+    void expanding_what_can_be_found_keeps_declaration_order_and_is_unmodifiable() {
+        Set<Class<? extends OrderEvent>> found = EventTypeExpansion.expandWhatCanBeFound(
+                new LinkedHashSet<>(List.of(PaymentEvent.class, OrderPlaced.class)));
+
+        assertThat(found).startsWith(PaymentEvent.class);
+        assertThat(found).containsSequence(PaymentReserved.class, PaymentFailed.class, OrderPlaced.class);
+        assertThatThrownBy(() -> found.add(OrderPlaced.class)).isInstanceOf(UnsupportedOperationException.class);
+    }
+
     @SuppressWarnings("unchecked")
     private static Set<Class<?>> expandOne(Class<?> declaredType) {
         return (Set<Class<?>>) (Set<?>) EventTypeExpansion.expand(Set.of((Class<Object>) declaredType), REFUSAL);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<Class<?>> expandOneLeniently(Class<?> declaredType) {
+        return (Set<Class<?>>) (Set<?>) EventTypeExpansion.expandWhatCanBeFound(Set.of((Class<Object>) declaredType));
     }
 
     @Test

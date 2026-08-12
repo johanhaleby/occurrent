@@ -517,8 +517,10 @@ which for a Spring Boot application is startup. A saga sees this message:
 
 ```
 java.lang.IllegalArgumentException: the concrete event types dispatch would accept for com.example.OrderEvent cannot all
-be enumerated, so a filter derived from it would miss some of them. Declare the concrete event types instead, or make
-OrderEvent and every level below it final or sealed.
+be enumerated, so a filter derived from it would miss some of them. Declare the concrete event types instead, make
+OrderEvent and every level below it final or sealed, or set an explicit filter(...), which is used instead of deriving
+one and is the way out when a CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type
+string.
 ```
 
 A subscription reports the same shape with a message of its own, naming the subscription id alongside the type:
@@ -630,15 +632,44 @@ For an annotation-based subscription, list the concrete types with the annotatio
 the declared supertype, for example `@Subscription(id = "order-subscription", eventTypes = {OrderPlaced.class,
 PaymentReserved.class})`.
 
+### Or, for a saga, set an explicit filter
+
+New in 0.33.0, and the remedy to reach for when the hierarchy is genuinely open and you know what your events are stored
+as. A saga can now say what it subscribes on instead of having it derived from its event types, so nothing is derived and
+nothing is refused:
+
+```java
+Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
+        .correlateAll(OrderEvent::orderId)
+        .startsOn(OrderEvent.class)
+        .react(OrderEvent.class, (state, event) -> ...)
+        .filter(Filter.type("order-event"))
+        .build();
+```
+
+`FlowSaga.Builder` has the same method, both Kotlin `saga { }` blocks expose it as `filter(...)`, and `Saga.create(...)`
+takes one as a trailing argument. A subscription has no equivalent, so for `@Subscription` and its siblings the
+`eventTypes` attribute above is still the answer.
+
+Two things become yours to get right. The filter has to match the saga's start events, because a filter that excludes
+them means no instance is ever created. And the build-time check is switched off for every event type the saga declares,
+not only for the one you could not enumerate, so a filter you set for an unrelated reason also stops you being told about
+a sealed hierarchy that was reopened somewhere else in the same saga.
+
 ### If you wrote a type mapper that collapses the hierarchy
 
 One case genuinely worked in 0.32.0 and now throws, for a saga and for a subscription's reopened-hierarchy shape alike. A
 `CloudEventTypeMapper` that maps every type in a hierarchy onto one CloudEvent type string makes a declared supertype
-match, because the string the filter asks for is the string every event has. Declaring the concrete types keeps that
-working, since they all map to the same string, so take the second remedy above. Occurrent cannot tell your mapper apart
-from the default one at build time, which is why the refusal does not make an exception for it. There is no filter
-override on a saga yet, and [#751](https://github.com/johanhaleby/occurrent/issues/751) tracks adding one. A subscription
-already has one. Its `eventTypes` attribute is the explicit list, the same one the second remedy above uses.
+match, because the string the filter asks for is the string every event has. Occurrent cannot tell your mapper apart from
+the default one at build time, which is why the refusal does not make an exception for it.
+
+For a saga, `filter(Filter.type("order-event"))` is the direct answer, since it says the thing reflection could not work
+out. Declaring the concrete types also keeps working, because under such a mapper they all map to the same string, and it
+is the better choice when you can enumerate them. Reach for the filter when you cannot, which is the case a hierarchy
+other people extend was always going to end up in.
+
+A subscription has only the second of those. Its `eventTypes` attribute is the explicit list, the same one the concrete
+types remedy above uses.
 
 An annotation-based subscription's filter changes too, but not from the same mapper, and it needs nothing from you. It
 used to derive its filter from the concrete types a sealed type permits and leave the declared type out. The collapsing

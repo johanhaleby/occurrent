@@ -138,6 +138,12 @@ the hierarchy below it final or sealed. It names declaring the concrete types fi
 is also the remedy under a mapper that collapses the hierarchy, since the concrete types map to the same string the
 declared one did.
 
+> **Amended for 0.33.0, under [#751](https://github.com/johanhaleby/occurrent/issues/751).** The message now names a
+> third remedy, an explicit `filter(...)` on the builder, which replaces the derived filter and so removes the reason to
+> refuse anything. Declaring the concrete types is still named first, because it is the answer whenever the types can be
+> enumerated. The array message is unchanged, since sealing an array is impossible and keeping an array as a declared
+> event type is not worth pointing anyone at.
+
 ### One expansion for the whole repository, not a second copy
 
 This expansion already existed. `SubscriptionAnnotations.getConcreteEventTypes` in
@@ -184,6 +190,13 @@ reach the same `eventTypes()`, so one call at the point each builder produces th
 `on(Class, ..)` and a window condition together. `SagaFilters` is unchanged, `startEventTypes()` is unchanged because it
 already matches with `isInstance`, and `FlowSagaImpl` is unchanged because `eventTypes` there is only an accessor.
 
+> **Amended for 0.33.0, under [#751](https://github.com/johanhaleby/occurrent/issues/751).** All three still walk the
+> hierarchy, but there are now two entry points and only one of them refuses. A saga given an explicit `filter(...)`
+> derives no filter, so it calls `EventTypeExpansion.expandWhatCanBeFound` instead of `expand` and reports the concrete
+> types that could be found rather than being refused. The property this ADR is built on is untouched, because it is
+> about the derived filter and an explicit filter is not one. The paragraph below stays true as written, since both
+> entry points expand and correlation coverage still runs over the expanded set.
+
 Correlation coverage is checked over the expanded set, which changes nothing and is worth writing down so nobody claims
 otherwise. An expanded type is always a subtype of a declared type, `TypeDispatch` resolves a correlator through
 superclasses and interfaces, and every declared type is checked before what it expanded into. So a correlator that covers
@@ -211,6 +224,12 @@ common case" (`Saga.java:408`), forcing every such saga to list its concrete typ
 and it is the docs-and-discipline answer this repository's own convention rejects for a library whose callers are
 unknown. Recorded as #751 on its own merits, because an explicit filter is useful for more than this.
 
+> **Amended for 0.33.0, under [#751](https://github.com/johanhaleby/occurrent/issues/751).** `Saga#filter()` shipped, and
+> this rejection stands as written, because the two are different proposals. What was rejected here is an explicit filter
+> *instead of* expansion, leaving a caller who declares a sealed type to find out from the documentation that they need
+> one. What shipped is an explicit filter *alongside* expansion, for the caller whose hierarchy cannot be enumerated at
+> all.
+
 **Put the expansion in `SagaFilters`.** It lives in `dsl/saga-dsl/blocking`, so only the blocking runner would benefit,
 and `eventTypes()` would keep reporting the declared supertype on its own.
 
@@ -231,6 +250,13 @@ Expansion was designed to keep it working, by keeping the declared type in the s
 helps. There is no override yet, since `Saga` has no `filter()` (#751), so the remedies are to declare the concrete types,
 which works under a collapsing mapper too because they all map to the same string, or to seal the hierarchy. How many
 callers run such a mapper is unknowable from here, which is exactly why it is written down instead of dismissed.
+
+> **Amended for 0.33.0, under [#751](https://github.com/johanhaleby/occurrent/issues/751).** That caller now has a
+> remedy that says the thing reflection could not work out. `filter(Filter.type("order-event"))` on either builder
+> replaces the derived filter, so the saga is built without deriving one and the refusal never runs. Declaring the
+> concrete types and sealing the hierarchy are still the better answers when either is available. The cost of the new
+> one is that it switches the check off for every event type that saga declares rather than only the one that could not
+> be enumerated, which is stated on `Saga#filter()` itself and in section 10 of the upgrade guide.
 
 **The projection DSL still behaves the other way, and that is recorded rather than left as an accident.** It has the
 same derivation and the same supertype handler lookup, and it documents the constraint instead of fixing it. Two sibling
