@@ -4,14 +4,16 @@ Date: 2026-08-08
 
 ## Status
 
-Accepted. Resolves [#361](https://github.com/johanhaleby/occurrent/issues/361). Additive across the projection DSL, the
-view DSL and the Spring Boot starters.
+Withdrawn on 2026-08-11 by [ADR 122](0122-an-applied-position-is-not-a-completed-prefix.md), before this feature
+ever shipped.
 
-> **Withdrawn on 2026-08-11 by [ADR 122](0122-an-applied-position-is-not-a-completed-prefix.md), before this
-> feature ever shipped.** `waitUntilApplied` read a monotonic maximum as a completed prefix, which needs
-> position-ordered delivery, and no delivery source Occurrent ships provides that. `AppliedProjectionPositionStore`,
-> its recording wrappers, both Mongo-backed stores, and `@Projection`'s `recordAppliedPosition` attribute are all
-> removed from 0.33.0. [#361](https://github.com/johanhaleby/occurrent/issues/361) reopens.
+Originally accepted, resolving [#361](https://github.com/johanhaleby/occurrent/issues/361), additive across the
+projection DSL, the view DSL and the Spring Boot starters.
+
+> `waitUntilApplied` read a monotonic maximum as a completed prefix, which needs position-ordered delivery, and no
+> delivery source Occurrent ships provides that. `AppliedProjectionPositionStore`, its recording wrappers, both
+> Mongo-backed stores, and `@Projection`'s `recordAppliedPosition` attribute are all removed from 0.33.0.
+> [#361](https://github.com/johanhaleby/occurrent/issues/361) reopens.
 
 ## Context
 

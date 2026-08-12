@@ -498,7 +498,9 @@ counts as no version, which keeps a checkpoint write from a registrar-driven sub
 the strategy bean is still being built.
 
 A user who declares their own `CheckpointStorage` bean is unaffected, since that bean no longer carries
-the fence. A user who hand-wires their own models passes the source themselves, which is one argument
+the fence, unless fencing is enabled and the bean cannot evaluate write conditions, in which case the
+amendment below refuses it at startup rather than accepting a checkpoint the fence cannot actually
+protect. A user who hand-wires their own models passes the source themselves, which is one argument
 in two places.
 
 > **Amended for 0.33.0.** Several strategy beans with no `@Primary` no longer start the application. The
@@ -587,7 +589,8 @@ The migration guide documents the window.
 
 A user who wires their own subscription models gets the fence by passing the source and gets today's
 behaviour by leaving it out. A user on the Spring Boot starter gets it without doing anything, whatever
-their checkpoint storage bean is, because the fence no longer travels through that bean.
+their checkpoint storage bean is, because the fence no longer travels through that bean, unless that
+bean cannot evaluate write conditions, in which case startup refuses rather than running unfenced.
 
 A `CheckpointStorage` implementation outside this repository has to be updated, which the recipe does
 for the signature and the author does for the behaviour. A store that cannot write conditionally stays
