@@ -123,6 +123,12 @@ bare `instanceof`.
 > `Projections.materializedView` builds the coalescing view directly from a `View`, not from an existing
 > `MaterializedView`, so there is no public path to wrap it around the recorder instead.
 
+> **Withdrawn on 2026-08-11 by [ADR 122](0122-an-applied-position-is-not-a-completed-prefix.md), before it
+> ever shipped.** The delegating position recorder the amendment above describes, `RecordingMaterializedView`,
+> is removed for 0.33.0 along with `AppliedProjectionPositionStore` and its recording wrappers. The "only this
+> order is buildable" claim above described a design that never released. `ReplayAware` and the `instanceof`
+> probe it names are unaffected. Nothing about them depended on the withdrawn recorder.
+
 **3. The boundary is driven by whoever owns the replay, and every path that does not own one degrades to today's
 behaviour.** Internally, `BlockingHandover.Source` gains defaulted `replayStarted()`, `replayCompleted()` and
 `replayAbandoned()` methods, and `ReactiveHandover.Source` gains the same with `Mono<Void> replayCompleted()` so the

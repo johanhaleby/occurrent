@@ -170,7 +170,7 @@ public final class Projections {
      * always implements {@link ReactiveReplayAware}, and forwards
      * {@code replayStarted}/{@code replayCompleted}/{@code replayAbandoned} to {@code materializedView} whenever it
      * implements the blocking view DSL's {@code ReplayAware} capability, so a replay driven through a
-     * {@code CatchupProjectionFeed} still reaches a batching or position-recording view wrapped through this bridge.
+     * {@code CatchupProjectionFeed} still reaches a batching view wrapped through this bridge.
      */
     public static <E> BiFunction<EventMetadata, E, Mono<Void>> reactiveUpdateWithMetadata(MaterializedView<E> materializedView) {
         requireNonNull(materializedView, "materializedView cannot be null");
