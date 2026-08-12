@@ -2,6 +2,13 @@
 
 ## Hot restart
 
+- **SHUTDOWN 2026-08-12 while U14 was mid-flight. Read this block first on restart.**
+  - **Every monitor is dead.** A shutdown kills all three. Re-arm work-item, review-thread watch and stalled detector before doing anything else, and run one full sweep straight after arming, because a baseline poll only records state and never emits for what is ALREADY red or already merged.
+  - **U14's work lives at `/Users/johan/devtools/java/projects/occurrent/.claude/worktrees/agent-a3dce3de6b285b2d9` on branch `cdx33/u14-join-window`.** Uncommitted files survive a shutdown on disk, so nothing is lost even if the push did not land. At shutdown the modified set was `changelog.md`, `FlowSagaImpl.java`, `StepBuilder.java` and `FlowSagaTest.java`, off base `3da1faa62`. Check `git ls-remote --heads origin cdx33/u14-join-window` first: if it exists, prefer the pushed branch; if not, recover from that worktree rather than re-dispatching from scratch.
+  - **The subagent itself does NOT survive.** Its reasoning is the perishable part, so read its handover message in this transcript before re-dispatching. Re-dispatch with the same brief plus whatever it had already established, and tell the replacement what is already done so it does not redo it.
+  - **Next action on restart:** re-arm monitors, recover U14's branch, confirm the ADR 120 amendment is still owed to Johan for a wording confirm before any merge, then carry on. Nothing else in the epic is outstanding.
+
+
 - Verified at: `main`, `9f52fee8a` plus later `[ci skip]` checkpoints, 2026-08-12. **All three monitors re-armed for the third reopen: work-item `brbmxn4a0`, review-thread watch `b1g2458hl`, stalled detector `bzru78v4i` on `/Users/johan/devtools/java/projects/occurrent/.claude/worktrees/agent-a3dce3de6b285b2d9`.** Post-arming sweep clean, both repo-wide watches baselined at 0 open PRs. Main is 27 of 27 SUCCESS by run list across all four workflows on that merge commit. No monitors running, no active units, nothing dispatched.
 - Workspace baseline: session worktree `johan/codex-review-plan-0-33-da1f93`, clean and in sync with `origin/main`. Never `cd` to the primary checkout from a worktree session (see `lessons.md`).
 - Active epic / definition of done: **cdx33 REOPENED a THIRD time 2026-08-12 for U14**, Johan reversing the recorded `join` decision on AGENTS.md grounds. Done when U14 merges, main is green on it, and the docs set is re-checked. Previously closed at revision 59, 17 of 17.
