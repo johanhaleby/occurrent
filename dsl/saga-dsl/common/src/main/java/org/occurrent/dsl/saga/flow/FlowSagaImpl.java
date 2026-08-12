@@ -358,9 +358,11 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     // What a firing branch's reaction reads. Every WindowCondition trigger, on(StepCondition, ...) and the lowered join
-    // sugar alike, gets the events received since the step it fired from was entered, so a count it takes matches the count
-    // that fulfilled the condition. A classic branch reads the whole retained history instead, and so does a WindowCondition
-    // whose state has previousStepEntryIndex -1, which is what a store rebuilt without that field hands back.
+    // sugar alike, gets whatever of the events received since the step it fired from was entered is still retained, all
+    // of them unless a stepWindow cap has already evicted the step's own oldest ones. The condition still fires on the
+    // count it counted regardless, since that count is carried forward rather than re-derived from what remains. A
+    // classic branch reads the whole retained history instead, and so does a WindowCondition whose state has
+    // previousStepEntryIndex -1, which is what a store rebuilt without that field hands back.
     private ReceivedEvents<E> reactionWindow(FlowStateImpl<E> state, Trigger<E> trigger) {
         boolean windowed = trigger instanceof WindowCondition<E>
                 && state.previousStepEntryIndex() >= 0;

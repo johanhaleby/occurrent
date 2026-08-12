@@ -34,10 +34,15 @@ windows it whenever `state.previousStepEntryIndex() >= 0`, with no exception for
 That window always starts after index 0, the pinned initiating event, in every step including the first, so a
 `join`'s reaction loses the initiating event from `count`, `all`, `first`, `any`, `none` and `asList` wherever it
 previously reached it through the whole retained history, and a `join` past the first step loses whatever an
-earlier step left behind on top of that. `received.initiating()` is the one accessor built to reach past the
-window, and it still returns the start event at any step. Condition evaluation is unaffected either way. A
+earlier step left behind on top of that. The window is the retained suffix of the events received since the step
+it fired from was entered, which is all of them unless a `stepWindow` cap has already evicted the step's own
+oldest ones, in which case the callback sees only what survived, same as `on(StepCondition, ...)` already did
+before this record. `received.initiating()` is the one accessor built to reach past the window, and it still
+returns the start event at any step, cap or no cap. Condition evaluation is unaffected either way, at any cap. A
 first-step `join` already counted only post-start arrivals before this record, since it counts since the step's
-entry the same way `on(StepCondition, ...)` always has.
+entry the same way `on(StepCondition, ...)` always has, and
+[ADR 123](0123-a-step-conditions-counts-are-carried-so-the-steps-events-can-be-dropped.md) already covers why a
+`stepWindow` cap changes what the callback sees but not what the condition counted.
 
 `StepBuilder.join`'s deprecation javadoc is corrected to state the shared window plainly and to drop the false
 "Behavior is unchanged, only the way you write it" claim. `ReceivedEvents`'s javadoc needed no change, since it

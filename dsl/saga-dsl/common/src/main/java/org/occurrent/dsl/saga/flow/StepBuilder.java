@@ -147,10 +147,10 @@ public final class StepBuilder<E, C> {
      * events of a type becomes {@code event(type, n)}, and the whole list becomes one {@code allOf(...)} tree. Two
      * expectations naming the same type collapse to the higher of their counts, which is what such a join has always meant,
      * since each expectation is checked against the same window independently. {@code whenFulfilled} reads the same window
-     * the condition was evaluated over, the events received since this step was entered, exactly as {@link
-     * #on(StepCondition, Continuation, Function)}'s does. That narrows what {@code join} shipped with in 0.31.0, when the
-     * callback read the whole retained history no matter which step it fired from. See
-     * {@code doc/migration/upgrading-to-0.33.0.md}, section 11, and {@link StepCondition}.
+     * the condition was evaluated over, exactly as {@link #on(StepCondition, Continuation, Function)}'s does, including
+     * how a {@code stepWindow} cap narrows that window further while leaving the condition counting exactly as it did.
+     * That narrows what {@code join} shipped with in 0.31.0, when the callback read the whole retained history no matter
+     * which step it fired from. See {@code doc/migration/upgrading-to-0.33.0.md}, section 11, and {@link StepCondition}.
      */
     @Deprecated
     public StepBuilder<E, C> join(List<Expectation<E>> expecting, Continuation then, Function<ReceivedEvents<E>, List<C>> whenFulfilled) {

@@ -590,9 +590,12 @@ way, so a test that starts your context or builds your sagas finds all of them.
 ## 11. A lowered `join`'s reaction now reads its own window, not the whole retained history
 
 `join`'s callback used to read every event the instance still keeps, the same as a guard or a `timeout`'s `onExpiry`
-does. It now reads only the events received since the step it fired from was entered, the same window
-`on(StepCondition, ...)` reads. `received.initiating()` still reaches the start event no matter how many steps ago
-it arrived.
+does. It now reads the retained events since the step it fired from was entered instead, the same window
+`on(StepCondition, ...)` reads. That is every one of them by default, but a `stepWindow` cap can have evicted the
+step's own oldest events by the time the reaction runs, so the callback then sees only what survived the cap. The
+condition itself still fires on the same event either way, since [section 9](#9-a-flow-saga-can-cap-the-events-of-the-step-it-is-parked-in)
+covers `stepWindow` carrying its counts forward rather than re-deriving them from what is still kept.
+`received.initiating()` still reaches the start event no matter how many steps ago it arrived, or how tight the cap.
 
 You are affected in two shapes, and the first-step one is easy to miss.
 
@@ -617,10 +620,10 @@ FlowSaga.<GameEvent, GameCommand>builder()
                 }));
 ```
 
-A `join` in a saga's first step keeps its own step's events, since there is no earlier step to lose anything to,
-but the window a reaction reads always starts after the initiating event, in every step including the first. A
-first-step `join` whose callback reaches for the start type through `count`, `all`, `first`, `any`, `none` or
-`asList` now sees nothing where it used to see one:
+A `join` in a saga's first step keeps whatever a `stepWindow` cap has left of its own events, since there is no
+earlier step to lose anything to, but the window a reaction reads always starts after the initiating event, in
+every step including the first. A first-step `join` whose callback reaches for the start type through `count`,
+`all`, `first`, `any`, `none` or `asList` now sees nothing where it used to see one:
 
 ```java
 FlowSaga.<GameEvent, GameCommand>builder()
