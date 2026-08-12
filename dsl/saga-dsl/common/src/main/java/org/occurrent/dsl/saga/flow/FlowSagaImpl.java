@@ -172,12 +172,17 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
         List<E> appended = append(state.received(), event);
-        // Drop the current step's oldest events past stepWindow before anything reads them, so a guard and a reaction in
+        // Counts are derived from the step's events as this delivery actually finds them, before stepWindow trims
+        // anything. A backlog that exceeds a newly configured cap is counted against what genuinely arrived, not
+        // against the sliver the same delivery is about to leave behind, and the refusal below reads the STORED
+        // (already-persisted) windowStart rather than the trim this delivery is computing, so it only fires when a
+        // prior capped delivery already advanced it past the step's entry.
+        List<Integer> counts = stepConditionCounts(state, step, appended, event);
+        // Drop the current step's oldest events past stepWindow now that counts exist, so a guard and a reaction in
         // this delivery see exactly what gets persisted.
         int windowStart = boundedWindowStart(state.stepEntryIndex(), state.windowStart(), appended.size());
         List<E> received = retain(appended, state.windowStart(), windowStart);
         List<E> window = received.subList(windowStartIndex(state.stepEntryIndex(), windowStart, received.size()), received.size());
-        List<Integer> counts = stepConditionCounts(state, step, windowStart, window, event);
         int[] leafCursor = {0};
         List<Branch<E, C>> branches = step.branches();
         for (int i = 0; i < branches.size(); i++) {
@@ -495,11 +500,13 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
      * The counts to evaluate this step's conditions with, or {@code null} to count the window instead. The carried counts
      * are used once they were counted for the declaration this step has now, and are re-derived from the window when they
      * were not, which covers a document written before the field existed and a redeploy that changed a leaf. Re-deriving
-     * needs the events, so a step whose older events {@code stepWindow} already dropped has nothing left to fall back on
-     * and refuses the delivery instead of counting short.
+     * reads {@code appended} against the STATE's own stored {@code windowStart}, i.e. the window as it stood before this
+     * delivery's own stepWindow trim, so a backlog that a newly lowered cap is only now catching up on is still counted in
+     * full on the delivery that first trims it. The refusal below is judged on that same stored value: a step whose older
+     * events a PRIOR delivery already dropped has nothing left to fall back on and refuses instead of counting short, but
+     * this delivery's own trim, computed after counts, never itself triggers the refusal.
      */
-    private @Nullable List<Integer> stepConditionCounts(FlowStateImpl<E> state, CompiledStep<E, C> step, int windowStart,
-                                                        List<E> window, E event) {
+    private @Nullable List<Integer> stepConditionCounts(FlowStateImpl<E> state, CompiledStep<E, C> step, List<E> appended, E event) {
         StepLeaves<E> leaves = step.leaves();
         if (leaves.matchers().isEmpty() || !leaves.countable()) {
             return null;
@@ -508,22 +515,24 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         if (progress != null && describesTheSameLeaves(progress, leaves)) {
             return incremented(leaves.matchers(), progress.matchCounts(), event);
         }
-        if (droppedFromTheCurrentStep(state, windowStart)) {
+        if (droppedFromTheCurrentStep(state)) {
             throw new IllegalStateException("step '" + step.name() + "' cannot be evaluated for this instance, because the"
                     + " step's condition declaration changed while the instance was parked in it and stepWindow had already"
                     + " dropped the events its counts would be rebuilt from. Retrying the delivery cannot help. Put the"
                     + " previous condition declaration for this step back until the parked instances have moved on, or"
                     + " delete the instance");
         }
+        List<E> window = appended.subList(windowStartIndex(state.stepEntryIndex(), state.windowStart(), appended.size()), appended.size());
         return counted(leaves.matchers(), window);
     }
 
     // Whether any of the current step's own events are already gone, which is what leaves nothing to rebuild its counts
-    // from. Reading the tail as starting past the step's entry is the signal, and the entry check is what keeps a store's
-    // defaulting from looking like one, since an instance that has entered a step was entered at position 1 or later, while
-    // a defaulted entry reads as 0 and a defaulted tail start reads as 1 and so can never pass a real entry position.
-    private static boolean droppedFromTheCurrentStep(FlowStateImpl<?> state, int windowStart) {
-        return state.stepEntryIndex() >= 1 && windowStart > state.stepEntryIndex();
+    // from. Reading the STORED tail as starting past the step's entry is the signal, i.e. the state as a PRIOR delivery
+    // left it rather than the trim this delivery is computing, and the entry check is what keeps a store's defaulting
+    // from looking like one, since an instance that has entered a step was entered at position 1 or later, while a
+    // defaulted entry reads as 0 and a defaulted tail start reads as 1 and so can never pass a real entry position.
+    private static boolean droppedFromTheCurrentStep(FlowStateImpl<?> state) {
+        return state.stepEntryIndex() >= 1 && state.windowStart() > state.stepEntryIndex();
     }
 
     // Whether the carried counts were counted for the leaves this step declares now. The length check and the negative

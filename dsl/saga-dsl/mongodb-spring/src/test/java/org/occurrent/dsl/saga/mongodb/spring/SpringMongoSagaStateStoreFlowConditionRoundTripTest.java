@@ -28,10 +28,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEnvelope;
+import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.flow.Continuation;
+import org.occurrent.dsl.saga.flow.FlowSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
+import org.occurrent.dsl.saga.flow.StepCondition;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.ActionKind;
 import org.occurrent.dsl.saga.flow.internal.FlowStateImpl.StepConditionProgress;
@@ -186,6 +191,62 @@ class SpringMongoSagaStateStoreFlowConditionRoundTripTest {
                 () -> assertThat(loaded.previousStepEntryIndex())
                         .as("absent means not known, and a window-condition reaction falls back to the whole retained history")
                         .isEqualTo(-1)
+        );
+    }
+
+    @Test
+    void a_pre_0_33_0_document_with_a_backlog_exceeding_a_newly_configured_step_window_derives_counts_instead_of_refusing() {
+        // The scenario ADR 123 says a pre-0.33.0 document can never reach: stepWindow turned on for a step whose instance
+        // already carries more of its own events than the new cap allows, with bookkeeping written before counts existed
+        // at all. Delivering into it must count the real backlog once, rather than refuse it or judge it against the
+        // sliver the same delivery is about to keep.
+        MongoOperations mongoOperations = mongoOperations();
+        CloudEventConverter<ReviewEvent> converter = converter();
+        SagaStateStore<FlowState<ReviewEvent>> store =
+                new SpringMongoSagaStateStore<>(mongoOperations, "saga-review", rawFlowStateType(), converter);
+        List<ReviewEvent> received = List.of(
+                new ReviewRequested("e1", "backlog"),
+                new Approved("e2", "backlog", 10),
+                new Approved("e3", "backlog", 20),
+                new Approved("e4", "backlog", 30),
+                new Approved("e5", "backlog", 40));
+
+        mongoOperations.insert(new Document("_id", "backlog")
+                .append("status", SagaStatus.ACTIVE.name())
+                .append("version", 1L)
+                .append("state", new Document("currentStep", "awaiting-decision")
+                        .append("windowStart", 1)
+                        .append("stepEntryIndex", 1)
+                        .append("completed", false)
+                        .append("previousStep", "awaiting-decision")
+                        .append("lastAction", ActionKind.NONE.name())
+                        .append("matchedBranchIndex", -1)
+                        .append("received", received.stream().map(event -> cloudEventJson(converter, event)).toList()))
+                .append("timers", List.of())
+                .append("streamWatermarks", new Document())
+                .append("createdAt", 1_000L)
+                .append("updatedAt", 1_000L), "saga-review");
+
+        FlowState<ReviewEvent> loaded = store.find("backlog").orElseThrow().state();
+        Saga<ReviewEvent, FlowState<ReviewEvent>, Object> saga = FlowSaga.<ReviewEvent, Object>builder()
+                .stepWindow(2)
+                .startsOn(ReviewRequested.class)
+                .correlateAll(ReviewEvent::reviewId)
+                .step("awaiting-decision", step -> step.on(StepCondition.event(Approved.class, 3), Continuation.end()))
+                .build();
+
+        FlowState<ReviewEvent> afterDelivery = saga.evolve(loaded, SagaInput.event(new Approved("e6", "backlog", 50)));
+        boolean saved = store.compareAndSave("backlog",
+                new SagaEnvelope<>("backlog", afterDelivery, SagaStatus.ACTIVE, 2, List.of(), Map.of(), null, null, null, null, null), 1);
+        FlowState<ReviewEvent> roundTripped = store.find("backlog").orElseThrow().state();
+
+        assertAll(
+                () -> assertThat(saga.isTerminal(afterDelivery))
+                        .as("five Approved had already arrived before stepWindow was even configured, well past the count of three")
+                        .isTrue(),
+                () -> assertThat(afterDelivery.received()).as("the newly configured cap still applies from this delivery on").hasSize(3),
+                () -> assertThat(saved).isTrue(),
+                () -> assertThat(roundTripped).as("the completed, capped state round-trips through Mongo unchanged").isEqualTo(afterDelivery)
         );
     }
 

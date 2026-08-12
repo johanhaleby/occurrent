@@ -853,6 +853,29 @@ class FlowSagaTest {
         }
 
         @Test
+        void a_pre_0_33_0_backlog_exceeding_a_newly_configured_cap_derives_counts_instead_of_refusing() {
+            // What a document written before stepWindow existed looks like: windowStart never trimmed (still 1), a real
+            // stepEntryIndex, and no carried counts (a store defaults the absent field to null). Turning stepWindow on then
+            // delivers into a step whose backlog already exceeds the new cap, and the first such delivery has to count the
+            // whole pre-trim backlog rather than either refusing (the bug this guards) or judging the condition on the
+            // sliver the same delivery is about to keep.
+            FlowStateImpl<CapEvent> seeded = new FlowStateImpl<>("wait",
+                    List.of(new Opened("c1"), new Approved("c1", 1), new Approved("c1", 2), new Approved("c1", 3), new Approved("c1", 4)),
+                    1, 1, false, null, -1, ActionKind.NONE, -1, null);
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(2, new ArrayList<>());
+
+            Saga.Step<FlowState<CapEvent>, CapCommand> fired = saga.step(seeded, SagaInput.event(new Approved("c1", 5)));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(fired.state()))
+                            .as("five Approved had already arrived before stepWindow was even configured, well past the count of three")
+                            .isTrue(),
+                    () -> assertThat(fired.effects()).containsExactly(SagaEffect.issue(new Report("done"))),
+                    () -> assertThat(fired.state().received()).as("the newly configured cap still applies from this delivery on").hasSize(3)
+            );
+        }
+
+        @Test
         void two_predicated_leaves_over_one_type_keep_counting_the_window_and_refuse_the_cap() {
             List<String> fired = new ArrayList<>();
             FlowSaga.Builder<CapEvent, CapCommand> ambiguous = FlowSaga.<CapEvent, CapCommand>builder()
