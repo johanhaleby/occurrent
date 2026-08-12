@@ -31,17 +31,22 @@ while its own javadoc said they would not.
 
 `WindowCondition` drops `loweredFromJoin`. Every `WindowCondition` trigger, whether built by
 `on(StepCondition, ...)` directly or by lowering a `join`, now narrows the same way. `FlowSagaImpl.reactionWindow`
-windows it whenever `state.previousStepEntryIndex() >= 0`, with no exception for how the trigger was constructed. A
-`join` in a saga's first step sees no change, since the window since that step was entered is already the whole
-retained history there. A `join` past the first step now reads only the events received since it fired from, the
-same window `on(StepCondition, ...)` reads, and an event an earlier step left behind is no longer visible to it.
-`received.initiating()` reaches the start event either way, at any step.
+windows it whenever `state.previousStepEntryIndex() >= 0`, with no exception for how the trigger was constructed.
+That window always starts after index 0, the pinned initiating event, in every step including the first, so a
+`join`'s reaction loses the initiating event from `count`, `all`, `first`, `any`, `none` and `asList` wherever it
+previously reached it through the whole retained history, and a `join` past the first step loses whatever an
+earlier step left behind on top of that. `received.initiating()` is the one accessor built to reach past the
+window, and it still returns the start event at any step. Condition evaluation is unaffected either way. A
+first-step `join` already counted only post-start arrivals before this record, since it counts since the step's
+entry the same way `on(StepCondition, ...)` always has.
 
 `StepBuilder.join`'s deprecation javadoc is corrected to state the shared window plainly and to drop the false
 "Behavior is unchanged, only the way you write it" claim. `ReceivedEvents`'s javadoc needed no change, since it
-already stated the narrowed contract this record now makes true. `FlowSagaTest.LoweredJoin`'s test is inverted from
-asserting the exemption to asserting the narrowing, keeping the cross-step fixture that proves `initiating()` still
-reaches past the window.
+already stated the narrowed contract this record now makes true. `FlowSagaTest.LoweredJoin`'s cross-step test is
+inverted from asserting the exemption to asserting the narrowing, keeping the fixture that proves `initiating()`
+still reaches past the window. Two more tests cover the boundaries that inversion alone does not, an earlier step's
+event of the same type the `join` is waiting for, and a first-step `join` reading its own start type through a
+generic accessor.
 
 The changelog entry moves to Breaking changes, and `doc/migration/upgrading-to-0.33.0.md` gets a new section 11 as
 the migration path, since no `UpgradeToOccurrent_0_33` recipe touches `StepBuilder` and a behavioural window change
@@ -62,9 +67,10 @@ fourth answer to it.
 
 ## Consequences
 
-- A `join` reaction past a saga's first step reads fewer events than it did before this release. A caller relying on
-  that reach has to hand-count against a guard's full `ReceivedEvents` instead, the same workaround `join` itself
-  was built to remove. `received.initiating()` is unaffected.
+- A `join`'s reaction reads fewer events than it did before this release, at any step. A first-step `join` loses the
+  initiating event from its generic accessors, and a `join` past the first step loses that plus whatever an earlier
+  step left behind. A caller relying on either reach has to hand-count against a guard's full `ReceivedEvents`
+  instead, the same workaround `join` itself was built to remove. `received.initiating()` is unaffected.
 - ADR 120's amendment argued this narrowing could never reach a lowered `join`, because that would silently break a
   shipped API. This record makes exactly that change, deliberately, with the changelog entry and migration section
   the amendment said a dropped discriminator would need.

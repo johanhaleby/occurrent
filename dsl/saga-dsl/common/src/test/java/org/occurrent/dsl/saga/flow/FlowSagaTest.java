@@ -1695,6 +1695,51 @@ class FlowSagaTest {
 
         @SuppressWarnings("deprecation")
         @Test
+        void a_join_reaction_does_not_count_an_earlier_steps_event_of_the_same_type_it_is_waiting_for() {
+            // The window narrows by position, not by type, so an earlier Ready left behind by step one must drop out of
+            // the second step's own count exactly as an unrelated type would, and not be added to the Ready that fired it.
+            Saga<JoinEvent, FlowState<JoinEvent>, JoinCommand> saga = FlowSaga.<JoinEvent, JoinCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(JoinEvent::id)
+                    .step("first", step -> step.on(Go.class, Continuation.next()))
+                    .step("second", step -> step.join(List.of(Expectation.of(Ready.class, 1)), Continuation.end(),
+                            received -> List.of(new Saw("readies=" + received.count(Ready.class)))))
+                    .build();
+
+            FlowState<JoinEvent> afterStart = start(saga, new Started("j")).state();
+            FlowState<JoinEvent> afterEarlyReady = saga.evolve(afterStart, SagaInput.event(new Ready("j")));
+            FlowState<JoinEvent> inSecond = saga.evolve(afterEarlyReady, SagaInput.event(new Go("j")));
+            Saga.Step<FlowState<JoinEvent>, JoinCommand> fired = saga.step(inSecond, SagaInput.event(new Ready("j")));
+
+            assertThat(fired.effects())
+                    .as("only the Ready that fired this step's join is in view, not the one step one left behind")
+                    .containsExactly(SagaEffect.issue(new Saw("readies=1")));
+        }
+
+        @SuppressWarnings("deprecation")
+        @Test
+        void a_first_step_joins_reaction_does_not_see_the_initiating_event_through_a_generic_accessor() {
+            // The window a WindowCondition reaction reads always starts after index 0, the pinned initiating event, even
+            // for a saga's first step. initiating() is the one accessor built to reach past that, so a join reaction that
+            // instead counts its own start type through count(...) sees zero, not one.
+            Saga<JoinEvent, FlowState<JoinEvent>, JoinCommand> saga = FlowSaga.<JoinEvent, JoinCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(JoinEvent::id)
+                    .step("first", step -> step.join(List.of(Expectation.of(Ready.class, 1)), Continuation.end(),
+                            received -> List.of(new Saw("starts=" + received.count(Started.class)
+                                    + " initiating=" + received.initiating(Started.class).id()))))
+                    .build();
+
+            FlowState<JoinEvent> afterStart = start(saga, new Started("j")).state();
+            Saga.Step<FlowState<JoinEvent>, JoinCommand> fired = saga.step(afterStart, SagaInput.event(new Ready("j")));
+
+            assertThat(fired.effects())
+                    .as("the start event is outside even a first step's join window, but initiating() still reaches it")
+                    .containsExactly(SagaEffect.issue(new Saw("starts=0 initiating=j")));
+        }
+
+        @SuppressWarnings("deprecation")
+        @Test
         void a_join_collapses_repeated_types_to_their_highest_count_and_keeps_first_appearance_order() {
             Saga<JoinEvent, FlowState<JoinEvent>, JoinCommand> saga = FlowSaga.<JoinEvent, JoinCommand>builder()
                     .startsOn(Started.class)

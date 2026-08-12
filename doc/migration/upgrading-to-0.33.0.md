@@ -191,8 +191,9 @@ Change the import and the type name at every use listed in the tables above, the
 
 `join` keeps working, and this section is only useful if you want to move off it, or if you need something `join`
 cannot express in the first place. What changes regardless is `join`'s own reaction window, narrower in this release
-whether or not you migrate off it. See [section 11](#11-a-lowered-joins-reaction-now-reads-its-own-window-not-the-whole-retained-history)
-before relying on a `join` in any step but the first.
+whether or not you migrate off it, in the first step as much as any later one. See
+[section 11](#11-a-lowered-joins-reaction-now-reads-its-own-window-not-the-whole-retained-history) before relying on
+a `join`'s reaction to read more than the events its own expectations fulfilled.
 
 A flow step can now wait on a `StepCondition` tree instead of only a single-branch choice or a `join`. `join`'s
 per-type counting is one case a tree expresses, `allOf(event(Type, count), ...)`, so every existing `join` call has a
@@ -593,9 +594,12 @@ does. It now reads only the events received since the step it fired from was ent
 `on(StepCondition, ...)` reads. `received.initiating()` still reaches the start event no matter how many steps ago
 it arrived.
 
-You are affected if a `join` past a saga's first step counts or inspects an event an earlier step left behind.
-Nothing changes for a `join` in the first step, since the window since that step was entered is already the whole
-retained history there.
+You are affected in two shapes, and the first-step one is easy to miss.
+
+A `join` past a saga's first step no longer sees an earlier step's events at all, whatever their type. That
+includes a repeat of one of its own expectation types. If an earlier step left behind an event of the exact type
+this `join` is waiting for, the old callback counted it alongside the one that fired the `join`, and the new one
+does not.
 
 Java, before and after:
 
@@ -605,19 +609,37 @@ FlowSaga.<GameEvent, GameCommand>builder()
         .step("lobby", step -> step.on(PlayerJoined.class, Continuation.next()))
         .step("ready-check", step -> step.join(List.of(Expectation.of(PlayerReady.class, 2)), Continuation.end(),
                 received -> {
-                    // Before: counted the PlayerJoined events "lobby" left behind, plus this step's own.
-                    // After: counts only events received since "ready-check" was entered, so this is 0
-                    // unless a PlayerJoined event also arrives inside this step.
+                    // Before: counted every PlayerJoined "lobby" left behind, plus this step's own, whatever the type.
+                    // After: counts only events received since "ready-check" was entered, so this is 0 unless a
+                    // PlayerJoined also arrives inside this step. The same drop applies to a repeated PlayerReady.
                     int lateJoiners = received.count(PlayerJoined.class);
                     return List.of(new StartMatch(lateJoiners));
                 }));
 ```
 
-A `join` that only ever counts the type its own expectations name, which is what most calls do, sees no change. The
-window narrows only for a callback that reads a type its `join` did not ask for, or that calls `count`, `all`, `any`
-or `none` expecting them to reach past the step it fired from.
+A `join` in a saga's first step keeps its own step's events, since there is no earlier step to lose anything to,
+but the window a reaction reads always starts after the initiating event, in every step including the first. A
+first-step `join` whose callback reaches for the start type through `count`, `all`, `first`, `any`, `none` or
+`asList` now sees nothing where it used to see one:
 
-`join`'s deprecation javadoc said this could never happen, that lowering it to `on(allOf(...))` changed nothing
+```java
+FlowSaga.<GameEvent, GameCommand>builder()
+        .startsOn(MatchStarted.class)
+        .step("ready-check", step -> step.join(List.of(Expectation.of(PlayerReady.class, 2)), Continuation.end(),
+                received -> {
+                    // Before: 1, the MatchStarted event was in the whole retained history the callback read.
+                    // After: 0, the window starts after index 0 even in the first step. initiating() still
+                    // returns it either way.
+                    int starts = received.count(MatchStarted.class);
+                    return List.of(new StartMatch(starts));
+                }));
+```
+
+`received.initiating()` is the one accessor built to reach past the window, and it keeps returning the start event
+in both shapes above. Condition evaluation is unaffected by either shape. A first-step `join` already counted only
+post-start arrivals before this release, since a `join`'s condition has always counted since the step's own entry.
+
+`join`'s deprecation javadoc said none of this could happen, that lowering it to `on(allOf(...))` changed nothing
 about what the callback sees. That was false, and the javadoc is corrected in this release.
 
 ### Why there is no recipe for this one
@@ -628,7 +650,9 @@ code inside `whenFulfilled` look identical before and after this release, so the
 Whether a given `join` is affected depends on what its callback actually reads and on what an earlier step in the
 same saga left behind, both runtime facts a static rewrite has no way to evaluate.
 
-So this section is the migration path. Search your codebase for `.join(` calls in a step that is not a saga's
-first, and check whether `whenFulfilled` reads a type its own expectations did not name. A test that drives the
-saga across a step transition and asserts on the join's effects catches a real regression the same way
-`FlowSagaTest`'s own join test now does.
+So this section is the migration path. Search your codebase for every `.join(` call, and check whether
+`whenFulfilled` reads a type through a generic accessor rather than only through the expectation that fired it. In
+a step past the first, that includes a repeated occurrence of the `join`'s own expectation type. In the first step,
+it includes the saga's own start type. A test that drives the saga across a step transition, and a test that fires
+a first-step `join` and asserts on its effects, both catch a real regression the same way `FlowSagaTest`'s own
+`join` tests now do.
