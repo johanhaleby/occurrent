@@ -22,16 +22,17 @@ import org.junit.jupiter.api.Test
 import org.occurrent.dsl.saga.SagaInput
 
 /**
- * Kotlin parity for the Java-side pair in `FlowSagaTest`
+ * Kotlin parity for two Java-side pairs, kept out of SagaFlowExtensionsTest.kt as its own file, the same way
+ * StepConditionKotlinVarianceTest.kt is: `FlowSagaTest`'s
  * (`two_leaves_sharing_a_name_and_a_predicate_are_accepted_under_the_cap` /
- * `two_leaves_sharing_a_name_while_holding_different_predicates_are_refused_the_cap`), kept out of
- * SagaFlowExtensionsTest.kt as its own file, the same way StepConditionKotlinVarianceTest.kt is.
+ * `two_leaves_sharing_a_name_while_holding_different_predicates_are_refused_the_cap`), and
+ * `StepConditionTest.allOf_rejects_two_children_over_one_predicate_whatever_names_they_give_it`.
  *
- * `event<T>(count, predicateId, predicate)` used to wrap [predicate] in a fresh Java `Predicate` on every call, which
- * has identity equality, so two leaves built from the very same Kotlin function value never matched each other even
- * though the equivalent Java leaves, built from one shared `Predicate` instance, do. [NamedPredicate] closes that gap
- * without changing the negative case. Two separately-declared lambdas, even functionally identical ones, still
- * compare unequal.
+ * Both `event` overloads used to wrap a Kotlin function in a fresh Java `Predicate` on every call, which has identity
+ * equality, so two leaves built from the very same Kotlin function value never matched each other even though the
+ * equivalent Java leaves, built from one shared `Predicate` instance, do. `wrapPredicate` closes that gap without
+ * changing the negative case. Two separately-declared lambdas, even functionally identical ones, still compare
+ * unequal.
  */
 class SagaFlowKotlinPredicateIdentityTest {
 
@@ -81,5 +82,41 @@ class SagaFlowKotlinPredicateIdentityTest {
             .isInstanceOf(IllegalStateException::class.java)
             .hasMessageContaining("step 'decide'")
             .hasMessageContaining("share the predicate name 'big'")
+    }
+
+    @Test
+    fun `allOf refuses two unnamed children matching the same event via a shared function value`() {
+        val sameTest: (Approved) -> Boolean = { true }
+
+        assertThatThrownBy {
+            saga<CapEvent, CapCommand> {
+                startsOn<Opened>()
+                correlateAll { it.id }
+                step("wait") {
+                    on(allOf(event<Approved>(2, sameTest), event<Approved>(3, sameTest)), then = end)
+                }
+            }
+        }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("allOf children 0 and 1")
+            .hasMessageContaining("Approved")
+    }
+
+    @Test
+    fun `allOf refuses two named children over one shared function value whatever names they give it`() {
+        val sameTest: (Approved) -> Boolean = { true }
+
+        assertThatThrownBy {
+            saga<CapEvent, CapCommand> {
+                startsOn<Opened>()
+                correlateAll { it.id }
+                step("wait") {
+                    on(allOf(event<Approved>(2, "twoOfThem", sameTest), event<Approved>(3, "threeOfThem", sameTest)), then = end)
+                }
+            }
+        }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("allOf children 0 and 1")
+            .hasMessageContaining("Approved")
     }
 }
