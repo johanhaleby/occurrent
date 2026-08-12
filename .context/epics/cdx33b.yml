@@ -1,0 +1,119 @@
+schema_version: 1
+epic: cdx33b
+revision: 1
+updated_at: 2026-08-12T17:49:25Z
+updated_by: "orchestrator session faee3625 (registration; plan approved by Johan 2026-08-12, /Users/johan/.claude/plans/unified-bubbling-koala.md)"
+baseline: {repo: johanhaleby/occurrent, branch: main}
+authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work."
+pending_actions: []
+units:
+  U1:
+    issue: null
+    goal: "Manual-start pin race (review findings 1+13, the blocker): close the capture/write-order reversal without throwing on the ordinary rolling-deploy refusal; fold write-first-read-on-refusal with the log classification redesigned"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  U2:
+    issue: null
+    goal: "Redis Cluster hash slots (finding 2): hash-tag both keys into one slot (layout unreleased), decide fail-fast complement at unit gate; changelog entry + migration guide section 4 correction"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  U3:
+    issue: null
+    goal: "Durable opt-out marker race (finding 3): marker-before-delegate plus remove-on-exception, preserving PR 733's no-leak property; latched-delegate concurrency test"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  U4:
+    issue: null
+    goal: "stepWindow pre-progress trap (finding 4): derive fallback counts pre-trim, pass STORED windowStart to droppedFromTheCurrentStep; regression tests incl. hand-seeded pre-progress document; aligns implementation with ADR 123's stated contract"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  U5:
+    issue: null
+    goal: "Kotlin predicate identity (finding 6): NamedPredicate wrapper in SagaFlowExtensions.kt with equality on the captured function; Kotlin parity test; fingerprint verified unaffected"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  U6:
+    issue: null
+    goal: "Retained-size threshold warning (finding 7 per D2): edge-triggered WARN at SpringMongoSagaStateStore.flowStateToDocument naming stepWindow as the remedy"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  U7:
+    issue: 751
+    goal: "Saga filter override, closes #751 (finding 5 per D1): explicit filter/type-selector override bypassing EventTypeExpansion, Kotlin sugar, refusal message gains the third remedy, changelog + migration section 10 rework, ADR 124 amendment wording design-gated to Johan"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  U8:
+    issue: null
+    goal: "Migration guide Kotlin truth (finding 9): section 2 discloses Java-only recipe coverage, adds blocking and reactor Kotlin snippets; merges after U4 per guide serialization order U2-U4-U8-U7"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U4]
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  U9:
+    issue: null
+    goal: "ADR and javadoc integrity (finding 15): ADR 0110 follow-up note, ADR 0116 three-way reconciliation, reactor Projections.java stale phrase, ADR 0111 Status wording to Johan at design gate"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  U10:
+    issue: null
+    goal: "Docs-site ripple, LAST: carried-over join correction (docs/0.33.0-preview ~5799, docs/707-step-conditions ~5546), U7 filter override chapter, claim sweep of saga/subscription/checkpoint chapters; push never merge"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U2, U4, U7]
+    session: null
+    deliverables:
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+  UREG:
+    issue: null
+    goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping)"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: "placeholder check; UREG delivers issues and comments, verified by listing them in evidence at closeout"}
