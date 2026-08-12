@@ -1350,3 +1350,31 @@ when it starts, and states in the gate what changed since dispatch. The orchestr
 its side: before approving any plan, diff main against the SHA the plan was written from and check
 whether any sibling unit merged into the same area. When the answer is that the scope already landed,
 the right output is a report and no branch, which is what U3 produced.
+
+## A steady stream of routine events starved the sweep that would have caught five stalls
+
+**What happened.** Over two hours of cdx33b's Wave A, the orchestrator processed roughly fifteen
+monitor events, each answered as a routine delta report. In that window three workers idled on open
+review threads (one for two hours), one worker's report demand sat unprocessed, and the two units
+holding questions FOR THE USER (a plan gate and an ADR wording choice, both `plan_approval_venue:
+session`) waited silently in sessions the user was not looking at. The user asked "is anything stuck?",
+which is the definitional detection defect. The skill already commanded a session-liveness sweep
+"every tick", and the orchestrator had treated no monitor event as a tick: with monitors providing
+every wake and no heartbeat armed, the phrase "every tick" bound nothing.
+
+**Why it matters.** Three separate mechanisms failed the same direction. Monitors emit transitions,
+not durations, so "thread opened" arrived and "thread still open, owner idle for two hours" had no
+signal to arrive as. The stalled-worker detector's arming was deferred "until chips have worktrees"
+as prose, not as a journaled pending action, and the quiet moment that would have triggered it never
+came, precisely because the event stream stayed busy. And the in-session gate venue, chosen correctly
+because the user was at the computer, produced questions the user did not know existed, with no
+surface listing "sessions currently holding a question for you".
+
+**How to apply.** Every wake is a tick. At any wake, if more than ~15 minutes have passed since the
+last liveness sweep, run it before treating the event as routine. When an event shows a unit acquiring
+an obligation, stamp a deadline in the epic state at that moment, because only a recorded deadline
+turns a transition into a duration a later wake can check. Journal deferred armings as pending actions
+with trigger conditions. And when any unit's gate venue is `session`, the orchestrator's next report to
+the user names the sessions holding questions for them, every time, because the venue that avoids
+round-tripping decisions also hides their existence. The skill now encodes the first three; the fourth
+is this epic's standing practice.
