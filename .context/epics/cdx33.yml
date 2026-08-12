@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33
-revision: 60
+revision: 61
 updated_at: 2026-08-11T19:56:20Z
 updated_by: "orchestrator session faee3625 (U12 MERGED as 743391bc6, all 15 library units done; UDOCS2 dispatched as the last unit)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -40,7 +40,9 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: "WIP pushed as 16c775454 on cdx33/u14-join-window off base 3da1faa62, no PR yet. Machine shut down mid-unit; the subagent is gone but its handover is preserved below."}
+    next_action: "Resume from origin/cdx33/u14-join-window. DONE and verified in the WIP commit: loweredFromJoin removed from reactionWindow AND from the WindowCondition record (it had exactly one reader), both StepBuilder call sites updated, join's deprecated javadoc now states the reaction reads the same window on(StepCondition) does, the LoweredJoin test inverted to a_join_reaction_reads_only_its_own_window_not_the_whole_retained_history asserting notes=0 plus initiating=j, mutation-checked by forcing windowed=false and watching 7 tests fail then restoring from a scratchpad copy, and 529 of 529 green in dsl/saga-dsl/common. ReceivedEvents javadoc needed no edit, it already documents the narrowed behaviour. NOT STARTED: the changelog Breaking changes bullet, migration section 11 with its own why-no-recipe subsection modelled on section 10, the ADR amendment, the blocking saga module test run, and the PR itself."
+    blocking_on: []
   U13:
     issue: null
     goal: "Documentation truth for two defects in this epic's own output: #754 (FlowStateImpl.java:52 still states the superseded retention bound historyWindow + stepWindow + 1) and #755 (the reopened-hierarchy startup refusal now applies to subscriptions as well as sagas, which is a breaking change against 0.32.0 that the changelog denies and migration section 10 frames as saga-only)"
