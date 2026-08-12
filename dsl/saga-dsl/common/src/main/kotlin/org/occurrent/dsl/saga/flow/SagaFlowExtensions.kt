@@ -66,6 +66,19 @@ fun <E : Any, C : Any> saga(block: FlowSagaBuilder<E, C>.() -> Unit): Saga<E, Fl
  */
 fun stepTimer(stepName: String): TimerName = FlowSaga.stepTimer(stepName)
 
+/**
+ * Wraps a Kotlin function as a [Predicate] with equals/hashCode delegating to [delegate], since a bare SAM conversion
+ * allocates a fresh object on every call and two leaves built from the very same function value would then never be
+ * recognized as counting the same events (see [StepScope.event]). Parity only. Two separately-declared lambdas, even
+ * functionally identical ones, still compare unequal here, exactly as two separately-declared Java lambdas do.
+ */
+@PublishedApi
+internal class NamedPredicate<T>(private val delegate: (T) -> Boolean) : Predicate<T> {
+    override fun test(candidate: T): Boolean = delegate(candidate)
+    override fun equals(other: Any?): Boolean = other is NamedPredicate<*> && delegate == other.delegate
+    override fun hashCode(): Int = delegate.hashCode()
+}
+
 /** Receiver for the flow [saga] block. Delegates to the Java [FlowSaga.Builder]. */
 @SagaDsl
 class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
@@ -167,9 +180,13 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
      * that predicate so a saga can keep the leaf's count in its state instead of counting the step's events again. Naming a
      * predicate is what makes `stepWindow` usable on the step. Change the name whenever the predicate's meaning changes,
      * since keeping the name while changing the test is the one thing this cannot detect.
+     *
+     * Wraps [predicate] in [NamedPredicate] rather than a bare SAM conversion, so two leaves built from the same Kotlin
+     * function value compare equal the way two leaves sharing a Java [Predicate] instance do. A fresh SAM object has
+     * identity equality and would never match another one, even one wrapping the exact same function.
      */
     inline fun <reified T : E> event(count: Int = 1, predicateId: String, noinline predicate: (T) -> Boolean): StepCondition<E> =
-        StepCondition.event<E, T>(T::class.java, count, predicateId, Predicate { candidate: T -> predicate(candidate) })
+        StepCondition.event<E, T>(T::class.java, count, predicateId, NamedPredicate(predicate))
 
     /** [allOf] over an existing [StepCondition] tree, fulfilled once every one of [first] plus [rest] is. */
     fun allOf(first: StepCondition<out E>, vararg rest: StepCondition<out E>): StepCondition<E> =
