@@ -1,16 +1,24 @@
 schema_version: 1
 epic: cdx33b
-revision: 1
+revision: 2
 updated_at: 2026-08-12T17:49:25Z
 updated_by: "orchestrator session faee3625 (registration; plan approved by Johan 2026-08-12, /Users/johan/.claude/plans/unified-bubbling-koala.md)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work."
-pending_actions: []
+pending_actions:
+  - id: act-001
+    type: dispatch-chip
+    target: "All nine units dispatched as CHIPS per Johan's explicit vehicle instruction mid-dispatch (four subagents U3/U5/U6/U8 stopped within a minute of launch and reissued as chips). Chip ids: U1 task_b1bb589d, U7 task_e8ffca0c, U2 task_697ac389, U4 task_d0071e31, U3 task_9d06c1eb, U5 task_0c40e553, U6 task_64882fe4, U8 task_90e69b98, U9 task_e8d98913"
+    expected: "each chip starts when Johan clicks it, delivers a PR and a DELIVERY_RESULT; U1 and U7 present plan gates in their own sessions"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-12T17:49:25Z
 units:
   U1:
     issue: null
     goal: "Manual-start pin race (review findings 1+13, the blocker): close the capture/write-order reversal without throwing on the ordinary rolling-deploy refusal; fold write-first-read-on-refusal with the log classification redesigned"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -20,7 +28,7 @@ units:
   U2:
     issue: null
     goal: "Redis Cluster hash slots (finding 2): hash-tag both keys into one slot (layout unreleased), decide fail-fast complement at unit gate; changelog entry + migration guide section 4 correction"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -30,7 +38,7 @@ units:
   U3:
     issue: null
     goal: "Durable opt-out marker race (finding 3): marker-before-delegate plus remove-on-exception, preserving PR 733's no-leak property; latched-delegate concurrency test"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -40,7 +48,7 @@ units:
   U4:
     issue: null
     goal: "stepWindow pre-progress trap (finding 4): derive fallback counts pre-trim, pass STORED windowStart to droppedFromTheCurrentStep; regression tests incl. hand-seeded pre-progress document; aligns implementation with ADR 123's stated contract"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -50,7 +58,7 @@ units:
   U5:
     issue: null
     goal: "Kotlin predicate identity (finding 6): NamedPredicate wrapper in SagaFlowExtensions.kt with equality on the captured function; Kotlin parity test; fingerprint verified unaffected"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -60,7 +68,7 @@ units:
   U6:
     issue: null
     goal: "Retained-size threshold warning (finding 7 per D2): edge-triggered WARN at SpringMongoSagaStateStore.flowStateToDocument naming stepWindow as the remedy"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -70,7 +78,7 @@ units:
   U7:
     issue: 751
     goal: "Saga filter override, closes #751 (finding 5 per D1): explicit filter/type-selector override bypassing EventTypeExpansion, Kotlin sugar, refusal message gains the third remedy, changelog + migration section 10 rework, ADR 124 amendment wording design-gated to Johan"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -80,7 +88,7 @@ units:
   U8:
     issue: null
     goal: "Migration guide Kotlin truth (finding 9): section 2 discloses Java-only recipe coverage, adds blocking and reactor Kotlin snippets; merges after U4 per guide serialization order U2-U4-U8-U7"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: [U4]
@@ -90,7 +98,7 @@ units:
   U9:
     issue: null
     goal: "ADR and javadoc integrity (finding 15): ADR 0110 follow-up note, ADR 0116 three-way reconciliation, reactor Projections.java stale phrase, ADR 0111 Status wording to Johan at design gate"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -100,7 +108,7 @@ units:
   U10:
     issue: null
     goal: "Docs-site ripple, LAST: carried-over join correction (docs/0.33.0-preview ~5799, docs/707-step-conditions ~5546), U7 filter override chapter, claim sweep of saga/subscription/checkpoint chapters; push never merge"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: [U2, U4, U7]
@@ -110,7 +118,7 @@ units:
   UREG:
     issue: null
     goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping)"
-    phase: PLANNED
+    phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
