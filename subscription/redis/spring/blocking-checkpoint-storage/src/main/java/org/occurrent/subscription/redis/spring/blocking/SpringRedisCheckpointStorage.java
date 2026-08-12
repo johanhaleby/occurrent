@@ -53,11 +53,16 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * land between the comparison and the write. {@link CheckpointWriteCondition#any()} needs no comparison and keeps
  * writing through {@code opsForValue().set}, exactly as before, leaving the version key untouched.
  * <p>
- * <strong>Redis Cluster.</strong> The checkpoint key and the version key are not guaranteed to hash to the same
- * slot, and Cluster refuses a script that touches keys in different slots. A caller that never passes a condition
- * other than {@link CheckpointWriteCondition#any()} is unaffected, since that path never runs the script. A caller
- * that does is refused immediately, on the first conditional write, with the error Cluster itself reports for
- * crossing slots.
+ * <strong>Redis Cluster.</strong> The version key carries a hash tag built from whatever the checkpoint key itself
+ * hashes on, so Cluster places both keys in the same slot and the scripts above, and the two-key {@code DEL} in
+ * {@link #delete(String)}, are never refused for crossing slots. A subscription id with no braces of its own hashes
+ * on its full text either way, and one that already contains a matched pair hashes on the text between them, the
+ * same substring Cluster would use for the checkpoint key. The one shape this cannot help is a subscription id
+ * whose only closing brace has no opening brace anywhere before it in the string. Cluster then hashes the checkpoint
+ * key on its whole, untagged text, and no hash tag built around that text can reproduce the same slot without
+ * introducing a closing brace of its own that Cluster would find first. Such an id refuses a conditional write the
+ * same way every id used to, immediately, with the error Cluster reports for crossing slots. No subscription id
+ * this library or its tests generate takes that shape.
  */
 @NullMarked
 public class SpringRedisCheckpointStorage implements CheckpointStorage {
@@ -233,9 +238,8 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return requireNonNull(executeWithRetry(save, retryUnlessShutdownOrRefused, retryStrategy).get());
     }
 
-    // True because the comparison is real on a standalone or replicated server, which is where this storage is
-    // supported. On Cluster the script is refused for crossing slots, and nothing here can tell the two deployments
-    // apart without a round trip to the server.
+    // True unconditionally. The comparison is real on a standalone server, a replicated one, and on Cluster, since
+    // versionKey's hash tag keeps both keys the script touches in the same slot.
     @Override
     public boolean evaluatesWriteConditions() {
         return true;
@@ -266,8 +270,27 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
     }
 
-    private static String versionKey(String subscriptionId) {
-        return VERSION_KEY_PREFIX + subscriptionId;
+    // Wraps the same substring Redis Cluster's own slot algorithm would pick out of the checkpoint key (subscriptionId
+    // itself, unprefixed), in a hash tag of its own, so the two keys the write scripts touch land in the same slot.
+    // Package-private, not private, so a test can compute it against an independent Cluster slot implementation.
+    static String versionKey(String subscriptionId) {
+        return VERSION_KEY_PREFIX + "{" + clusterHashTag(subscriptionId) + "}";
+    }
+
+    // Redis Cluster's own slot algorithm (CLUSTER-SPEC, "Keys hash tags"): the first '{', then the first '}' after
+    // it; the whole key stands in for the tag when either brace is missing or none of the key sits between them.
+    // Mirrored here, rather than pulled from a client library, because keeping it beside versionKey is what makes it
+    // obvious the two must never drift apart.
+    private static String clusterHashTag(String key) {
+        int openBrace = key.indexOf('{');
+        if (openBrace < 0) {
+            return key;
+        }
+        int closeBrace = key.indexOf('}', openBrace + 1);
+        if (closeBrace < 0 || closeBrace == openBrace + 1) {
+            return key;
+        }
+        return key.substring(openBrace + 1, closeBrace);
     }
 
     @SuppressWarnings("unchecked")

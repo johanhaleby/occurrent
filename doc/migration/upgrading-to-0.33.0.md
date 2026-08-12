@@ -93,8 +93,7 @@ refuses to start when it would pair your store with a competing-consumer lease, 
 that.
 
 Occurrent's own Mongo and Redis checkpoint storages do not need this recipe. They already evaluate `notOlderThan`
-and `ifAbsent` for real. Redis Cluster is the exception. It still refuses a conditional write outright, and
-section 4 covers why.
+and `ifAbsent` for real, on Redis Cluster too, see section 4.
 
 If your store can evaluate a condition for real, the two rules that matter are the same two the TCK asserts on every
 storage that declares it supports them. `any()` must leave whatever version is stored untouched, carrying it
@@ -121,9 +120,12 @@ redelivered, which is within the at-least-once contract this library has always 
 
 ## 4. Redis Cluster
 
-`SpringRedisCheckpointStorage` refuses `notOlderThan` and `ifAbsent` on Redis Cluster, on the first conditional
-write, because the checkpoint and its stored version live in two differently named keys that Cluster will not
-guarantee land in the same slot.
+`SpringRedisCheckpointStorage` keeps the checkpoint and its stored version in two differently named keys, and
+Cluster refuses a script that touches keys in different slots. The version key's name carries a hash tag built from
+whatever the checkpoint key itself hashes on, so Cluster places both in the same slot and `notOlderThan` and
+`ifAbsent` work there exactly as they do on a standalone or replicated server. The one shape this cannot help is a
+subscription id whose only closing brace has no opening brace before it anywhere in the string, which still refuses
+a conditional write immediately, with the error Cluster reports for crossing slots.
 
 ## 5. Five subscription-capability interfaces are renamed
 
