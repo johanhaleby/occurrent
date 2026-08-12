@@ -650,9 +650,11 @@ code inside `whenFulfilled` look identical before and after this release, so the
 Whether a given `join` is affected depends on what its callback actually reads and on what an earlier step in the
 same saga left behind, both runtime facts a static rewrite has no way to evaluate.
 
-So this section is the migration path. Search your codebase for every `.join(` call, and check whether
-`whenFulfilled` reads a type through a generic accessor rather than only through the expectation that fired it. In
-a step past the first, that includes a repeated occurrence of the `join`'s own expectation type. In the first step,
-it includes the saga's own start type. A test that drives the saga across a step transition, and a test that fires
-a first-step `join` and asserts on its effects, both catch a real regression the same way `FlowSagaTest`'s own
+So this section is the migration path. Search your codebase for every `StepBuilder.join` call (`.join(` in Java)
+and every Kotlin `StepScope.join` call too, written as a bare `join(...)` with no receiver inside a `step { }`
+block, and check whether `whenFulfilled` reads a type through a generic accessor rather than only through the
+expectation that fired it. In a step past the first, that includes a repeated occurrence of the `join`'s own
+expectation type. In the first step, it includes the saga's own start type. A test that drives the saga across a
+step transition, and a test that fires a first-step `join` and asserts on its effects, both catch a real regression
+the same way `FlowSagaTest`'s own
 `join` tests now do.
