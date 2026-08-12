@@ -1326,3 +1326,27 @@ entry pass, was this shard green on the previous run of the same branch, and doe
 infrastructure signatures rather than assertion logic. Then rerun rather than conclude. Record the
 signature either way, since a flake that is never written down is rediscovered from scratch every time.
 This one is worth recognising: change-stream history loss under a paused-subscription hold test.
+
+## A plan gate must re-check main before it closes, not only before it opens
+
+**What happened.** cdx33's U3 was dispatched plan-first, parked for hours on its own interactive
+question, and came back to report that its entire scope had been merged meanwhile by other units:
+findings 2 and 4 in PR 742, finding 3 including the evaluator rewrite and the retention bound in PR
+749, and the Kotlin variance fix in PR 744. It had verified main's substance rather than trusting
+commit subjects, so it correctly opened nothing. Two of its observations are worth keeping. Its
+approved plan would have narrowed the deprecated `join`'s reaction, and main deliberately went the
+other way, with PR 742's own review reversing an initial narrowing because ADR 120 lowers `join` as
+sugar that preserves semantics exactly, so implementing the approved plan would have REGRESSED main.
+And the deferred follow-up its plan proposed was superseded by a better design in 749, a separate
+`stepWindow(int)` knob rather than redefining `historyWindow`.
+
+**Why it matters.** A plan is a claim about a repository state that stops being true while the plan is
+being written. The longer the gate, the staler the premise, and an approved plan carries authority that
+makes a stale premise hard to notice: the natural next step is to implement it, not to re-derive it.
+The failure mode is not just wasted work, it is a plan whose approval licenses a regression.
+
+**How to apply.** A dispatched unit re-reads main immediately before its plan gate CLOSES, not only
+when it starts, and states in the gate what changed since dispatch. The orchestrator does the same from
+its side: before approving any plan, diff main against the SHA the plan was written from and check
+whether any sibling unit merged into the same area. When the answer is that the scope already landed,
+the right output is a report and no branch, which is what U3 produced.
