@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33b
-revision: 3
+revision: 4
 updated_at: 2026-08-12T17:49:25Z
 updated_by: "orchestrator session faee3625 (registration; plan approved by Johan 2026-08-12, /Users/johan/.claude/plans/unified-bubbling-koala.md)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -44,7 +44,7 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "768", met: false, evidence: "OPEN. Adversarial verify found a CONFIRMED regression: catch(RuntimeException) misses Error, so the marker leaks permanently on an Error-throwing delegate, the exact PR 733 bug reopened. Sent back with the catch(Throwable) fix and an Error-path test. Other three angles held, the latched race test verified deterministic against the old ordering."}
   U4:
     issue: null
     goal: "stepWindow pre-progress trap (finding 4): derive fallback counts pre-trim, pass STORED windowStart to droppedFromTheCurrentStep; regression tests incl. hand-seeded pre-progress document; aligns implementation with ADR 123's stated contract"
@@ -54,7 +54,7 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "766", met: false, evidence: "OPEN, checks green, no threads. Adversarial verify CLEAN on all five angles incl. the algebraic no-legitimate-misclassification trace and the non-vacuous changed-declaration test. Cleared for merge pending DELIVERY_RESULT with mutation evidence and the section 9 accuracy verdict."}
   U5:
     issue: null
     goal: "Kotlin predicate identity (finding 6): NamedPredicate wrapper in SagaFlowExtensions.kt with equality on the captured function; Kotlin parity test; fingerprint verified unaffected"
@@ -64,7 +64,7 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "765", met: false, evidence: "OPEN, checks green after one recorded-flake rerun (ninth data point). Adversarial verify CLEAN on all five angles; the third commit (referential identity per a Copilot finding) is what makes it hold. One addition requested: a test asserting the documented method-reference refusal. Changelog absence is CORRECT per the epic dev-churn rule, ruled and recorded."}
   U6:
     issue: null
     goal: "Retained-size threshold warning (finding 7 per D2): edge-triggered WARN at SpringMongoSagaStateStore.flowStateToDocument naming stepWindow as the remedy"
