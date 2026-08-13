@@ -46,8 +46,8 @@ import static java.util.Objects.requireNonNull;
  * different things to say about the type they were given.
  * <p>
  * The rule above governs {@link #expand} and {@link #concreteTypesOf}, the two entry points a derived filter is built
- * from. {@link #expandWhatCanBeFound} walks the same hierarchy and refuses nothing, for a caller that was handed an
- * explicit filter and so derives none. Nothing here relaxes the rule, because a caller with no derived filter has no
+ * from. {@link #expandWhatCanBeFound} walks the same hierarchy and refuses only an array, for a caller that was handed
+ * an explicit filter and so derives none. Nothing here relaxes the rule, because a caller with no derived filter has no
  * filter for it to be true of.
  */
 public final class EventTypeExpansion {
@@ -75,19 +75,30 @@ public final class EventTypeExpansion {
     }
 
     /**
-     * The declared types plus every concrete type they cover that can be found, in the same order {@link #expand} uses,
-     * refusing nothing. A declared type whose concrete types cannot all be found contributes the ones that can.
+     * The declared types plus every concrete type they cover that can be found, in the same order {@link #expand} uses.
+     * A declared type whose concrete types cannot all be found contributes the ones that can, instead of being refused.
      * <p>
      * <strong>Only for a caller that is not deriving a filter.</strong> The rule at the top of this class is enforced by
-     * {@link #expand}, and this method enforces nothing, so a filter built from what comes back here can miss event
+     * {@link #expand}, and this method does not enforce it, so a filter built from what comes back here can miss event
      * types that dispatch would accept. It exists for a caller that has been given an explicit filter and so derives
      * none, and still wants to report which event types it handles. The saga DSL's {@code filter(Filter)} override is
      * the one such caller.
+     * <p>
+     * An array is still refused, through {@code cannotExpand}, because an array is not an event type at all rather than
+     * a hierarchy this cannot enumerate. No event is ever stored under an array's name, so accepting one would only
+     * mean saying nothing about a declaration that is always a mistake.
+     *
+     * @param cannotExpand builds the exception to throw for an array
      */
-    public static <E> Set<Class<? extends E>> expandWhatCanBeFound(Set<Class<? extends E>> declaredTypes) {
+    public static <E> Set<Class<? extends E>> expandWhatCanBeFound(Set<Class<? extends E>> declaredTypes,
+                                                                   Function<Class<?>, RuntimeException> cannotExpand) {
         requireNonNull(declaredTypes, "declaredTypes cannot be null");
+        requireNonNull(cannotExpand, "cannotExpand cannot be null");
         Set<Class<? extends E>> expanded = new LinkedHashSet<>();
         for (Class<? extends E> declared : declaredTypes) {
+            if (declared.isArray()) {
+                throw cannotExpand.apply(declared);
+            }
             expanded.add(declared);
             collect(declared, expanded, new HashSet<>());
         }

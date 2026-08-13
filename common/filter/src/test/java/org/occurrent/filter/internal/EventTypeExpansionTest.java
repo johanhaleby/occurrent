@@ -202,7 +202,14 @@ class EventTypeExpansionTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("hierarchyShapes")
-    void expanding_what_can_be_found_refuses_no_shape_and_otherwise_answers_what_expand_answers(String shape, Class<?> declaredType, Outcome expected) {
+    void expanding_what_can_be_found_refuses_only_an_array_and_otherwise_answers_what_expand_answers(String shape, Class<?> declaredType, Outcome expected) {
+        if (declaredType.isArray()) {
+            // An array is not an event type at all, so it stays refused whether or not a filter is deriving anything.
+            assertThatThrownBy(() -> expandOneLeniently(declaredType)).as("%s is refused", shape)
+                    .isInstanceOf(IllegalArgumentException.class);
+            return;
+        }
+
         Set<Class<?>> lenient = expandOneLeniently(declaredType);
 
         assertThat(lenient).as("%s always names itself", shape).contains(declaredType);
@@ -230,7 +237,7 @@ class EventTypeExpansionTest {
     @Test
     void expanding_what_can_be_found_keeps_declaration_order_and_is_unmodifiable() {
         Set<Class<? extends OrderEvent>> found = EventTypeExpansion.expandWhatCanBeFound(
-                new LinkedHashSet<>(List.of(PaymentEvent.class, OrderPlaced.class)));
+                new LinkedHashSet<>(List.of(PaymentEvent.class, OrderPlaced.class)), REFUSAL);
 
         assertThat(found).startsWith(PaymentEvent.class);
         assertThat(found).containsSequence(PaymentReserved.class, PaymentFailed.class, OrderPlaced.class);
@@ -244,7 +251,7 @@ class EventTypeExpansionTest {
 
     @SuppressWarnings("unchecked")
     private static Set<Class<?>> expandOneLeniently(Class<?> declaredType) {
-        return (Set<Class<?>>) (Set<?>) EventTypeExpansion.expandWhatCanBeFound(Set.of((Class<Object>) declaredType));
+        return (Set<Class<?>>) (Set<?>) EventTypeExpansion.expandWhatCanBeFound(Set.of((Class<Object>) declaredType), REFUSAL);
     }
 
     @Test

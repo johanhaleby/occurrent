@@ -255,7 +255,7 @@ public final class FlowSaga {
             Set<Class<? extends E>> declaredTypes = collectEventTypes();
             Set<Class<? extends E>> eventTypes = filter == null
                     ? EventTypeExpansion.expand(declaredTypes, Saga::cannotSubscribeOn)
-                    : EventTypeExpansion.expandWhatCanBeFound(declaredTypes);
+                    : EventTypeExpansion.expandWhatCanBeFound(declaredTypes, Saga::cannotSubscribeOn);
             validateCorrelationCoverage(eventTypes);
             validateStepWindowCanKeepCounts();
 

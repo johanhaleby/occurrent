@@ -243,6 +243,32 @@ class SagaFilterOverrideTest {
     }
 
     @Test
+    void does_not_excuse_an_array_event_type_either() {
+        // An array is not an event type at all rather than a hierarchy that cannot be enumerated, so it stays refused
+        // whether or not a filter is set. Without this the filter would silently turn off a diagnostic for a
+        // declaration that is always a mistake, which is what the message above declines to point anyone at.
+        assertThatThrownBy(() -> Saga.<Object, String, OrderCommand>builder(null)
+                .correlateAll(e -> "order-1")
+                .startsOn(OrderPlaced[].class)
+                .filter(SUBJECT_FILTER)
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not support an array");
+    }
+
+    @Test
+    void does_not_excuse_an_array_event_type_on_the_flow_builder_either() {
+        assertThatThrownBy(() -> FlowSaga.<Object, OrderCommand>builder()
+                .correlateAll(e -> "order-1")
+                .startsOn(OrderPlaced[].class)
+                .filter(SUBJECT_FILTER)
+                .step("wait", step -> step.on(OrderPlaced.class, Continuation.end()))
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("does not support an array");
+    }
+
+    @Test
     void is_not_offered_as_a_remedy_for_an_array_event_type() {
         // An array is a mistake rather than a hierarchy that cannot be enumerated, so pointing at a filter would be
         // advice to keep the mistake.

@@ -175,8 +175,12 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * subject say, also stops you being told about a sealed hierarchy that was reopened somewhere below the type you
      * declared.
      * <p>
-     * A filter broader than the declared event types is safe, because an event the saga does not handle leaves the
-     * state unchanged and produces no effects.
+     * Keep the filter inside the saga's own event hierarchy. Every CloudEvent it admits is converted to a domain event
+     * before the saga sees it, so one the converter cannot turn into an {@code E} fails that delivery rather than being
+     * ignored. Inside the hierarchy the two builders differ. A saga from {@link Builder} leaves its state untouched for
+     * an event type it registered no handler for. A flow saga appends every correlated event it receives to the
+     * instance's retained history before it looks at which branch handles it, so a filter broader than the types the
+     * flow names grows that history with events no step will ever match.
      */
     default @Nullable Filter filter() {
         return null;
@@ -332,7 +336,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
             // has nothing to protect and only reports what it finds.
             types = filter == null
                     ? EventTypeExpansion.expand(union, Saga::cannotSubscribeOn)
-                    : EventTypeExpansion.expandWhatCanBeFound(union);
+                    : EventTypeExpansion.expandWhatCanBeFound(union, Saga::cannotSubscribeOn);
         }
         return new Saga<>() {
             @Override
@@ -671,7 +675,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
             // has nothing to protect and only reports what it finds. Coverage below runs over the same shape either way.
             Set<Class<? extends E>> allTypes = filter == null
                     ? EventTypeExpansion.expand(declaredTypes, Saga::cannotSubscribeOn)
-                    : EventTypeExpansion.expandWhatCanBeFound(declaredTypes);
+                    : EventTypeExpansion.expandWhatCanBeFound(declaredTypes, Saga::cannotSubscribeOn);
             if (correlateAll == null) {
                 TypeDispatch<Function<E, @Nullable String>> coverage = new TypeDispatch<>(correlators);
                 for (Class<?> type : allTypes) {
