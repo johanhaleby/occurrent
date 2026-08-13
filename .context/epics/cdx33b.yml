@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 10
-updated_at: 2026-08-13T06:38:00Z
-updated_by: "orchestrator session faee3625 (blocker pass returned 4 confirmed, U1 sent back, U11 registered)"
+revision: 11
+updated_at: 2026-08-13T06:48:00Z
+updated_by: "orchestrator session faee3625 (U7 report banked incomplete, its adversarial pass dispatched)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -90,9 +90,9 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "local_8a2de541"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "770", met: false, evidence: "OPEN, rebased clean onto ce46e4969 with semantic verification (U4's and U5's tests run green on the merged result), 27/27 by run list on head 9a391aaad after one recorded-flake same-commit rerun (11th data point for the subscription-mongodb-spring shard). Suppressed block read: both findings real, one was the orchestrator's stale #751 line (fixed), one is U10's docs scope (correctly declined). DELIVERY_RESULT INCOMPLETE: missing invariant table, mutation evidence, johan-writing confirmation; sent back for restoration. ADR 124 wording gate with Johan in-session, told to present now. Orchestrator adversarial pass dispatched on the rebased diff. Merge slot: last of the guide set, after 769 and 762, with section-10 sentinel greps at final rebase."}
   U8:
     issue: null
     goal: "Migration guide Kotlin truth (finding 9): section 2 discloses Java-only recipe coverage, adds blocking and reactor Kotlin snippets; merges after U4 per guide serialization order U2-U4-U8-U7"
